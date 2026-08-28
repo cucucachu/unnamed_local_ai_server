@@ -1,0 +1,10 @@
+services/model-runner/models/*.gguf
+.env
+__pycache__/
+.venv/
+node_modules/
+dist/
+.expo/
+*.pyc
+.pytest_cache/
+.ruff_cache/
