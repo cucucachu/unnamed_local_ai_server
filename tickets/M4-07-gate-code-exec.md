@@ -4,7 +4,7 @@
 
 ## Context
 
-The PRODUCT.md "hands + toolbox" promise, end to end: the agent authors a script with its file
+The README.md "hands + toolbox" promise, end to end: the agent authors a script with its file
 tools, executes it in the sandbox, and the results land in the user's real files — with the
 isolation suite green on the same build.
 

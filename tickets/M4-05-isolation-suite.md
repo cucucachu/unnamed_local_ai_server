@@ -4,7 +4,7 @@
 
 ## Context
 
-The security promise of the product ("safe to let it run code", PRODUCT.md) verified as a
+The security promise of the product ("safe to let it run code", README.md) verified as a
 repeatable script, not a one-time manual check. Covers PLAN.md P2-4 and the isolation half of
 P3-11. Runs inside a live exec container and against the compose config.
 

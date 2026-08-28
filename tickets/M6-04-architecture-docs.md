@@ -33,9 +33,8 @@ sections from earlier tickets — keep them, organized):
 
 ## Out of scope
 
-New features; rewriting PLAN.md/PRODUCT.md (they stay as historical intent docs — add a
-one-line banner at the top of PLAN.md: "Superseded by docs/ARCHITECTURE.md for as-built
-details").
+New features; rewriting PLAN.md (it stays as a historical intent doc — add a one-line banner
+at the top of PLAN.md: "Superseded by docs/ARCHITECTURE.md for as-built details").
 
 ## Acceptance criteria (Tier A)
 

@@ -43,7 +43,7 @@ Off-site/cloud backup; encryption; incremental snapshots (rsync full-mirror is t
 
 ## Tier B (append to docs/HOST-CHECKS.md under M6 — PM runs, final product acceptance)
 
-- [ ] From a phone, run PRODUCT.md's "What using it looks like" list end to end: organize a
+- [ ] From a phone, run README.md's "What using it looks like" list end to end: organize a
       messy folder via chat; batch-rename via script; summarize a text file to a new file;
       play the result media; download a file. Each works from the couch.
 - [ ] PM sign-off line: `v1 accepted <date>`.

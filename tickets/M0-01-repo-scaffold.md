@@ -45,9 +45,11 @@ tickets/            (already exists — leave as is)
    - No services yet, but include a top-of-file comment listing which ticket adds which
      service block (caddy→M0-03, model-runner→M1-01, agent-server→M2-01, postgres→M3-01,
      code-exec-manager→M4-03).
-6. `README.md`: one-paragraph product description (crib from PRODUCT.md), quickstart section
-   (clone → `cp .env.example .env` → run host scripts → `docker compose up -d`), link to
-   PRODUCT.md / PLAN.md / `tickets/BACKLOG.md` / `docs/HOST-CHECKS.md`.
+6. `README.md`: **already done** (converted from the old `PRODUCT.md` ahead of schedule) — verify
+   it still has a product description, a quickstart section (clone → `cp .env.example .env` →
+   run host scripts → `docker compose up -d`), and links to PLAN.md / `tickets/BACKLOG.md` /
+   `docs/HOST-CHECKS.md`; update the quickstart section to reflect the real compose file once
+   this ticket lands.
 
 ## Out of scope
 

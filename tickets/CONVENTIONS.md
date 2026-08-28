@@ -4,7 +4,7 @@ Every ticket in this folder assumes the specs below. Tickets reference this file
 restating it. **If a ticket appears to conflict with this file, this file wins** — flag the
 conflict in your PR description.
 
-Referenced docs: [`../PRODUCT.md`](../PRODUCT.md) (what/why), [`../PLAN.md`](../PLAN.md)
+Referenced docs: [`../README.md`](../README.md) (what/why), [`../PLAN.md`](../PLAN.md)
 (architecture), [`BACKLOG.md`](./BACKLOG.md) (ordering & gates).
 
 ---
@@ -190,7 +190,7 @@ workspace pointing outside it (the resolved target must be rejected).
    real model. Tests that intentionally hit the real model live in `scripts/e2e/` and are
    invoked only by gate tickets.
 4. No new published ports, no new docker.sock mounts, no auth added (v1 is trusted-LAN by
-   design — see PRODUCT.md).
+   design — see README.md).
 5. Commit messages: `M2-04: short imperative summary`.
 
 ## 10. Out of scope for v1 (do not build, even if tempting)

@@ -5,7 +5,7 @@
 ## Context
 
 Proves the "remembers the state of your files across sessions" and "real file-management
-partner" product promises (PRODUCT.md): everything survives a full stack restart, and the
+partner" product promises (README.md): everything survives a full stack restart, and the
 chat↔files loop closes in the UI.
 
 ## Spec

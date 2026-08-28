@@ -1,6 +1,6 @@
 # Backlog — Ordering, Dependencies, Gates
 
-Product: [`../PRODUCT.md`](../PRODUCT.md) · Architecture: [`../PLAN.md`](../PLAN.md) ·
+Product: [`../README.md`](../README.md) · Architecture: [`../PLAN.md`](../PLAN.md) ·
 Shared contracts: [`CONVENTIONS.md`](./CONVENTIONS.md)
 
 ## Delivery strategy
@@ -19,7 +19,7 @@ run, at the upper bound of what one agent run should attempt.
 | M3 | Persistence + files | Threads survive restarts; full file manager UI | G3: restart-persistence + files round-trip |
 | M4 | Code execution | Sandboxed `execute_code` with hard isolation | G4: agent runs a script on real files; isolation suite green |
 | M5 | Media | Video/audio playback with seek from the files UI | G5: phone-browser seek/scrub |
-| M6 | LAN + integration | `homeai.local`, native parity, docs, backup | G5+: full PRODUCT.md scenario from a phone |
+| M6 | LAN + integration | `homeai.local`, native parity, docs, backup | G5+: full README.md scenario from a phone |
 
 ## Dependency graph
 
