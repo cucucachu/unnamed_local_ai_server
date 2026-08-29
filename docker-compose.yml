@@ -1,7 +1,7 @@
 # Home AI Agent — compose skeleton.
 #
 # Service blocks are added incrementally by later tickets, not all at once:
-#   caddy              -> M0-03 (Caddy reverse proxy + placeholder frontend)
+#   caddy              -> M0-03 (Caddy reverse proxy + placeholder frontend) [added]
 #   model-runner       -> M1-01 (llama.cpp Vulkan build)
 #   agent-server       -> M2-01 (FastAPI + deepagents skeleton)
 #   postgres           -> M3-01 (checkpoints + metadata)
@@ -17,4 +17,13 @@ networks:
   homeai-net:
     driver: bridge
 
-services: {}
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: infra/caddy/Dockerfile
+    ports:
+      - "80:80"
+    networks:
+      - homeai-net
+    restart: unless-stopped
