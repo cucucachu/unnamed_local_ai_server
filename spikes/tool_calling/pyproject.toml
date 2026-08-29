@@ -1,0 +1,16 @@
+[project]
+name = "tool-calling-spike"
+version = "0.1.0"
+description = "M1-03: tool-calling validation spike against the real model-runner"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-openai>=1.0,<2.0",
+    "deepagents>=0.7.10,<0.8",
+    "pytest>=8.0",
+]
+
+# This is a standalone script (spike.py), not an importable package — don't
+# try to build/install a wheel for it.
+[tool.uv]
+package = false

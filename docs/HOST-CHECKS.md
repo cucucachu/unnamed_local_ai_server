@@ -12,6 +12,10 @@ agent run.
 
 ## M1
 
+- [ ] (M1-03) PM sign-off: read `docs/TOOL_CALLING.md` (verdict: GO) and
+      confirm comfort with M2-03 proceeding on native tool-calling before
+      that ticket starts.
+
 ## M2
 
 ## M3
