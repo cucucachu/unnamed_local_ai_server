@@ -1,0 +1,21 @@
+# Host checks (Tier B)
+
+Manual, human/host-only verification steps that need the real machine, a phone,
+or a LAN device — things a CI script can't check. Each ticket that has Tier B
+items appends them under its milestone's heading below. Check items off as
+they're verified on the real host; don't attempt these from an automated
+agent run.
+
+## M0
+
+## M1
+
+## M2
+
+## M3
+
+## M4
+
+## M5
+
+## M6
