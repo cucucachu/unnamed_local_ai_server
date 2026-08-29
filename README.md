@@ -290,17 +290,22 @@ This repo's issue tracker **is** the project plan — there are no separate loca
 
 ## Getting started
 
-The stack isn't scaffolded yet (that's milestone M0, tracked in the issues). Once it lands, the intended quickstart is:
+Repo scaffold and host scripts (milestone M0) are landing incrementally — see the [issues](../../issues) for what's done. The intended quickstart:
 
 ```bash
 git clone git@github.com:cucucachu/unnamed_local_ai_server.git
 cd unnamed_local_ai_server
-cp .env.example .env   # fill in POSTGRES_PASSWORD and any host-specific values
-# run the host setup scripts under infra/host/ (avahi, ufw, GPU driver check)
+cp .env.example .env   # fill in POSTGRES_PASSWORD, RENDER_GID/VIDEO_GID, LAN_SUBNET
+
+# One-time host prep (idempotent, safe to re-run) — see infra/host/setup-gpu-drivers.md first
+sudo infra/host/setup-workspace.sh
+sudo infra/host/setup-avahi.sh
+sudo infra/host/setup-ufw.sh
+
 docker compose up -d
 ```
 
-Everything runs directly on the target Linux host (native, no cloud) — real `docker compose`, the real GPU, the real model. Only phone/LAN-device checks are deferred to a human host checklist (`docs/HOST-CHECKS.md`).
+Everything runs directly on the target Linux host (native, no cloud) — real `docker compose`, the real GPU, the real model. Only phone/LAN-device checks are deferred to a human host checklist ([`docs/HOST-CHECKS.md`](docs/HOST-CHECKS.md)). Networking details (mDNS, firewall, LAN-only isolation) are in [`docs/NETWORKING.md`](docs/NETWORKING.md).
 
 ## License
 
