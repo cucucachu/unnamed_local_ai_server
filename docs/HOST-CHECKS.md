@@ -8,6 +8,8 @@ agent run.
 
 ## M0
 
+- [ ] (M0-03) Phone on WiFi: `http://homeai.local` shows the placeholder page. **(GATE G0)**
+
 ## M1
 
 ## M2
