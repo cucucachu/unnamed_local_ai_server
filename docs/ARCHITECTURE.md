@@ -50,3 +50,96 @@ server, exec sandboxing, storage, and networking.
   default "auto" thinking mode — without it, short `max_tokens` completions
   (e.g. a `max_tokens: 8` smoke test) can spend the entire budget on hidden
   `<|channel>thought` content and return an empty `message.content`.
+
+## Quant benchmark (M1-04)
+
+Real `llama-bench` numbers on this exact host (AMD Radeon 890M iGPU, Ryzen AI
+9 HX 370), used to pick the default quant instead of guessing. As noted in
+`fetch-model.sh`, the model repo has no K-quants — the real choice is between
+three legacy-type quants: `Q4_0` (noticeably lossy), `Q8_0` (near-lossless),
+`BF16` (full precision).
+
+### Benchmark mechanics
+
+- **Binary**: the `server-vulkan` image (`ghcr.io/ggml-org/llama.cpp`) does
+  **not** ship a standalone `/app/llama-bench` executable — only `/app/llama-server`
+  and a unified dispatcher binary `/app/llama`, which exposes `bench` as a
+  subcommand (`/app/llama help all` lists it alongside `serve`, `cli`,
+  `quantize`, etc.). Confirmed via `docker run --rm --entrypoint /bin/sh ... -c
+  "ls /app"` (no `llama-bench` file present) and `docker run --rm --entrypoint
+  /app/llama ... help all`.
+- **Invocation**: `docker compose run --rm --entrypoint /app/llama model-runner
+  bench -m /models/<file> -p 512 -n 128 -ngl 999 -r 3 --verbose`. Passing
+  `--entrypoint /app/llama` overrides the image's default entrypoint
+  (`/app/llama-server`), and the `bench ...` arguments after the service name
+  in `docker compose run` fully replace the compose file's `command:` block
+  (which is llama-server-flavored and would otherwise be nonsensical for a
+  bench run) — no compose file edits needed. The `-v/models:ro` volume mount
+  and `group_add`/`devices` GPU-access config from the `model-runner` service
+  definition still apply to `run` the same as `up`.
+- **Serving container was stopped** (confirmed via `docker compose ps -a`
+  showing no containers) before every benchmark run, per the ticket's
+  GTT-contention warning.
+- **Repetitions**: `-r 3` (3 repetitions per quant, per spec); `llama-bench`
+  reports the mean ± stddev across those 3 reps directly.
+- **Deviation — discarded a contaminated Q4_0 run**: an early sanity check
+  (`-r 1`) was run in parallel with the still-in-progress `BF16` download and
+  showed higher, misleadingly optimistic numbers (pp512 ≈ 411 t/s, tg128 ≈
+  24.7 t/s) than the clean re-run after all downloads finished (pp512 ≈ 293,
+  tg128 ≈ 17.8) — most likely explained by reduced memory-bandwidth
+  contention once the download finished, on top of only 1 rep vs. 3. All
+  numbers in the table below are from the **clean runs**, with no concurrent
+  network/disk activity and no other containers running.
+
+### Results
+
+| Quant  | File size (decimal / GiB)     | pp512 (t/s)      | tg128 (t/s)     | Fully offloaded to Vulkan? |
+| ------ | ------------------------------ | ---------------- | --------------- | --------------------------- |
+| Q4_0   | 14.62 GB / 13.60 GiB           | 293.34 ± 1.77     | 17.80 ± 0.13    | Yes — `offloaded 31/31 layers to GPU`, Vulkan0 model buffer 13925.86 MiB |
+| Q8_0   | 26.86 GB / 25.00 GiB           | 263.45 ± 1.94     | 12.62 ± 0.01    | Yes — `offloaded 31/31 layers to GPU`, Vulkan0 model buffer 25600.47 MiB |
+| BF16   | 50.51 GB / 47.03 GiB           | **failed to load** | **failed to load** | **No** — crashes, see below |
+
+**BF16 does not fully offload and cannot even complete a benchmark run at
+`-ngl 999`** on this GPU. The Vulkan device reported 45,381 MiB free at model
+load, but BF16's weights alone need a `Vulkan0 model buffer size = 48150.36
+MiB` (plus a `Vulkan_Host model buffer size = 1408.00 MiB`) — over budget
+before KV-cache/compute buffers are even added. The real, literal failure:
+
+```
+load_tensors: offloaded 31/31 layers to GPU
+load_tensors:      Vulkan0 model buffer size = 48150.36 MiB
+load_tensors:  Vulkan_Host model buffer size =  1408.00 MiB
+load_all_data: using async uploads for device Vulkan0, buffer type Vulkan0, backend Vulkan0
+radv/amdgpu: Not enough memory for command submission.
+ggml_vulkan: device lost on Vulkan0
+llama_model_load: error loading model: vk::Queue::submit: ErrorDeviceLost
+llama_bench: error: failed to load model '/models/gemma-4-26B-A4B-it-BF16.gguf'
+```
+
+This is a hard crash (Vulkan `ErrorDeviceLost`), not a graceful CPU fallback —
+`llama-bench`'s `-ngl 999` forces every layer onto the GPU device rather than
+auto-balancing across CPU/GPU, so there was no partial-offload number to
+record for BF16 under the spec's uniform benchmark parameters. (A follow-up
+attempt at `-ngl 0`, immediately after the crash, also failed with the same
+`ErrorDeviceLost` — the AMD/RADV Vulkan device needs a brief recovery window
+after a device-lost event; a later, unrelated Q4_0 run a few seconds after
+that confirmed the device had recovered and worked normally again. This
+CPU-fallback attempt was out of scope for the spec's fixed `-ngl 999`
+methodology and was not pursued further once the device-recovery confound
+was identified.)
+
+### Chosen default: `Q8_0`
+
+**`Q8_0` is the new default** (`MODEL_FILE` in both `.env` and `.env.example`
+updated from `gemma-4-26B-A4B-it-Q4_0.gguf` to `gemma-4-26B-A4B-it-Q8_0.gguf`).
+
+Rationale: `Q8_0` fully offloads to the Vulkan GPU (same as `Q4_0`) and its
+token-generation speed — **12.62 t/s** — is comfortably interactive (well
+above typical reading speed) and only **~1.4x slower** than `Q4_0`'s 17.80
+t/s (prompt-processing is even closer: 263 vs 293 t/s, ~1.1x). That modest
+speed cost buys a near-lossless quant instead of `Q4_0`'s noticeably-lossy
+legacy 4-bit quantization, and there is ample free memory (45+ GB GTT) to
+afford the extra ~12 GB `Q8_0` needs on disk/GPU. `BF16` is excluded outright
+— it cannot even load under full GPU offload on this hardware, let alone
+compete on speed, so the near-lossless/fully-working `Q8_0` is the clear
+winner over both the lossier `Q4_0` and the non-functional `BF16`.
