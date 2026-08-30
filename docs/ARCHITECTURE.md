@@ -160,3 +160,78 @@ of this project won't want to make just to run the default model. `Q8_0`
 remains the clear default; `BF16` is documented here as a working option for
 anyone who's raised their GTT cap and wants maximum quality regardless of
 speed.
+
+### Quality: perplexity & KL-divergence vs. BF16 (follow-up)
+
+The speed numbers above say nothing about *quality* — how much worse `Q8_0`
+or `Q4_0` actually behave compared to full-precision `BF16`. Quantization
+quality loss is a property of the quantized weights + eval text, not the
+hardware running it, so this is measurable directly with `llama.cpp`'s
+bundled `perplexity` subcommand (`/app/llama perplexity`), which supports
+both plain perplexity (PPL) and `--kl-divergence` mode (compares a quant's
+full output probability distribution, token-by-token, against a saved
+full-precision reference — the same methodology the `llama.cpp` project
+itself uses to publish quant-quality numbers).
+
+**Methodology**: standard `wikitext-2-raw-v1` corpus (the community-standard
+eval set for these comparisons). `BF16` was run first with
+`--kl-divergence-base <file>` to save its per-token output distributions as
+the reference; `Q8_0` and `Q4_0` were then each run with `--kl-divergence
+--kl-divergence-base <file>` to compare against it. `ctx-size` 512 (default).
+
+**Scaled down from the full corpus for a concrete, checked reason**: the
+reference logits file turned out to store near-full-vocab log-probs per
+scored token (~522 KB/token, measured directly from a 2-chunk test) — for
+this model's large vocabulary, the *full* corpus (576 chunks / 294,912
+tokens) would have produced a ~77 GB logits file. Scaled to **220 chunks**
+(112,640 tokens, 56,320 scored) instead, producing a 29.41 GB file (matched
+the pre-run prediction almost exactly) and ~27 min total runtime across all
+3 models — comfortably bounded, while still a substantial, representative
+sample (not a token effort).
+
+**Results** — `Q8_0` vs `BF16` reference:
+
+```
+Mean KLD      : 0.691161 ± 0.008128
+Median KLD    : 0.059910
+Maximum KLD   : 32.827709
+Mean Δp       : -0.073 ± 0.043 %
+RMS Δp        : 10.146 ± 0.149 %
+Same top p    : 76.800 ± 0.178 %
+```
+
+**Results** — `Q4_0` vs `BF16` reference:
+
+```
+Mean KLD      : 2.195803 ± 0.009057
+Median KLD    : 1.667623
+Maximum KLD   : 24.602465
+Mean Δp       : -2.438 ± 0.092 %
+RMS Δp        : 21.905 ± 0.145 %
+Same top p    : 44.020 ± 0.210 %
+```
+
+**Interpretation**: `Q4_0` diverges from `BF16` roughly **3.2x more** than
+`Q8_0` does (mean KLD 2.196 vs 0.691), and only picks the *same* most-likely
+next token as `BF16` **44.0%** of the time, vs. `Q8_0`'s **76.8%** — nearly
+double the agreement. Token-probability perturbation (RMS Δp) is also ~2.2x
+larger for `Q4_0` (21.9% vs 10.1%). This quantitatively confirms the
+qualitative call made above: `Q8_0` behaves much more like full-precision
+`BF16` than `Q4_0` does, which is exactly the "near-lossless" property the
+default-quant rationale relies on.
+
+**Caveat — the raw PPL-ratio numbers from this tool are not trustworthy for
+this comparison and were discarded.** The KL-run's *reconstructed* baseline
+PPL (recovered from the 16-bit-quantized saved logits) didn't match `BF16`'s
+own directly-measured PPL (7036 vs. 18412 — a 2.6x mismatch), and `Q4_0`'s
+own live PPL (884) came out *lower* than `BF16`'s despite being the lossier
+quant, which is nonsensical for a proper full-precision reference. Likely
+cause: this is an *instruction-tuned* model being fed raw, unformatted
+Wikipedia text with no chat template — exactly the out-of-distribution
+scenario `llama.cpp`'s own perplexity docs warn can produce misleadingly
+high/unstable perplexity, and the 16-bit log-prob storage used for
+`--kl-divergence-base` doesn't seem to faithfully preserve the resulting
+extreme-outlier surprisal values on reconstruction. KLD, Δp, and same-top-p
+(reported above) are computed more robustly from the same run and don't
+show this pathology, so those are the numbers to trust here — not the PPL
+ratios.
