@@ -97,13 +97,13 @@ three legacy-type quants: `Q4_0` (noticeably lossy), `Q8_0` (near-lossless),
 | ------ | ------------------------------ | ---------------- | --------------- | --------------------------- |
 | Q4_0   | 14.62 GB / 13.60 GiB           | 293.34 ± 1.77     | 17.80 ± 0.13    | Yes — `offloaded 31/31 layers to GPU`, Vulkan0 model buffer 13925.86 MiB |
 | Q8_0   | 26.86 GB / 25.00 GiB           | 263.45 ± 1.94     | 12.62 ± 0.01    | Yes — `offloaded 31/31 layers to GPU`, Vulkan0 model buffer 25600.47 MiB |
-| BF16   | 50.51 GB / 47.03 GiB           | **failed to load** | **failed to load** | **No** — crashes, see below |
+| BF16   | 50.51 GB / 47.03 GiB           | 194.27 ± 1.93     | 6.68 ± 0.01     | Yes (after GTT cap raise, see below) — `offloaded 31/31 layers to GPU`, Vulkan0 model buffer 48150.36 MiB |
 
-**BF16 does not fully offload and cannot even complete a benchmark run at
-`-ngl 999`** on this GPU. The Vulkan device reported 45,381 MiB free at model
-load, but BF16's weights alone need a `Vulkan0 model buffer size = 48150.36
-MiB` (plus a `Vulkan_Host model buffer size = 1408.00 MiB`) — over budget
-before KV-cache/compute buffers are even added. The real, literal failure:
+**Initial run: BF16 failed to load.** At the default GTT cap (Linux's `ttm`
+allocator defaults to ~50% of system RAM — 45.67 GiB on this 91 GiB host),
+BF16's weights alone need a `Vulkan0 model buffer size = 48150.36 MiB` (plus
+`Vulkan_Host model buffer size = 1408.00 MiB`) — over budget before
+KV-cache/compute buffers are even added. The real, literal failure:
 
 ```
 load_tensors: offloaded 31/31 layers to GPU
@@ -118,15 +118,24 @@ llama_bench: error: failed to load model '/models/gemma-4-26B-A4B-it-BF16.gguf'
 
 This is a hard crash (Vulkan `ErrorDeviceLost`), not a graceful CPU fallback —
 `llama-bench`'s `-ngl 999` forces every layer onto the GPU device rather than
-auto-balancing across CPU/GPU, so there was no partial-offload number to
-record for BF16 under the spec's uniform benchmark parameters. (A follow-up
-attempt at `-ngl 0`, immediately after the crash, also failed with the same
-`ErrorDeviceLost` — the AMD/RADV Vulkan device needs a brief recovery window
-after a device-lost event; a later, unrelated Q4_0 run a few seconds after
-that confirmed the device had recovered and worked normally again. This
-CPU-fallback attempt was out of scope for the spec's fixed `-ngl 999`
-methodology and was not pursued further once the device-recovery confound
-was identified.)
+auto-balancing across CPU/GPU. (A follow-up attempt at `-ngl 0`, immediately
+after the crash, also failed with the same `ErrorDeviceLost` — the AMD/RADV
+Vulkan device needs a brief recovery window after a device-lost event; a
+later, unrelated Q4_0 run a few seconds after that confirmed the device had
+recovered and worked normally again.)
+
+**Follow-up: raised the GTT cap and re-benchmarked successfully.** The ~50%
+default is a Linux kernel (`ttm` allocator) default, not a hardware limit —
+on AMD APUs, "VRAM" is just system RAM the kernel is willing to map into the
+GPU's address space, tunable via `ttm.pages_limit` / `ttm.page_pool_size` boot
+params. Raised to 64 GiB (`ttm.pages_limit=16777216 ttm.page_pool_size=16777216`
+in `GRUB_CMDLINE_LINUX_DEFAULT`, requires a reboot — this is a host-level
+change, not something this repo's scripts manage, since it trades host RAM
+for GPU-mappable RAM and the right value depends on what else runs on the
+box). After rebooting and confirming `cat /sys/module/ttm/parameters/pages_limit`
+read `16777216`, BF16 loaded and fully offloaded (31/31 layers) with the
+same `docker compose run --rm --entrypoint /app/llama model-runner bench ...`
+invocation, no other changes.
 
 ### Chosen default: `Q8_0`
 
@@ -138,8 +147,16 @@ token-generation speed — **12.62 t/s** — is comfortably interactive (well
 above typical reading speed) and only **~1.4x slower** than `Q4_0`'s 17.80
 t/s (prompt-processing is even closer: 263 vs 293 t/s, ~1.1x). That modest
 speed cost buys a near-lossless quant instead of `Q4_0`'s noticeably-lossy
-legacy 4-bit quantization, and there is ample free memory (45+ GB GTT) to
-afford the extra ~12 GB `Q8_0` needs on disk/GPU. `BF16` is excluded outright
-— it cannot even load under full GPU offload on this hardware, let alone
-compete on speed, so the near-lossless/fully-working `Q8_0` is the clear
-winner over both the lossier `Q4_0` and the non-functional `BF16`.
+legacy 4-bit quantization, and there is ample free memory (45+ GB GTT even
+at the *default* cap) to afford the extra ~12 GB `Q8_0` needs on disk/GPU.
+
+`BF16` remains excluded even though it *can* load after the GTT cap raise
+(above): at **6.68 t/s** tg it's ~2.7x slower than `Q4_0` and ~1.9x slower
+than `Q8_0` — noticeably less snappy for interactive chat — while costing
+nearly 2x `Q8_0`'s disk/GPU footprint for a materially smaller quality gain
+(BF16 vs. Q8_0 is a much smaller precision jump than Q8_0 vs. Q4_0). It also
+requires a host-level GTT reconfiguration + reboot that most deployments
+of this project won't want to make just to run the default model. `Q8_0`
+remains the clear default; `BF16` is documented here as a working option for
+anyone who's raised their GTT cap and wants maximum quality regardless of
+speed.
