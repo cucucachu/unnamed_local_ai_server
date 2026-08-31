@@ -37,6 +37,7 @@ npm install
 npx expo start          # dev server; press w for web, or scan the QR code with Expo Go
 npm test                # jest (jest-expo preset)
 npx tsc --noEmit        # typecheck
+npx expo lint           # eslint (eslint-config-expo)
 npx expo export --platform web   # production web build -> dist/
 ```
 
