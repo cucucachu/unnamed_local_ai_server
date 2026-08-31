@@ -1,7 +1,7 @@
 """Application settings, sourced from environment variables via pydantic-settings.
 
 Variable names match the "Reference: Shared Conventions & Contracts" issue (§3),
-lower-cased and unprefixed. `postgres_*` fields are read but unused until M3-01.
+lower-cased and unprefixed.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,7 +18,19 @@ class Settings(BaseSettings):
 
     workspace_root: str = "/data/workspace"
 
-    # Unused until M3-01 (Postgres checkpoints + metadata).
     postgres_user: str = "homeai"
     postgres_password: str = ""
     postgres_db: str = "homeai"
+
+    @property
+    def postgres_dsn(self) -> str:
+        """DSN for the checkpointer's Postgres connection pool.
+
+        Hardcodes the `postgres` hostname — that's the compose service name,
+        consistent with how `model_base_url`'s default already hardcodes
+        `model-runner:8080` as a compose-network hostname.
+        """
+        return (
+            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"@postgres:5432/{self.postgres_db}"
+        )

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 import uvicorn
 from httpx import ASGITransport, AsyncClient
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.core.config import Settings
 from app.main import create_app
@@ -28,7 +29,10 @@ def test_settings() -> Settings:
 
 @pytest.fixture
 async def client(test_settings: Settings) -> AsyncIterator[AsyncClient]:
-    app = create_app(test_settings)
+    # `checkpointer_override` keeps this fixture on `MemorySaver` (fast, no
+    # real Postgres) rather than the production lifespan's real Postgres
+    # connection — see `app.main.create_app`'s docstring.
+    app = create_app(test_settings, checkpointer_override=MemorySaver())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
