@@ -1,0 +1,9 @@
+{
+  "name": "chat-browser-smoke",
+  "private": true,
+  "type": "module",
+  "description": "M2-06 full-stack chat smoke test (headless browser via Playwright) — see chat_browser_smoke.sh.",
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

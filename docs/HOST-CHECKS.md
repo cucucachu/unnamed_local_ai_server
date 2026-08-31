@@ -21,6 +21,8 @@ agent run.
 - [ ] (M2-05) Laptop browser on LAN: `http://homeai.local` shows the two-tab shell.
 - [ ] (M2-05) Phone with Expo Go: `npx expo start` from `services/frontend/`,
       scan QR — app opens, tabs render (native parity smoke).
+- [ ] (M2-06) Phone browser: send a message, watch tokens stream live.
+- [ ] (M2-06) Expo Go: same, confirming keyboard behavior and send button.
 
 ## M3
 

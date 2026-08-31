@@ -58,6 +58,13 @@ export interface UserMessageFrame {
   content: string;
 }
 
+/** Connection lifecycle states a UI can render directly (e.g. a "connecting…"
+ * pill). `closed` covers both an explicit client-initiated `close()` and a
+ * terminal disconnect (mid-turn drop, or reconnect attempts exhausted) —
+ * there's no automatic recovery from `closed` in either case, so a UI
+ * doesn't need to distinguish them beyond "not connected, not retrying". */
+export type ChatConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
+
 export interface ChatSocketHandlers {
   onTurnStart?: (frame: TurnStartFrame) => void;
   onToken?: (frame: TokenFrame) => void;
@@ -65,6 +72,10 @@ export interface ChatSocketHandlers {
   onToolEnd?: (frame: ToolEndFrame) => void;
   onTurnEnd?: (frame: TurnEndFrame) => void;
   onError?: (frame: ErrorFrame) => void;
+  /** Optional: fires whenever the socket's own connection lifecycle state
+   * changes (independent of any particular frame). Additive — existing
+   * callers that don't pass it are unaffected. */
+  onConnectionStateChange?: (state: ChatConnectionState) => void;
 }
 
 export interface ChatSocket {
@@ -177,12 +188,14 @@ export function openChatSocket(
   function scheduleReconnect(): void {
     if (closedByClient) return;
     if (reconnectAttempts >= RECONNECT_DELAYS_MS.length) {
+      handlers.onConnectionStateChange?.('closed');
       handlers.onError?.({
         type: 'error',
         message: `chat socket disconnected and failed to reconnect after ${RECONNECT_DELAYS_MS.length} attempts`,
       });
       return;
     }
+    handlers.onConnectionStateChange?.('reconnecting');
     const delay = RECONNECT_DELAYS_MS[reconnectAttempts];
     reconnectAttempts += 1;
     reconnectTimer = setTimeout(() => {
@@ -199,6 +212,7 @@ export function openChatSocket(
       // UI that's mid-render of a response (spec judgement call, see
       // module doc / ticket report).
       turnInFlight = false;
+      handlers.onConnectionStateChange?.('closed');
       handlers.onError?.({
         type: 'error',
         message: 'chat socket disconnected while a turn was in progress',
@@ -210,9 +224,11 @@ export function openChatSocket(
   }
 
   function connect(): void {
+    handlers.onConnectionStateChange?.(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
     socket = new WebSocketImpl(url);
     socket.onopen = () => {
       reconnectAttempts = 0;
+      handlers.onConnectionStateChange?.('open');
     };
     socket.onmessage = handleMessage;
     // Browsers/RN always follow a WebSocket error with a close event, so
@@ -233,6 +249,7 @@ export function openChatSocket(
       closedByClient = true;
       clearReconnectTimer();
       socket?.close();
+      handlers.onConnectionStateChange?.('closed');
     },
   };
 }
