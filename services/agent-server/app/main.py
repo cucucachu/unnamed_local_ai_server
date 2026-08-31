@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent.build import build_agent
-from app.api import health
+from app.api import chat_ws, health
 from app.core.config import Settings
 
 
@@ -42,6 +42,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
 
     app.include_router(health.router, prefix="/api")
+    # No prefix: the WS route's own path (`/ws/chat/{thread_id}`) must match
+    # Caddy's `/ws/*` routing exactly (see `infra/caddy/Caddyfile`), not be
+    # nested under `/api` like the REST routes above.
+    app.include_router(chat_ws.router)
 
     return app
 
