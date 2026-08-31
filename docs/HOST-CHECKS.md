@@ -38,6 +38,8 @@ agent run.
 - [ ] (M3-04) Expo Go: same create/switch/delete/reopen-history flow,
       confirming swipe-to-delete works on the thread list (native gesture,
       not exercised by the web-only browser smoke test).
+- [ ] (M3-05) Phone browser + Expo Go: browse the Files tab, upload a photo
+      from the phone, download it back, delete it.
 
 ## M4
 
