@@ -1,0 +1,197 @@
+"""Tests for the `/ws/chat/{thread_id}` WebSocket endpoint (`app/api/chat_ws.py`).
+
+Uses `starlette.testclient.TestClient` (not `httpx.AsyncClient`/`ASGITransport`,
+which don't support WebSockets the same way) — the standard, if synchronous,
+tool for testing FastAPI WebSocket routes. It's used synchronously here even
+though the rest of this suite is async (`asyncio_mode = "auto"`): entering
+`with TestClient(app) as client:` runs the app's lifespan (building the real
+agent against `app.state.settings`) on a dedicated background event loop
+owned by the client, and `websocket_connect(...)` sessions talk to it via a
+blocking, thread-safe portal — safe to drive from worker threads for the
+concurrency test below.
+"""
+
+import threading
+
+import pytest
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from app.main import create_app
+from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
+
+
+def _make_client(fake_model: FakeModel, tmp_path) -> TestClient:
+    settings = fake_model.settings(workspace_root=str(tmp_path))
+    app = create_app(settings)
+    return TestClient(app)
+
+
+def _drain_turn(ws) -> list[dict]:
+    """Receive frames until (and including) `turn_end` or `error`."""
+    frames = []
+    while True:
+        frame = ws.receive_json()
+        frames.append(frame)
+        if frame["type"] in ("turn_end", "error"):
+            return frames
+
+
+async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
+    fake_model.queue(TextTurn("hello world", chunk_size=5))
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/plain-thread"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        frames = _drain_turn(ws)
+
+    assert frames[0] == {"type": "turn_start"}
+    assert frames[-1] == {"type": "turn_end"}
+
+    token_frames = frames[1:-1]
+    assert len(token_frames) >= 2
+    assert all(f["type"] == "token" for f in token_frames)
+    assert "".join(f["content"] for f in token_frames) == "hello world"
+
+
+async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
+    fake_model.queue(
+        ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}),
+        TextTurn("done"),
+    )
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/tool-thread"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "write a file"})
+        frames = _drain_turn(ws)
+
+    assert frames[0] == {"type": "turn_start"}
+    assert frames[-1] == {"type": "turn_end"}
+
+    types = [f["type"] for f in frames]
+    tool_start_idx = types.index("tool_start")
+    tool_end_idx = types.index("tool_end")
+    assert tool_start_idx < tool_end_idx
+
+    tool_start = frames[tool_start_idx]
+    assert tool_start["name"] == "write_file"
+    assert tool_start["category"] == "file"
+    assert tool_start["args"] == {"file_path": "/x.txt", "content": "y"}
+    assert isinstance(tool_start["tool_call_id"], str) and tool_start["tool_call_id"]
+
+    tool_end = frames[tool_end_idx]
+    assert tool_end["name"] == "write_file"
+    assert tool_end["status"] == "success"
+    assert tool_end["tool_call_id"] == tool_start["tool_call_id"]
+
+    # Token frames for "done" arrive after the tool_end, before turn_end.
+    token_frames = [f for f in frames[tool_end_idx + 1 : -1] if f["type"] == "token"]
+    assert token_frames
+    assert "".join(f["content"] for f in token_frames) == "done"
+
+    written = tmp_path / "x.txt"
+    assert written.exists()
+    assert written.read_text() == "y"
+
+
+async def test_invalid_frame(fake_model: FakeModel, tmp_path) -> None:
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/invalid-thread"
+    ) as ws:
+        ws.send_json({"type": "not_a_real_type"})
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert isinstance(frame["message"], str) and frame["message"]
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_json()
+        assert exc_info.value.code == 1008
+
+
+async def test_invalid_frame_non_json_text(fake_model: FakeModel, tmp_path) -> None:
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/invalid-thread-2"
+    ) as ws:
+        ws.send_text("this is not json")
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_json()
+        assert exc_info.value.code == 1008
+
+
+async def test_two_turns_same_socket(fake_model: FakeModel, tmp_path) -> None:
+    fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/two-turns-thread"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "message one"})
+        first_frames = _drain_turn(ws)
+
+        ws.send_json({"type": "user_message", "content": "message two"})
+        second_frames = _drain_turn(ws)
+
+    assert first_frames[0] == {"type": "turn_start"}
+    assert first_frames[-1] == {"type": "turn_end"}
+    assert "".join(f["content"] for f in first_frames if f["type"] == "token") == "first reply"
+
+    assert second_frames[0] == {"type": "turn_start"}
+    assert second_frames[-1] == {"type": "turn_end"}
+    assert "".join(f["content"] for f in second_frames if f["type"] == "token") == "second reply"
+
+    assert len(fake_model.requests) == 2
+    second_request_contents = [m.get("content") for m in fake_model.requests[-1]["messages"]]
+    assert any("message one" in (c or "") for c in second_request_contents)
+    assert any("first reply" in (c or "") for c in second_request_contents)
+
+
+def test_concurrent_turns_serialized(fake_model: FakeModel, tmp_path) -> None:
+    fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
+    thread_id = "concurrent-thread"
+
+    results: dict[str, list[dict]] = {}
+    errors: dict[str, BaseException] = {}
+    start_barrier = threading.Barrier(2)
+
+    def drive(key: str, ws, message: str) -> None:
+        try:
+            start_barrier.wait(timeout=5)
+            ws.send_json({"type": "user_message", "content": message})
+            results[key] = _drain_turn(ws)
+        except BaseException as exc:  # noqa: BLE001
+            errors[key] = exc
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws_a, client.websocket_connect(f"/ws/chat/{thread_id}") as ws_b:
+        t_a = threading.Thread(target=drive, args=("a", ws_a, "message-a"))
+        t_b = threading.Thread(target=drive, args=("b", ws_b, "message-b"))
+        t_a.start()
+        t_b.start()
+        t_a.join(timeout=10)
+        t_b.join(timeout=10)
+
+    assert not errors, errors
+    assert set(results) == {"a", "b"}
+
+    for frames in results.values():
+        assert frames[0] == {"type": "turn_start"}
+        assert frames[-1] == {"type": "turn_end"}
+
+    # Both turns completed; the fake model saw exactly one request per turn.
+    assert len(fake_model.requests) == 2
+
+    # No interleaving: whichever request ran second must see the FULL first
+    # exchange (both connections' user messages plus the first turn's
+    # assistant reply) already in the checkpointed history — only possible
+    # if the per-thread lock fully serialized the two turns rather than
+    # letting them race against a shared/empty checkpoint.
+    second_request_contents = [m.get("content") for m in fake_model.requests[-1]["messages"]]
+    joined = [c or "" for c in second_request_contents]
+    assert any("message-a" in c for c in joined)
+    assert any("message-b" in c for c in joined)
+    assert any("first reply" in c for c in joined)
