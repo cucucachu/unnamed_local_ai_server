@@ -62,6 +62,26 @@ M2-04's final report for the full transcript):
   cases: `on_tool_error` -> `tool_end` (`status: "error"`), AND the
   subsequent propagated exception -> the normal "unhandled exception during
   a turn" path (`error` frame + close 1011).
+
+## M3-02 `threads` table side-effects
+
+This ticket adds `ThreadStore` bookkeeping side-effects around the existing
+turn lifecycle (the wire format above is untouched — no new/changed frames):
+
+- On connect (once per WS connection, before the receive loop): auto-insert
+  a `threads` row for `thread_id` if one doesn't already exist, so a thread
+  driven purely over WS (e.g. `scripts/ws_smoke.py`'s default `smoke-1`, or
+  any pre-M3-02 gate script) still shows up for `GET /api/threads` /
+  `GET .../messages` rather than 404ing there. See `PgThreadStore`'s
+  docstring (`app/db/threads.py`) for what happens when `thread_id` isn't a
+  valid UUID (the common case for these legacy/manual thread ids) — this
+  call still can't fail the connection either way.
+- On each well-formed `user_message`, before running the turn: set the
+  thread's title to the first 60 chars of the message IF the title is still
+  the default `"New chat"` (a no-op otherwise) — see `_derive_title`.
+- After a turn completes normally (i.e. `_run_turn_or_disconnect` returns
+  `False` — NOT on disconnect-mid-turn or an unhandled-error abort): bump
+  `updated_at = now()`.
 """
 
 from __future__ import annotations
@@ -100,6 +120,21 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
 
 _ARGS_VALUE_TRUNCATE_LEN = 500
 _RESULT_PREVIEW_TRUNCATE_LEN = 2000
+_TITLE_MAX_LEN = 60
+
+
+def _derive_title(content: str) -> str:
+    """First `_TITLE_MAX_LEN` chars of `content`, single-line, `...`-truncated.
+
+    Spec (M3-02): "first 60 chars of the message (single-line, ellipsis if
+    truncated)". Runs of whitespace (including newlines) are collapsed to a
+    single space before truncating, so a multi-line message can't break a
+    thread-list row onto multiple visual lines.
+    """
+    single_line = " ".join(content.split())
+    if len(single_line) <= _TITLE_MAX_LEN:
+        return single_line
+    return single_line[:_TITLE_MAX_LEN] + "..."
 
 
 def _category_for_tool(name: str) -> str:
@@ -276,6 +311,9 @@ async def _send_error_and_close(websocket: WebSocket, message: str, code: int) -
 async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     await websocket.accept()
 
+    thread_store = websocket.app.state.thread_store
+    await thread_store.ensure_exists(thread_id)
+
     while True:
         try:
             raw = await websocket.receive_json()
@@ -296,6 +334,8 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             )
             return
 
+        await thread_store.set_title_if_new(thread_id, _derive_title(content))
+
         lock = _thread_locks.setdefault(thread_id, asyncio.Lock())
         async with lock:
             try:
@@ -307,3 +347,4 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                 return
         if disconnected:
             return
+        await thread_store.touch(thread_id)

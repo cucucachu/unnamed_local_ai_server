@@ -18,16 +18,24 @@ from langgraph.checkpoint.memory import MemorySaver
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.db.threads import InMemoryThreadStore, ThreadStore
 from app.main import create_app
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 
 
-def _make_client(fake_model: FakeModel, tmp_path) -> TestClient:
+def _make_client(fake_model: FakeModel, tmp_path, thread_store: ThreadStore | None = None) -> TestClient:
     settings = fake_model.settings(workspace_root=str(tmp_path))
-    # `checkpointer_override` keeps this on `MemorySaver` (fast, no real
-    # Postgres) rather than the production lifespan's real Postgres
-    # connection — see `app.main.create_app`'s docstring.
-    app = create_app(settings, checkpointer_override=MemorySaver())
+    # `checkpointer_override`/`thread_store_override` keep this on
+    # `MemorySaver`/`InMemoryThreadStore` (fast, no real Postgres) rather
+    # than the production lifespan's real Postgres connection — see
+    # `app.main.create_app`'s docstring. Callers that want to assert on
+    # `ThreadStore` state (M3-02) pass their own `thread_store` instance in;
+    # everyone else gets a private, unobservable one (unchanged behavior).
+    app = create_app(
+        settings,
+        checkpointer_override=MemorySaver(),
+        thread_store_override=thread_store or InMemoryThreadStore(),
+    )
     return TestClient(app)
 
 
@@ -199,3 +207,37 @@ def test_concurrent_turns_serialized(fake_model: FakeModel, tmp_path) -> None:
     assert any("message-a" in c for c in joined)
     assert any("message-b" in c for c in joined)
     assert any("first reply" in c for c in joined)
+
+
+async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, tmp_path) -> None:
+    """M3-02: connection-time auto-insert, title auto-set from msg 1, `updated_at` bump."""
+    fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
+    thread_store = InMemoryThreadStore()
+    thread_id = "title-bump-thread"
+    long_message = "hello world " * 10  # > 60 chars once whitespace-collapsed
+
+    with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        # `ensure_exists` runs once at connection-open, before any message.
+        created = await thread_store.get(thread_id)
+        assert created is not None
+        assert created.title == "New chat"
+
+        ws.send_json({"type": "user_message", "content": long_message})
+        _drain_turn(ws)
+
+        # A second turn's `turn_end` can only reach the client after the
+        # server (a single sequential per-connection coroutine) has already
+        # run turn 1's post-turn `thread_store.touch()` — that call always
+        # executes before the server even attempts to receive message 2 —
+        # so asserting here (rather than right after the FIRST `_drain_turn`)
+        # avoids a race against an in-flight `touch()` call.
+        ws.send_json({"type": "user_message", "content": "a totally different second message"})
+        _drain_turn(ws)
+
+        after_turns = await thread_store.get(thread_id)
+
+    expected_title = " ".join(long_message.split())[:60] + "..."
+    assert after_turns.title == expected_title
+    assert after_turns.updated_at > created.updated_at

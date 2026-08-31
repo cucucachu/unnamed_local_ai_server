@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.core.config import Settings
+from app.db.threads import InMemoryThreadStore
 from app.main import create_app
 from tests.fake_model.scripting import FakeModel
 from tests.fake_model.server import create_fake_model_app
@@ -29,10 +30,13 @@ def test_settings() -> Settings:
 
 @pytest.fixture
 async def client(test_settings: Settings) -> AsyncIterator[AsyncClient]:
-    # `checkpointer_override` keeps this fixture on `MemorySaver` (fast, no
-    # real Postgres) rather than the production lifespan's real Postgres
-    # connection — see `app.main.create_app`'s docstring.
-    app = create_app(test_settings, checkpointer_override=MemorySaver())
+    # `checkpointer_override`/`thread_store_override` keep this fixture off
+    # real Postgres entirely (fast, no real-Postgres dependency) rather than
+    # the production lifespan's real Postgres connection — see
+    # `app.main.create_app`'s docstring.
+    app = create_app(
+        test_settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
