@@ -1,10 +1,16 @@
-from collections.abc import AsyncIterator
+import asyncio
+import threading
+import time
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
+import uvicorn
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
 from app.main import create_app
+from tests.fake_model.scripting import FakeModel
+from tests.fake_model.server import create_fake_model_app
 
 
 @pytest.fixture
@@ -26,3 +32,54 @@ async def client(test_settings: Settings) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
+
+
+class _UvicornThreadServer:
+    """Runs a `uvicorn.Server` on an ephemeral port in a dedicated background
+    thread with its own event loop.
+
+    A background thread (rather than a task on the test's own event loop) is
+    used so the fake model's server loop can't be starved or entangled by
+    whatever the test/agent-under-test is doing on the main loop, and so
+    teardown is a simple, synchronous join with no risk of leaking a pending
+    task on the test's loop.
+    """
+
+    def __init__(self, app) -> None:
+        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
+        self.server = uvicorn.Server(config)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        asyncio.run(self.server.serve())
+
+    def start(self) -> None:
+        self._thread.start()
+        deadline = time.monotonic() + 5
+        while not self.server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError("fake model server did not start within 5s")
+            time.sleep(0.01)
+
+    @property
+    def port(self) -> int:
+        return self.server.servers[0].sockets[0].getsockname()[1]
+
+    def stop(self) -> None:
+        self.server.should_exit = True
+        self._thread.join(timeout=5)
+        if self._thread.is_alive():  # pragma: no cover - defensive
+            raise RuntimeError("fake model server thread did not stop within 5s")
+
+
+@pytest.fixture
+def fake_model() -> Iterator[FakeModel]:
+    fake = FakeModel()
+    app = create_fake_model_app(fake)
+    runner = _UvicornThreadServer(app)
+    runner.start()
+    fake.base_url = f"http://127.0.0.1:{runner.port}/v1"
+    try:
+        yield fake
+    finally:
+        runner.stop()
