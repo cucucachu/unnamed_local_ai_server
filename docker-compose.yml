@@ -4,7 +4,7 @@
 #   caddy              -> M0-03 (Caddy reverse proxy + placeholder frontend) [added]
 #   model-runner       -> M1-01 (llama.cpp Vulkan build) [added]
 #   agent-server       -> M2-01 (FastAPI + deepagents skeleton) [added]
-#   postgres           -> M3-01 (checkpoints + metadata)
+#   postgres           -> M3-01 (checkpoints + metadata) [added]
 #   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper)
 #
 # Fixed topology (see "Reference: Shared Conventions & Contracts" issue, §2):
@@ -16,6 +16,9 @@ name: homeai
 networks:
   homeai-net:
     driver: bridge
+
+volumes:
+  pgdata:
 
 services:
   caddy:
@@ -60,6 +63,9 @@ services:
     restart: unless-stopped
     networks: [homeai-net]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ${WORKSPACE_DIR}:/data/workspace
     environment:
@@ -67,3 +73,26 @@ services:
       MODEL_NAME: ${MODEL_NAME}
       EXEC_MANAGER_URL: ${EXEC_MANAGER_URL}
       EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Only used by `tests/test_checkpointer_pg.py` (integration tests) so
+      # `docker compose exec agent-server uv run pytest -m integration`
+      # "just works" without hand-typing a DSN. Not read by the app itself.
+      TEST_PG_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    networks: [homeai-net]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

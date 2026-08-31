@@ -14,6 +14,7 @@ concurrency test below.
 import threading
 
 import pytest
+from langgraph.checkpoint.memory import MemorySaver
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -23,7 +24,10 @@ from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 
 def _make_client(fake_model: FakeModel, tmp_path) -> TestClient:
     settings = fake_model.settings(workspace_root=str(tmp_path))
-    app = create_app(settings)
+    # `checkpointer_override` keeps this on `MemorySaver` (fast, no real
+    # Postgres) rather than the production lifespan's real Postgres
+    # connection — see `app.main.create_app`'s docstring.
+    app = create_app(settings, checkpointer_override=MemorySaver())
     return TestClient(app)
 
 

@@ -17,11 +17,22 @@ ENV UV_CACHE_DIR=/tmp/uv-cache
 # non-root runtime UID from writing to it; /tmp itself is world-writable
 # (1777), so uv recreates it on demand under whichever UID runs the container.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev && rm -rf "$UV_CACHE_DIR"
+# Dev deps (pytest et al.) ARE synced here (no `--no-dev`) — despite this
+# being the runtime image, not just a build stage — so that
+# `docker compose exec agent-server uv run pytest -m integration` (M3-01)
+# works out of the box. It can't fall back to syncing them on demand at
+# `docker compose exec` time: the runtime UID is non-root and can't write
+# into this build-time `.venv` (see the CMD comment below), so whatever's
+# missing here is permanently missing at runtime.
+RUN uv sync --frozen && rm -rf "$UV_CACHE_DIR"
 
 COPY app/ ./app/
+# tests/ is included in the runtime image (not just app/) so
+# `docker compose exec agent-server uv run pytest -m integration` (M3-01)
+# has something to collect.
+COPY tests/ ./tests/
 
-# --no-sync: the frozen, no-dev venv built above is exactly what should run;
-# without it, `uv run` re-syncs (including dev deps) on every container start
-# as the non-root runtime UID, which can't write into the build-time venv.
+# --no-sync: the frozen venv built above is exactly what should run; without
+# it, `uv run` re-checks/re-syncs on every container start as the non-root
+# runtime UID, which can't write into the build-time venv.
 CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
