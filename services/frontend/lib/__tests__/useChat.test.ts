@@ -1,8 +1,9 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
+import type { ThreadMessage } from '../threads';
 import type { WebSocketCtor, WebSocketLike } from '../chatSocket';
-import { useChat, type ChatItem, type UseChatResult } from '../useChat';
+import { mapHistoryToItems, useChat, type ChatItem, type UseChatResult } from '../useChat';
 
 /** Same fake-`WebSocket` pattern as `chatSocket.test.ts`'s `FakeWebSocket` —
  * duplicated (rather than imported) since that class isn't exported from
@@ -43,11 +44,36 @@ function latestSocket(): FakeWebSocket {
 
 const Ctor = FakeWebSocket as unknown as WebSocketCtor;
 
+/** Mocks `global.fetch` (the layer `lib/threads.ts`'s `getThreadMessages` ->
+ * `lib/api.ts`'s `apiFetch` ultimately calls) to resolve `GET
+ * /api/threads/{id}/messages` with `messages` — same mocking approach as
+ * `lib/__tests__/api.test.ts`, reused here for consistency. */
+function mockThreadMessages(messages: ThreadMessage[]): void {
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    json: async () => messages,
+  }) as unknown as typeof fetch;
+}
+
+function mockThreadMessagesFailure(status = 500, detail = 'boom'): void {
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: false,
+    status,
+    statusText: 'Internal Server Error',
+    json: async () => ({ detail }),
+  }) as unknown as typeof fetch;
+}
+
 /** Minimal `renderHook`-equivalent: no `@testing-library/react-hooks` is
  * installed, so this mounts a throwaway component via `react-test-renderer`
  * (already a transitive dep of `jest-expo`) and captures the hook's return
- * value on every render. */
-function renderUseChat(threadId = 'default'): {
+ * value on every render. This variant does NOT wait for the hydration
+ * fetch's pending promise chain to settle — used by the hydration-phase
+ * tests themselves, which need to assert on the `'loading'` state before it
+ * resolves. */
+function renderUseChatSync(threadId = 'default'): {
   current: () => UseChatResult;
   unmount: () => void;
 } {
@@ -72,6 +98,25 @@ function renderUseChat(threadId = 'default'): {
   };
 }
 
+/** Flushes the microtask queue via a zero-delay macrotask boundary, letting
+ * the hydration fetch's `.then()`/`.catch()` chain (and the state updates
+ * inside it) settle before the caller continues. */
+async function flush(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** `renderUseChatSync` + an immediate `flush()` — the harness every
+ * non-hydration-focused test in this file uses, since those tests only
+ * care about post-hydration (`'done'`) socket behavior and would otherwise
+ * all need their own explicit `flush()` call. */
+async function renderUseChat(threadId = 'default'): Promise<ReturnType<typeof renderUseChatSync>> {
+  const hook = renderUseChatSync(threadId);
+  await flush();
+  return hook;
+}
+
 function findItem<K extends ChatItem['kind']>(
   items: ChatItem[],
   kind: K,
@@ -85,11 +130,16 @@ function findItem<K extends ChatItem['kind']>(
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
+  // Default: empty history, hydration succeeds immediately — matches this
+  // suite's pre-M3-04 behavior of starting every test with an empty
+  // `items` list and an immediately-open socket. Tests that care about
+  // hydration itself (loading/error/retry) override this per-test.
+  mockThreadMessages([]);
 });
 
 describe('useChat — plain text turn', () => {
-  it('produces one assistant item with the full concatenated text, streaming: false after turn_end', () => {
-    const hook = renderUseChat();
+  it('produces one assistant item with the full concatenated text, streaming: false after turn_end', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       latestSocket().emit({ type: 'turn_start' });
@@ -108,8 +158,8 @@ describe('useChat — plain text turn', () => {
 });
 
 describe('useChat — tool turn', () => {
-  it('produces a tool item with the right status/name/category, and a SEPARATE assistant item after it', () => {
-    const hook = renderUseChat();
+  it('produces a tool item with the right status/name/category, and a SEPARATE assistant item after it', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       latestSocket().emit({ type: 'turn_start' });
@@ -160,8 +210,8 @@ describe('useChat — tool turn', () => {
 });
 
 describe('useChat — error frame', () => {
-  it('appends an error item and resets busy to false', () => {
-    const hook = renderUseChat();
+  it('appends an error item and resets busy to false', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       hook.current().sendMessage('hi');
@@ -178,8 +228,8 @@ describe('useChat — error frame', () => {
     expect(errorItem.message).toBe('boom');
   });
 
-  it('closes out a dangling streaming assistant item instead of leaving it stuck streaming', () => {
-    const hook = renderUseChat();
+  it('closes out a dangling streaming assistant item instead of leaving it stuck streaming', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       latestSocket().emit({ type: 'turn_start' });
@@ -196,8 +246,8 @@ describe('useChat — error frame', () => {
 });
 
 describe('useChat — two turns in sequence', () => {
-  it('grows items to include two independent sets of turn output', () => {
-    const hook = renderUseChat();
+  it('grows items to include two independent sets of turn output', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       hook.current().sendMessage('message one');
@@ -238,8 +288,8 @@ describe('useChat — tool-only turn with no trailing text (substituted edge cas
   // per the ticket's own suggestion: a turn that ends with a tool call and no
   // trailing text at all, exercising the "handle gracefully" dangling-item
   // note for `turn_end`.
-  it('ends with zero dangling streaming items — only the tool item remains', () => {
-    const hook = renderUseChat();
+  it('ends with zero dangling streaming items — only the tool item remains', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       latestSocket().emit({ type: 'turn_start' });
@@ -268,8 +318,8 @@ describe('useChat — tool-only turn with no trailing text (substituted edge cas
 });
 
 describe('useChat — sendMessage', () => {
-  it('appends a user item immediately, sets busy, and sends a user_message frame', () => {
-    const hook = renderUseChat();
+  it('appends a user item immediately, sets busy, and sends a user_message frame', async () => {
+    const hook = await renderUseChat();
 
     act(() => {
       hook.current().sendMessage('hi there');
@@ -282,8 +332,8 @@ describe('useChat — sendMessage', () => {
 });
 
 describe('useChat — connectionState', () => {
-  it('reflects the underlying socket connection lifecycle', () => {
-    const hook = renderUseChat();
+  it('reflects the underlying socket connection lifecycle', async () => {
+    const hook = await renderUseChat();
 
     expect(hook.current().connectionState).toBe('connecting');
 
@@ -292,4 +342,165 @@ describe('useChat — connectionState', () => {
     });
     expect(hook.current().connectionState).toBe('open');
   });
+});
+
+describe('useChat — history hydration', () => {
+  it('starts in hydrationState "loading" with the socket not yet opened', () => {
+    mockThreadMessages([
+      { id: 'm-1', role: 'user', content: 'hello from history', tool_name: null, tool_calls: null },
+    ]);
+
+    const hook = renderUseChatSync();
+
+    expect(hook.current().hydrationState).toBe('loading');
+    expect(hook.current().items).toEqual([]);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    // Unmount before the mocked fetch's promise settles (rather than
+    // leaving it dangling into the next test): the hydration effect's own
+    // cleanup sets a `cancelled` flag precisely so an in-flight hydration
+    // fetch never calls `setState` after unmount.
+    hook.unmount();
+  });
+
+  it('maps fetched history into items and opens the socket once hydration completes', async () => {
+    mockThreadMessages([
+      { id: 'm-1', role: 'user', content: 'hello from history', tool_name: null, tool_calls: null },
+    ]);
+
+    const hook = renderUseChatSync();
+    await flush();
+
+    expect(hook.current().hydrationState).toBe('done');
+    expect(hook.current().items).toEqual([{ id: 'm-1', kind: 'user', text: 'hello from history' }]);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it('sets hydrationState "error" and never opens the socket when the history fetch fails', async () => {
+    mockThreadMessagesFailure(500, 'db unavailable');
+
+    const hook = renderUseChatSync();
+    await flush();
+
+    expect(hook.current().hydrationState).toBe('error');
+    expect(hook.current().items).toEqual([]);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it('retryHydration re-fetches and recovers into "done", opening the socket', async () => {
+    mockThreadMessagesFailure();
+
+    const hook = renderUseChatSync();
+    await flush();
+    expect(hook.current().hydrationState).toBe('error');
+
+    mockThreadMessages([{ id: 'm-2', role: 'user', content: 'second attempt', tool_name: null, tool_calls: null }]);
+    act(() => {
+      hook.current().retryHydration();
+    });
+    expect(hook.current().hydrationState).toBe('loading');
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    await flush();
+
+    expect(hook.current().hydrationState).toBe('done');
+    expect(hook.current().items).toEqual([{ id: 'm-2', kind: 'user', text: 'second attempt' }]);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+describe('mapHistoryToItems', () => {
+  // Table-driven per the ticket ("history→items mapping table-driven (≥4
+  // cases incl. tool rows)"). Each case is exercised in isolation (its own
+  // one- or two-message `input`) except where a case's whole point is an
+  // interaction between adjacent rows (the "assistant+tool_calls paired
+  // with the following tool row" case), matching how `_normalize_message`
+  // in `app/api/chat.py` actually emits these sequences.
+  const cases: { name: string; input: ThreadMessage[]; expected: ChatItem[] }[] = [
+    {
+      name: 'a user row maps directly to a ChatUserItem',
+      input: [{ id: 'u-1', role: 'user', content: 'hi there', tool_name: null, tool_calls: null }],
+      expected: [{ id: 'u-1', kind: 'user', text: 'hi there' }],
+    },
+    {
+      name: 'an assistant row with plain content maps directly to a non-streaming ChatAssistantItem',
+      input: [{ id: 'a-1', role: 'assistant', content: 'hello!', tool_name: null, tool_calls: null }],
+      expected: [{ id: 'a-1', kind: 'assistant', text: 'hello!', streaming: false }],
+    },
+    {
+      name: 'a tool row maps to a ChatToolItem with status "success" and the stored content as resultPreview',
+      input: [{ id: 't-1', role: 'tool', content: 'wrote 1 file', tool_name: 'write_file', tool_calls: null }],
+      expected: [
+        {
+          id: 't-1',
+          kind: 'tool',
+          toolCallId: 't-1',
+          name: 'write_file',
+          category: 'file',
+          status: 'success',
+          args: {},
+          resultPreview: 'wrote 1 file',
+        },
+      ],
+    },
+    {
+      name: 'an unrecognized tool name still maps to a ChatToolItem, falling back to category "other"',
+      input: [{ id: 't-2', role: 'tool', content: 'did a thing', tool_name: 'some_future_tool', tool_calls: null }],
+      expected: [
+        {
+          id: 't-2',
+          kind: 'tool',
+          toolCallId: 't-2',
+          name: 'some_future_tool',
+          category: 'other',
+          status: 'success',
+          args: {},
+          resultPreview: 'did a thing',
+        },
+      ],
+    },
+    {
+      name: 'an assistant row with empty content + tool_calls renders nothing (the paired tool row covers it)',
+      input: [
+        {
+          id: 'a-2',
+          role: 'assistant',
+          content: '',
+          tool_name: null,
+          tool_calls: [{ id: 'call-1', name: 'write_file', args: { file_path: '/x.txt' } }],
+        },
+        { id: 't-3', role: 'tool', content: 'wrote 1 file', tool_name: 'write_file', tool_calls: null },
+        { id: 'a-3', role: 'assistant', content: 'done', tool_name: null, tool_calls: null },
+      ],
+      expected: [
+        {
+          id: 't-3',
+          kind: 'tool',
+          toolCallId: 't-3',
+          name: 'write_file',
+          category: 'file',
+          status: 'success',
+          args: {},
+          resultPreview: 'wrote 1 file',
+        },
+        { id: 'a-3', kind: 'assistant', text: 'done', streaming: false },
+      ],
+    },
+    {
+      name: 'an assistant row with empty content and NO tool_calls still maps to an (empty) ChatAssistantItem',
+      input: [{ id: 'a-4', role: 'assistant', content: '', tool_name: null, tool_calls: null }],
+      expected: [{ id: 'a-4', kind: 'assistant', text: '', streaming: false }],
+    },
+    {
+      name: 'an empty history maps to an empty item list',
+      input: [],
+      expected: [],
+    },
+  ];
+
+  for (const { name, input, expected } of cases) {
+    it(name, () => {
+      expect(mapHistoryToItems(input)).toEqual(expected);
+    });
+  }
 });

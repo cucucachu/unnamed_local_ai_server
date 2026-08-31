@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# M2-06 full-stack chat smoke test.
+# M2-06/M3-04 full-stack chat smoke test.
 #
 # Opens a real headless browser against the live stack (`caddy` fronting the
 # built frontend + proxying to `agent-server`/`model-runner`), navigates to
-# the Chat tab, sends "Say exactly: PONG", and asserts a real assistant
-# bubble with text appears within 120 seconds.
+# the Chat tab, creates a new thread from the UI, sends a message, goes back
+# to the thread list (asserting the title reflects the message, per M3-02's
+# title-derivation), reopens the thread (asserting history hydration
+# actually rendered the prior messages, per M3-04), and sends a follow-up
+# message — see `chat_browser_smoke.mjs` for the full step-by-step.
 #
 # Prerequisites (not managed by this script):
 #   - The full docker-compose stack is up and healthy:
