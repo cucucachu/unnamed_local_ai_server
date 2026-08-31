@@ -1,0 +1,15 @@
+# Build context exclusions — mirrors .gitignore. Critical for the
+# frontend-build Docker stage (infra/caddy/Dockerfile): without excluding
+# node_modules here, `COPY services/frontend/ ./` would overwrite the
+# image's freshly `npm ci`'d (Alpine/musl) node_modules with whatever is
+# on the host (glibc), breaking any native module.
+.git/
+**/node_modules/
+**/dist/
+**/.expo/
+**/__pycache__/
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+services/model-runner/models/*.gguf
+.env
