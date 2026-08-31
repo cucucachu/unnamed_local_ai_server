@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
   KeyboardAvoidingView,
+  FlatList,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,11 +18,6 @@ import {
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import { useChat, type ChatItem, type ChatToolItem } from '@/lib/useChat';
 
-// Fixed for v1 — real thread switching lands in M3-04 (out of scope here);
-// `useChat` already accepts a `threadId` param so this is a one-line swap
-// later.
-const THREAD_ID = 'default';
-
 const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyphMap> = {
   file: 'document-text-outline',
   exec: 'terminal-outline',
@@ -29,12 +25,18 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
   other: 'construct-outline',
 };
 
+/** M2-06's screen, parameterized by `threadId` (M3-04) instead of the old
+ * hardcoded `THREAD_ID = 'default'`. `useLocalSearchParams` (not
+ * `useGlobalSearchParams`) is the right hook here per expo-router's own
+ * distinction: this screen only ever cares about ITS OWN route's
+ * `[threadId]` segment, never a parent/sibling route's params. */
 export default function ChatScreen() {
-  const { items, sendMessage, busy, connectionState } = useChat(THREAD_ID);
+  const { threadId } = useLocalSearchParams<{ threadId: string }>();
+  const { items, sendMessage, busy, connectionState, hydrationState, retryHydration } = useChat(threadId);
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<ChatItem>>(null);
 
-  const canSend = !busy && draft.trim().length > 0;
+  const canSend = !busy && hydrationState === 'done' && draft.trim().length > 0;
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
@@ -63,6 +65,36 @@ export default function ChatScreen() {
   );
 
   const connectionLabel = CONNECTION_LABEL[connectionState];
+
+  // Spec: "Show a spinner until hydration completes; hydration failure ->
+  // error banner with retry, socket not opened." These two early returns
+  // (before the composer/list render at all) are what make that literal:
+  // `useChat` itself never opens the socket while `hydrationState !==
+  // 'done'` (see `lib/useChat.ts`), and this screen mirrors that by not
+  // rendering the composer/message list until then either.
+  if (hydrationState === 'loading') {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color={theme.accent} />
+      </View>
+    );
+  }
+
+  if (hydrationState === 'error') {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.hydrationErrorText}>Couldn&apos;t load this conversation.</Text>
+        <Pressable
+          style={styles.retryButton}
+          onPress={retryHydration}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading conversation"
+        >
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -205,6 +237,30 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
+  },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  hydrationErrorText: {
+    color: theme.danger,
+    fontSize: 15,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  retryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  retryButtonText: {
+    color: theme.text,
+    fontSize: 14,
+    fontWeight: '600',
   },
   connectionPill: {
     alignSelf: 'center',
