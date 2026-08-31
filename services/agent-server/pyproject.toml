@@ -1,0 +1,37 @@
+[project]
+name = "agent-server"
+version = "0.1.0"
+description = "M2-01: FastAPI service hosting the agent, chat WS, files and media APIs"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.10,<0.8",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "langchain-openai>=1.0,<2.0",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "psycopg-pool>=3.3.1",
+    "psycopg[binary]>=3.3.4",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+# app/ is run directly via `uv run uvicorn app.main:app` (uvicorn inserts the
+# cwd onto sys.path) rather than imported as an installed package — don't
+# try to build/install a wheel for it.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.5",
+]
