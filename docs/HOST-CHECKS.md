@@ -8,21 +8,27 @@ agent run.
 
 ## M0
 
-- [ ] (M0-03) Phone on WiFi: `http://homeai.local` shows the placeholder page. **(GATE G0)**
+- [x] (M0-03) Phone on WiFi: `http://homeai.local` shows the placeholder page. **(GATE G0)**
 
 ## M1
 
-- [ ] (M1-03) PM sign-off: read `docs/TOOL_CALLING.md` (verdict: GO) and
+- [x] (M1-03) PM sign-off: read `docs/TOOL_CALLING.md` (verdict: GO) and
       confirm comfort with M2-03 proceeding on native tool-calling before
       that ticket starts.
 
 ## M2
 
-- [ ] (M2-05) Laptop browser on LAN: `http://homeai.local` shows the two-tab shell.
-- [ ] (M2-05) Phone with Expo Go: `npx expo start` from `services/frontend/`,
+- [x] (M2-05) Laptop browser on LAN: `http://homeai.local` shows the two-tab shell.
+- [x] (M2-05) Phone with Expo Go: `npx expo start` from `services/frontend/`,
       scan QR — app opens, tabs render (native parity smoke).
-- [ ] (M2-06) Phone browser: send a message, watch tokens stream live.
-- [ ] (M2-06) Expo Go: same, confirming keyboard behavior and send button.
+- [x] (M2-06) Phone browser: send a message, watch tokens stream live.
+- [x] (M2-06) Expo Go: same, confirming keyboard behavior and send button.
+- [x] (M2-07) Phone browser at `http://homeai.local`: send "create a file
+      called from-my-phone.txt containing hi" — tool card appears in chat —
+      then verify on the host the file exists. **(GATE G1+G2)**
+- [x] (M2-07) Tokens visibly stream (not one blob at the end). **(GATE G1+G2)**
+
+> **PM sign-off: G1+G2 passed 2026-08-30**
 
 ## M3
 
