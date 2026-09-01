@@ -4,6 +4,8 @@
 what the Dockerfile's `uv run uvicorn app.main:app` command serves.
 """
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -13,7 +15,17 @@ from fastapi import FastAPI
 
 from app.api import router
 from app.core.config import Settings
+from app.reaper import reap_loop
 from app.sessions import SessionManager
+
+# Uvicorn only configures its OWN loggers ("uvicorn"/"uvicorn.error"/
+# "uvicorn.access") - it never touches the root logger's level, which
+# defaults to WARNING. Without this, every `logger.info(...)` in
+# `app.sessions`/`app.reaper` (notably the reaper's one-line-per-removal
+# log, M4-03 spec) would be silently dropped rather than reaching `docker
+# compose logs` - confirmed by a real live-fire reaper run whose removal
+# never appeared in the container's logs until this was added.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 
 def create_app(settings: Settings | None = None, docker_client_override: Any | None = None) -> FastAPI:
@@ -39,9 +51,15 @@ def create_app(settings: Settings | None = None, docker_client_override: Any | N
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client = docker_client_override or docker.from_env()
         app.state.session_manager = SessionManager(client, app.state.settings)
+        reaper_task = asyncio.create_task(reap_loop(app.state.session_manager))
         try:
             yield
         finally:
+            reaper_task.cancel()
+            try:
+                await reaper_task
+            except asyncio.CancelledError:
+                pass
             if docker_client_override is None:
                 client.close()
 

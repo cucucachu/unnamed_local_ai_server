@@ -5,7 +5,7 @@
 #   model-runner       -> M1-01 (llama.cpp Vulkan build) [added]
 #   agent-server       -> M2-01 (FastAPI + deepagents skeleton) [added]
 #   postgres           -> M3-01 (checkpoints + metadata) [added]
-#   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper)
+#   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper) [added]
 #
 # Fixed topology (see "Reference: Shared Conventions & Contracts" issue, §2):
 # only `caddy` publishes a host port (80). Every other service is reachable
@@ -96,3 +96,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # The *only* service with docker.sock mounted (README.md "Isolation
+  # boundary" / "Documented future hardening (not v1)": a docker-socket-proxy
+  # fast-follow is intentionally deferred, so this runs as root - no `user:`
+  # override, unlike agent-server's own non-root `user:` above). Owns the
+  # session-scoped exec container lifecycle (ensure/execute/delete, M4-02)
+  # and the idle reaper (M4-03) that stops+removes containers idle past
+  # EXEC_IDLE_MINUTES. `scripts/check_socket_exclusivity.sh` enforces that no
+  # other service in this file ever gains its own docker.sock mount.
+  code-exec-manager:
+    build: ./services/code-exec-manager
+    restart: unless-stopped
+    networks: [homeai-net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WORKSPACE_DIR: ${WORKSPACE_DIR}
+      HOMEAI_UID: ${HOMEAI_UID}
+      HOMEAI_GID: ${HOMEAI_GID}
+      EXEC_IDLE_MINUTES: ${EXEC_IDLE_MINUTES}
+      EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}
