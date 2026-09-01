@@ -154,6 +154,12 @@ export default function FilesScreen() {
       if (result === null) return; // user cancelled the picker
       refresh();
     } catch (error) {
+      // Logged (not just toasted) because the toast's generic fallback
+      // text alone hid the real cause during M3-05 native-device testing
+      // (`Unsupported FormDataPart implementation` — see `UploadPart`'s
+      // docstring in `lib/files.ts`) for long enough that it needed a
+      // live device + terminal log to root-cause.
+      console.error('[files] upload failed:', error);
       showToast(errorDetail(error, 'Upload failed'));
     } finally {
       setUploading(false);

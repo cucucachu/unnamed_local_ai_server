@@ -1,10 +1,11 @@
 import { Platform } from 'react-native';
 
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File, Paths, UploadType } from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 
-import { ApiError, apiBase, apiFetch } from './api';
+import { ApiError, apiBase, apiFetch, detailFromBody } from './api';
 
 /**
  * Typed client for the "Reference: Shared Conventions & Contracts" issue
@@ -98,43 +99,61 @@ export async function deletePath(path: string): Promise<void> {
   await apiFetch<void>(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
 }
 
-/** One `FormData` part per uploaded file. RN's own `FormData` polyfill
- * (read directly from `node_modules/react-native/Libraries/Network/
- * FormData.js` for this ticket) treats a plain `{ uri, name, type }` object
- * as its "blob" shape for a file part — the standard idiom used throughout
- * the RN ecosystem for multipart uploads of a `file://` URI. Web instead
- * appends a real `File`/`Blob` (from `<input type="file">`), which every
- * `FormData` implementation (RN's own, and the browser/DOM one this
- * project's `tsconfig` types against) accepts natively. */
-export type UploadPart = File | Blob | { uri: string; name: string; type?: string };
+/**
+ * One `FormData` part per uploaded file — WEB ONLY (see `uploadToDir`'s own
+ * docstring for why native has an entirely separate upload path below,
+ * `uploadOneNative`, that never constructs a `FormData` at all). A real DOM
+ * `File`/`Blob` (from `<input type="file">`), which the browser's own
+ * `fetch`/`FormData` handle natively.
+ */
+export type UploadPart = File | Blob;
 
 /**
- * Platform-independent core of the upload flow — `path` (target dir) +
- * repeated `file` fields per §5, POSTed as `multipart/form-data`. Exported
- * separately from `pickAndUpload` below so it's unit-testable without a
- * real file picker (see `lib/__tests__/files.test.ts`).
+ * WEB upload path — `path` (target dir) + repeated `file` fields per §5,
+ * POSTed as `multipart/form-data` via a hand-built `FormData` + `fetch`.
+ * Exported separately from `pickAndUpload` below so it's unit-testable
+ * without a real file picker (see `lib/__tests__/files.test.ts`).
  *
- * Deviation from the ticket's framing ("upload/download need raw fetch/
- * native APIs instead since they're not plain JSON... even where you can't
- * reuse `apiFetch` itself directly"): upload actually CAN reuse `apiFetch`
- * directly, confirmed by reading `apiFetch`'s own body (`lib/api.ts`) — it
- * never inspects or sets a request `Content-Type`, it just hands `init`
- * straight to `fetch`, and it only cares that the *response* is JSON (true
- * here: `201 {"uploaded": [...]}`, and error bodies are `{"detail": ...}`
- * exactly like every other endpoint). Handing it a `FormData` body works
- * identically to a bespoke `fetch` call — the runtime sets the multipart
- * boundary header itself whenever the body is `FormData`, on both web and
- * RN's own networking stack. Only `download` genuinely can't reuse
- * `apiFetch` (its response is binary, and `apiFetch` unconditionally calls
- * `response.json()`).
+ * NOT used on native — only `pickAndUploadWeb` calls this; native's
+ * `pickAndUploadNative` calls `uploadOneNative` instead. This split (rather
+ * than one shared function) exists because of a genuine, confirmed-live-
+ * on-device Expo SDK 57 bug, root-caused over several rounds of real
+ * Android testing during M3-05:
+ *
+ * Expo SDK 57 installs its own spec-compliant `fetch` globally
+ * (`expo/src/winter/fetch`), which no longer goes through RN's
+ * `XMLHttpRequest`-based networking at all. Its `FormData`-to-multipart
+ * encoder (`convertFormData.ts`) has a compat shim for RN's classic
+ * `FormData` (detected via `typeof formData.getParts === 'function'`) that
+ * is fundamentally broken for any `FormData` with more than one part:
+ * `formData.entries = function() { return formData.getParts().map(...) }`
+ * returns a flat array of bare VALUES (each part's string/file/blob,
+ * unwrapped), but the encoder's own consuming loop —
+ * `for (const [name, entry] of entries)` — destructures each array
+ * element as if it were a `[name, value]` PAIR. For a short string value
+ * (e.g. this project's `path` field, often `""` for the workspace root),
+ * that silently destructures into `name = undefined, entry = undefined`
+ * (an empty string has no characters to iterate), which then fails the
+ * encoder's own `typeof entry === 'string' | entry instanceof Blob |
+ * 'bytes' in entry` checks and throws `Unsupported FormDataPart
+ * implementation` — NOT because of anything about the file part's shape
+ * (several file-part shapes were tried and ruled out first: a plain
+ * `{ uri, name, type }` object, and a real `expo-file-system` `File`
+ * wrapped as `{ file }` per the shim's own `if (part.file) return
+ * part.file` branch — both hit the exact same error, for the exact same
+ * reason: the `path` STRING field breaks first, before the file field is
+ * ever reached).
+ *
+ * Given that, native doesn't touch `fetch`+`FormData` for uploads at all —
+ * see `uploadOneNative`, which uses `expo-file-system`'s own native
+ * `File.upload()` (a real multipart implementation in Android/iOS native
+ * code, not JS-level `FormData` encoding) instead.
  */
 export async function uploadToDir(targetDir: string, parts: UploadPart[]): Promise<UploadResult> {
   const formData = new FormData();
   formData.append('path', targetDir);
   for (const part of parts) {
-    // RN's `{ uri, name, type }` blob shape isn't part of the DOM
-    // `FormData`/`Blob` types this project's tsconfig checks against.
-    formData.append('file', part as unknown as Blob);
+    formData.append('file', part);
   }
   return apiFetch<UploadResult>('/api/files/upload', { method: 'POST', body: formData });
 }
@@ -195,16 +214,101 @@ function pickAndUploadWeb(targetDir: string): Promise<UploadResult | null> {
   });
 }
 
+/**
+ * Copies one picked asset into a file this app fully owns (named
+ * `asset.name`, so the upload gets the right filename — `File.name`
+ * derives from its URI's basename, and there's no settable `name` to just
+ * assign `asset.name` onto directly).
+ *
+ * `pickAndUploadNative` below deliberately passes `copyToCacheDirectory:
+ * false` to the picker, and this copies from the resulting raw `content://`
+ * URI directly (via `expo-file-system/legacy`'s `copyAsync`) — NOT from a
+ * pre-copied `file://` cache path, despite `copyToCacheDirectory: true`
+ * (with a "copy from the cache path" here) being tried FIRST and seeming
+ * like the obviously-intended API for exactly this. Four approaches were
+ * tried against a real Android device before this one, in order:
+ *  1. `copyToCacheDirectory: true` + rename the cached copy in place (new
+ *     `File` API) — "Missing 'READ' permission" from `File.rename`.
+ *  2. `copyToCacheDirectory: true` + read via `File.bytes()` + write to a
+ *     new file (new `File` API) — the exact same "Missing 'READ'
+ *     permission", now from `bytes()`.
+ *  3. `copyToCacheDirectory: true` + `expo-file-system/legacy`'s
+ *     `copyAsync` FROM that same cached path — `java.io.IOException:
+ *     Location '.../cache/DocumentPicker/<uuid>.jpg' isn't readable`, a
+ *     VERBATIM match for a long-standing, still-open upstream Expo Go bug
+ *     (searched and confirmed — see `github.com/expo/expo/issues/21792`,
+ *     identical reports spanning SDK 38 through at least SDK 48).
+ *  4. Same as #3 plus a retry-with-delay (the most commonly-suggested
+ *     mitigation for that bug, on the theory it's a permission-flush
+ *     race) — failed identically and deterministically every retry, which
+ *     rules out a timing race specifically on this device/Android version
+ *     and points at `copyToCacheDirectory: true`'s OWN internal copy step
+ *     being the thing that's actually broken here, not a delay before
+ *     reading its result.
+ * This approach instead never lets the picker attempt that internal copy
+ * at all (`copyToCacheDirectory: false`) and does the equivalent copy
+ * ourselves, straight from the `content://` URI Android's picker Activity
+ * itself returns — the other well-documented workaround for this same
+ * class of bug, and structurally different enough (a `ContentResolver`
+ * stream copy, not a same-process file-to-file copy of the picker's own
+ * output) that it isn't just retrying the same broken step a fifth time.
+ */
+async function copyPickedAsset(asset: DocumentPicker.DocumentPickerAsset): Promise<File> {
+  const destinationUri = `${LegacyFileSystem.cacheDirectory}${asset.name}`;
+  await LegacyFileSystem.deleteAsync(destinationUri, { idempotent: true });
+  await LegacyFileSystem.copyAsync({ from: asset.uri, to: destinationUri });
+  return new File(destinationUri);
+}
+
+/**
+ * Uploads one already-local `File` via `expo-file-system`'s own native
+ * `File.upload()` — a real multipart implementation in Android/iOS native
+ * code — instead of `uploadToDir`'s `fetch` + `FormData`. See
+ * `uploadToDir`'s docstring for the full story on why native can't use
+ * that path at all (a confirmed Expo SDK 57 bug in mixed string+file
+ * `FormData` bodies, unrelated to anything fixable in this file).
+ *
+ * One request per file (`parameters` + a single file, not a repeated
+ * `file` field) rather than one combined multipart request for the whole
+ * batch — `File.upload()`'s own shape is fundamentally single-file — so
+ * `pickAndUploadNative` below calls this once per picked asset and merges
+ * the `uploaded` arrays. The server's `POST /api/files/upload` (§5) treats
+ * every request as "however many `file` fields are present", so a batch of
+ * single-file requests is just as correct as one multi-file request, only
+ * less efficient for very large batches (fine for this app's picker-driven
+ * upload flow).
+ */
+async function uploadOneNative(targetDir: string, file: File): Promise<UploadResult> {
+  const response = await file.upload(`${apiBase()}/api/files/upload`, {
+    uploadType: UploadType.MULTIPART,
+    fieldName: 'file',
+    parameters: { path: targetDir },
+  });
+
+  let body: unknown;
+  try {
+    body = JSON.parse(response.body);
+  } catch {
+    body = undefined;
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new ApiError(response.status, detailFromBody(body, `Upload failed (${response.status})`));
+  }
+  return body as UploadResult;
+}
+
 async function pickAndUploadNative(targetDir: string): Promise<UploadResult | null> {
-  const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+  const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: false });
   if (result.canceled) return null;
 
-  const parts: UploadPart[] = result.assets.map((asset) => ({
-    uri: asset.uri,
-    name: asset.name,
-    type: asset.mimeType ?? 'application/octet-stream',
-  }));
-  return uploadToDir(targetDir, parts);
+  const uploaded: string[] = [];
+  for (const asset of result.assets) {
+    const file = await copyPickedAsset(asset);
+    const one = await uploadOneNative(targetDir, file);
+    uploaded.push(...one.uploaded);
+  }
+  return { uploaded };
 }
 
 /**

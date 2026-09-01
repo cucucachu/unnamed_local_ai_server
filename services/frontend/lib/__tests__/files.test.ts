@@ -1,5 +1,5 @@
 import { ApiError } from '../api';
-import { copyPath, deletePath, joinPath, listFiles, mkdir, movePath, parentPath, uploadToDir } from '../files';
+import { copyPath, deletePath, joinPath, listFiles, mkdir, movePath, parentPath, uploadToDir, type UploadPart } from '../files';
 
 function mockFetchOk(body: unknown, status = 200): jest.Mock {
   const fetchMock = jest.fn().mockResolvedValue({
@@ -166,10 +166,22 @@ describe('deletePath', () => {
 });
 
 describe('uploadToDir', () => {
+  // `uploadToDir` is the WEB-ONLY upload path (see its docstring in
+  // `lib/files.ts` for why — native uses `uploadOneNative`'s
+  // `expo-file-system` `File.upload()` instead, not `fetch` + `FormData`,
+  // due to a confirmed Expo SDK 57 bug in mixed string+file `FormData`
+  // bodies). `uploadToDir` doesn't care what's inside a part beyond
+  // handing it to `FormData.append` — so a minimal fake object is
+  // sufficient here; this suite tests `uploadToDir`'s own request-shaping
+  // (fields, encoding, response handling), not real `Blob` behavior.
+  function fakePart(tag: string): UploadPart {
+    return { tag } as unknown as UploadPart;
+  }
+
   it('POSTs multipart form data to /api/files/upload with the target dir as the "path" field', async () => {
     const fetchMock = mockFetchOk({ uploaded: ['docs/a.txt'] }, 201);
 
-    await uploadToDir('docs', [{ uri: 'file:///tmp/a.txt', name: 'a.txt', type: 'text/plain' }]);
+    await uploadToDir('docs', [fakePart('a.txt')]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [calledUrl, calledInit] = fetchMock.mock.calls[0];
@@ -184,10 +196,7 @@ describe('uploadToDir', () => {
   it('appends one "file" field per part, and a "path" field with a space/unicode target dir', async () => {
     const fetchMock = mockFetchOk({ uploaded: ['a b/тест.txt', 'a b/тест2.txt'] }, 201);
 
-    await uploadToDir('a b', [
-      { uri: 'file:///tmp/1.txt', name: 'тест.txt', type: 'text/plain' },
-      { uri: 'file:///tmp/2.txt', name: 'тест2.txt', type: 'text/plain' },
-    ]);
+    await uploadToDir('a b', [fakePart('тест.txt'), fakePart('тест2.txt')]);
 
     const [, calledInit] = fetchMock.mock.calls[0];
     const body = calledInit.body as FormData;
@@ -198,7 +207,7 @@ describe('uploadToDir', () => {
   it('returns the parsed {uploaded} result on success', async () => {
     mockFetchOk({ uploaded: ['docs/a.txt'] }, 201);
 
-    const result = await uploadToDir('docs', [{ uri: 'file:///tmp/a.txt', name: 'a.txt' }]);
+    const result = await uploadToDir('docs', [fakePart('a.txt')]);
 
     expect(result).toEqual({ uploaded: ['docs/a.txt'] });
   });
@@ -211,7 +220,7 @@ describe('uploadToDir', () => {
       json: async () => ({ detail: "directory 'missing' not found" }),
     }) as unknown as typeof fetch;
 
-    const error = await uploadToDir('missing', [{ uri: 'file:///tmp/a.txt', name: 'a.txt' }]).catch((e) => e);
+    const error = await uploadToDir('missing', [fakePart('a.txt')]).catch((e) => e);
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).detail).toBe("directory 'missing' not found");
