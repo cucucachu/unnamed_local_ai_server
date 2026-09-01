@@ -20,6 +20,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.db.threads import InMemoryThreadStore, ThreadStore
 from app.main import create_app
+from tests.fake_exec_manager.scripting import FakeExecManager
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 
 
@@ -106,6 +107,50 @@ async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
     written = tmp_path / "x.txt"
     assert written.exists()
     assert written.read_text() == "y"
+
+
+async def test_execute_code_tool_turn(
+    fake_model: FakeModel, fake_exec_manager: FakeExecManager, tmp_path
+) -> None:
+    """M4-04: `execute_code` reaches the fake exec-manager and its `tool_start`
+    frame carries `category == "exec"` (extends M2-04's `_TOOL_CATEGORY_BY_NAME`
+    mapping test, `test_tool_turn` above, to the new tool)."""
+    fake_model.queue(
+        ToolCallTurn(name="execute_code", args={"command": "echo hi"}),
+        TextTurn("done"),
+    )
+    settings = fake_model.settings(
+        workspace_root=str(tmp_path), exec_manager_url=fake_exec_manager.base_url
+    )
+    app = create_app(
+        settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()
+    )
+
+    with TestClient(app) as client, client.websocket_connect("/ws/chat/exec-thread") as ws:
+        ws.send_json({"type": "user_message", "content": "run echo hi"})
+        frames = _drain_turn(ws)
+
+    assert frames[0] == {"type": "turn_start"}
+    assert frames[-1] == {"type": "turn_end"}
+
+    types = [f["type"] for f in frames]
+    tool_start_idx = types.index("tool_start")
+    tool_end_idx = types.index("tool_end")
+    assert tool_start_idx < tool_end_idx
+
+    tool_start = frames[tool_start_idx]
+    assert tool_start["name"] == "execute_code"
+    assert tool_start["category"] == "exec"
+
+    tool_end = frames[tool_end_idx]
+    assert tool_end["name"] == "execute_code"
+    assert tool_end["status"] == "success"
+    assert tool_end["tool_call_id"] == tool_start["tool_call_id"]
+
+    assert fake_exec_manager.ensure_calls == ["exec-thread"]
+    assert len(fake_exec_manager.execute_calls) == 1
+    assert fake_exec_manager.execute_calls[0].command == "echo hi"
+    assert fake_exec_manager.execute_calls[0].session_id == "exec-thread"
 
 
 async def test_invalid_frame(fake_model: FakeModel, tmp_path) -> None:

@@ -19,6 +19,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
 from app.agent.prompts import SYSTEM_PROMPT
 from app.core.config import Settings
@@ -29,6 +30,6 @@ def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
         model=build_model(settings),
         backend=FilesystemBackend(root_dir=settings.workspace_root, virtual_mode=True),
         system_prompt=SYSTEM_PROMPT,
-        tools=[],  # execute_code added in M4-04
+        tools=[make_execute_code_tool(settings)],
         checkpointer=checkpointer,
     )
