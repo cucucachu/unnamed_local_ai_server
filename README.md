@@ -304,6 +304,11 @@ sudo infra/host/setup-workspace.sh
 sudo infra/host/setup-avahi.sh
 sudo infra/host/setup-ufw.sh
 
+# Exec toolbox image — a plain `docker build`, not a compose service (compose
+# can't build an image it never runs itself; code-exec-manager, M4-02, spins
+# up short-lived containers from this image on demand).
+./services/code-exec-manager/build-exec-image.sh
+
 docker compose up -d
 ```
 
