@@ -31,7 +31,10 @@ export class ApiError extends Error {
   }
 }
 
-function detailFromBody(body: unknown, fallback: string): string {
+/** Exported for `lib/files.ts`'s `uploadOneNative`, which parses an
+ * `expo-file-system` `File.upload()` response body itself (that API
+ * doesn't go through `apiFetch`, but its error body shape is identical). */
+export function detailFromBody(body: unknown, fallback: string): string {
   if (body && typeof body === 'object' && typeof (body as { detail?: unknown }).detail === 'string') {
     return (body as { detail: string }).detail;
   }

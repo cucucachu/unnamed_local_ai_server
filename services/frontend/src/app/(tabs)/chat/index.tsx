@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 
+import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
@@ -46,20 +47,7 @@ export default function ThreadListScreen() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const showToast = useCallback((message: string) => {
-    if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
-    setToast(message);
-    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
-    };
-  }, []);
+  const { message: toast, showToast } = useToast();
 
   const loadThreads = useCallback(async () => {
     try {
@@ -187,11 +175,7 @@ export default function ThreadListScreen() {
         />
       )}
 
-      {toast ? (
-        <View style={styles.toast} testID="thread-list-toast">
-          <Text style={styles.toastText}>{toast}</Text>
-        </View>
-      ) : null}
+      <Toast message={toast} testID="thread-list-toast" />
     </View>
   );
 }
@@ -343,22 +327,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.danger,
-  },
-  toast: {
-    position: 'absolute',
-    bottom: 20,
-    left: 16,
-    right: 16,
-    backgroundColor: theme.surface,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: theme.border,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  toastText: {
-    color: theme.text,
-    fontSize: 14,
-    textAlign: 'center',
   },
 });
