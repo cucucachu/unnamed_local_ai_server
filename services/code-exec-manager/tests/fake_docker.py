@@ -24,6 +24,13 @@ class FakeExecResult:
 
 
 class FakeContainer:
+    # Arbitrary fixed default so tests that don't care about adoption/
+    # `StartedAt` never need to set it explicitly - matches the real SDK's
+    # `container.attrs["State"]["StartedAt"]` shape (ISO8601, `Z`-suffixed,
+    # nanosecond-precision) closely enough for `SessionManager._adopt`'s
+    # `datetime.fromisoformat` to parse it unmodified.
+    DEFAULT_STARTED_AT = "2024-01-01T00:00:00.000000000Z"
+
     def __init__(self, name: str, image: str, **kwargs: Any) -> None:
         self.name = name
         self.image = image
@@ -40,6 +47,12 @@ class FakeContainer:
         # `(cmd, demux, user) -> FakeExecResult` for tests simulating a
         # slow/hanging exec (e.g. via `time.sleep`).
         self.exec_run_result: FakeExecResult | Any = FakeExecResult(0)
+        # Mirrors the real SDK's `.attrs` dict closely enough for the
+        # reaper's adoption path (`container.attrs["State"]["StartedAt"]`)
+        # to work unmodified - tests simulating an "unknown" container set
+        # `container.attrs["State"]["StartedAt"]` directly, the same way
+        # existing tests mutate `container.status` directly.
+        self.attrs: dict[str, Any] = {"State": {"StartedAt": self.DEFAULT_STARTED_AT}}
 
     def reload(self) -> None:
         pass  # status is mutated directly by fakes/tests; nothing to refresh
@@ -66,6 +79,10 @@ class FakeContainerCollection:
     def __init__(self) -> None:
         self._by_name: dict[str, FakeContainer] = {}
         self.run_calls: list[dict[str, Any]] = []
+        # Test hook for `tests/test_reaper_unit.py`'s "listing error doesn't
+        # crash the reap loop" case - when set, `list()` raises this instead
+        # of returning, simulating a transient Docker Engine API failure.
+        self.list_error: Exception | None = None
 
     def get(self, name: str) -> FakeContainer:
         container = self._by_name.get(name)
@@ -80,6 +97,8 @@ class FakeContainerCollection:
         return container
 
     def list(self, all: bool = False, filters: dict[str, Any] | None = None) -> list[FakeContainer]:
+        if self.list_error is not None:
+            raise self.list_error
         containers = [c for c in self._by_name.values() if not c.removed]
         if not all:
             containers = [c for c in containers if c.status == "running"]

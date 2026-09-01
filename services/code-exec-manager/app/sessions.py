@@ -16,6 +16,7 @@ concerns itself purely with the Docker side of the lifecycle.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,8 @@ import docker.errors
 from fastapi import HTTPException
 
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 SESSION_ID_PATTERN = r"^[a-zA-Z0-9_-]{1,64}$"
 
@@ -269,6 +272,92 @@ class SessionManager:
 
     def _list_sync(self) -> list[Any]:
         return self._client.containers.list(all=True, filters={"label": "homeai.exec=1"})
+
+    async def reap_once(self, now: datetime | None = None) -> None:
+        """One idle-reaper pass: stop+remove every `homeai.exec=1` container
+        (running or stopped - hence `all=True` in `_list_sync`) whose idle
+        time exceeds `settings.exec_idle_minutes`.
+
+        `now` is injectable (defaults to `datetime.now(UTC)`) so
+        `app/reaper.py`'s 60s-interval background loop never needs it, while
+        unit tests can drive the idle clock deterministically without real
+        sleeping.
+
+        Never raises - a listing failure (e.g. a transient Docker API error)
+        or a single container's own processing failure is logged and
+        swallowed, so `app/reaper.py`'s `while True` loop keeps ticking on
+        the next 60s tick either way.
+        """
+        now = now or datetime.now(UTC)
+        await anyio.to_thread.run_sync(self._reap_once_sync, now)
+
+    def _reap_once_sync(self, now: datetime) -> None:
+        try:
+            containers = self._list_sync()
+        except Exception:
+            logger.exception("reaper: failed to list homeai.exec containers")
+            return
+
+        for container in containers:
+            try:
+                self._reap_container_if_idle(container, now)
+            except Exception:
+                logger.exception(
+                    "reaper: failed to process container %r", getattr(container, "name", "<unknown>")
+                )
+
+    def _reap_container_if_idle(self, container: Any, now: datetime) -> None:
+        session_id = container.labels.get("homeai.session")
+        if not session_id:
+            return  # not one of ours (defensive; the label filter already scopes this)
+
+        last_used = self._last_used.get(session_id)
+        if last_used is None:
+            # Unknown to this process - either a genuinely fresh container
+            # this instance itself just created (impossible in practice:
+            # `ensure`/`execute` always `_touch` first) or, per the ticket,
+            # a manager restart that wiped `_last_used` while the container
+            # kept running. Adopt it by seeding its idle clock from Docker's
+            # own record of when it started, rather than treating "unknown"
+            # as "just used" (which would mean a restart resets the idle
+            # clock forever and nothing ever gets reaped).
+            last_used = self._adopt(session_id, container)
+
+        idle_minutes = (now - last_used).total_seconds() / 60
+        if idle_minutes <= self._settings.exec_idle_minutes:
+            return
+
+        logger.info(
+            "reaper: removing idle session %r (idle %.1f min > limit %d min)",
+            session_id,
+            idle_minutes,
+            self._settings.exec_idle_minutes,
+        )
+        try:
+            container.stop(timeout=5)
+        except docker.errors.APIError:
+            pass  # already stopped/stopping - `remove` below still applies
+        container.remove(force=True)
+        self._last_used.pop(session_id, None)
+
+    def _adopt(self, session_id: str, container: Any) -> datetime:
+        """Seed `_last_used[session_id]` from the container's own
+        `State.StartedAt` (an ISO8601 string Docker always sets) the first
+        time this process sees a container it doesn't recognize, and return
+        the seeded value.
+
+        Falls back to `now` (i.e. treat it as freshly-used) if `StartedAt`
+        is ever missing or unparseable - the same "worst case: looks
+        freshly-used" tradeoff this class's own docstring already accepts
+        for `_last_used` not surviving a restart at all.
+        """
+        started_at_raw = container.attrs.get("State", {}).get("StartedAt")
+        try:
+            started_at = datetime.fromisoformat(started_at_raw)
+        except (TypeError, ValueError):
+            started_at = datetime.now(UTC)
+        self._last_used[session_id] = started_at
+        return started_at
 
 
 def _truncate_bytes(data: bytes | None) -> tuple[bytes, bool]:
