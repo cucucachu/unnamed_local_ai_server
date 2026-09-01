@@ -1,0 +1,41 @@
+[project]
+name = "code-exec-manager"
+version = "0.1.0"
+description = "M4-02: sole docker.sock holder - session-scoped exec container lifecycle (ensure/execute/delete)"
+requires-python = ">=3.12"
+dependencies = [
+    "anyio>=4.11.0",
+    "docker>=7.1.0",
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+# app/ is run directly via `uv run uvicorn app.main:app` (uvicorn inserts the
+# cwd onto sys.path) rather than imported as an installed package - same
+# reasoning as agent-server's own pyproject.toml.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+markers = [
+    "integration: requires a real Docker daemon (docker.sock) and the homeai-exec-toolbox:latest image",
+]
+# Same reasoning as agent-server's pyproject.toml: the container runs as a
+# non-root, HOME-less UID that can't write into /app's build-time tree, so
+# the default `.pytest_cache` location would otherwise warn on every
+# `docker compose exec code-exec-manager uv run pytest` invocation.
+cache_dir = "/tmp/pytest_cache"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.5",
+]
