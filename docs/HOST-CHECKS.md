@@ -40,6 +40,11 @@ agent run.
       not exercised by the web-only browser smoke test).
 - [x] (M3-05) Phone browser + Expo Go: browse the Files tab, upload a photo
       from the phone, download it back, delete it.
+- [ ] (M3-06) Phone: create a thread + file via chat, reboot the **whole
+      host machine**, confirm thread history and file are intact and chat
+      continues. (The one check scripts can't do.)
+
+> **PM sign-off: G3 passed ____**
 
 ## M4
 
