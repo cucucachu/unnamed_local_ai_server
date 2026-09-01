@@ -11,6 +11,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.core.config import Settings
 from app.db.threads import InMemoryThreadStore
 from app.main import create_app
+from tests.fake_exec_manager.scripting import FakeExecManager
+from tests.fake_exec_manager.server import create_fake_exec_manager_app
 from tests.fake_model.scripting import FakeModel
 from tests.fake_model.server import create_fake_model_app
 
@@ -87,6 +89,27 @@ def fake_model() -> Iterator[FakeModel]:
     runner = _UvicornThreadServer(app)
     runner.start()
     fake.base_url = f"http://127.0.0.1:{runner.port}/v1"
+    try:
+        yield fake
+    finally:
+        runner.stop()
+
+
+@pytest.fixture
+def fake_exec_manager() -> Iterator[FakeExecManager]:
+    """A running fake code-exec-manager, bound to a real ephemeral port.
+
+    A real bound port (rather than an in-process `httpx.MockTransport`) is
+    used so the exact same fixture works for both a direct-tool unit test
+    (`test_execute_code_tool.py`) and an agent-level WS test
+    (`test_chat_ws.py`) whose `Settings.exec_manager_url` must be a real,
+    dialable URL — same reasoning as `fake_model` above.
+    """
+    fake = FakeExecManager()
+    app = create_fake_exec_manager_app(fake)
+    runner = _UvicornThreadServer(app)
+    runner.start()
+    fake.base_url = f"http://127.0.0.1:{runner.port}"
     try:
         yield fake
     finally:
