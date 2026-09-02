@@ -50,6 +50,9 @@ agent run.
 
 - [ ] (M4-05) PM reads the suite output and countersigns the isolation section.
 - [ ] (M4-06) Phone browser + Expo Go: exec card renders and expands cleanly at phone width.
+- [ ] (M4-07) From a phone: ask the agent to batch-process something real in your workspace (e.g. "make thumbnails of the images in test-photos/ using ffmpeg or imagemagick") and verify results in the files screen.
+
+> **PM sign-off: G4 passed ____**
 
 ## M5
 
