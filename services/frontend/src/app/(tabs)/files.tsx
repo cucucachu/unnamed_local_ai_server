@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -21,6 +21,7 @@ import {
   copyPath,
   type FileEntry,
 } from '@/lib/files';
+import { mediaKind } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 type LoadState = 'loading' | 'error' | 'done';
@@ -94,6 +95,7 @@ type PendingAction =
  * a successful mutation, not a client-side guess at the new state).
  */
 export default function FilesScreen() {
+  const router = useRouter();
   const [path, setPath] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loadState, setLoadState] = useState<LoadState>('loading');
@@ -130,18 +132,41 @@ export default function FilesScreen() {
 
   const refresh = useCallback(() => load(path), [load, path]);
 
-  const handlePressEntry = useCallback((entry: FileEntry) => {
-    if (entry.type === 'dir') {
-      setPath(entry.path);
-    } else {
-      setActionSheetEntry(entry);
-    }
-  }, []);
+  // Shared by both the direct-tap route below and `FileActionSheet`'s
+  // "Play" action, so there's exactly one place that knows the media
+  // route's pathname/params shape.
+  const openMedia = useCallback(
+    (entry: FileEntry) => {
+      const kind = mediaKind(entry.name);
+      if (kind === null) return;
+      router.push({ pathname: '/media', params: { path: entry.path, kind } });
+    },
+    [router],
+  );
+
+  const handlePressEntry = useCallback(
+    (entry: FileEntry) => {
+      if (entry.type === 'dir') {
+        setPath(entry.path);
+      } else if (mediaKind(entry.name) !== null) {
+        // M5-02: a recognized video/audio file opens the player directly
+        // instead of the action sheet — "Play" is still available there
+        // too (for parity with every other file action), reached via
+        // long-press below.
+        openMedia(entry);
+      } else {
+        setActionSheetEntry(entry);
+      }
+    },
+    [openMedia],
+  );
 
   // Long-press (native) / right-click (web) opens the SAME action sheet for
   // either a file or a directory (per the ticket) — this is the only way to
   // rename/move/copy/delete a directory from the UI, since tapping one just
-  // descends into it.
+  // descends into it. Unlike `handlePressEntry`, this is unconditional even
+  // for media files ("long-press still offers Download/Rename/etc." per the
+  // ticket) — the action sheet itself gates its own "Play" entry.
   const handleEntryLongPress = useCallback((entry: FileEntry) => {
     setActionSheetEntry(entry);
   }, []);
@@ -315,6 +340,7 @@ export default function FilesScreen() {
       <FileActionSheet
         entry={actionSheetEntry}
         onClose={() => setActionSheetEntry(null)}
+        onPlay={openMedia}
         onDownload={handleDownload}
         onRename={(entry) => setPendingAction({ kind: 'rename', entry })}
         onMove={(entry) => setPendingAction({ kind: 'move', entry })}

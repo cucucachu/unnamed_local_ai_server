@@ -56,4 +56,9 @@ agent run.
 
 ## M5
 
+- [ ] (M5-02) Phone browser: play the video, scrub the timeline, audio file plays too.
+- [ ] (M5-02) Expo Go: same file plays with expo-video controls; seek works.
+
+> **PM sign-off: G5 passed ____**
+
 ## M6

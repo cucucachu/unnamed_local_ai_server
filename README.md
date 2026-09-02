@@ -184,7 +184,7 @@ sequenceDiagram
     participant A as Agent Server
     participant W as Workspace dir
 
-    U->>P: GET /api/files/stream?path=video.mp4\nRange: bytes=0-
+    U->>P: GET /api/media/stream?path=video.mp4\nRange: bytes=0-
     P->>A: proxy with Range header
     A->>W: open file, seek to range
     A-->>P: 206 Partial Content + chunk
