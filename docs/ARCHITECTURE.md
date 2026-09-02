@@ -235,3 +235,50 @@ extreme-outlier surprisal values on reconstruction. KLD, Δp, and same-top-p
 (reported above) are computed more robustly from the same run and don't
 show this pathology, so those are the numbers to trust here — not the PPL
 ratios.
+
+## Isolation verification (M4-05)
+
+Run `scripts/verify_isolation.sh` after any change to `code-exec-manager` or
+the toolbox image (`services/code-exec-manager/exec-image/Dockerfile`) — it
+is the scripted, repeatable check for the product's core safety promise
+("safe to let it run code"), so it needs re-running whenever anything in
+that promise's implementation moves.
+
+It drives 17 checks against the live stack: 14 run commands **inside a real
+exec container through the manager's own `POST /sessions/{id}/execute`
+endpoint** (never via `docker exec` straight into the container, which would
+bypass exactly what's being tested — an agent can only ever reach the
+container through that same endpoint), plus 3 stack-level checks run
+directly against the compose config and a `docker inspect` of that same
+container. Together they cover every clause of
+`services/code-exec-manager/app/sessions.py`'s `build_run_kwargs` (the exact
+§7 hardening spec):
+
+- **Network isolation** — no interfaces besides `lo`, no reachability to
+  `agent-server`, the LAN, or the public internet, at both the shell
+  (`curl`) and raw-socket (Python) level.
+- **Filesystem isolation** — the root filesystem is read-only; `docker.sock`
+  and agent-server's own `/app`/`/data` paths are absent; `/tmp` and
+  `$HOME` are writable tmpfs; `/workspace` is the sole writable non-tmpfs
+  (real bind) mount.
+- **Capability dropping** — every Linux capability is dropped (`CapEff`
+  all-zero), and the container runs as the configured non-root
+  `HOMEAI_UID`, never root.
+- **Resource limits** — the cgroup CPU quota and `memory.max` match
+  `nano_cpus`/`mem_limit` exactly.
+- **Secret non-leakage** — no environment variables reach the exec
+  container at all (no `POSTGRES`, `MODEL_`, or similar secret-shaped
+  names), matching `build_run_kwargs` never setting an `environment=` key.
+- **Stack-level** — `code-exec-manager` remains the sole `docker.sock`
+  holder (reuses M4-03's `scripts/check_socket_exclusivity.sh`), the exec
+  container's own `docker inspect` confirms `NetworkMode`/`ReadonlyRootfs`/
+  `CapDrop`/`Privileged`/bind-mount all match spec, and no compose service
+  other than `caddy` publishes a host port.
+
+Any failing check prints in red and the suite keeps running the rest (so a
+single run shows every failure at once, not just the first), then exits 1
+if anything failed. It's always safe to re-run: the exec container, its
+manager session, and the throwaway "runner" container used to reach the
+manager's REST API (see the script's own header comment for why a runner
+container is needed at all — `code-exec-manager` publishes no host port) are
+all cleaned up in an `EXIT` trap.
