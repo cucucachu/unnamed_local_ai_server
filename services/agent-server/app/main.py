@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.build import build_agent
-from app.api import chat, chat_ws, files, health
+from app.api import chat, chat_ws, files, health, media
 from app.core.config import Settings
 from app.db.checkpointer import build_postgres_checkpointer
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
@@ -77,6 +77,7 @@ def create_app(
     app.include_router(health.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
     app.include_router(files.router, prefix="/api")
+    app.include_router(media.router, prefix="/api")
     # No prefix: the WS route's own path (`/ws/chat/{thread_id}`) must match
     # Caddy's `/ws/*` routing exactly (see `infra/caddy/Caddyfile`), not be
     # nested under `/api` like the REST routes above.
