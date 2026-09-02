@@ -48,6 +48,8 @@ agent run.
 
 ## M4
 
+- [ ] (M4-05) PM reads the suite output and countersigns the isolation section.
+
 ## M5
 
 ## M6
