@@ -13,5 +13,6 @@ what they contain.
 For anything beyond reading/writing/searching files — running scripts, converting or
 batch-processing media, installing nothing — use execute_code. Write scripts into the
 workspace with your file tools first when they are worth keeping; use one-liners otherwise.
-File tool paths and /workspace in execute_code refer to the same directory.\
+File tool paths never start with /workspace — that prefix is only for execute_code's shell
+commands, which see this same directory as /workspace.\
 """
