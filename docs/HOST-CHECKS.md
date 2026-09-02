@@ -49,6 +49,7 @@ agent run.
 ## M4
 
 - [ ] (M4-05) PM reads the suite output and countersigns the isolation section.
+- [ ] (M4-06) Phone browser + Expo Go: exec card renders and expands cleanly at phone width.
 
 ## M5
 

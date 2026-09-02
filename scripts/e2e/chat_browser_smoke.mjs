@@ -30,6 +30,11 @@ const TIMEOUT_MS = 120_000;
 const FIRST_MESSAGE =
   'Say exactly: PONG. This message   is intentionally padded well past sixty characters so the thread list title gets truncated with an ellipsis.';
 const FOLLOW_UP_MESSAGE = 'Say exactly: PONG again please.';
+// Explicit tool-name + verbatim command, matching how `prompts.py`'s system
+// prompt describes `execute_code` ("running scripts" / one-liners) — this
+// phrasing reliably gets the model to call the tool rather than just
+// describing what it would run.
+const EXEC_MESSAGE = 'Use execute_code to run: echo HELLO-UI';
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
@@ -84,6 +89,36 @@ async function waitForText(page, text, timeoutMs = 15_000) {
   return locator;
 }
 
+/** Polls until `locator`'s match count exceeds `priorCount` — used for the
+ * exec tool-card appearance check (step 6), mirroring the same poll-based
+ * style as `sendMessageAndAwaitReply` above rather than a single `waitFor`
+ * (Playwright's built-in count assertions don't expose a plain locator API
+ * for "count changed" the way `expect(locator).toHaveCount(n)` does without
+ * pulling in the `expect` import this script otherwise avoids). */
+async function expectCountAbove(locator, priorCount, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await locator.count()) > priorCount) return;
+    await locator.page().waitForTimeout(300);
+  }
+  throw new Error(`${label} did not appear within ${timeoutMs}ms`);
+}
+
+/** Polls `container`'s text content until it matches any of `patterns` —
+ * used to wait for the exec card's status chip (success/failure/timeout;
+ * see `ToolItemCard`'s exec branch in `chat/[threadId].tsx`) without caring
+ * which one actually rendered here (the exit-0 assertion right after this
+ * call is what actually pins down the expected happy-path result). */
+async function waitForAnyText(container, patterns, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const text = (await container.textContent()) ?? '';
+    if (patterns.some((pattern) => pattern.test(text))) return text;
+    await container.page().waitForTimeout(300);
+  }
+  throw new Error(`none of [${patterns.join(', ')}] appeared within ${timeoutMs}ms`);
+}
+
 async function main() {
   const startedAt = Date.now();
   const browser = await chromium.launch({ headless: true });
@@ -129,6 +164,37 @@ async function main() {
     // --- Step 5: follow-up message gets a real response ----------------
     const followUpReply = await sendMessageAndAwaitReply(page, FOLLOW_UP_MESSAGE, hydratedAssistantCount);
     console.log(`Step 5 OK — assistant replied to follow-up: ${followUpReply}`);
+
+    // --- Step 6: execute_code tool call renders as an exec card (M4-06) -
+    // Requires the real stack (agent-server + model-runner +
+    // code-exec-manager) to be up — already true of every prior step here.
+    const toolCardLocator = page.locator('[data-testid="chat-item-tool"]');
+    const priorToolCardCount = await toolCardLocator.count();
+
+    const input = page.getByPlaceholder('Message…');
+    await input.waitFor({ state: 'visible', timeout: 15_000 });
+    await input.fill(EXEC_MESSAGE);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    await expectCountAbove(toolCardLocator, priorToolCardCount, 60_000, 'exec tool card');
+    const toolCard = toolCardLocator.nth(priorToolCardCount);
+    console.log('Step 6 OK — exec tool card appeared');
+
+    // Wait for the run to finish (the success/failure/timeout chip only
+    // renders once `resultPreview` arrives at `tool_end` — see
+    // `lib/execResult.ts` / `ToolItemCard`'s exec branch) before expanding.
+    await waitForAnyText(toolCard, [/exit 0/, /exit \d+/, /timed out/], 60_000);
+
+    // Expand the card (same tap-to-toggle header as every other tool card).
+    const toolHeader = toolCard.locator('[data-testid="chat-item-tool-header"]');
+    await toolHeader.click();
+
+    await waitForText(page, 'HELLO-UI', 15_000);
+    console.log('Step 6 OK — expanded exec card shows command output (HELLO-UI)');
+
+    const exitZeroLocator = toolCard.getByText('exit 0');
+    await exitZeroLocator.first().waitFor({ state: 'visible', timeout: 5_000 });
+    console.log('Step 6 OK — exit-0 chip rendered');
 
     const elapsedMs = Date.now() - startedAt;
     console.log(`PASS: full create -> send -> list -> reopen -> follow-up flow completed in ${elapsedMs}ms`);
