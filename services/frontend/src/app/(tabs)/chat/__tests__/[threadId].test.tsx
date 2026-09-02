@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { act, create } from 'react-test-renderer';
 
-import type { UseChatResult } from '@/lib/useChat';
+import type { ChatToolItem, UseChatResult } from '@/lib/useChat';
 
 // Per the ticket's own text ("one shallow render of the screen"): mock
 // `useChat` entirely rather than exercising the real WebSocket layer, so
@@ -118,6 +118,107 @@ describe('ChatScreen ([threadId])', () => {
 
     const text = renderer?.toJSON();
     expect(text).toBeTruthy();
+  });
+
+  function execToolItem(overrides: Partial<ChatToolItem> = {}): ChatToolItem {
+    return {
+      id: 'exec-1',
+      kind: 'tool',
+      toolCallId: 'call-exec-1',
+      name: 'execute_code',
+      category: 'exec',
+      status: 'running',
+      args: { command: 'echo HELLO-UI' },
+      ...overrides,
+    };
+  }
+
+  /** Flattens the rendered tree to a single string of everything Text nodes
+   * emitted, for cheap substring assertions — this repo has no snapshot
+   * files in this directory (verified before adding this helper) and the
+   * existing tests already favor explicit assertions over snapshots. */
+  function renderedText(renderer: ReturnType<typeof create>): string {
+    return JSON.stringify(renderer.toJSON());
+  }
+
+  function expandFirstToolCard(renderer: ReturnType<typeof create>): void {
+    const header = renderer.root.findByProps({ testID: 'chat-item-tool-header' });
+    act(() => {
+      (header.props as { onPress: () => void }).onPress();
+    });
+  }
+
+  describe('exec tool cards (M4-06)', () => {
+    it('running: shows the command and a spinner, no exit chip', () => {
+      setUseChatResult({ items: [execToolItem({ status: 'running' })] });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const text = renderedText(renderer!);
+      expect(text).toContain('echo HELLO-UI');
+      expect(text).not.toMatch(/exit \d/);
+      expect(text).not.toContain('timed out');
+    });
+
+    it('success: shows a green "exit 0" chip', () => {
+      setUseChatResult({
+        items: [
+          execToolItem({
+            status: 'success',
+            resultPreview: 'exit_code: 0\n--- stdout ---\nHELLO-UI\n--- stderr ---\n(empty)',
+          }),
+        ],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderedText(renderer!)).toContain('exit 0');
+
+      expandFirstToolCard(renderer!);
+      expect(renderedText(renderer!)).toContain('HELLO-UI');
+    });
+
+    it('failure: shows a red "exit N" chip for a nonzero exit code', () => {
+      setUseChatResult({
+        items: [
+          execToolItem({
+            status: 'error',
+            resultPreview: 'exit_code: 1\n--- stdout ---\n(empty)\n--- stderr ---\nboom',
+          }),
+        ],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderedText(renderer!)).toContain('exit 1');
+    });
+
+    it('timed out: shows a distinct "timed out" chip rather than an exit-code chip', () => {
+      setUseChatResult({
+        items: [
+          execToolItem({
+            status: 'error',
+            resultPreview: 'exit_code: 124 (TIMED OUT)\n--- stdout ---\npartial\n--- stderr ---\n(empty)',
+          }),
+        ],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderedText(renderer!)).toContain('timed out');
+    });
   });
 
   it('disables the composer (canSend false) while busy, even with draft text, once hydrated', () => {

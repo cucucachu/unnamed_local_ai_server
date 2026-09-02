@@ -3,10 +3,12 @@ import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   KeyboardAvoidingView,
   FlatList,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -15,6 +17,7 @@ import {
   type TextInputKeyPressEventData,
 } from 'react-native';
 
+import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import { useChat, type ChatItem, type ChatToolItem } from '@/lib/useChat';
 
@@ -193,16 +196,101 @@ function ChatItemRow({ item }: { item: ChatItem }): ReactElement {
 // state/tests never have to account for a trailing cursor glyph.
 const STREAMING_CURSOR = ' ▍';
 
+/** Defensive: `item.args` is typed `Record<string, unknown>`, so
+ * `args.command` isn't guaranteed to be a string at the type level even
+ * though the server always sends one for `execute_code`. Falls back to an
+ * empty collapsed-header line (never throws/crashes) if it isn't. */
+function firstLine(command: unknown): string {
+  if (typeof command !== 'string') return '';
+  const newlineIndex = command.indexOf('\n');
+  return newlineIndex === -1 ? command : command.slice(0, newlineIndex);
+}
+
+interface ExecChipInfo {
+  text: string;
+  color: string;
+}
+
+/** Chip precedence: a timed-out run gets its own distinct chip regardless
+ * of its (GNU-`timeout`-mandated) exit code — see
+ * `services/code-exec-manager/app/sessions.py`'s `GNU_TIMEOUT_EXIT_CODE`
+ * (124). `null` (parse failure — e.g. an `execute_code failed: ...`
+ * transport-error string, which never matches the `exit_code: N` shape)
+ * means "not a real exec result": caller falls back to the generic
+ * checkmark/x icon in that case. */
+function execChipInfo(parsed: ParsedExecResult): ExecChipInfo | null {
+  if (parsed.exitCode === null) return null;
+  if (parsed.timedOut) return { text: '⏱ timed out', color: theme.accent };
+  if (parsed.exitCode === 0) return { text: '✓ exit 0', color: theme.success };
+  return { text: `✗ exit ${parsed.exitCode}`, color: theme.danger };
+}
+
+const TRUNCATED_MARKER = '[output truncated]';
+
+/** Splits the trailing `\n[output truncated]` line (if present) off the
+ * parsed body so it can be styled dim/italic separately from the raw
+ * stdout/stderr text, per spec. */
+function splitTruncatedMarker(body: string): { main: string; truncated: boolean } {
+  const suffix = `\n${TRUNCATED_MARKER}`;
+  if (body.endsWith(suffix)) {
+    return { main: body.slice(0, -suffix.length), truncated: true };
+  }
+  return { main: body, truncated: false };
+}
+
+/** Caps the scrollable stdout/stderr block at ~40% of the window/screen
+ * height (spec: "capped at roughly 40% of screen height"). A `Dimensions`-
+ * based percentage (over a fixed pixel value) is the pragmatic RN Web +
+ * native choice here: it scales sensibly across phone/tablet/desktop
+ * viewports without a breakpoint table, and `Dimensions.get` is read at
+ * render time (not hoisted to a module constant) so it reflects the
+ * current window on web resize / native orientation change — no dedicated
+ * resize listener needed for what's just a soft cap on a `ScrollView`. */
+function getExecOutputMaxHeight(): number {
+  return Dimensions.get('window').height * 0.4;
+}
+
+function ExecToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedExecResult | null }): ReactElement {
+  const commandText =
+    typeof item.args.command === 'string' ? item.args.command : JSON.stringify(item.args, null, 2);
+  const split = parsed !== null ? splitTruncatedMarker(parsed.body) : null;
+
+  return (
+    <View style={styles.toolDetail}>
+      <Text style={styles.toolDetailText}>{commandText}</Text>
+      {split !== null ? (
+        <ScrollView style={[styles.execOutputScroll, { maxHeight: getExecOutputMaxHeight() }]}>
+          <Text style={styles.toolDetailText}>{split.main}</Text>
+          {split.truncated ? <Text style={styles.execTruncatedText}>{TRUNCATED_MARKER}</Text> : null}
+        </ScrollView>
+      ) : null}
+    </View>
+  );
+}
+
 function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
   const [expanded, setExpanded] = useState(false);
+  const isExec = item.category === 'exec';
+  const execParsed = isExec && item.resultPreview !== undefined ? parseExecResult(item.resultPreview) : null;
+  const chip = execParsed !== null ? execChipInfo(execParsed) : null;
 
   return (
     <View style={styles.toolCard} testID="chat-item-tool">
-      <Pressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)}>
+      <Pressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)} testID="chat-item-tool-header">
         <Ionicons name={CATEGORY_ICON[item.category]} size={16} color={theme.textMuted} />
-        <Text style={styles.toolName}>{item.name}</Text>
+        {isExec ? (
+          <Text style={styles.toolName} numberOfLines={1} ellipsizeMode="tail">
+            {firstLine(item.args.command)}
+          </Text>
+        ) : (
+          <Text style={styles.toolName}>{item.name}</Text>
+        )}
         {item.status === 'running' ? (
           <ActivityIndicator size="small" color={theme.accent} style={styles.toolStatusIcon} />
+        ) : isExec && chip !== null ? (
+          <View style={[styles.execChip, { borderColor: chip.color }]}>
+            <Text style={[styles.execChipText, { color: chip.color }]}>{chip.text}</Text>
+          </View>
         ) : (
           <Ionicons
             name={item.status === 'success' ? 'checkmark-circle' : 'close-circle'}
@@ -219,12 +307,16 @@ function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
         />
       </Pressable>
       {expanded ? (
-        <View style={styles.toolDetail}>
-          <Text style={styles.toolDetailText}>{JSON.stringify(item.args, null, 2)}</Text>
-          {item.resultPreview !== undefined ? (
-            <Text style={styles.toolDetailText}>{item.resultPreview}</Text>
-          ) : null}
-        </View>
+        isExec ? (
+          <ExecToolDetail item={item} parsed={execParsed} />
+        ) : (
+          <View style={styles.toolDetail}>
+            <Text style={styles.toolDetailText}>{JSON.stringify(item.args, null, 2)}</Text>
+            {item.resultPreview !== undefined ? (
+              <Text style={styles.toolDetailText}>{item.resultPreview}</Text>
+            ) : null}
+          </View>
+        )
       ) : null}
     </View>
   );
@@ -358,6 +450,29 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontFamily: monospaceFontFamily,
     fontSize: 12,
+  },
+  execChip: {
+    marginLeft: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  execChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  execOutputScroll: {
+    borderRadius: 6,
+    backgroundColor: theme.bg,
+    padding: 6,
+  },
+  execTruncatedText: {
+    color: theme.textMuted,
+    fontFamily: monospaceFontFamily,
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 2,
   },
   composer: {
     flexDirection: 'row',
