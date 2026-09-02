@@ -40,19 +40,19 @@ agent run.
       not exercised by the web-only browser smoke test).
 - [x] (M3-05) Phone browser + Expo Go: browse the Files tab, upload a photo
       from the phone, download it back, delete it.
-- [ ] (M3-06) Phone: create a thread + file via chat, reboot the **whole
+- [x] (M3-06) Phone: create a thread + file via chat, reboot the **whole
       host machine**, confirm thread history and file are intact and chat
       continues. (The one check scripts can't do.)
 
-> **PM sign-off: G3 passed ____**
+> **PM sign-off: G3 passed 2026-09-01**
 
 ## M4
 
-- [ ] (M4-05) PM reads the suite output and countersigns the isolation section.
-- [ ] (M4-06) Phone browser + Expo Go: exec card renders and expands cleanly at phone width.
-- [ ] (M4-07) From a phone: ask the agent to batch-process something real in your workspace (e.g. "make thumbnails of the images in test-photos/ using ffmpeg or imagemagick") and verify results in the files screen.
+- [x] (M4-05) PM reads the suite output and countersigns the isolation section.
+- [x] (M4-06) Phone browser + Expo Go: exec card renders and expands cleanly at phone width.
+- [x] (M4-07) From a phone: ask the agent to batch-process something real in your workspace (e.g. "make thumbnails of the images in test-photos/ using ffmpeg or imagemagick") and verify results in the files screen.
 
-> **PM sign-off: G4 passed ____**
+> **PM sign-off: G4 passed 2026-09-01**
 
 ## M5
 
