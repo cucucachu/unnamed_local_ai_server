@@ -22,7 +22,13 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider value={DarkTheme}>
-        <Stack screenOptions={{ headerShown: false }} />
+        <Stack screenOptions={{ headerShown: false }}>
+          {/* M5-02: the media player opens as a modal over whichever tab
+              triggered it (the Files tab today), per the ticket's "Expo
+              Router modal presentation" spec — a sibling of the implicit
+              `(tabs)` group route, not nested inside it. */}
+          <Stack.Screen name="media" options={{ presentation: 'modal', headerShown: false }} />
+        </Stack>
         <StatusBar style="light" />
       </ThemeProvider>
     </GestureHandlerRootView>
