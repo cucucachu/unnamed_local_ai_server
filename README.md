@@ -15,6 +15,7 @@ A private, local, always-on AI agent for your home network — a chat assistant 
 - [Project status & roadmap](#project-status--roadmap)
 - [Working with the GitHub issues](#working-with-the-github-issues)
 - [Getting started](#getting-started)
+- [Backups](#backups)
 - [License](#license)
 
 ## Overview
@@ -313,6 +314,40 @@ docker compose up -d
 ```
 
 Everything runs directly on the target Linux host (native, no cloud) — real `docker compose`, the real GPU, the real model. Only phone/LAN-device checks are deferred to a human host checklist ([`docs/HOST-CHECKS.md`](docs/HOST-CHECKS.md)). Networking details (mDNS, firewall, LAN-only isolation) are in [`docs/NETWORKING.md`](docs/NETWORKING.md).
+
+## Backups
+
+**What's covered**: the workspace directory (`WORKSPACE_DIR` — every file the agent/you create, upload, or edit) and the Postgres database (thread/message history). Together these are the only genuinely irreplaceable state this stack holds.
+
+**What's not covered**: model weights (`services/model-runner/models/*.gguf` — multi-GB, re-downloadable any time via `./services/model-runner/fetch-model.sh`, not user data) and `.env` (holds `POSTGRES_PASSWORD` — a secret, deliberately not swept into a backup dir; back it up yourself, out of band, if you want to). v1 backup is a full local mirror only — no off-site/cloud copy, no encryption, no incremental snapshots (see `infra/host/backup-workspace.sh`'s docstring and M6-03's ticket for the explicit out-of-scope list).
+
+**Manual run**:
+
+```bash
+sudo infra/host/backup-workspace.sh
+```
+
+Mirrors `WORKSPACE_DIR` into `$BACKUP_DIR/workspace` (`rsync -a --delete` — exact mirror, not additive) and, if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` (keeps the last 14 by count; skipped with a warning, not an error, if the stack is down). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
+
+**Automatic daily backups** (03:00, via a systemd timer):
+
+```bash
+sudo infra/host/install-backup-timer.sh              # install + enable
+sudo infra/host/install-backup-timer.sh --uninstall  # remove
+systemctl list-timers homeai-backup.timer            # check it's scheduled
+```
+
+**Restoring**:
+
+```bash
+# Workspace: rsync back (stop the stack first so nothing's writing to it mid-restore)
+docker compose down
+sudo rsync -a --delete "$BACKUP_DIR/workspace/" "$WORKSPACE_DIR/"
+docker compose up -d
+
+# Postgres: gunzip the dump into a fresh/scratch database via psql
+gunzip -c "$BACKUP_DIR/pg/homeai-<date>.sql.gz" | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+```
 
 ## License
 

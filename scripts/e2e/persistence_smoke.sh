@@ -17,6 +17,14 @@
 # mirrors `gate_m2.sh`'s logging/health-polling conventions (same
 # `wget -O /dev/null` curl-equivalent - `curl` isn't installed on this host).
 #
+# M6-03: thread id renamed "pg-1" -> "persistence-smoke-pg-1" (prefixed with
+# this script's own name, matching every other gate/smoke script's
+# convention) and cleanup now deletes that checkpoint via the threads REST
+# DELETE endpoint in an EXIT trap - this script previously had no cleanup
+# at all, so its checkpoint/conversation history grew unbounded across
+# repeated runs (e.g. inside gate_full.sh, which chains this script
+# alongside 9 others against the same live stack).
+#
 # Usage:
 #   scripts/e2e/persistence_smoke.sh
 #
@@ -28,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-THREAD_ID="pg-1"
+THREAD_ID="persistence-smoke-pg-1"
 NAME="Bob"
 
 API_HEALTH_TIMEOUT_S=120
@@ -148,6 +156,20 @@ print(''.join(tokens))
   log "OK: reply mentions '${NAME}' - checkpoint survived the agent-server restart"
   rm -f "$out"
 }
+
+cleanup() {
+  # M6-03: always runs (success or failure) so this script is safely
+  # re-runnable and doesn't leave its checkpoint growing across repeated
+  # runs - this script previously had no cleanup at all.
+  python3 -c "
+import urllib.request
+try:
+    urllib.request.urlopen(urllib.request.Request('http://localhost/api/threads/${THREAD_ID}', method='DELETE'), timeout=15)
+except Exception:
+    pass
+" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 main() {
   log "=== PERSISTENCE SMOKE (M3-01): checkpoint survives agent-server restart ==="

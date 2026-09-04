@@ -17,10 +17,22 @@
 // Mirrors the spirit of `scripts/ws_smoke.py` (same "Say exactly: PONG"-style
 // prompt, same tolerance for the real model not saying exactly that) but at
 // the browser/UI layer instead of raw WebSocket frames.
+//
+// M6-03: this script's own "New chat" button creates a REAL UUID thread via
+// `POST /api/threads` (through the UI), and step 6's `EXEC_MESSAGE` creates
+// a real code-exec-manager session for it — neither was ever cleaned up
+// before this change (confirmed live on this host: `GET /api/threads`
+// showed 7+ leftover "Say exactly: PONG..." threads from prior manual runs
+// of this exact script). `main()` now captures the thread id from the URL
+// right after creating it and deletes both the thread and its exec session
+// in a `finally` block, so re-running this script (standalone or inside
+// `gate_full.sh`) doesn't accumulate cruft.
 
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
+const API_BASE = process.env.CHAT_SMOKE_API_BASE ?? 'http://localhost/api';
 const TIMEOUT_MS = 120_000;
 
 // Deliberately > 60 chars (and with a run of internal whitespace) so the
@@ -119,8 +131,52 @@ async function waitForAnyText(container, patterns, timeoutMs) {
   throw new Error(`none of [${patterns.join(', ')}] appeared within ${timeoutMs}ms`);
 }
 
+/** M6-03: best-effort REST DELETE of the thread this script's own "New
+ * chat" button created, plus the code-exec-manager session `EXEC_MESSAGE`
+ * creates for it (session_id == threadId, already exec-manager-safe since
+ * a UUID only ever contains `[a-z0-9-]`). Same "curl not installed;
+ * urllib/`docker exec` are the house workarounds" conventions as every
+ * other `scripts/e2e/*.sh` script — code-exec-manager publishes no host
+ * port (M4-03), so its session is reached by execing python3 directly
+ * inside its own container against its own localhost:8090. */
+function cleanupThreadBestEffort(threadId) {
+  if (!threadId) return;
+  const deleteThreadScript = `
+import sys
+import urllib.error
+import urllib.request
+
+req = urllib.request.Request(sys.argv[1], method='DELETE')
+try:
+    urllib.request.urlopen(req, timeout=15)
+except Exception:
+    pass
+`;
+  try {
+    execFileSync('python3', ['-c', deleteThreadScript, `${API_BASE}/threads/${threadId}`]);
+  } catch {
+    // best-effort
+  }
+
+  const deleteSessionScript = `
+import sys
+import urllib.request
+
+try:
+    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
+except Exception:
+    pass
+`;
+  try {
+    execFileSync('docker', ['exec', 'homeai-code-exec-manager-1', 'python3', '-c', deleteSessionScript, threadId]);
+  } catch {
+    // best-effort — e.g. no execute_code call ever happened this run, so no session ever existed
+  }
+}
+
 async function main() {
   const startedAt = Date.now();
+  let threadId;
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -135,6 +191,11 @@ async function main() {
     const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
     await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
     await newChatButton.click();
+    // M6-03: capture the real thread id expo-router pushes into the URL
+    // (`router.push('/chat/[threadId]', ...)` in `chat/index.tsx`) so it —
+    // and its exec-manager session — can be cleaned up in `finally`.
+    await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
+    threadId = new URL(page.url()).pathname.split('/').filter(Boolean).pop();
 
     // --- Step 2: send the first message ---------------------------------
     const firstReply = await sendMessageAndAwaitReply(page, FIRST_MESSAGE, 0);
@@ -200,6 +261,7 @@ async function main() {
     console.log(`PASS: full create -> send -> list -> reopen -> follow-up flow completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    cleanupThreadBestEffort(threadId);
   }
 }
 

@@ -46,6 +46,11 @@
 #      re-running this script is safe (Tier A requires two green runs in a
 #      row).
 #
+# M6-03: cleanup now also deletes the code-exec-manager session/container
+# this script's `execute_code` call creates (session_id == THREAD_ID ==
+# "gate-m4") - without this, the exec container sat alive until the 30-min
+# idle reaper (EXEC_IDLE_MINUTES) fired.
+#
 # Out of scope (per the ticket): media (M5), real photo EXIF work - the
 # dummy `.txt` files ARE the point (determinism).
 #
@@ -409,6 +414,18 @@ cleanup() {
   fi
 
   rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
+
+  # M6-03: code-exec-manager publishes no host port (M4-03) - reached here
+  # by execing python3 directly inside its own container against its own
+  # localhost:8090, same workaround as `exec_crossview_smoke.sh`'s own
+  # M6-03 cleanup addition.
+  docker exec homeai-code-exec-manager-1 python3 -c "
+import sys, urllib.request
+try:
+    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
+except Exception:
+    pass
+" "$THREAD_ID" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

@@ -22,6 +22,12 @@
 #   6. Cleans up the file it created so re-running this script is safe
 #      (idempotent - the acceptance criteria require two green runs in a row).
 #
+# M6-03: cleanup also deletes the "gate-m2" LangGraph checkpoint via the
+# threads REST DELETE endpoint, so this thread's conversation history
+# doesn't grow unbounded across repeated runs (e.g. inside gate_full.sh,
+# which runs this script standalone AND again via gate_m4.sh's own
+# regression step).
+#
 # `curl` is NOT installed on this host (verified: `apt install curl` would
 # be needed, and passwordless sudo isn't available here either). `wget` IS
 # available and used as the curl-equivalent for both a plain reachability
@@ -249,6 +255,20 @@ step_web_build_serves() {
 cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
+  # M6-03: also delete the "gate-m2" checkpoint. `PgThreadStore.delete`/
+  # `ensure_exists` no-op for this non-UUID thread id (see
+  # app/db/threads.py's own docstring - it's a legacy/manual WS-only id,
+  # never inserted into the `threads` table), but
+  # `checkpointer.adelete_thread` still deletes the real chat-memory
+  # checkpoint regardless of UUID-ness, so this is a genuine (not just
+  # REST-list-cosmetic) cleanup.
+  python3 -c "
+import urllib.request
+try:
+    urllib.request.urlopen(urllib.request.Request('http://localhost/api/threads/${THREAD_ID}', method='DELETE'), timeout=15)
+except Exception:
+    pass
+" 2>/dev/null || true
 }
 trap cleanup EXIT
 

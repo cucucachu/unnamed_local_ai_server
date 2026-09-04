@@ -30,6 +30,19 @@
 #   7. Cleans up (delete thread + file) via an EXIT trap, so re-running this
 #      script twice in a row (the Tier A acceptance criterion) is safe.
 #
+# M6-03: cleanup now also removes the now-empty "reports/" dir this script
+# creates (the file-delete alone left an empty directory behind - confirmed
+# it was still sitting in the real workspace from earlier runs) via a plain
+# `rmdir`, which only succeeds on an empty directory - never touches a real
+# user "reports" dir that happens to have other content in it. Cleanup also
+# best-effort deletes any code-exec-manager session keyed by THREAD_ID:
+# although this script's prompt says "Use your file tools", running it
+# inside `gate_full.sh` showed the real LLM sometimes chooses `execute_code`
+# (e.g. a shell redirect) to satisfy the file-write prompt instead, which
+# leaves an orphaned `homeai-exec-<thread_id>` container behind (confirmed
+# via `docker ps` after a real two-run `gate_full.sh` chain) - same
+# best-effort DELETE pattern as `exec_crossview_smoke.sh`.
+#
 # Out of scope (per the ticket): code exec, media.
 #
 # `curl` is NOT installed on this host - reuses the same `wget`/Python
@@ -424,8 +437,19 @@ cleanup() {
   # (Tier A requires two green runs in a row) - mirrors `gate_m2.sh`'s and
   # `files_rest_smoke.sh`'s own EXIT-trap convention.
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
+  rmdir "${WORKSPACE_DIR}/${FILE_DIR}" 2>/dev/null || true
   if [ -n "${THREAD_ID:-}" ]; then
     rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
+    # Best-effort: the LLM may have used execute_code (not just file tools)
+    # to satisfy the write prompt, which would have created a code-exec-manager
+    # session/container keyed by THREAD_ID - see M6-03 note above.
+    docker exec homeai-code-exec-manager-1 python3 -c "
+import sys, urllib.request
+try:
+    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
+except Exception:
+    pass
+" "$THREAD_ID" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT

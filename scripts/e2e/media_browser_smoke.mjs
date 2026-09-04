@@ -1,12 +1,15 @@
 // M5-02 full-stack media-player smoke test — invoked by
 // `media_browser_smoke.sh`, not run directly. That wrapper seeds
-// `test-video.mp4` into the workspace (via `docker run` against the
-// `homeai-exec-toolbox` image, since ffmpeg lives there, not necessarily on
-// this host — same tool M5-01 used for its own live verification) BEFORE
-// calling this script, and cleans it up after — those steps live in the
-// `.sh` wrapper (not here) because they need `docker`/the workspace's real
-// host path, neither of which this script has any other reason to reach
-// for itself. See that file for the exact `ffmpeg`/cleanup commands.
+// `media-browser-smoke-test-video.mp4` (M6-03: renamed from the bare
+// generic `test-video.mp4` to avoid a collision surface with other
+// scripts/real-user files at the workspace root) into the workspace (via
+// `docker run` against the `homeai-exec-toolbox` image, since ffmpeg lives
+// there, not necessarily on this host — same tool M5-01 used for its own
+// live verification) BEFORE calling this script, and cleans it up after —
+// those steps live in the `.sh` wrapper (not here) because they need
+// `docker`/the workspace's real host path, neither of which this script
+// has any other reason to reach for itself. See that file for the exact
+// `ffmpeg`/cleanup commands.
 //
 // Drives the real Files UI (no mocking — real REST `/api/files` list, real
 // `/api/media/stream` Range-streamed playback) through M5-02's acceptance
@@ -28,7 +31,7 @@
 import { chromium } from 'playwright';
 
 const BASE_URL = process.env.MEDIA_SMOKE_BASE_URL ?? 'http://localhost/';
-const VIDEO_FILE_NAME = process.env.MEDIA_SMOKE_FILE_NAME ?? 'test-video.mp4';
+const VIDEO_FILE_NAME = process.env.MEDIA_SMOKE_FILE_NAME ?? 'media-browser-smoke-test-video.mp4';
 const UI_TIMEOUT_MS = 20_000;
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
