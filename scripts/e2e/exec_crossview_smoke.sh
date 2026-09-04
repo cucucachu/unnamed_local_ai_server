@@ -25,6 +25,12 @@
 # Cleans up the created thread + host file via an EXIT trap, so re-running
 # this script is safe.
 #
+# M6-03: cleanup now also deletes the code-exec-manager session/container
+# this script's `execute_code` call creates (session_id == THREAD_ID) -
+# without this, the exec container sat alive until the 30-min idle reaper
+# (EXEC_IDLE_MINUTES) fired, which is well past a `gate_full.sh` run's own
+# timeframe.
+#
 # Usage:
 #   scripts/e2e/exec_crossview_smoke.sh
 #
@@ -260,6 +266,19 @@ cleanup() {
   rm -f /tmp/exec-crossview-attempt-1.log /tmp/exec-crossview-attempt-2.log \
         /tmp/exec-crossview-read-attempt-1.log /tmp/exec-crossview-read-attempt-2.log 2>/dev/null || true
   rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
+  # M6-03: code-exec-manager publishes no host port (M4-03) - reached here
+  # by execing python3 directly inside its own container against its own
+  # localhost:8090 (same "no published port" workaround
+  # `scripts/verify_isolation.sh` uses via a separate runner container,
+  # simplified here since a session-delete call doesn't need its own
+  # network-attached container).
+  docker exec homeai-code-exec-manager-1 python3 -c "
+import sys, urllib.request
+try:
+    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
+except Exception:
+    pass
+" "$THREAD_ID" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

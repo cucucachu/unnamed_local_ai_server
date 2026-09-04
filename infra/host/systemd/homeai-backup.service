@@ -1,0 +1,8 @@
+[Unit]
+Description=Home AI Agent - workspace + Postgres backup (see infra/host/backup-workspace.sh)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=__REPO_ROOT__/infra/host/backup-workspace.sh

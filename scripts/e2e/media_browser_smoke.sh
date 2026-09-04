@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # M5-02 full-stack media-player smoke test.
 #
-# Seeds a small synthetic video (`test-video.mp4`, via `ffmpeg` — see
-# `seed_test_video` below) directly into the WORKSPACE_DIR host directory,
+# Seeds a small synthetic video (`media-browser-smoke-test-video.mp4`, via
+# `ffmpeg` — see `seed_test_video` below) directly into the WORKSPACE_DIR
+# host directory,
 # opens a real headless browser against the live stack, navigates to the
 # Files tab, taps the seeded file (asserting M5-02's tap-routing opens the
 # player modal directly), and drives real script-level play/seek against
@@ -26,12 +27,18 @@
 #   scripts/e2e/media_browser_smoke.sh
 #   MEDIA_SMOKE_BASE_URL=http://homeai.local/ scripts/e2e/media_browser_smoke.sh
 #
+# M6-03: video filename prefixed with this script's own name (was the bare
+# generic "test-video.mp4") - written straight to the workspace ROOT, not a
+# script-unique subfolder (unlike files_browser_smoke.mjs's own
+# RUN_SUFFIX-scoped folders), so a bare generic name was a genuine
+# collision surface with any other script/real-user file of the same name.
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-VIDEO_FILE_NAME="test-video.mp4"
+VIDEO_FILE_NAME="media-browser-smoke-test-video.mp4"
 
 # Same ".env, one KEY=value, not the whole file" extraction as
 # `exec_crossview_smoke.sh` — this script only needs WORKSPACE_DIR, and the
