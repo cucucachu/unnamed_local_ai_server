@@ -67,20 +67,18 @@ flowchart TB
     model -.->|device passthrough| dri
 ```
 
-There is no separate `frontend` compose service. `infra/caddy/Dockerfile`
-is a multi-stage build: stage 1 (`node:22-alpine`) runs `npx expo export
---platform web` against `services/frontend/`, then stage 2 (`caddy:2-alpine`)
-`COPY --from=frontend-build /out /srv/www` bakes the static bundle directly
-into the final Caddy image. Caddy serves it straight off local disk
-(`infra/caddy/Caddyfile`'s `handle { root * /srv/www; file_server }`) — no
-network hop, no second container.
+Caddy serves the Expo web export itself, straight off local disk
+(`infra/caddy/Caddyfile`'s `handle { root * /srv/www; file_server }`).
+`infra/caddy/Dockerfile` is a multi-stage build that produces this: stage 1
+(`node:22-alpine`) runs `npx expo export --platform web` against
+`services/frontend/`, then stage 2 (`caddy:2-alpine`) `COPY
+--from=frontend-build /out /srv/www` bakes the resulting static bundle
+directly into the final Caddy image.
 
-`model-runner` passes through only `/dev/dri:/dev/dri` (plus `group_add:
-[RENDER_GID, VIDEO_GID]` and `ipc: host`) — the Vulkan/RADV render node.
-This project deliberately runs the **Vulkan** (RADV/Mesa) backend instead
-of ROCm (see "Model operations" below for why), and Vulkan only needs
-`/dev/dri`; `/dev/kfd` (the ROCm/KFD compute-queue device node) is never
-passed through.
+`model-runner` passes through `/dev/dri:/dev/dri` (plus `group_add:
+[RENDER_GID, VIDEO_GID]` and `ipc: host`) — the Vulkan/RADV render node
+used by the **Vulkan** (RADV/Mesa) backend this service runs (see "Model
+operations" below for why Vulkan over ROCm).
 
 **Docker network naming**: the diagram labels it `homeai-net` — that's the
 compose-file key (`docker-compose.yml`'s `networks:` block) and the name
@@ -418,8 +416,8 @@ flag the conflict rather than resolving it silently.
   (RADV/Mesa) beats ROCm on token generation and avoids ROCm's GTT
   allocation bug (ROCm only sees VRAM; Vulkan sees VRAM+GTT via
   `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`). This is why `model-runner` passes
-  through `/dev/dri` (the Vulkan/RADV render node), never `/dev/kfd` (the
-  ROCm compute-queue node) — see the system overview diagram above.
+  through `/dev/dri` (the Vulkan/RADV render node) rather than `/dev/kfd`
+  (the ROCm compute-queue node) — see the system overview diagram above.
 - **Sampling defaults**: `--temp 1.0 --top-p 0.95 --top-k 64` (per the
   model card, in `docker-compose.yml`'s `command:`).
 - **`MODEL_EXTRA_ARGS` additions**: `--verbose --reasoning-budget 0`.
