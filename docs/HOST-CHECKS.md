@@ -73,3 +73,4 @@ agent run.
 ## M7
 
 - [ ] (M7-01) From a phone on the LAN, `http://homeai.local` still loads and a chat turn completes (proves the `homeai-internal`/`homeai-net` split didn't break anything a real device on the LAN actually uses).
+- [ ] (M7-06) Phone browser + Expo Go: ask a question that triggers `web_search` — the search card expands cleanly at phone width (title/hostname/snippet per result, no overflow) and tapping a result opens the system browser. Then ask it to fetch a specific URL (`web_fetch`) — that card's expanded scrollable text block also fits/scrolls cleanly at phone width, and tapping the final URL opens the system browser too.

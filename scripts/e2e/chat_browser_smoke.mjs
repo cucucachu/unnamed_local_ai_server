@@ -47,6 +47,13 @@ const FOLLOW_UP_MESSAGE = 'Say exactly: PONG again please.';
 // phrasing reliably gets the model to call the tool rather than just
 // describing what it would run.
 const EXEC_MESSAGE = 'Use execute_code to run: echo HELLO-UI';
+// M7-06: same explicit tool-name + verbatim-argument phrasing convention as
+// `EXEC_MESSAGE` above, for the same reason (reliably gets the real model
+// to actually call the tool rather than just answering from its own
+// training data) — this is "the M7-05 research prompt" the ticket refers
+// to (M7-05 added `web_search`/`web_fetch` themselves; this script's own
+// prior steps had no coverage of either tool at all until this addition).
+const WEB_SEARCH_MESSAGE = 'Use web_search to search for: llama.cpp github repository';
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
@@ -256,6 +263,59 @@ async function main() {
     const exitZeroLocator = toolCard.getByText('exit 0');
     await exitZeroLocator.first().waitFor({ state: 'visible', timeout: 5_000 });
     console.log('Step 6 OK — exit-0 chip rendered');
+
+    // --- Step 7: web_search tool call renders as a search card whose
+    // expanded view lists >= 1 result with a real https:// link (M7-06) -
+    // Requires the real stack (agent-server + model-runner + web-fetch +
+    // searxng) to be up — same precondition as step 6 for exec.
+    const priorSearchCardCount = await toolCardLocator.count();
+    await input.fill(WEB_SEARCH_MESSAGE);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    await expectCountAbove(toolCardLocator, priorSearchCardCount, 60_000, 'web_search tool card');
+    const searchCard = toolCardLocator.nth(priorSearchCardCount);
+    console.log('Step 7 OK — web_search tool card appeared');
+
+    // Wait for the done state — either the "N results" count chip or an
+    // "error" chip (see `webSearchChipInfo` in `chat/[threadId].tsx`) —
+    // before expanding; fail fast with a clear message if it's the error
+    // chip rather than timing out looking for result links that will never
+    // appear.
+    const searchChipText = await waitForAnyText(searchCard, [/\d+ results?/, /error/], 60_000);
+    if (!/\d+ results?/.test(searchChipText)) {
+      throw new Error(`Step 7: web_search did not return results (chip text: "${searchChipText}")`);
+    }
+
+    const searchHeader = searchCard.locator('[data-testid="chat-item-tool-header"]');
+    await searchHeader.click();
+
+    // Each result's title is a `Linking.openURL`-backed tappable element
+    // with `accessibilityRole="link"` (see `WebSearchToolDetail`) — RN
+    // Web surfaces that as an ARIA `role="link"`, which Playwright's
+    // `getByRole('link')` matches directly.
+    const resultLinkLocator = searchCard.getByRole('link');
+    await resultLinkLocator.first().waitFor({ state: 'visible', timeout: 15_000 });
+    if ((await resultLinkLocator.count()) < 1) {
+      throw new Error('Step 7: expanded search card has no result links');
+    }
+
+    // The collapsed hostname/snippet text never contains the raw url by
+    // design (see `WebSearchToolDetail`'s doc) — the actual proof that a
+    // real `https://` link is behind a result is to click it and observe
+    // where it navigates. `Linking.openURL`'s web implementation
+    // (`react-native-web`) does `window.open(url, '_blank', 'noopener')`
+    // for a single-arg call, which Playwright observes as a new
+    // page/"popup" on the browser context.
+    const [popup] = await Promise.all([
+      page.context().waitForEvent('page', { timeout: 15_000 }),
+      resultLinkLocator.first().click(),
+    ]);
+    const popupUrl = popup.url();
+    await popup.close();
+    if (!popupUrl.startsWith('https://')) {
+      throw new Error(`Step 7: expected the opened result link to be an https:// URL, got "${popupUrl}"`);
+    }
+    console.log(`Step 7 OK — expanded search card's first result opens an https:// link (${popupUrl})`);
 
     const elapsedMs = Date.now() - startedAt;
     console.log(`PASS: full create -> send -> list -> reopen -> follow-up flow completed in ${elapsedMs}ms`);
