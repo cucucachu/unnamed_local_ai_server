@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sample Article Title</title>
+</head>
+<body>
+  <nav><a href="/">Home</a> | <a href="/about">About</a></nav>
+  <article>
+    <h1>Sample Article Title</h1>
+    <p>
+      This is the first paragraph of a small sample article used as a test
+      fixture for the web-fetch service's HTML extraction path. It needs to
+      be long enough that trafilatura's boilerplate-detection heuristics
+      recognize it as real article content rather than discarding it as too
+      short to bother with.
+    </p>
+    <p>
+      Here is a second paragraph with a <a href="https://example.com/link">link</a>
+      to make sure link preservation (<code>include_links=True</code>) is
+      exercised by the test, plus a bit more filler text so the extracted
+      body comfortably clears any minimum-length thresholds the extraction
+      library applies internally.
+    </p>
+    <table>
+      <tr><th>Column A</th><th>Column B</th></tr>
+      <tr><td>1</td><td>2</td></tr>
+    </table>
+  </article>
+  <footer>Copyright some site, all rights reserved.</footer>
+</body>
+</html>

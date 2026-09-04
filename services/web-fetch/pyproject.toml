@@ -1,0 +1,44 @@
+[project]
+name = "web-fetch"
+version = "0.1.0"
+description = "M7-03: internal fetch + readable-text extraction service, behind egress-proxy"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx[http2]>=0.28.1",
+    "markdownify>=0.14.1",
+    "pydantic-settings>=2.15.0",
+    "pypdf>=5.1.0",
+    "readability-lxml>=0.8.1",
+    "trafilatura>=1.12.2",
+    "uvicorn[standard]>=0.52.4",
+]
+
+# app/ is run directly via `uv run uvicorn app.main:app` (uvicorn inserts the
+# cwd onto sys.path) rather than imported as an installed package - same
+# reasoning as agent-server's/code-exec-manager's own pyproject.toml.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+# /tmp is world-writable (1777) regardless of runtime UID, same reasoning as
+# agent-server's/code-exec-manager's own pyproject.toml: this container runs
+# as a non-root, HOME-less UID (compose sets `user: HOMEAI_UID:HOMEAI_GID`)
+# that can't write into /app's build-time tree, so the default
+# `.pytest_cache` under the (read-only-at-runtime) rootdir would otherwise
+# raise a `PytestCacheWarning` on every `docker compose exec web-fetch uv run
+# pytest` invocation.
+cache_dir = "/tmp/pytest_cache"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.22.0",
+    "ruff>=0.16.5",
+]
