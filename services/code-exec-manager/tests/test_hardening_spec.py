@@ -1,7 +1,8 @@
-"""Field-by-field assertion of `app.sessions.build_run_kwargs` against the
-"Reference: Shared Conventions & Contracts" issue's §7 hardening spec -
-the security test for this ticket. Every value here is either a hardcoded
-constant or derived purely from `Settings`; none is caller-controlled.
+"""Field-by-field assertion of `app.sessions.build_run_kwargs` against
+docs/ARCHITECTURE.md's "Contracts" section's exec-container hardening
+spec - the security test for this module. Every value here is either a
+hardcoded constant or derived purely from `Settings`; none is
+caller-controlled.
 """
 
 from __future__ import annotations

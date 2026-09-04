@@ -1,6 +1,6 @@
 """The container lifecycle: `ensure` / `execute` / `remove` / `list_sessions`.
 
-Implements the "Reference: Shared Conventions & Contracts" issue's §7
+Implements docs/ARCHITECTURE.md's "Contracts" section's exec-container
 hardening spec exactly - this module is the *only* place in the codebase
 that builds a container-creation call, and every field of that call is a
 hardcoded constant or derived from `Settings`, never from a caller-supplied

@@ -1,9 +1,9 @@
 """REST thread management + history hydration — `/api/threads*`.
 
-Contract fixed by the "Reference: Shared Conventions & Contracts" issue
-(#34), §5 "Threads" — do not deviate. This carries create/list/delete +
-history hydration on page load / thread switch; the WS (`app/api/chat_ws.py`)
-only carries live turns (§6).
+Contract fixed by docs/ARCHITECTURE.md's "Contracts" section ("Threads") —
+do not deviate. This carries create/list/delete + history hydration on
+page load / thread switch; the WS (`app/api/chat_ws.py`) only carries live
+turns.
 
 ## Message-normalization introspection notes (real, not guessed — installed
 `langchain-core==1.6.1` / `langgraph==1.2.11`; see this ticket's final report

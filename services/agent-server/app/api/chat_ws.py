@@ -1,7 +1,8 @@
 """`WS /ws/chat/{thread_id}` — token + tool streaming chat endpoint.
 
-Wire format is fixed by the "Reference: Shared Conventions & Contracts" issue
-(#34), §6 — do not deviate; the frontend (M2-06) is built against it exactly.
+Wire format is fixed by docs/ARCHITECTURE.md's "Contracts" section (the
+WebSocket chat protocol) — do not deviate; the frontend is built against it
+exactly.
 
 Client -> server (only valid incoming frame):
     {"type": "user_message", "content": "string"}

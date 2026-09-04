@@ -126,8 +126,8 @@ Everything else in this sequence (the WS upgrade, the tool-call round
 trips through `model-runner` and `code-exec-manager`) matches the real
 `app/api/chat_ws.py` / `app/agent/execute_code_tool.py` / `app/sessions.py`
 flow, and the `code-exec-manager` API calls (`POST /sessions/{id}/ensure`,
-`POST /sessions/{id}/execute`) match the contract in
-[issue #34 §7](https://github.com/cucucachu/unnamed_local_ai_server/issues/34).
+`POST /sessions/{id}/execute`) match the `code-exec-manager` API contract
+in "Contracts" below.
 
 ### Media file playback flow
 
@@ -199,8 +199,7 @@ what another doc says it should be.
 - **Image/base**: `python:3.12-slim` + `uv` (astral's static binary
   copied in). Dockerfile: `services/agent-server/Dockerfile`.
 - **Published port**: none.
-- **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`,
-  matches [issue #34 §2](https://github.com/cucucachu/unnamed_local_ai_server/issues/34)'s topology table).
+- **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
 - **Mounts**: `${WORKSPACE_DIR}:/data/workspace` (rw bind; host default
   `/srv/homeai/workspace`) — confirmed in `docker compose config`'s
   `volumes:` block for this service.
@@ -354,27 +353,130 @@ host and are set up/verified by scripts under `infra/host/` and `scripts/`.
 
 ## 3. Contracts
 
-The binding API shapes — HTTP (`/api/*`), the WebSocket chat protocol
-(`/ws/chat/{thread_id}`), the internal `code-exec-manager` REST API, and
-the workspace path-traversal guard used by both the files and media
-APIs — are **not duplicated in this document**. They live in
-[Reference: Shared Conventions & Contracts (issue #34)](https://github.com/cucucachu/unnamed_local_ai_server/issues/34),
-specifically:
+The binding API shapes for `agent-server`'s HTTP API, its WebSocket chat
+protocol, `code-exec-manager`'s internal REST API, and the workspace
+path-traversal guard shared by the files and media APIs. This section is
+the single source of truth for these shapes — if any code ever disagrees
+with it, fix the code (or update this doc, if the doc is what's actually
+wrong) rather than letting them drift apart silently.
 
-- **§5 — HTTP API contract** (agent-server, all under `/api`): threads,
-  files, media endpoints, request/response shapes, error format.
-- **§6 — WebSocket chat contract** (`/ws/chat/{thread_id}`): the
-  `turn_start`/`token`/`tool_start`/`tool_end`/`turn_end`/`error` frame
-  protocol.
-- **§7 — code-exec-manager API contract** (internal, port 8090): the
-  `ensure`/`execute`/`DELETE`/`GET /sessions` endpoints and the exact
-  container-hardening spec (`network_mode`, `cap_drop`, mounts, limits).
-- **§8 — path-traversal guard**: the `resolve_workspace_path` function
-  shape and the traversal cases it must reject.
+### HTTP API (agent-server, all under `/api`)
 
-That issue is the single source of truth for these shapes; if this
-document or any code ever appears to disagree with it, the issue wins —
-flag the conflict rather than resolving it silently.
+All JSON. Errors: `{"detail": "<human readable>"}` with an appropriate
+4xx/5xx status. Every `path` parameter is a **workspace-relative POSIX
+path** (`""` = workspace root); any path that resolves outside the
+workspace root returns `400` (see the path-traversal guard below).
+
+**Health**
+- `GET /api/health` → `200 {"status": "ok"}`
+
+**Threads**
+- `POST /api/threads` body `{"title": "optional string"}` → `201
+  {"id": "<uuid>", "title": "New chat", "created_at": iso8601,
+  "updated_at": iso8601}`
+- `GET /api/threads` → `200 [{thread}, ...]`, ordered by `updated_at` desc
+- `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
+  "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
+  "tool_calls": [{"id", "name", "args"}]|null}, ...]`, normalized from the
+  LangGraph checkpoint (`tool` rows carry the tool result text)
+- `DELETE /api/threads/{id}` → `204` (deletes the row and the
+  checkpointer state for that thread)
+
+**Files**
+- `GET /api/files?path=<dir>` → `200 {"path": str, "entries": [{"name":
+  str, "path": str, "type": "file"|"dir", "size": int, "mtime": iso8601,
+  "mime": str|null}]}`, sorted dirs-first then case-insensitive by name;
+  `404` if the dir is missing
+- `POST /api/files/upload` — multipart form, field `path` (target dir),
+  field `file` (binary, may repeat) → `201 {"uploaded": ["rel/path",
+  ...]}`; overwrites existing files
+- `GET /api/files/download?path=<file>` → `200` binary,
+  `Content-Disposition: attachment`
+- `POST /api/files/mkdir` body `{"path": str}` → `201` (parents created,
+  `mkdir -p` semantics)
+- `POST /api/files/move` body `{"src": str, "dst": str}` → `200`
+  (rename == move); `409` if `dst` exists
+- `POST /api/files/copy` body `{"src": str, "dst": str}` → `200` (dirs
+  copied recursively); `409` if `dst` exists
+- `DELETE /api/files?path=<p>` → `204` (dirs deleted recursively)
+
+**Media**
+- `GET /api/media/stream?path=<file>` — `Range`-aware, `206 Partial
+  Content`, `Accept-Ranges: bytes`; see "Media file playback flow" above
+  for the exact request/response sequence.
+
+### WebSocket chat protocol (`/ws/chat/{thread_id}`)
+
+One JSON object per text frame. The connection stays open across turns;
+turns for one thread are serialized server-side by a per-thread
+`asyncio.Lock`.
+
+Client → server:
+
+```json
+{"type": "user_message", "content": "string"}
+```
+
+Server → client, in order within a turn:
+
+```json
+{"type": "turn_start"}
+{"type": "token", "content": "str"}                       // one per streamed model token chunk
+{"type": "tool_start", "tool_call_id": "str", "name": "str",
+ "category": "file"|"exec"|"plan"|"other", "args": {}}     // args truncated to 500 chars/value
+{"type": "tool_end", "tool_call_id": "str", "name": "str",
+ "status": "success"|"error", "result_preview": "str"}     // truncated to 2000 chars
+{"type": "turn_end"}
+{"type": "error", "message": "str"}                        // followed by a normal close, code 1011
+```
+
+Category mapping by tool name: `ls|read_file|write_file|edit_file|glob|
+grep|delete` → `file`; `execute_code` → `exec`; `write_todos|task` →
+`plan`; anything else → `other`.
+
+### `code-exec-manager` API (internal, port 8090)
+
+- `POST /sessions/{session_id}/ensure` → `200 {"container_id": str,
+  "created": bool}`. `session_id` must match `^[a-zA-Z0-9_-]{1,64}$`
+  (thread UUIDs qualify) — otherwise `422`.
+- `POST /sessions/{session_id}/execute` body `{"command": str,
+  "timeout_seconds": int = EXEC_DEFAULT_TIMEOUT_S}` → `200 {"stdout": str,
+  "stderr": str, "exit_code": int, "timed_out": bool, "duration_ms": int,
+  "truncated": bool}` (`stdout`/`stderr` each truncated to 200,000 bytes).
+  `404` if the session doesn't exist yet (callers must `ensure` first).
+- `DELETE /sessions/{session_id}` → `204` (stop + remove the container;
+  idempotent).
+- `GET /sessions` → `200 [{"session_id": str, "container_id": str,
+  "last_used": iso8601}]`.
+
+**Exec-container hardening spec** — the exact configuration
+`services/code-exec-manager/app/sessions.py`'s `build_run_kwargs`
+produces, and the spec `scripts/verify_isolation.sh` checks against:
+`network_mode="none"`, `cap_drop=["ALL"]`,
+`security_opt=["no-new-privileges"]`, `read_only=True`,
+`tmpfs={"/tmp": "size=512m", "/home/homeai": "size=64m"}`,
+`mem_limit="4g"`, `nano_cpus=4_000_000_000` (4 CPUs),
+`user=f"{HOMEAI_UID}:{HOMEAI_GID}"`, `pids_limit=512`, a single bind mount
+`WORKSPACE_DIR (host path) -> /workspace (rw)`, command `sleep infinity`,
+labels `{"homeai.exec": "1", "homeai.session": session_id}`. Nothing else
+mounted; no env secrets passed in.
+
+### Path-traversal guard
+
+Used by the files and media APIs:
+
+```python
+def resolve_workspace_path(rel: str) -> Path:
+    root = Path("/data/workspace").resolve()
+    p = (root / rel).resolve()          # resolves symlinks and ".."
+    if p != root and root not in p.parents:
+        raise HTTPException(400, "path escapes workspace")
+    return p
+```
+
+Tested against: `../x`, absolute `/etc/passwd`, nested `a/../../x`, and a
+symlink inside the workspace that points outside it (the resolved target
+must be rejected).
 
 ---
 
@@ -695,7 +797,7 @@ design actually protects against them:
 2. **Untrusted model output.** Everything the model says — including tool
    names, tool-call arguments, and file paths — has to be treated as
    attacker-or-hallucination-influenced input, not as trusted instruction.
-   The path-traversal guard (issue #34 §8) and the files/media APIs'
+   The path-traversal guard ("Contracts" above) and the files/media APIs'
    workspace-relative path handling exist specifically because the model
    can be prompted (by a user, or by content it reads from a file) into
    requesting a path that tries to escape the workspace.

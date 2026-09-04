@@ -1,8 +1,8 @@
 """REST file management over the shared workspace directory — `/api/files*`.
 
-Contract fixed by the "Reference: Shared Conventions & Contracts" issue
-(#34), §5 "Files" — do not deviate from the shapes below. §8's traversal
-guard (`app.core.paths.resolve_workspace_path`) is applied to EVERY `path`/
+Contract fixed by docs/ARCHITECTURE.md's "Contracts" section ("Files") — do
+not deviate from the shapes below. The path-traversal guard
+(`app.core.paths.resolve_workspace_path`) is applied to EVERY `path`/
 `src`/`dst` parameter before touching the filesystem; this is a SEPARATE,
 human-facing API over the same real host directory the agent's own
 `deepagents.backends.FilesystemBackend` (`app/agent/build.py`) already reads/
