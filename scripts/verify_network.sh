@@ -98,33 +98,53 @@ log "=== M6-01: network verification suite ==="
 log "LAN_SUBNET=${LAN_SUBNET} DEFAULT_IFACE=${DEFAULT_IFACE:-<unresolved>}"
 
 # ---- check 1: mDNS resolution ---------------------------------------------
+#
+# Retries up to 5 times (1s apart) rather than a single shot — same
+# convention as setup-avahi.sh's own verification loop, and for the same
+# reason: observed live on this exact host (M6-01 development), a single
+# avahi-resolve call can occasionally get a stale/racing IPv6 answer for a
+# moment even with use-ipv6=no correctly configured and no competing mDNS
+# responder (confirmed via `resolvectl mdns` showing systemd-resolved's own
+# mDNS fully disabled) — 4 of 5 back-to-back calls resolved correctly. A
+# persistent misconfiguration still fails hard: this only accepts the FIRST
+# IPv4 answer that also matches the current LAN interface's real address,
+# so a genuinely wrong steady-state (IPv6 always, or a stale Docker-bridge
+# address) exhausts all 5 attempts and fails exactly as before.
 
 check_1() {
-  local resolved_addr iface_addr
-  resolved_addr="$(avahi-resolve -n homeai.local 2>/dev/null | awk '{print $2}')" || true
+  local resolved_addr iface_addr attempt
 
-  if [[ -z "${resolved_addr}" ]]; then
-    fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
-      "avahi-resolve returned nothing — is avahi-daemon running? (sudo infra/host/setup-avahi.sh)"
-    return
-  fi
-  if [[ "${resolved_addr}" == *:* ]]; then
-    fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
-      "resolved to an IPv6 address (${resolved_addr}) — see docs/NETWORKING.md's IPv6 gotcha"
-    return
-  fi
   if [[ -z "${DEFAULT_IFACE}" ]]; then
     fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
-      "resolved to ${resolved_addr}, but could not auto-detect the default-route interface to cross-check against"
+      "could not auto-detect the default-route interface to cross-check against"
     return
   fi
   iface_addr="$(ip -4 -o addr show dev "${DEFAULT_IFACE}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
-  if [[ -z "${iface_addr}" ]] || [[ "${resolved_addr}" != "${iface_addr}" ]]; then
+  if [[ -z "${iface_addr}" ]]; then
     fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
-      "resolved to ${resolved_addr}, but ${DEFAULT_IFACE} (the LAN interface) is currently ${iface_addr:-<none>} — see docs/NETWORKING.md's Docker-bridge gotcha"
+      "${DEFAULT_IFACE} (the LAN interface) currently has no IPv4 address"
     return
   fi
-  pass 1 "avahi-resolve -n homeai.local -> ${resolved_addr} (matches ${DEFAULT_IFACE})"
+
+  for attempt in 1 2 3 4 5; do
+    resolved_addr="$(avahi-resolve -n homeai.local 2>/dev/null | awk '{print $2}')" || true
+    if [[ "${resolved_addr}" == "${iface_addr}" ]]; then
+      pass 1 "avahi-resolve -n homeai.local -> ${resolved_addr} (matches ${DEFAULT_IFACE}, attempt ${attempt}/5)"
+      return
+    fi
+    sleep 1
+  done
+
+  if [[ -z "${resolved_addr}" ]]; then
+    fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
+      "avahi-resolve returned nothing after 5 attempts — is avahi-daemon running? (sudo infra/host/setup-avahi.sh)"
+  elif [[ "${resolved_addr}" == *:* ]]; then
+    fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
+      "still resolving to an IPv6 address (${resolved_addr}) after 5 attempts — see docs/NETWORKING.md's IPv6 gotcha"
+  else
+    fail 1 "avahi-resolve -n homeai.local returns this host's LAN IPv4 address" \
+      "resolved to ${resolved_addr} after 5 attempts, but ${DEFAULT_IFACE} (the LAN interface) is currently ${iface_addr} — see docs/NETWORKING.md's Docker-bridge gotcha"
+  fi
 }
 
 # ---- check 2: end-to-end health check over mDNS + proxy -------------------

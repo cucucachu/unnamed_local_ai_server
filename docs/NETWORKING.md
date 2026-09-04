@@ -54,9 +54,22 @@ Three independent layers, because no single one is sufficient on its own:
 
    **Persistence gotcha**: rules added to `DOCKER-USER` via a bare `iptables`
    command only live in the kernel's in-memory ruleset and are lost on
-   reboot. `setup-ufw.sh` installs `iptables-persistent`
-   (`netfilter-persistent`) non-interactively and runs
-   `netfilter-persistent save` after adding the rule so it survives reboots.
+   reboot. The obvious fix — `apt-get install iptables-persistent` — is
+   actually a trap on this Ubuntu release: `ufw`'s own package declares
+   `Breaks: iptables-persistent, netfilter-persistent` (confirmed via
+   `apt-cache show ufw`), so installing either one **silently uninstalls
+   `ufw` itself** as part of the same transaction (this was hit live during
+   M6-01's development — a non-interactive `apt-get install -y` sails right
+   past the "will be REMOVED: ufw" line). `setup-ufw.sh` instead installs a
+   small systemd oneshot unit, `homeai-docker-user-fw.service`, ordered
+   `After=docker.service`/`Requires=docker.service`, that re-inserts the
+   same rule idempotently on every boot — no conflicting package, and
+   correctly ordered after Docker (re)creates the `DOCKER-USER` chain from
+   scratch on every `dockerd` start (which is what actually wipes a rule
+   added any earlier in the boot sequence — plain boot-order luck, not
+   reboot-survival, is why a cron `@reboot` entry alone wouldn't be
+   reliable either). `sudo systemctl status homeai-docker-user-fw.service`
+   shows whether it last ran successfully.
 
 4. **mDNS (`avahi-daemon`)** advertises `homeai.local` so LAN devices can find
    the host by name without router DNS changes — this is a convenience, not
