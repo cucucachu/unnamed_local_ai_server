@@ -7,8 +7,8 @@
 #   postgres           -> M3-01 (checkpoints + metadata) [added]
 #   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper) [added]
 #
-# Fixed topology (see "Reference: Shared Conventions & Contracts" issue, §2):
-# only `caddy` publishes a host port (80). Every other service is reachable
+# Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
+# `caddy` publishes a host port (80). Every other service is reachable
 # only from inside the `homeai-net` bridge network.
 
 name: homeai

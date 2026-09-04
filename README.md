@@ -151,24 +151,20 @@ Track live progress on the [Milestones](../../milestones) and [Issues](../../iss
 
 ## Working with the GitHub issues
 
-This repo's issue tracker **is** the project plan — there are no separate local planning files. Two pinned reference issues hold the cross-cutting rules that every other issue assumes:
+This repo's issue tracker **is** the project plan — there are no separate local planning files. Every backlog ticket across all seven milestones is closed; the [Issues](../../issues) page is the delivery history.
 
-- **[Reference: Shared Conventions & Contracts](../../issues?q=is%3Aissue+label%3Areference)** — binding environment variables, service topology, HTTP/WebSocket API shapes, toolchain pins, path-traversal guard, and testing/definition-of-done rules. If an issue ever conflicts with this one, the reference issue wins — flag the conflict in your PR description.
-- **[Reference: Backlog — Ordering, Dependencies & Gates](../../issues?q=is%3Aissue+label%3Areference)** — the full dependency graph, ordered backlog table, parallel work lanes, gate procedure, and risk register.
+The binding technical contracts every ticket built against — environment variables, service topology, HTTP/WebSocket API shapes, the path-traversal guard — live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#3-contracts). The full dependency graph, ordered backlog table, parallel work lanes, and risk register that governed build order are preserved on the closed [Reference: Backlog — Ordering, Dependencies & Gates](../../issues/35) issue.
 
-(Both are pinned at the top of the [Issues](../../issues) list and carry the `reference` label.)
-
-- **Milestones** map 1:1 to the phases in the table above (`M0 - Foundations` … `M6 - LAN + integration`). A milestone isn't done until its gate issue passes.
+- **Milestones** map 1:1 to the phases in the table above (`M0 - Foundations` … `M6 - LAN + integration`). A milestone was done once its gate issue passed.
 - **Labels**:
   - `ticket` — a unit of implementation work.
   - `size:S` / `size:M` / `size:L` — rough effort sizing.
-  - `gate` — a milestone gate issue (ends with an automated script *and* a human/host checklist). A gate blocks the next milestone's gate from starting, though later-milestone implementation issues may start early if their own dependencies are met.
+  - `gate` — a milestone gate issue (ends with an automated script *and* a human/host checklist). A gate blocked the next milestone's gate from starting, though later-milestone implementation issues could start early if their own dependencies were met.
   - `reference` — cross-cutting rules (conventions, backlog) rather than a unit of work.
-- **Dependencies**: each ticket issue body states its `Depends on` / `Blocks` tickets by ID (e.g. `M2-04`, which matches that issue's title prefix). Don't start an issue until its dependencies are closed. The Backlog reference issue has the full dependency graph and the **parallel lanes** — independent tracks of work that can run simultaneously.
+- **Dependencies**: each ticket issue body states its `Depends on` / `Blocks` tickets by ID (e.g. `M2-04`, which matches that issue's title prefix).
 - **Definition of done**: each ticket issue lists
   - **Tier A** — automated checks (lint, tests, `docker compose config -q`, any named e2e script) — required to close the issue.
-  - **Tier B** (gate issues only) — a human/host checklist (needs the real machine, a phone, or a LAN device). Append these items to `docs/HOST-CHECKS.md` rather than attempting them yourself if you can't reach the physical host.
-- **Suggested workflow**: pick the next unblocked issue in dependency order (or any issue in an open parallel lane), implement it to spec, satisfy Tier A locally, open a PR referencing the issue number, and close the issue once Tier A is green (append any Tier B items to `docs/HOST-CHECKS.md` for the PM to verify on-host).
+  - **Tier B** (gate issues only) — a human/host checklist (needs the real machine, a phone, or a LAN device). Appended to `docs/HOST-CHECKS.md`.
 - **Out of scope for v1** (don't build these, even if tempting): TLS/HTTPS, auth, docker-socket-proxy, transcoding, EAS builds, multi-user, GPU queueing, runtime `pip`/`npm` in exec containers, exposing anything to the internet.
 
 ## Getting started

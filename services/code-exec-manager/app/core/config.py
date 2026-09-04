@@ -1,8 +1,7 @@
 """Application settings, sourced from environment variables via pydantic-settings.
 
-Variable names match the "Reference: Shared Conventions & Contracts" issue
-(§3), lower-cased and unprefixed - same convention as agent-server's own
-`app/core/config.py`.
+Variable names match `.env.example`, lower-cased and unprefixed - same
+convention as agent-server's own `app/core/config.py`.
 """
 
 from pydantic import Field
