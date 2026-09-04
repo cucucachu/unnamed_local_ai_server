@@ -95,16 +95,21 @@ something merely unused.
 
 **Egress proxy (M7-02)**: `egress-proxy` is the second (and, by design,
 last) service on `homeai-net` — it also sits on `homeai-internal`, so any
-future internal-only consumer (M7-03/M7-04's `agent-server`) can reach it
-at `http://egress-proxy:8080` without joining `homeai-net` itself. It's a
+internal-only consumer (`web-fetch`, M7-03) can reach it at
+`http://egress-proxy:8080` without joining `homeai-net` itself. It's a
 `mitmproxy`-based filtering forward proxy: it terminates TLS with its own
 locally-generated CA (a plain `CONNECT` tunnel would hide the HTTP method
 from any filter sitting in front of it) and enforces a GET/HEAD-only +
 destination-guard policy in its `policy.py` addon before forwarding
 anything. See "Security model" below for the full policy and the CA-trust
-recipe. Not wired up as anyone's actual outbound proxy yet — that's
-M7-03/M7-04; this ticket only stands the proxy itself up and proves it
-enforces its policy (`scripts/verify_egress.sh`).
+recipe.
+
+**Web fetch (M7-03)**: `web-fetch` is the sole consumer of `egress-proxy` —
+the narrow internal HTTP service (`GET /fetch?url=<url>`) that turns a URL
+into readable markdown/text with hard caps, so the agent (once M7-05 wires
+up a tool that calls it) never sees raw HTML and never itself holds a
+network handle. See its "Service catalog" entry and "Contracts" below for
+the full shape.
 
 **Docker network naming**: the diagram labels them `homeai-internal`/
 `homeai-net` — that's the compose-file key (`docker-compose.yml`'s
@@ -224,7 +229,8 @@ what another doc says it should be.
 ### `egress-proxy`
 
 - **Purpose**: M7-02's filtering forward proxy — the single, deliberately
-  narrow chokepoint any future outbound-web-access feature (M7-03/M7-04)
+  narrow chokepoint any outbound-web-access feature (`web-fetch`'s M7-03
+  `/fetch`, and M7-04's planned `/search` addition to that same service)
   must route through. Enforces the read-only-web guarantee at the network
   layer (destination guard + GET/HEAD-only) rather than trusting a
   fetcher's own code to behave, per "Security model" below.
@@ -288,6 +294,66 @@ what another doc says it should be.
   from this repo — `scripts/verify_egress.sh` (below) is that check,
   against the live stack with real internet.
 
+### `web-fetch`
+
+- **Purpose**: M7-03's narrow internal fetch service — the *only* thing
+  that talks to `egress-proxy`. Turns a URL into readable markdown/text
+  with hard caps (`GET /fetch?url=<url>`), so the agent (once M7-05 adds a
+  tool calling this service) never sees raw HTML/PDF bytes and never itself
+  holds a network handle. `/search` (SearXNG-backed) is M7-04's addition to
+  this same service, not built here.
+- **Image/base**: `python:3.12-slim` + `uv`, same pattern as
+  `agent-server`'s/`code-exec-manager`'s own Dockerfiles. Dockerfile:
+  `services/web-fetch/Dockerfile`.
+- **Published port**: none.
+- **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
+- **Network (M7-01/M7-03)**: `homeai-internal` only — reaches the public
+  web exclusively via `egress-proxy` (`homeai-net`), never by joining that
+  network itself.
+- **Mounts**: named volume `egress-proxy-ca:/ca:ro` — the same volume
+  `egress-proxy` (M7-02) writes its self-generated CA into, mounted
+  read-only here per "Security model"'s CA-handling recipe below.
+- **Runs as**: `user: "${HOMEAI_UID}:${HOMEAI_GID}"` (non-root, same as
+  `agent-server`).
+- **Entrypoint** (`services/web-fetch/entrypoint.sh`, not a bare `CMD` —
+  see its own header comment): before `uvicorn` starts, combines the
+  image's system CA bundle (`/etc/ssl/certs/ca-certificates.crt`, shipped
+  by `python:3.12-slim`'s own `ca-certificates` package) with
+  `/ca/mitmproxy-ca-cert.pem` into `/tmp/ca-bundle.pem`, then exports
+  `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` pointing at it — this is what makes
+  the httpx client (`create_ssl_context()`, confirmed via
+  `inspect.getsource`) trust `egress-proxy`'s MITM leaf certs.
+  **CA-file-not-yet-written handling (a deliberate judgement call, since
+  the spec left it open)**: the `egress-proxy-ca` volume is populated
+  lazily by `egress-proxy` on ITS first start (§5 point 4 below) — if
+  `web-fetch` starts first, or `egress-proxy` has literally never started,
+  `/ca/mitmproxy-ca-cert.pem` won't exist yet. The entrypoint polls for up
+  to 30s (1 retry/second) before giving up; if it's still missing, it
+  **exits nonzero rather than starting anyway with no CA trust** — every
+  fetch would fail with a much more confusing raw SSL error otherwise, and
+  `restart: unless-stopped` (compose) means the container just retries the
+  whole wait automatically on the next attempt once `egress-proxy` has
+  actually started.
+- **Env vars consumed** (compose `environment:` block, cross-checked
+  against `app/core/config.py`'s `Settings`): `EGRESS_PROXY_URL`,
+  `FETCH_TIMEOUT_S`, `FETCH_MAX_BYTES`, `FETCH_MAX_TEXT_CHARS`,
+  `FETCH_MAX_REDIRECTS` (see `.env.example` for defaults).
+- **Tests**: `services/web-fetch/tests/` — `test_health.py`,
+  `test_extract.py` (pure content-type-extraction unit tests: trafilatura
+  happy path, the readability+markdownify fallback, plain-text/CSV/
+  Markdown passthrough, JSON pretty-printing, PDF text extraction + the
+  50-page cap), `test_fetch.py` (`/fetch` HTTP-level tests against
+  `httpx.AsyncClient` mocked with `respx` — every content type, the
+  413/415/504 caps, text truncation, a real multi-hop redirect chain, a
+  real upstream 4xx/5xx passed through as `502`, and `egress-proxy`'s own
+  403 passed through as `502` with its message intact), fixtures under
+  `tests/fixtures/` (`sample.html`, `sample.pdf`). Run: `cd
+  services/web-fetch && uv run ruff check . && uv run pytest`. No
+  integration test drives a real `egress-proxy`/real internet from this
+  repo (same reasoning as `egress-proxy`'s own test suite) — the host-only
+  Tier A check (`docker compose exec agent-server curl ... web-fetch:8000/
+  fetch?url=...`) is that check.
+
 ### `agent-server`
 
 - **Purpose**: the FastAPI app hosting the `deepagents`-based chat agent —
@@ -299,9 +365,10 @@ what another doc says it should be.
 - **Published port**: none.
 - **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
 - **Network (M7-01)**: `homeai-internal` only — no route to the public
-  internet. Stage 2's web access (M7-02/M7-03) is added via the reserved
-  `egress-proxy` on `homeai-net`, not by putting this service on that
-  network — see "Security model" below.
+  internet. Stage 2's web access goes through `web-fetch` (M7-03) once
+  M7-05 wires up a tool calling it — `agent-server` itself never joins
+  `homeai-net` or talks to `egress-proxy` directly; see "Security model"
+  below.
 - **Mounts**: `${WORKSPACE_DIR}:/data/workspace` (rw bind; host default
   `/srv/homeai/workspace`) — confirmed in `docker compose config`'s
   `volumes:` block for this service.
@@ -571,6 +638,57 @@ produces, and the spec `scripts/verify_isolation.sh` checks against:
 `WORKSPACE_DIR (host path) -> /workspace (rw)`, command `sleep infinity`,
 labels `{"homeai.exec": "1", "homeai.session": session_id}`. Nothing else
 mounted; no env secrets passed in.
+
+### `web-fetch` API (internal, port 8000)
+
+- `GET /fetch?url=<url>` → `200 {"url": str, "final_url": str, "title":
+  str|None, "content_type": str, "text": str, "truncated": bool,
+  "fetched_at": iso8601}`. `content_type` is the base MIME type only (any
+  `; charset=...` parameter stripped) — one of `text/html`, `text/plain`,
+  `text/markdown`, `text/csv`, `application/json`, `application/pdf`.
+  `title` is only ever non-`None` for `text/html` (extracted via
+  `readability-lxml`'s `Document.title()`).
+  - Requires an `http`/`https` `url` — anything else → `400 {"error":
+    str}` before any request is made (no scheme normalization/guessing).
+  - Every outbound request goes through `egress-proxy`
+    (`EGRESS_PROXY_URL`) with `follow_redirects=True`,
+    `max_redirects=FETCH_MAX_REDIRECTS`, `timeout=FETCH_TIMEOUT_S`, and
+    `User-Agent: HomeAI-Agent/1.0 (+read-only)`.
+  - The response body is streamed and aborted once actual bytes read
+    exceed `FETCH_MAX_BYTES` (checked against real bytes streamed, not a
+    declared `Content-Length`) → `413 {"error": str}`.
+  - A `Content-Type` outside the supported list above → `415 {"error":
+    str}` (checked from the response headers before the body is read/
+    capped).
+  - A real upstream `4xx`/`5xx`, OR `egress-proxy`'s own synthesized `403`
+    (method/destination guard, `docs/ARCHITECTURE.md` §5) → `502
+    {"error": str, "upstream_status": int}` — `error` is the upstream/
+    proxy response body text verbatim (e.g. `egress-proxy`'s own
+    `{"error": "destination not allowed by egress policy"}` JSON, passed
+    through as a string) so the caller learns *why*, not just that it
+    failed.
+  - A request that doesn't complete within `FETCH_TIMEOUT_S` → `504
+    {"error": str}`.
+  - Extracted `text` longer than `FETCH_MAX_TEXT_CHARS` is truncated to
+    exactly that length with `"truncated": true`; the response is never
+    rejected for being too long, only for being too large in raw bytes
+    (413, above).
+- `GET /health` → `200 {"status": "ok"}`.
+
+**Extraction by content type** (`app/core/extract.py`, spec §2):
+`text/html` → `trafilatura.extract(output_format="markdown",
+include_links=True, include_tables=True)`; if that returns nothing (e.g.
+a page too short/unstructured for its boilerplate heuristics to find a
+main-content region), falls back to `readability-lxml`'s
+`Document.summary()` + `markdownify.markdownify()`. `text/plain`/
+`text/markdown`/`text/csv` → UTF-8 decoded as-is (`errors="replace"` for
+undeclared/wrong charsets). `application/json` → parsed then
+re-serialized with `json.dumps(indent=2)`. `application/pdf` → `pypdf`
+`extract_text()` per page, **first 50 pages only** (`PDF_MAX_PAGES` — a
+judgement call: bounds worst-case latency/memory against a
+multi-thousand-page PDF without a spec-mandated limit to follow; not
+configurable via env, since it's a safety bound rather than a tunable
+like the `FETCH_*` caps).
 
 ### Path-traversal guard
 
@@ -910,8 +1028,8 @@ design actually protects against them:
    "No internet" is the default for every container, enforced at the
    network layer, not by convention — see "Network segmentation (M7-01)"
    below. The one exception, `egress-proxy` (M7-02), is a filtering MITM
-   proxy specifically so this guarantee doesn't depend on whatever
-   eventually fetches through it (M7-03/M7-04) being bug-free: "agent can
+   proxy specifically so this guarantee doesn't depend on `web-fetch`
+   (M7-03) or M7-04's planned `/search` addition being bug-free: "agent can
    read the public web; cannot write to it; cannot reach the LAN via the
    proxy" — see "Egress proxy (M7-02)" below for exactly how.
 3. **Untrusted model output.** Everything the model says — including tool
@@ -1063,17 +1181,17 @@ is how that guarantee is enforced independently of any fetcher's own code:
   checks; those checks continue to cover exactly the same four services
   they always did.
 
-**CA handling — how M7-03/M7-04 (or anything else that fetches through
-this proxy) must mount the volume and trust the cert:**
+**CA handling — how any consumer that fetches through this proxy must
+mount the volume and trust the cert (implemented for real by `web-fetch`,
+M7-03; the recipe below is what it actually does, not a plan):**
 
 1. Mount the SAME named volume `egress-proxy-ca` **read-only** at whatever
    path the consumer's own HOME resolves to for its HTTPS client's trust
-   store — e.g. `egress-proxy-ca:/ca:ro` if the consumer just needs the
-   raw file, or directly reusing mitmproxy's own layout if the consumer is
-   itself a mitmproxy-family tool. Do NOT mount it read-write anywhere but
-   `egress-proxy`'s own service block — the CA private key lives in this
-   volume too (`mitmproxy-ca.pem`), and nothing but the proxy that
-   generated it should ever be able to write to it.
+   store — `web-fetch` uses `egress-proxy-ca:/ca:ro` (it just needs the raw
+   file, not mitmproxy's own `~/.mitmproxy` layout). Do NOT mount it
+   read-write anywhere but `egress-proxy`'s own service block — the CA
+   private key lives in this volume too (`mitmproxy-ca.pem`), and nothing
+   but the proxy that generated it should ever be able to write to it.
 2. mitmproxy writes several formats into that directory on first start;
    the one every ordinary HTTPS client (`curl --cacert`, Python
    `requests`/`httpx` via `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE`, Node's
@@ -1081,21 +1199,37 @@ this proxy) must mount the volume and trust the cert:**
    **`mitmproxy-ca-cert.pem`** (PEM, cert only — not `mitmproxy-ca.pem`,
    which also bundles the private key and must never leave `egress-proxy`
    itself in practice, even though the read-only mount technically exposes
-   it too).
-3. Point the consumer's outbound HTTP client at the proxy
-   (`HTTPS_PROXY=http://egress-proxy:8080` / `HTTP_PROXY=http://egress-proxy:8080`,
-   reachable over `homeai-internal` — see "Egress proxy (M7-02)" above for
-   why no `homeai-net` membership is needed on the consumer's side) AND at
-   the mounted cert (however that consumer's language/runtime expects a
-   custom CA bundle to be specified — this repo's own
-   `scripts/verify_egress.sh` does this with plain `curl --cacert
-   /ca/mitmproxy-ca-cert.pem`, the simplest concrete example to copy).
+   it too). `web-fetch`'s `entrypoint.sh` concatenates this with the
+   image's own system CA bundle (`/etc/ssl/certs/ca-certificates.crt`)
+   into one combined file at container-start time, rather than trusting
+   the mitmproxy cert exclusively — a fetch to a public site is expected
+   to see an mitmproxy-issued leaf cert (since `egress-proxy` MITMs
+   everything it forwards), but combining bundles rather than replacing
+   the system one keeps this robust to that assumption ever changing.
+3. Point the consumer's outbound HTTP client at the proxy AND at the
+   mounted/combined cert bundle. `web-fetch` does this by passing
+   `proxy=EGRESS_PROXY_URL` directly to its `httpx.AsyncClient`
+   constructor (not the `HTTPS_PROXY`/`HTTP_PROXY` env-var convention
+   `scripts/verify_egress.sh`'s `curl` invocation uses) and exporting
+   `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` (both, since it's unclear which
+   one a given httpx/requests version consults — cheap belt-and-suspenders)
+   pointing at the combined bundle from point 2 before `uvicorn` starts;
+   httpx's own `create_ssl_context()` respects `SSL_CERT_FILE` when
+   `trust_env` is on (confirmed by reading its source directly). Either
+   env-var-based or constructor-argument-based proxy configuration
+   satisfies this point — pick whichever fits the consumer's own HTTP
+   client library.
 4. The volume is populated lazily — mitmproxy only writes the CA files the
    **first time `egress-proxy` actually starts**. Any consumer/verification
    script that depends on the cert being present must either depend on
    `egress-proxy` via `depends_on` + a startup order, or poll for the file
-   (as `scripts/verify_egress.sh` does), rather than assuming it exists
-   immediately after `docker compose up`.
+   (as `scripts/verify_egress.sh` and `web-fetch`'s own `entrypoint.sh` both
+   do), rather than assuming it exists immediately after `docker compose
+   up`. `web-fetch`'s entrypoint polls for 30s then **exits nonzero** if the
+   cert still isn't there (a judgement call: fail loud and let `restart:
+   unless-stopped` retry the whole wait, rather than silently starting up
+   with no CA trust and having every single fetch fail with a confusing raw
+   SSL error instead).
 
 ### Documented fast-follows (not built for v1)
 
