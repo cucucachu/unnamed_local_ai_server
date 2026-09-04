@@ -15,6 +15,7 @@ def test_settings() -> Settings:
         fetch_max_bytes=1_000_000,
         fetch_max_text_chars=40_000,
         fetch_max_redirects=5,
+        searxng_url="http://searxng:8080",
         _env_file=None,
     )
 

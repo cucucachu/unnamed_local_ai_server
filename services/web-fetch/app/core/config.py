@@ -15,3 +15,8 @@ class Settings(BaseSettings):
     fetch_max_bytes: int = 5_000_000
     fetch_max_text_chars: int = 40_000
     fetch_max_redirects: int = 5
+
+    # M7-04: internal SearXNG instance `/search` (spec §3) talks to —
+    # never the public internet directly, and never a caller-supplied
+    # value (unlike `/fetch`'s own `url` query param).
+    searxng_url: str = "http://searxng:8080"

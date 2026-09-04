@@ -1,0 +1,170 @@
+# M7-04: SearXNG (self-hosted metasearch engine) settings for the narrow,
+# JSON-only, GET-only-engines deployment behind `web-fetch`'s `GET /search`
+# endpoint (docs/ARCHITECTURE.md §2's "searxng" service-catalog entry has
+# the full contract; §5 "Security model" has the threat-model reasoning).
+#
+# Mounted read-only at `/etc/searxng/settings.yml` (docker-compose.yml).
+# The stock `searxng/searxng` image's own `container/entrypoint.sh` only
+# ever GENERATES a fresh settings.yml (from its own template, with a
+# random `secret_key` substituted via `sed`) when the target path doesn't
+# already exist (`setup()`'s `if [ ! -f "$target_settings" ]` branch) —
+# supplying this file at that same path means that bootstrap path never
+# runs. See `server.secret_key` below for what that means for
+# `SEARXNG_SECRET`.
+#
+# `use_default_settings.engines.keep_only` (searx/settings_loader.py's
+# `update_settings()`, confirmed by reading that function directly against
+# the pinned image's source) is what makes "disable every engine except an
+# explicit allowlist" tractable without hand-listing every one of
+# upstream's ~230 engines with `disabled: true` on each — anything not
+# named here doesn't exist in the merged config at all, not just
+# "disabled". Every other top-level key below (`search`, `server`,
+# `outgoing`) is MERGED on top of upstream's own default settings.yml
+# (same function), not a full replacement — anything not mentioned here
+# (autocomplete, favicon_resolver, plugins, etc.) keeps its upstream
+# default.
+use_default_settings:
+  engines:
+    keep_only:
+      # --- GET-only engines (spec: "only engines whose implementation
+      # uses GET" — every engine's own outbound request has to survive
+      # egress-proxy's GET/HEAD-only filter, docs/ARCHITECTURE.md §5,
+      # exactly like web-fetch's own `/fetch` requests do). Audited
+      # directly against each engine module's `request()` function in the
+      # pinned image's SearXNG source (github.com/searxng/searxng,
+      # `master` branch @ 2026-09-04 — the pinned image digest below
+      # doesn't correspond to a tagged release with its own browsable
+      # source tree, so this audit is against `master` at audit time;
+      # re-audit if the image is ever re-pinned to a meaningfully newer
+      # commit). Default HTTP method for every engine is GET
+      # (`searx/search/processors/online.py`'s `default_request_params()`
+      # returns `{"method": "GET", ...}`) unless an engine's own
+      # `request()` explicitly sets `params["method"] = "POST"`.
+      #
+      #   - brave         (searx/engines/brave.py)          -> request() never sets params["method"] -> GET
+      #   - wikipedia     (searx/engines/wikipedia.py)       -> request() never sets params["method"] -> GET (REST API: /api/rest_v1/page/summary/<title>)
+      #   - github        (searx/engines/github.py)          -> request() never sets params["method"] -> GET (api.github.com/search/repositories)
+      #   - stackoverflow (searx/engines/stackexchange.py,
+      #                    api_site: stackoverflow)          -> request() never sets params["method"] -> GET (api.stackexchange.com/2.3/search/advanced)
+      #   - mojeek        (searx/engines/mojeek.py)          -> request() never sets params["method"] -> GET; upstream's OWN
+      #                                                          default settings.yml entry has `disabled: true` on this one
+      #                                                          (unlike the other four) — explicitly re-enabled in the
+      #                                                          `engines:` override at the bottom of this file.
+      #
+      # EXCLUDED despite being in this ticket's own "expected set" guess —
+      # audited from source and found to be POST, not GET (flagged per the
+      # ticket's own instructions rather than trusted from the guess):
+      #   - duckduckgo — searx/engines/duckduckgo.py's `request()` sets
+      #     `params["method"] = "POST"` unconditionally: it POSTs a no-JS
+      #     HTML search form to `https://html.duckduckgo.com/html/`.
+      #   - startpage — searx/engines/startpage.py's `request()` likewise
+      #     sets `params["method"] = "POST"` (a `POST .../sp/search` HTML
+      #     form; the request also sets a cookie literally named
+      #     `enable_post_method`). Neither engine would survive
+      #     egress-proxy's GET/HEAD-only filter — both would get a `403
+      #     {"error": "method not allowed by egress policy"}` on every
+      #     query, silently returning zero results from those two engines
+      #     if they were left enabled.
+      # `wikidata` (a natural sibling of `wikipedia`) was also checked and
+      # excluded for the same reason: searx/engines/wikidata.py's
+      # request() sets `params["method"] = "POST"` (SPARQL query POSTed to
+      # query.wikidata.org).
+      #
+      # NOT independently source-audited (out of scope for this pass —
+      # flagged, not silently assumed either way): every other engine in
+      # upstream's ~230-engine default list. None of them are reachable
+      # anyway once `keep_only` restricts the merged engine list to just
+      # the five named below, so this is a completeness note for whoever
+      # re-audits this list later (e.g. if a sixth engine is ever added),
+      # not a gap in what's actually enabled today.
+      - brave
+      - wikipedia
+      - github
+      - stackoverflow
+      - mojeek
+
+search:
+  # JSON only (spec §2) — no HTML UI is ever served or needed: this
+  # instance is never routed by Caddy and has no human user, only
+  # web-fetch's own `/search` endpoint calling `?format=json`.
+  formats:
+    - json
+  safe_search: 0
+
+server:
+  # Single trusted client (web-fetch, reachable only over
+  # `homeai-internal` — docker-compose.yml) — no public-facing rate
+  # limiting needed, same reasoning as egress-proxy's own lack of one.
+  limiter: false
+  # SearXNG would otherwise proxy image result bytes through itself; no
+  # image/news/video categories are enabled here at all (out of scope per
+  # the ticket's own "Out of scope" list), so this is just making that
+  # explicit rather than leaving it an accidental default.
+  image_proxy: false
+  # secret_key signs the Flask session cookie/CSRF token and a couple of
+  # HMAC'd internal URLs (image-proxy links, mainly — unused here, see
+  # `image_proxy` above). This is a FIXED value baked into this committed
+  # file, not actually sourced from the `SEARXNG_SECRET` env var
+  # docker-compose.yml passes to this container:
+  #
+  # DEVIATION / judgement call (flagged explicitly for a human to
+  # double-check, per this ticket's own instructions — not a silent
+  # no-op): the pinned image's `container/entrypoint.sh` only substitutes
+  # a random secret via `sed` into a FRESH settings.yml it generates from
+  # its own template, on the `if [ ! -f "$target_settings" ]` first-boot
+  # path. Since this ticket mounts its OWN settings.yml (with the
+  # GET-only engines + JSON format already configured) at that exact
+  # path, that bootstrap path never runs — and nothing else in the pinned
+  # image reads `SEARXNG_SECRET` (or any env var) to patch an ALREADY
+  # -existing settings.yml's `secret_key` (confirmed directly from
+  # `searx/webapp.py`: `app.secret_key = settings['server']['secret_key']`,
+  # no `os.environ` fallback anywhere near it). `SEARXNG_SECRET` is still
+  # wired through `.env`/`docker-compose.yml` (consistent with this
+  # repo's "every secret is an env var" convention, and so a future
+  # templating entrypoint wrapper could pick it up), but as shipped here
+  # it is NOT what actually protects this value. Real risk in practice is
+  # low: this instance has no public UI (never routed by Caddy, spec's
+  # own "Out of scope"), `search.formats` is JSON-only (no browser session
+  # ever actually exercises the signed cookie), and `image_proxy: false`
+  # above means the one HMAC use of this key (image-proxy link signing)
+  # never triggers either. Re-verify/re-wire before treating this as
+  # hardened for a multi-tenant or internet-exposed deployment.
+  secret_key: "m7-04-searxng-static-secret-not-env-driven-see-comment-above"
+
+outgoing:
+  # Same order of magnitude as web-fetch's own FETCH_TIMEOUT_S, scaled
+  # down since this is one upstream-engine round trip, not a full page
+  # fetch+redirect chain.
+  request_timeout: 6.0
+  # Every outbound request SearXNG itself makes — to brave / wikipedia /
+  # github / stackoverflow / mojeek, the five engines kept above, plus
+  # their own periodic `fetch_traits()` language/region lookups — goes
+  # through the SAME egress-proxy chokepoint as web-fetch's own `/fetch`
+  # (docs/ARCHITECTURE.md §5). SearXNG never gets its own direct route to
+  # the public internet: docker-compose.yml keeps this service on
+  # `homeai-internal` only, same as web-fetch, never on `homeai-net`.
+  proxies:
+    http:
+      - http://egress-proxy:8080
+    https:
+      - http://egress-proxy:8080
+  # egress-proxy MITMs HTTPS with its own locally-generated CA (the same
+  # one web-fetch's `entrypoint.sh` trusts — docs/ARCHITECTURE.md §5's "CA
+  # handling"). Point curl_cffi (SearXNG's outbound HTTP client) at the
+  # cert file directly via this setting rather than relying on the image's
+  # `update-ca-certificates` step (which only runs "if running as root" at
+  # container start — this image is not required to run as root, and
+  # `outgoing.verify` is data this settings.yml already controls
+  # regardless of container user).
+  verify: /etc/searxng-ca/mitmproxy-ca-cert.pem
+
+# Re-enable mojeek: upstream's own default settings.yml entry for it has
+# `disabled: true` (see the audit comment under `keep_only` above) —
+# `keep_only` only controls WHICH engines exist in the merged config at
+# all, not their own `disabled`/`inactive` flags, so this override is
+# still needed on top of it. `update_settings()` matches this by `name`
+# against the (already `keep_only`-filtered) engine list and merges this
+# entry's fields onto the matching default entry.
+engines:
+  - name: mojeek
+    disabled: false

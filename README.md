@@ -51,6 +51,7 @@ In short: a private, always-on "computer-use" assistant for your home network, w
 ## Guiding principles
 
 - **Local-first, always.** Inference, file storage, and code execution all happen on this machine. Internet access (if any) is incidental — for pulling container images or model files — never required day to day.
+- **Search depends on the public web answering, not on a third-party search service.** The agent's web search runs through a self-hosted metasearch engine (SearXNG) that queries public search engines directly — no hosted search API, no API key, nothing leaves this machine except the outbound query itself. That said, the *results* still depend on real websites out there answering those queries, same as any page the agent reads with `/fetch` — this stack owns the search step, not the internet's willingness to respond.
 - **Give it real capability, then contain the risk.** Genuine, persistent file access, because that's the point of the tool. Anything riskier — arbitrary code execution — is isolated behind a hard boundary instead of being restricted into uselessness.
 - **One address, every device.** `homeai.local` (or wherever it lands) is the whole interface, from any device on the network.
 - **Minimum viable now, room to grow later.** Get the core loop (chat, files, code, media) working end to end, with a documented path to add polish and hardening later without rearchitecting.

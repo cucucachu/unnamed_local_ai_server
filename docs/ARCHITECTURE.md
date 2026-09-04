@@ -229,11 +229,14 @@ what another doc says it should be.
 ### `egress-proxy`
 
 - **Purpose**: M7-02's filtering forward proxy — the single, deliberately
-  narrow chokepoint any outbound-web-access feature (`web-fetch`'s M7-03
-  `/fetch`, and M7-04's planned `/search` addition to that same service)
-  must route through. Enforces the read-only-web guarantee at the network
-  layer (destination guard + GET/HEAD-only) rather than trusting a
-  fetcher's own code to behave, per "Security model" below.
+  narrow chokepoint any outbound-web-access feature must route through:
+  `web-fetch`'s own `/fetch` (M7-03) talks to it directly, and `searxng`
+  (M7-04) talks to it for every one of its own outbound engine queries
+  (`web-fetch`'s `/search` itself only ever talks to `searxng` over
+  `homeai-internal`, never to `egress-proxy` directly). Enforces the
+  read-only-web guarantee at the network layer (destination guard +
+  GET/HEAD-only) rather than trusting a fetcher's own code to behave, per
+  "Security model" below.
 - **Image/base**: `mitmproxy/mitmproxy` pinned by digest (multi-platform
   manifest-list digest for the `12` tag, resolved via the Docker Hub v2
   tags API — see `services/egress-proxy/Dockerfile`'s own comment for why
@@ -296,12 +299,16 @@ what another doc says it should be.
 
 ### `web-fetch`
 
-- **Purpose**: M7-03's narrow internal fetch service — the *only* thing
-  that talks to `egress-proxy`. Turns a URL into readable markdown/text
-  with hard caps (`GET /fetch?url=<url>`), so the agent (once M7-05 adds a
-  tool calling this service) never sees raw HTML/PDF bytes and never itself
-  holds a network handle. `/search` (SearXNG-backed) is M7-04's addition to
-  this same service, not built here.
+- **Purpose**: the narrow internal fetch/search service — the *only* thing
+  that talks to `egress-proxy` directly. `GET /fetch?url=<url>` (M7-03)
+  turns a URL into readable markdown/text with hard caps; `GET
+  /search?q=<query>&n=<1..20>` (M7-04) proxies a query to the internal
+  `searxng` service below and normalizes its JSON. Either way the agent
+  (once M7-05 adds tools calling this service) never sees raw HTML/PDF
+  bytes or SearXNG's own response shape, and never itself holds a network
+  handle. `/search` was added to this SAME service rather than a new
+  Python one, per the M7-03 subagent's own contract note (`app/api/` is a
+  multi-route-module layout by design, not a single-endpoint service).
 - **Image/base**: `python:3.12-slim` + `uv`, same pattern as
   `agent-server`'s/`code-exec-manager`'s own Dockerfiles. Dockerfile:
   `services/web-fetch/Dockerfile`.
@@ -309,7 +316,9 @@ what another doc says it should be.
 - **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
 - **Network (M7-01/M7-03)**: `homeai-internal` only — reaches the public
   web exclusively via `egress-proxy` (`homeai-net`), never by joining that
-  network itself.
+  network itself. Reaches `searxng` (M7-04, below) directly over this same
+  `homeai-internal` network — that hop never touches `egress-proxy` at all;
+  `searxng` is the one that does, for ITS OWN outbound requests.
 - **Mounts**: named volume `egress-proxy-ca:/ca:ro` — the same volume
   `egress-proxy` (M7-02) writes its self-generated CA into, mounted
   read-only here per "Security model"'s CA-handling recipe below.
@@ -322,7 +331,10 @@ what another doc says it should be.
   `/ca/mitmproxy-ca-cert.pem` into `/tmp/ca-bundle.pem`, then exports
   `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` pointing at it — this is what makes
   the httpx client (`create_ssl_context()`, confirmed via
-  `inspect.getsource`) trust `egress-proxy`'s MITM leaf certs.
+  `inspect.getsource`) trust `egress-proxy`'s MITM leaf certs. Only
+  matters for `/fetch`'s own client (talks straight to the public web
+  through `egress-proxy`) — `/search`'s client talks to `searxng` directly
+  over plain internal HTTP, no proxy/CA trust involved on this leg.
   **CA-file-not-yet-written handling (a deliberate judgement call, since
   the spec left it open)**: the `egress-proxy-ca` volume is populated
   lazily by `egress-proxy` on ITS first start (§5 point 4 below) — if
@@ -337,7 +349,10 @@ what another doc says it should be.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings`): `EGRESS_PROXY_URL`,
   `FETCH_TIMEOUT_S`, `FETCH_MAX_BYTES`, `FETCH_MAX_TEXT_CHARS`,
-  `FETCH_MAX_REDIRECTS` (see `.env.example` for defaults).
+  `FETCH_MAX_REDIRECTS`, `SEARXNG_URL` (see `.env.example` for defaults).
+  `/search` reuses `FETCH_TIMEOUT_S` for its own SearXNG round trip rather
+  than introducing a second timeout knob — no new env var beyond
+  `SEARXNG_URL` was added for it.
 - **Tests**: `services/web-fetch/tests/` — `test_health.py`,
   `test_extract.py` (pure content-type-extraction unit tests: trafilatura
   happy path, the readability+markdownify fallback, plain-text/CSV/
@@ -346,13 +361,113 @@ what another doc says it should be.
   `httpx.AsyncClient` mocked with `respx` — every content type, the
   413/415/504 caps, text truncation, a real multi-hop redirect chain, a
   real upstream 4xx/5xx passed through as `502`, and `egress-proxy`'s own
-  403 passed through as `502` with its message intact), fixtures under
-  `tests/fixtures/` (`sample.html`, `sample.pdf`). Run: `cd
-  services/web-fetch && uv run ruff check . && uv run pytest`. No
-  integration test drives a real `egress-proxy`/real internet from this
-  repo (same reasoning as `egress-proxy`'s own test suite) — the host-only
-  Tier A check (`docker compose exec agent-server curl ... web-fetch:8000/
-  fetch?url=...`) is that check.
+  403 passed through as `502` with its message intact), `test_search.py`
+  (M7-04: `/search` HTTP-level tests against a mocked SearXNG JSON
+  response via `respx` — happy path, de-duplication by URL across
+  engines, the `n` cap and its default/out-of-range-422 behavior, a
+  SearXNG 5xx/unreachable/invalid-JSON all mapping to `502`, and an
+  empty-results pass-through), fixtures under `tests/fixtures/`
+  (`sample.html`, `sample.pdf`). Run: `cd services/web-fetch && uv run
+  ruff check . && uv run pytest`. No integration test drives a real
+  `egress-proxy`/`searxng`/real internet from this repo (same reasoning as
+  `egress-proxy`'s own test suite) — the host-only Tier A check for
+  `/fetch` is `docker compose exec agent-server python3 ... web-fetch:8000/
+  fetch?url=...` (no `curl` in this image — see "e2e gate scripts" below),
+  and for `/search` it's `scripts/e2e/web_research_smoke.sh` (M7-04).
+
+### `searxng`
+
+- **Purpose**: M7-04's self-hosted metasearch engine — runs locally and
+  queries public search engines directly (no intermediate hosted search
+  API), giving the agent a way to *find* pages instead of only reading ones
+  it's told about. Configured JSON-only (`search.formats: [json]`, no HTML
+  UI) with only GET-implemented engines enabled, since every one of its own
+  outbound requests has to survive `egress-proxy`'s GET/HEAD-only filter
+  the same way `web-fetch`'s own requests do. Only ever called by
+  `web-fetch`'s `GET /search` above — never routed by Caddy, never talked
+  to by the UI or the agent directly.
+- **Image/base**: `searxng/searxng`, pinned by digest (multi-platform
+  manifest-list digest for the `latest` tag, resolved via the Docker Hub v2
+  tags API on 2026-09-04 — same method `services/egress-proxy/Dockerfile`'s
+  own comment used for `mitmproxy/mitmproxy:12`; no Dockerfile of this
+  repo's own — the pin lives directly on `docker-compose.yml`'s `image:`
+  line since this service needs no custom build, only a mounted config
+  file). Re-verify with `docker buildx imagetools inspect
+  searxng/searxng:latest` once this runs somewhere with real
+  registry+docker access — `searxng/searxng:latest` moves often (observed
+  a new push within the same day this was pinned), more so than
+  `mitmproxy/mitmproxy:12`'s own comparatively slow cadence.
+- **Published port**: none.
+- **Internal port**: `8080` (the pinned image's own default).
+- **Network (M7-01/M7-04)**: `homeai-internal` only. Its OWN outbound
+  requests (to brave/wikipedia/github/stackoverflow/mojeek — the 5 engines
+  kept, see below) are routed through `egress-proxy` via
+  `outgoing.proxies` in `settings.yml`, not a direct route out — this
+  service never joins `homeai-net`.
+- **Mounts**: `./services/searxng/settings.yml:/etc/searxng/settings.yml:ro`
+  (this repo's own config, read-only — see below for why supplying it here
+  matters), and the same named volume `web-fetch` mounts,
+  `egress-proxy-ca:/etc/searxng-ca:ro` (a separate top-level path from
+  `/etc/searxng` — see the compose file's own comment for why).
+- **Runs as**: the pinned image's own default user (no `user:` override in
+  compose — least-privilege is the image maintainer's job here, same
+  reasoning `postgres`'s own catalog entry implicitly follows).
+- **Engine configuration** (`services/searxng/settings.yml`, spec §2 —
+  this file's own header comment has the full reasoning; summarized here):
+  uses `use_default_settings.engines.keep_only` (confirmed directly from
+  `searx/settings_loader.py`'s `update_settings()`) to make ONLY
+  `brave`, `wikipedia`, `github`, `stackoverflow`, `mojeek` exist in the
+  merged engine list at all — not merely "enabled", genuinely absent, so
+  there's no reliance on remembering to disable ~225 other engines by
+  name. Each of those 5 was individually audited against its own
+  `request()` function in the pinned image's SearXNG source
+  (`github.com/searxng/searxng`, `master` @ 2026-09-04) and confirmed to
+  never set `params["method"] = "POST"` (the online-engine default is GET,
+  `searx/search/processors/online.py`'s `default_request_params()`).
+  **Engine-audit correction to this ticket's own guess**: the spec's
+  "expected set" also named `duckduckgo` and `startpage` — both were
+  audited and found to explicitly `POST` (DuckDuckGo POSTs a no-JS HTML
+  form to `html.duckduckgo.com/html/`; Startpage POSTs to `/sp/search`
+  with a cookie literally named `enable_post_method`), so both are
+  excluded. `wikidata` (checked as a natural `wikipedia` sibling) is POST
+  too (a SPARQL query) and was likewise excluded. Every other engine in
+  upstream's default list was NOT individually source-audited (only the
+  ones mentioned by name in the ticket, plus `wikidata`) — flagged as an
+  explicit gap for whoever adds a 6th engine later, not a silent
+  assumption either way. `mojeek` is re-enabled via a plain `engines:`
+  override (`disabled: false`) since upstream's own default entry for it
+  has `disabled: true` — `keep_only` controls which engines exist at all,
+  not their own `disabled` flag.
+- **`server.secret_key` — NOT env-var-driven, despite `SEARXNG_SECRET`
+  existing in `.env`/compose (a deliberate, explicitly-flagged deviation)**:
+  the pinned image's `container/entrypoint.sh` only ever substitutes a
+  random secret into a settings.yml it generates ITSELF, on a
+  first-boot-only path (`if [ ! -f "$target_settings" ]`). Since this
+  service mounts its OWN pre-existing settings.yml (with the engine
+  allowlist + JSON format already configured), that bootstrap path never
+  runs — and nothing else in the pinned image reads `SEARXNG_SECRET` (or
+  any env var) to patch an already-existing settings.yml's `secret_key`
+  (confirmed directly from `searx/webapp.py`:
+  `app.secret_key = settings['server']['secret_key']`, no `os.environ`
+  fallback). `settings.yml` ships a fixed, committed value instead; its
+  own comment has the full reasoning and the "real risk is low in
+  practice" argument (no public UI, JSON-only, `image_proxy: false` so the
+  one HMAC use of this key never triggers). `SEARXNG_SECRET` stays wired
+  through `.env`/compose for consistency with this repo's
+  every-secret-is-an-env-var convention and so a future templating
+  entrypoint could pick it up — flagged here as NOT currently load-bearing,
+  not silently a no-op.
+- **Env vars consumed**: `SEARXNG_SECRET` (compose `environment:` block —
+  see the caveat directly above for why this doesn't currently do
+  anything).
+- **Tests**: no dedicated test suite of its own (it's a pinned upstream
+  image + a static `settings.yml`, same category as `postgres`/`caddy`'s
+  own catalog entries) — `services/web-fetch/tests/test_search.py`
+  exercises `web-fetch`'s own `/search` contract against a mocked SearXNG
+  response (unit-level, no real SearXNG), and
+  `scripts/e2e/web_research_smoke.sh` (M7-04, "e2e gate scripts" below) is
+  the real, live-stack check that a genuine query round-trips through this
+  service's actual GET-only engines and back.
 
 ### `agent-server`
 
@@ -673,6 +788,19 @@ mounted; no env secrets passed in.
     exactly that length with `"truncated": true`; the response is never
     rejected for being too long, only for being too large in raw bytes
     (413, above).
+- `GET /search?q=<query>&n=<1..20, default 8>` (M7-04) → `200 {"query":
+  str, "results": [{"title": str, "url": str, "snippet": str, "engine":
+  str}, ...]}`. Calls the internal `searxng` service's own
+  `GET /search?q=...&format=json` (never the public internet directly —
+  `searxng` is what does that, through `egress-proxy`). Results are
+  de-duplicated by `url` (SearXNG can return the same URL from more than
+  one enabled engine) and capped at `n`, preserving SearXNG's own
+  relevance ordering rather than re-sorting. `n` outside `1..20` → `422`
+  (FastAPI query-param validation, not a hand-rolled clamp). `searxng`
+  unreachable, a non-`200` response, or an unparseable/malformed-shape
+  JSON body → `502 {"error": str}` — this endpoint has no caller-supplied
+  destination to validate (unlike `/fetch`'s own `url`), so there's no
+  `400` path here.
 - `GET /health` → `200 {"status": "ok"}`.
 
 **Extraction by content type** (`app/core/extract.py`, spec §2):
@@ -1028,10 +1156,18 @@ design actually protects against them:
    "No internet" is the default for every container, enforced at the
    network layer, not by convention — see "Network segmentation (M7-01)"
    below. The one exception, `egress-proxy` (M7-02), is a filtering MITM
-   proxy specifically so this guarantee doesn't depend on `web-fetch`
-   (M7-03) or M7-04's planned `/search` addition being bug-free: "agent can
-   read the public web; cannot write to it; cannot reach the LAN via the
-   proxy" — see "Egress proxy (M7-02)" below for exactly how.
+   proxy specifically so this guarantee doesn't depend on `web-fetch`'s
+   own `/fetch` (M7-03) or `searxng`'s outbound engine queries backing
+   `/search` (M7-04) being bug-free: "agent can read the public web;
+   cannot write to it; cannot reach the LAN via the proxy" — see "Egress
+   proxy (M7-02)" below for exactly how. This is also the guarantee behind
+   README.md's "Guiding principles" caveat that search depends on public
+   search engines answering SearXNG's own queries: SearXNG is not a
+   third-party *service* this stack depends on (it's self-hosted, runs
+   locally, no API key/hosted search backend involved) — but the actual
+   search results it returns necessarily come from third-party *websites*
+   answering its queries, the same trust relationship `/fetch` already has
+   with any page the agent asks it to read.
 3. **Untrusted model output.** Everything the model says — including tool
    names, tool-call arguments, and file paths — has to be treated as
    attacker-or-hallucination-influenced input, not as trusted instruction.
@@ -1293,6 +1429,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
+| `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and

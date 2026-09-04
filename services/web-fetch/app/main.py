@@ -1,4 +1,6 @@
-"""FastAPI application factory for web-fetch (M7-03).
+"""FastAPI application factory for web-fetch (M7-03: `/fetch`; M7-04:
+`/search`, added to this same service per the M7-03 subagent's own
+contract note — not a new Python service).
 
 `create_app()` builds the ASGI app; the module-level `app` object below is
 what the Dockerfile's `uv run uvicorn app.main:app` command serves. No
@@ -9,7 +11,7 @@ reached directly at `http://web-fetch:8000/...`, same convention as
 
 from fastapi import FastAPI
 
-from app.api import fetch, health
+from app.api import fetch, health, search
 from app.core.config import Settings
 
 
@@ -22,6 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(fetch.router)
+    app.include_router(search.router)
 
     return app
 
