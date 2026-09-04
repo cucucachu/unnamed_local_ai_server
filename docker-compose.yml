@@ -6,6 +6,8 @@
 #   agent-server       -> M2-01 (FastAPI + deepagents skeleton) [added]
 #   postgres           -> M3-01 (checkpoints + metadata) [added]
 #   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper) [added]
+#   egress-proxy       -> M7-02 (mitmproxy filtering forward proxy) [added]
+#   web-fetch          -> M7-03 (fetch + readable-text extraction, behind egress-proxy) [added]
 #
 # Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
 # `caddy` publishes a host port (80). M7-01 splits the single bridge that
@@ -14,16 +16,22 @@
 #   homeai-net      -> the egress-capable network (default Docker NAT, a
 #                      route to the internet). Reserved for `caddy` (needs
 #                      it to keep the published port) and the M7-02
-#                      `egress-proxy` (not built yet - see docs/ARCHITECTURE.md
-#                      §5). No other service may ever join this network.
+#                      `egress-proxy` (the sole other service allowed a
+#                      route out - see docs/ARCHITECTURE.md §5). No other
+#                      service may ever join this network.
 #   homeai-internal -> `internal: true` - Docker refuses to attach any
 #                      default route/NAT to this network, so no container
 #                      on it can reach the public internet at the network
 #                      layer, not merely by omission. Every other service
 #                      (agent-server, model-runner, code-exec-manager,
-#                      postgres) lives ONLY here.
-# `caddy` is the sole service on both: `homeai-internal` to reach
-# `agent-server`, `homeai-net` to keep its published port.
+#                      postgres, egress-proxy, web-fetch) lives here too,
+#                      since it's how `web-fetch` (M7-03) reaches
+#                      `egress-proxy` in the first place.
+# `caddy` and `egress-proxy` are the only services on `homeai-net`; `caddy`
+# additionally needs `homeai-internal` to reach `agent-server`, and
+# `egress-proxy` additionally needs `homeai-internal` to be reachable BY
+# `web-fetch` (M7-03) and, later, `agent-server`'s own outbound-web tool
+# (M7-05) — neither of which ever joins `homeai-net` itself.
 
 name: homeai
 
@@ -36,6 +44,12 @@ networks:
 
 volumes:
   pgdata:
+  # mitmproxy's own generated CA (private key + cert), written to
+  # ~/.mitmproxy inside the egress-proxy container on its first start - not
+  # baked into any image. `web-fetch` (M7-03, below) mounts this SAME volume
+  # read-only and trusts `mitmproxy-ca-cert.pem` from it (docs/ARCHITECTURE.md
+  # §5 has the exact steps); M7-04 (search) will do the same.
+  egress-proxy-ca:
 
 services:
   caddy:
@@ -50,6 +64,59 @@ services:
       - homeai-net
       - homeai-internal
     restart: unless-stopped
+
+  # M7-02: the single, deliberately-narrow egress chokepoint - the only
+  # other service besides `caddy` allowed on `homeai-net`. Terminates TLS
+  # with its own locally-generated CA (mounted at `egress-proxy-ca` below)
+  # so `policy.py` can see the real method/host/path of HTTPS requests
+  # rather than an opaque `CONNECT host:443` tunnel, and enforces the
+  # GET/HEAD-only + destination-guard policy documented in
+  # docs/ARCHITECTURE.md §5 before anything is forwarded. First actual
+  # consumer is `web-fetch` (M7-03, below); `scripts/verify_egress.sh`
+  # exercises the proxy itself directly, independent of any consumer.
+  egress-proxy:
+    build: ./services/egress-proxy
+    restart: unless-stopped
+    # Both networks: homeai-net for its own route out to the public
+    # internet (the entire point of this service), homeai-internal so that
+    # web-fetch (M7-03, below) can reach it as `http://egress-proxy:8080`.
+    networks:
+      - homeai-net
+      - homeai-internal
+    volumes:
+      - egress-proxy-ca:/home/mitmproxy/.mitmproxy
+    environment:
+      EGRESS_MAX_BYTES: ${EGRESS_MAX_BYTES}
+
+  # M7-03: the only service allowed to talk to `egress-proxy` (spec: "a
+  # narrow internal HTTP service is the only thing that talks to the
+  # proxy"). Turns a URL into readable markdown/text with hard caps
+  # (`FETCH_MAX_BYTES`/`FETCH_MAX_TEXT_CHARS`) before anything reaches the
+  # agent, so the model never sees raw HTML and never itself holds a
+  # network handle. `agent-server`'s own `execute_code` tool convention
+  # (an internal-service HTTP client, no direct network/Docker access) is
+  # the template this follows — see docs/ARCHITECTURE.md §2/§3 for the
+  # full API contract.
+  web-fetch:
+    build: ./services/web-fetch
+    restart: unless-stopped
+    # internal-only (M7-01) - reaches the public web ONLY via `egress-proxy`
+    # over this network, never by joining `homeai-net` itself.
+    networks: [homeai-internal]
+    user: "${HOMEAI_UID}:${HOMEAI_GID}"
+    # Read-only: the CA private key (`mitmproxy-ca.pem`) also lives in this
+    # volume, but nothing besides `egress-proxy` itself should ever be able
+    # to write to it (docs/ARCHITECTURE.md §5, "CA handling" point 1).
+    # `entrypoint.sh` combines `mitmproxy-ca-cert.pem` from here with the
+    # image's own system CA bundle before `uvicorn` starts.
+    volumes:
+      - egress-proxy-ca:/ca:ro
+    environment:
+      EGRESS_PROXY_URL: ${EGRESS_PROXY_URL}
+      FETCH_TIMEOUT_S: ${FETCH_TIMEOUT_S}
+      FETCH_MAX_BYTES: ${FETCH_MAX_BYTES}
+      FETCH_MAX_TEXT_CHARS: ${FETCH_MAX_TEXT_CHARS}
+      FETCH_MAX_REDIRECTS: ${FETCH_MAX_REDIRECTS}
 
   model-runner:
     build: ./services/model-runner
@@ -83,8 +150,9 @@ services:
     build: ./services/agent-server
     restart: unless-stopped
     # internal-only (M7-01) - no route to the public internet. Stage 2's
-    # web access (M7-02/M7-03) will go through the reserved `egress-proxy`
-    # on `homeai-net`, not by adding this service to that network.
+    # web access goes through `web-fetch` (M7-03, below) once M7-05 wires up
+    # its tool — `web-fetch` is the only thing that talks to `egress-proxy`
+    # directly; agent-server never gets its own `HTTPS_PROXY`/CA-trust setup.
     networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     depends_on:

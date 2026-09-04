@@ -1,0 +1,31 @@
+[project]
+name = "egress-proxy"
+version = "0.1.0"
+description = "M7-02: GET/HEAD-only MITM egress filter + destination guard (mitmproxy addon)"
+requires-python = ">=3.12"
+dependencies = [
+    "mitmproxy>=12.0.0,<13",
+]
+
+# policy.py is loaded directly by mitmdump via `-s /app/policy.py` (not
+# imported as an installed package) - same "app/ run directly" reasoning as
+# agent-server's/code-exec-manager's own pyproject.toml.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+# Same reasoning as agent-server's/code-exec-manager's pyproject.toml: the
+# container has no writable $HOME for a non-root UID, so the default
+# `.pytest_cache` location would otherwise warn on every
+# `docker compose exec egress-proxy uv run pytest` invocation.
+cache_dir = "/tmp/pytest_cache"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.5",
+]
