@@ -63,6 +63,5 @@ agent run.
 
 ## M6
 
-- [ ] (M6-01) `sudo scripts/verify_network.sh` green on the host with the full stack up.
 - [ ] (M6-01) Phone browser (iOS + Android if available): `http://homeai.local` loads the app; note Android mDNS result.
 - [ ] (M6-01) From a non-LAN network (phone on cellular): the address does not load.
