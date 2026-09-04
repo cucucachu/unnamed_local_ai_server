@@ -8,6 +8,7 @@
 #   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper) [added]
 #   egress-proxy       -> M7-02 (mitmproxy filtering forward proxy) [added]
 #   web-fetch          -> M7-03 (fetch + readable-text extraction, behind egress-proxy) [added]
+#   searxng            -> M7-04 (self-hosted metasearch engine, GET-only engines) [added]
 #
 # Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
 # `caddy` publishes a host port (80). M7-01 splits the single bridge that
@@ -24,14 +25,15 @@
 #                      on it can reach the public internet at the network
 #                      layer, not merely by omission. Every other service
 #                      (agent-server, model-runner, code-exec-manager,
-#                      postgres, egress-proxy, web-fetch) lives here too,
-#                      since it's how `web-fetch` (M7-03) reaches
-#                      `egress-proxy` in the first place.
+#                      postgres, egress-proxy, web-fetch, searxng) lives
+#                      here too, since it's how `web-fetch` (M7-03) and
+#                      `searxng` (M7-04) both reach `egress-proxy` in the
+#                      first place.
 # `caddy` and `egress-proxy` are the only services on `homeai-net`; `caddy`
 # additionally needs `homeai-internal` to reach `agent-server`, and
 # `egress-proxy` additionally needs `homeai-internal` to be reachable BY
-# `web-fetch` (M7-03) and, later, `agent-server`'s own outbound-web tool
-# (M7-05) — neither of which ever joins `homeai-net` itself.
+# `web-fetch` (M7-03), `searxng` (M7-04), and, later, `agent-server`'s own
+# outbound-web tool (M7-05) — none of which ever joins `homeai-net` itself.
 
 name: homeai
 
@@ -46,9 +48,10 @@ volumes:
   pgdata:
   # mitmproxy's own generated CA (private key + cert), written to
   # ~/.mitmproxy inside the egress-proxy container on its first start - not
-  # baked into any image. `web-fetch` (M7-03, below) mounts this SAME volume
-  # read-only and trusts `mitmproxy-ca-cert.pem` from it (docs/ARCHITECTURE.md
-  # §5 has the exact steps); M7-04 (search) will do the same.
+  # baked into any image. `web-fetch` (M7-03) and `searxng` (M7-04, both
+  # below) each mount this SAME volume read-only and trust
+  # `mitmproxy-ca-cert.pem` from it (docs/ARCHITECTURE.md §5 has the exact
+  # steps).
   egress-proxy-ca:
 
 services:
@@ -88,20 +91,27 @@ services:
     environment:
       EGRESS_MAX_BYTES: ${EGRESS_MAX_BYTES}
 
-  # M7-03: the only service allowed to talk to `egress-proxy` (spec: "a
-  # narrow internal HTTP service is the only thing that talks to the
-  # proxy"). Turns a URL into readable markdown/text with hard caps
-  # (`FETCH_MAX_BYTES`/`FETCH_MAX_TEXT_CHARS`) before anything reaches the
-  # agent, so the model never sees raw HTML and never itself holds a
-  # network handle. `agent-server`'s own `execute_code` tool convention
-  # (an internal-service HTTP client, no direct network/Docker access) is
-  # the template this follows — see docs/ARCHITECTURE.md §2/§3 for the
-  # full API contract.
+  # M7-03/M7-04: the only service allowed to talk to `egress-proxy` (spec:
+  # "a narrow internal HTTP service is the only thing that talks to the
+  # proxy"). `GET /fetch` (M7-03) turns a URL into readable markdown/text
+  # with hard caps (`FETCH_MAX_BYTES`/`FETCH_MAX_TEXT_CHARS`); `GET
+  # /search` (M7-04, added to this same service per the M7-03 subagent's
+  # own contract note, not a new Python service) proxies a query to the
+  # internal `searxng` instance below and normalizes its JSON. Either way
+  # the agent (once M7-05 wires up a tool) never sees raw HTML/SearXNG
+  # response shapes and never itself holds a network handle.
+  # `agent-server`'s own `execute_code` tool convention (an
+  # internal-service HTTP client, no direct network/Docker access) is the
+  # template this follows — see docs/ARCHITECTURE.md §2/§3 for the full
+  # API contract.
   web-fetch:
     build: ./services/web-fetch
     restart: unless-stopped
     # internal-only (M7-01) - reaches the public web ONLY via `egress-proxy`
-    # over this network, never by joining `homeai-net` itself.
+    # over this network, never by joining `homeai-net` itself. Reaches
+    # `searxng` (M7-04, below) directly over this same network too -
+    # `searxng` itself is the one that goes through `egress-proxy`, not
+    # this hop.
     networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     # Read-only: the CA private key (`mitmproxy-ca.pem`) also lives in this
@@ -117,6 +127,51 @@ services:
       FETCH_MAX_BYTES: ${FETCH_MAX_BYTES}
       FETCH_MAX_TEXT_CHARS: ${FETCH_MAX_TEXT_CHARS}
       FETCH_MAX_REDIRECTS: ${FETCH_MAX_REDIRECTS}
+      SEARXNG_URL: ${SEARXNG_URL}
+
+  # M7-04: self-hosted metasearch engine - only reachable from `web-fetch`'s
+  # `GET /search` above, over `homeai-internal`. NOT routed by Caddy (no
+  # `homeai-net` membership, no public-facing UI) - the UI never talks to
+  # it, per the ticket spec. `services/searxng/settings.yml`'s own header
+  # comment has the full audited GET-only engine list + the reasoning
+  # behind every non-default setting; docs/ARCHITECTURE.md §2's "searxng"
+  # entry has the service-catalog summary.
+  searxng:
+    # Pinned by digest (multi-platform manifest-list digest, resolved via
+    # the Docker Hub v2 tags API for the `searxng/searxng:latest` tag on
+    # 2026-09-04 - same method services/egress-proxy/Dockerfile's own
+    # comment used for mitmproxy/mitmproxy:12, since this sandbox has no
+    # local docker daemon to run `docker inspect`/`buildx imagetools
+    # inspect` against). Re-verify with `docker buildx imagetools inspect
+    # searxng/searxng:latest` once this runs somewhere with real
+    # registry+docker access.
+    image: searxng/searxng@sha256:8bb6a6f677a758cefa4ae2c9f5da1012876e428a4388e3e86f34be4ca715330a
+    # was: searxng/searxng:latest (resolved 2026-09-04)
+    restart: unless-stopped
+    # internal-only (M7-01) - its OWN outbound requests (to the public
+    # search engines) go through `egress-proxy` via `outgoing.proxies` in
+    # settings.yml, not a direct route out - this service never joins
+    # `homeai-net` itself.
+    networks: [homeai-internal]
+    volumes:
+      # Read-only, mounted at the exact path the image's own
+      # `container/entrypoint.sh` expects a pre-existing settings.yml
+      # (`/etc/searxng/settings.yml`) - see that file's own header comment
+      # for why supplying it here skips the image's first-boot
+      # random-secret bootstrap path entirely.
+      - ./services/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      # Same named volume `web-fetch` mounts for the same reason (M7-02's
+      # "CA handling" recipe, docs/ARCHITECTURE.md §5) - mounted at a
+      # separate top-level path (not nested under /etc/searxng) so the
+      # entrypoint's own ownership check on its config dir never has to
+      # reason about a second, independently-owned mount underneath it.
+      - egress-proxy-ca:/etc/searxng-ca:ro
+    environment:
+      # See settings.yml's own `server.secret_key` comment: wired through
+      # for consistency with this repo's env-var-per-secret convention,
+      # but the pinned image does NOT currently read this to patch an
+      # already-existing settings.yml - flagged there, not hidden.
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
 
   model-runner:
     build: ./services/model-runner
