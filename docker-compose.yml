@@ -32,8 +32,9 @@
 # `caddy` and `egress-proxy` are the only services on `homeai-net`; `caddy`
 # additionally needs `homeai-internal` to reach `agent-server`, and
 # `egress-proxy` additionally needs `homeai-internal` to be reachable BY
-# `web-fetch` (M7-03), `searxng` (M7-04), and, later, `agent-server`'s own
-# outbound-web tool (M7-05) — none of which ever joins `homeai-net` itself.
+# `web-fetch` (M7-03) and `searxng` (M7-04) — `agent-server`'s own
+# `web_search`/`web_fetch` tools (M7-05) reach `web-fetch` over this same
+# network instead; none of the four ever joins `homeai-net` itself.
 
 name: homeai
 
@@ -205,9 +206,10 @@ services:
     build: ./services/agent-server
     restart: unless-stopped
     # internal-only (M7-01) - no route to the public internet. Stage 2's
-    # web access goes through `web-fetch` (M7-03, below) once M7-05 wires up
-    # its tool — `web-fetch` is the only thing that talks to `egress-proxy`
-    # directly; agent-server never gets its own `HTTPS_PROXY`/CA-trust setup.
+    # web access goes through `web-fetch` (M7-03, above) via the
+    # `web_search`/`web_fetch` tools (M7-05, `WEB_FETCH_URL` below) —
+    # `web-fetch` is the only thing that talks to `egress-proxy` directly;
+    # agent-server never gets its own `HTTPS_PROXY`/CA-trust setup.
     networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     depends_on:
@@ -220,6 +222,8 @@ services:
       MODEL_NAME: ${MODEL_NAME}
       EXEC_MANAGER_URL: ${EXEC_MANAGER_URL}
       EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}
+      WEB_FETCH_URL: ${WEB_FETCH_URL}
+      WEB_FETCH_TOOL_MAX_CHARS: ${WEB_FETCH_TOOL_MAX_CHARS}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}

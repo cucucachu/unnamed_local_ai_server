@@ -25,6 +25,12 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
   file: 'document-text-outline',
   exec: 'terminal-outline',
   plan: 'list-outline',
+  // M7-05 adds the `web` category (web_search/web_fetch); a dedicated icon is
+  // the minimum needed to keep this `Record`'s keys exhaustive over the
+  // now-5-member `ToolCategory` union — richer `web` tool-card rendering
+  // (parsing `web_search`/`web_fetch`'s specific result text, like
+  // `execParsed`/`chip` do for `exec` above) is M7-06's job, out of scope here.
+  web: 'globe-outline',
   other: 'construct-outline',
 };
 

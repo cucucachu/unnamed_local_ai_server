@@ -11,7 +11,7 @@ Server -> client (in order within a turn):
     {"type": "turn_start"}
     {"type": "token", "content": "str"}
     {"type": "tool_start", "tool_call_id": "str", "name": "str",
-     "category": "file"|"exec"|"plan"|"other", "args": {}}
+     "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}
     {"type": "tool_end", "tool_call_id": "str", "name": "str",
      "status": "success"|"error", "result_preview": "str"}
     {"type": "turn_end"}
@@ -117,6 +117,8 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "execute_code": "exec",
     "write_todos": "plan",
     "task": "plan",
+    "web_search": "web",
+    "web_fetch": "web",
 }
 
 _ARGS_VALUE_TRUNCATE_LEN = 500

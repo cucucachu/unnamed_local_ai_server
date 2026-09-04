@@ -22,6 +22,7 @@ from app.db.threads import InMemoryThreadStore, ThreadStore
 from app.main import create_app
 from tests.fake_exec_manager.scripting import FakeExecManager
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
+from tests.fake_web_fetch.scripting import FakeWebFetch
 
 
 def _make_client(fake_model: FakeModel, tmp_path, thread_store: ThreadStore | None = None) -> TestClient:
@@ -151,6 +152,60 @@ async def test_execute_code_tool_turn(
     assert len(fake_exec_manager.execute_calls) == 1
     assert fake_exec_manager.execute_calls[0].command == "echo hi"
     assert fake_exec_manager.execute_calls[0].session_id == "exec-thread"
+
+
+async def test_web_search_tool_turn(
+    fake_model: FakeModel, fake_web_fetch: FakeWebFetch, tmp_path
+) -> None:
+    """M7-05: `web_search` reaches the fake web-fetch and its `tool_start`
+    frame carries `category == "web"` (extends M2-04's
+    `_TOOL_CATEGORY_BY_NAME` mapping test, `test_tool_turn` above, to the
+    new tool)."""
+    fake_web_fetch.search_response = {
+        "query": "llama.cpp github repo",
+        "results": [
+            {
+                "title": "ggml-org/llama.cpp",
+                "url": "https://github.com/ggml-org/llama.cpp",
+                "snippet": "LLM inference in C/C++",
+                "engine": "github",
+            }
+        ],
+    }
+    fake_model.queue(
+        ToolCallTurn(name="web_search", args={"query": "llama.cpp github repo"}),
+        TextTurn("found it"),
+    )
+    settings = fake_model.settings(
+        workspace_root=str(tmp_path), web_fetch_url=fake_web_fetch.base_url
+    )
+    app = create_app(
+        settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()
+    )
+
+    with TestClient(app) as client, client.websocket_connect("/ws/chat/web-thread") as ws:
+        ws.send_json({"type": "user_message", "content": "search for llama.cpp"})
+        frames = _drain_turn(ws)
+
+    assert frames[0] == {"type": "turn_start"}
+    assert frames[-1] == {"type": "turn_end"}
+
+    types = [f["type"] for f in frames]
+    tool_start_idx = types.index("tool_start")
+    tool_end_idx = types.index("tool_end")
+    assert tool_start_idx < tool_end_idx
+
+    tool_start = frames[tool_start_idx]
+    assert tool_start["name"] == "web_search"
+    assert tool_start["category"] == "web"
+
+    tool_end = frames[tool_end_idx]
+    assert tool_end["name"] == "web_search"
+    assert tool_end["status"] == "success"
+    assert "https://github.com/ggml-org/llama.cpp" in tool_end["result_preview"]
+
+    assert len(fake_web_fetch.search_calls) == 1
+    assert fake_web_fetch.search_calls[0].q == "llama.cpp github repo"
 
 
 async def test_invalid_frame(fake_model: FakeModel, tmp_path) -> None:

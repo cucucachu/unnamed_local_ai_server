@@ -6,7 +6,7 @@ import { wsUrl } from './api';
  * frame shapes; M2-06's chat screen imports these types directly.
  */
 
-export type ToolCategory = 'file' | 'exec' | 'plan' | 'other';
+export type ToolCategory = 'file' | 'exec' | 'plan' | 'web' | 'other';
 export type ToolStatus = 'success' | 'error';
 
 export interface TurnStartFrame {

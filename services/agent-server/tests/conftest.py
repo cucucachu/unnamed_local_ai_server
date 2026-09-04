@@ -15,6 +15,8 @@ from tests.fake_exec_manager.scripting import FakeExecManager
 from tests.fake_exec_manager.server import create_fake_exec_manager_app
 from tests.fake_model.scripting import FakeModel
 from tests.fake_model.server import create_fake_model_app
+from tests.fake_web_fetch.scripting import FakeWebFetch
+from tests.fake_web_fetch.server import create_fake_web_fetch_app
 
 
 @pytest.fixture
@@ -107,6 +109,25 @@ def fake_exec_manager() -> Iterator[FakeExecManager]:
     """
     fake = FakeExecManager()
     app = create_fake_exec_manager_app(fake)
+    runner = _UvicornThreadServer(app)
+    runner.start()
+    fake.base_url = f"http://127.0.0.1:{runner.port}"
+    try:
+        yield fake
+    finally:
+        runner.stop()
+
+
+@pytest.fixture
+def fake_web_fetch() -> Iterator[FakeWebFetch]:
+    """A running fake `web-fetch`, bound to a real ephemeral port — same
+    reasoning as `fake_exec_manager` above: a real bound port (rather than
+    an in-process `httpx.MockTransport`/`respx`) is what lets the exact same
+    fixture back both a direct-tool unit test and an agent-level WS test
+    whose `Settings.web_fetch_url` must be a real, dialable URL.
+    """
+    fake = FakeWebFetch()
+    app = create_fake_web_fetch_app(fake)
     runner = _UvicornThreadServer(app)
     runner.start()
     fake.base_url = f"http://127.0.0.1:{runner.port}"
