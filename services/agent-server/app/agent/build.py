@@ -22,6 +22,7 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
 from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
 from app.core.config import Settings
 
 
@@ -30,6 +31,10 @@ def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
         model=build_model(settings),
         backend=FilesystemBackend(root_dir=settings.workspace_root, virtual_mode=True),
         system_prompt=SYSTEM_PROMPT,
-        tools=[make_execute_code_tool(settings)],
+        tools=[
+            make_execute_code_tool(settings),
+            make_web_search_tool(settings),
+            make_web_fetch_tool(settings),
+        ],
         checkpointer=checkpointer,
     )

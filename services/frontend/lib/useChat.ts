@@ -91,6 +91,8 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   execute_code: 'exec',
   write_todos: 'plan',
   task: 'plan',
+  web_search: 'web',
+  web_fetch: 'web',
 };
 
 function categoryForToolName(name: string): ToolCategory {

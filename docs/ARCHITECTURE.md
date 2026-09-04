@@ -105,11 +105,13 @@ anything. See "Security model" below for the full policy and the CA-trust
 recipe.
 
 **Web fetch (M7-03)**: `web-fetch` is the sole consumer of `egress-proxy` —
-the narrow internal HTTP service (`GET /fetch?url=<url>`) that turns a URL
-into readable markdown/text with hard caps, so the agent (once M7-05 wires
-up a tool that calls it) never sees raw HTML and never itself holds a
-network handle. See its "Service catalog" entry and "Contracts" below for
-the full shape.
+the narrow internal HTTP service (`GET /fetch?url=<url>`, `GET
+/search?q=<query>`) that turns a URL/query into readable markdown/text and
+normalized search results with hard caps, so the agent — via its own
+`web_search`/`web_fetch` tools (M7-05, `app/agent/web_tools.py`) — never
+sees raw HTML/SearXNG response shapes and never itself holds a network
+handle. See its "Service catalog" entry and "Contracts" below for the full
+shape.
 
 **Docker network naming**: the diagram labels them `homeai-internal`/
 `homeai-net` — that's the compose-file key (`docker-compose.yml`'s
@@ -304,9 +306,9 @@ what another doc says it should be.
   turns a URL into readable markdown/text with hard caps; `GET
   /search?q=<query>&n=<1..20>` (M7-04) proxies a query to the internal
   `searxng` service below and normalizes its JSON. Either way the agent
-  (once M7-05 adds tools calling this service) never sees raw HTML/PDF
-  bytes or SearXNG's own response shape, and never itself holds a network
-  handle. `/search` was added to this SAME service rather than a new
+  (via its own `web_search`/`web_fetch` tools, M7-05) never sees raw
+  HTML/PDF bytes or SearXNG's own response shape, and never itself holds a
+  network handle. `/search` was added to this SAME service rather than a new
   Python one, per the M7-03 subagent's own contract note (`app/api/` is a
   multi-route-module layout by design, not a single-endpoint service).
 - **Image/base**: `python:3.12-slim` + `uv`, same pattern as
@@ -473,17 +475,18 @@ what another doc says it should be.
 
 - **Purpose**: the FastAPI app hosting the `deepagents`-based chat agent —
   REST APIs for threads/files, the WebSocket chat stream, Range-based media
-  streaming, and the `execute_code` tool's HTTP client to
-  `code-exec-manager`.
+  streaming, the `execute_code` tool's HTTP client to `code-exec-manager`,
+  and the `web_search`/`web_fetch` tools' HTTP client to `web-fetch`
+  (M7-05).
 - **Image/base**: `python:3.12-slim` + `uv` (astral's static binary
   copied in). Dockerfile: `services/agent-server/Dockerfile`.
 - **Published port**: none.
 - **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
 - **Network (M7-01)**: `homeai-internal` only — no route to the public
-  internet. Stage 2's web access goes through `web-fetch` (M7-03) once
-  M7-05 wires up a tool calling it — `agent-server` itself never joins
-  `homeai-net` or talks to `egress-proxy` directly; see "Security model"
-  below.
+  internet. Stage 2's web access goes through `web-fetch` (M7-03) via the
+  `web_search`/`web_fetch` tools (M7-05) — `agent-server` itself never
+  joins `homeai-net` or talks to `egress-proxy` directly; see "Security
+  model" below.
 - **Mounts**: `${WORKSPACE_DIR}:/data/workspace` (rw bind; host default
   `/srv/homeai/workspace`) — confirmed in `docker compose config`'s
   `volumes:` block for this service.
@@ -491,9 +494,10 @@ what another doc says it should be.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings` class): `MODEL_BASE_URL`,
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
-  `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `TEST_PG_DSN`
-  (only read by `tests/test_checkpointer_pg.py`'s integration fixture, not
-  by the application itself — compose's own comment on this line says so).
+  `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05), `POSTGRES_USER`,
+  `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `TEST_PG_DSN` (only read by
+  `tests/test_checkpointer_pg.py`'s integration fixture, not by the
+  application itself — compose's own comment on this line says so).
   **Nuance**: `HOMEAI_UID`/`HOMEAI_GID`/`WORKSPACE_DIR` are used by
   *compose* to set this service's `user:` field and bind-mount source —
   they are never actually injected into the container's own environment.
@@ -505,9 +509,11 @@ what another doc says it should be.
   `test_chat.py`, `test_chat_ws.py`, `test_files_rest.py`,
   `test_media_stream.py`, `test_paths.py`, `test_agent_build.py`,
   `test_execute_code_tool.py`, `test_execute_code_integration.py`,
+  `test_web_tools.py` (M7-05, `respx`-mocked `web-fetch`),
   `test_checkpointer_pg.py`, `test_threads_pg.py`, `test_fake_model.py`,
-  plus the `fake_model/`/`fake_exec_manager/` test doubles used to keep
-  most of the suite deterministic and independent of the real model/Docker.
+  plus the `fake_model/`/`fake_exec_manager/`/`fake_web_fetch/` test
+  doubles used to keep most of the suite deterministic and independent of
+  the real model/Docker/web-fetch.
   Run: `cd services/agent-server && uv run ruff check . && uv run pytest`
   (the default marker selection skips the `integration` tests). The
   Postgres-backed integration tests need a real reachable Postgres via
@@ -716,7 +722,7 @@ Server → client, in order within a turn:
 {"type": "turn_start"}
 {"type": "token", "content": "str"}                       // one per streamed model token chunk
 {"type": "tool_start", "tool_call_id": "str", "name": "str",
- "category": "file"|"exec"|"plan"|"other", "args": {}}     // args truncated to 500 chars/value
+ "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}     // args truncated to 500 chars/value
 {"type": "tool_end", "tool_call_id": "str", "name": "str",
  "status": "success"|"error", "result_preview": "str"}     // truncated to 2000 chars
 {"type": "turn_end"}
@@ -725,7 +731,54 @@ Server → client, in order within a turn:
 
 Category mapping by tool name: `ls|read_file|write_file|edit_file|glob|
 grep|delete` → `file`; `execute_code` → `exec`; `write_todos|task` →
-`plan`; anything else → `other`.
+`plan`; `web_search|web_fetch` (M7-05) → `web`; anything else → `other`.
+
+### Agent web tools (`web_search`/`web_fetch`, M7-05)
+
+Thin HTTP clients (`app/agent/web_tools.py`) against `web-fetch`'s own
+`/search`/`/fetch` (see that API's own contract above) — same
+factory-closes-over-`Settings` shape as `execute_code_tool.py`'s
+`make_execute_code_tool`, registered in `app/agent/build.py`'s
+`build_agent` alongside it. `Settings.web_fetch_url` (env `WEB_FETCH_URL`,
+default `http://web-fetch:8000`) points them at the internal `web-fetch`
+service over `homeai-internal` — neither tool ever talks to
+`egress-proxy` or the public internet directly.
+
+- `web_search(query: str, max_results: int = 8) -> str` — `max_results`
+  clamped to web-fetch's own `1..20` range before the request (avoids a
+  422 from over/under-shooting it). Formats each result as a numbered
+  entry:
+  ```
+  1. <title>
+     <url>
+     <snippet>
+  ```
+  (one blank-title/snippet-safe fallback: `"(untitled)"` for a missing
+  title, empty string for a missing snippet), joined with `\n` — no
+  trailing newline. An empty `results` list renders as the literal string
+  `"No results found."` instead of an empty list.
+- `web_fetch(url: str) -> str` — formats the response as:
+  ```
+  Title: <title, or "(untitled)" if null>
+  URL: <final_url>
+
+  <text>
+  ```
+  `text` is capped client-side at `Settings.web_fetch_tool_max_chars` (env
+  `WEB_FETCH_TOOL_MAX_CHARS`, default 30000 — independent of, and smaller
+  than, web-fetch's own server-side `FETCH_MAX_TEXT_CHARS` cap); a cut
+  result gets a trailing `\n[content truncated]` line, mirroring
+  `execute_code`'s own `[output truncated]` convention.
+- **Errors are always returned as an `"Error: ..."` string, never raised**
+  — matching deepagents' own filesystem tools (see `chat_ws.py`'s module
+  doc for why an `on_tool_error` event, which a raised exception would
+  fire, aborts the whole turn instead of letting the model react). Covers
+  both a non-2xx from `web-fetch` (its `{"error": str, ...}` body's
+  `error` field is used verbatim — e.g. a proxied `egress-proxy` 403 reads
+  `Error: destination not allowed by egress policy`, so the model learns
+  the boundary directly) and any transport-level failure (`web-fetch`
+  itself unreachable, timed out, etc. → `Error: web_search failed: ...`/
+  `Error: web_fetch failed: ...` with the underlying exception's `repr`).
 
 ### `code-exec-manager` API (internal, port 8090)
 

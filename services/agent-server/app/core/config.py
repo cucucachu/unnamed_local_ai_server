@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     exec_manager_url: str = "http://code-exec-manager:8090"
     exec_default_timeout_s: int = 120
 
+    web_fetch_url: str = "http://web-fetch:8000"
+    # Tool-side cap on `web_fetch`'s returned text — independent of, and on
+    # top of, `web-fetch`'s own server-side `FETCH_MAX_TEXT_CHARS` cap (the
+    # two caps protect different things: that one bounds how much text
+    # `web-fetch` extracts/holds at all, this one bounds how much of it a
+    # single tool result shoves into the model's own context window).
+    web_fetch_tool_max_chars: int = 30000
+
     workspace_root: str = "/data/workspace"
 
     postgres_user: str = "homeai"
