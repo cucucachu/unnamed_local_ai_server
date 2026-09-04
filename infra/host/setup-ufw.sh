@@ -14,9 +14,23 @@
 # enforcement for it is the DOCKER-USER chain, which Docker guarantees to
 # consult before its own forwarding rules. See docs/NETWORKING.md.
 #
-# iptables rules added at the CLI don't survive a reboot by themselves, so this
-# script also installs iptables-persistent/netfilter-persistent and saves the
-# ruleset after adding the DOCKER-USER rule.
+# Persistence (M6-01 fix — do NOT reintroduce iptables-persistent here): the
+# DOCKER-USER rule added below is in-memory only and would normally vanish on
+# reboot. The obvious fix (`apt-get install iptables-persistent`) is a REAL
+# BUG, discovered live on this exact host by M6-01's verify_network.sh: on
+# this Ubuntu release, the `ufw` package itself declares
+# `Breaks: iptables-persistent, netfilter-persistent` (confirmed via
+# `apt-cache show ufw`) — installing either of those SILENTLY REMOVES ufw as
+# part of the same apt transaction (apt reports "will be REMOVED: ufw" but a
+# non-interactive `-y` install sails right past that). An earlier version of
+# this script did exactly that and took the whole firewall down. Instead,
+# persistence here is a small systemd oneshot unit
+# (homeai-docker-user-fw.service, installed below) that re-inserts the same
+# rule idempotently every boot, ordered `After=docker.service` (Docker
+# recreates the DOCKER-USER chain from scratch on every dockerd start,
+# wiping anything inserted into it previously — this unit's ordering is what
+# makes it actually work, not just "eventually run at boot"). No conflicting
+# package, no dependency on ufw's own presence at all.
 
 set -euo pipefail
 
@@ -42,6 +56,18 @@ LAN_SUBNET="$(env_var LAN_SUBNET 192.168.1.0/24)"
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "warning: ${ENV_FILE} not found — using default LAN_SUBNET=${LAN_SUBNET}. Copy .env.example to .env and set your real subnet first." >&2
 fi
+
+# Defensive: if a previous run of this script (before the M6-01 fix)
+# installed iptables-persistent/netfilter-persistent, they need to come out
+# BEFORE ufw can be (re)installed, since ufw's own package metadata declares
+# `Breaks:` against both — apt will otherwise refuse (or silently remove
+# ufw again) rather than let both coexist.
+for pkg in iptables-persistent netfilter-persistent; do
+  if dpkg -s "$pkg" >/dev/null 2>&1; then
+    echo "Removing ${pkg} (conflicts with ufw's own package metadata — see this script's header)..."
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y "$pkg"
+  fi
+done
 
 if ! command -v ufw >/dev/null 2>&1; then
   echo "Installing ufw..."
@@ -86,17 +112,33 @@ else
     echo "Added DOCKER-USER rule: drop tcp/80 on ${DEFAULT_IFACE} not from ${LAN_SUBNET}."
   fi
 
-  # Manually-added iptables rules are in-memory only and vanish on reboot.
-  # Install netfilter-persistent (non-interactively — it would otherwise
-  # prompt to save the current ruleset) so the rule above survives.
-  if ! command -v netfilter-persistent >/dev/null 2>&1; then
-    echo "Installing iptables-persistent for reboot-safe rules..."
-    echo "iptables-persistent iptables-persistent/autosave_v4 boolean false" | debconf-set-selections
-    echo "iptables-persistent iptables-persistent/autosave_v6 boolean false" | debconf-set-selections
-    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
-  fi
-  netfilter-persistent save
-  echo "Saved iptables ruleset (survives reboot)."
+  # Install/refresh the boot-persistence unit (see header comment for why
+  # this replaces iptables-persistent). Regenerated unconditionally every
+  # run so a changed DEFAULT_IFACE/LAN_SUBNET (e.g. Wi-Fi -> Ethernet, or a
+  # different .env) is always reflected, not just on first install.
+  UNIT_PATH="/etc/systemd/system/homeai-docker-user-fw.service"
+  RULE_CHECK_CMD="iptables -C DOCKER-USER -i ${DEFAULT_IFACE} ! -s ${LAN_SUBNET} -p tcp --dport 80 -j DROP"
+  RULE_INSERT_CMD="iptables -I DOCKER-USER -i ${DEFAULT_IFACE} ! -s ${LAN_SUBNET} -p tcp --dport 80 -j DROP"
+  cat >"${UNIT_PATH}" <<EOF
+[Unit]
+Description=Home AI Agent - restore DOCKER-USER LAN-only rule for tcp/80 (see infra/host/setup-ufw.sh)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Idempotent: the -C existence check comes first so re-running (or a
+# service restart) never inserts a duplicate rule.
+ExecStart=/bin/sh -c '${RULE_CHECK_CMD} 2>/dev/null || ${RULE_INSERT_CMD}'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now homeai-docker-user-fw.service
+  echo "Installed/refreshed homeai-docker-user-fw.service (re-applies the DOCKER-USER rule after every boot, once docker.service starts)."
 fi
 
 echo "=== setup-ufw.sh summary ==="

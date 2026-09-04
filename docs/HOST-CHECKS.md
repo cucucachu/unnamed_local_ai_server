@@ -62,3 +62,6 @@ agent run.
 > **PM sign-off: G5 passed ____**
 
 ## M6
+
+- [ ] (M6-01) Phone browser (iOS + Android if available): `http://homeai.local` loads the app; note Android mDNS result.
+- [ ] (M6-01) From a non-LAN network (phone on cellular): the address does not load.
