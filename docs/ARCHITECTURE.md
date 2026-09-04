@@ -34,10 +34,10 @@ flowchart TB
     nativeapp -->|"ws/http to homeai.local"| proxy
 
     subgraph host [Linux Host]
-        proxy["Caddy Reverse Proxy\n(serves the Expo web build directly\nfrom /srv/www, baked in at build time)"]
+        proxy["Caddy Reverse Proxy\n(serves the Expo web build directly\nfrom /srv/www, baked in at build time)\nhomeai-net + homeai-internal — the only service on both"]
         avahi[avahi-daemon\nmDNS: homeai.local]
 
-        subgraph dockernet [Docker network: homeai-net]
+        subgraph internalnet [Docker network: homeai-internal, internal: true — no route to the internet]
             agent["Agent Server\nFastAPI + deepagents\napp code at /app\nFilesystemBackend at /data/workspace"]
             execmgr[Code-Exec Manager\nFastAPI + docker SDK\nno app-code or secret access]
             model[Model Runner\nllama.cpp server-vulkan]
@@ -80,11 +80,25 @@ directly into the final Caddy image.
 used by the **Vulkan** (RADV/Mesa) backend this service runs (see "Model
 operations" below for why Vulkan over ROCm).
 
-**Docker network naming**: the diagram labels it `homeai-net` — that's the
-compose-file key (`docker-compose.yml`'s `networks:` block) and the name
-every script in this repo treats as canonical. The actual Docker network
-name on the host is project-prefixed: `homeai_homeai-net` (compose project
-name `homeai` + `homeai-net`, confirmed via `docker network ls` — see
+**Network segmentation (M7-01)**: there are two Docker networks, not one —
+`homeai-internal` (`internal: true` — Docker attaches no default
+route/NAT, so nothing on it can reach the public internet at the network
+layer) and `homeai-net` (the ordinary bridge network with default Docker
+egress). `agent-server`, `model-runner`, `code-exec-manager`, and
+`postgres` are on `homeai-internal` **only**. `caddy` is the sole service
+on both: it needs `homeai-internal` to reach `agent-server`, and
+`homeai-net` to keep its published port (and thus a route out, for
+whatever it itself needs). `homeai-net` is reserved exclusively for
+`caddy` and the M7-02 `egress-proxy` (not built yet — see "Security model"
+below) — no other service may ever join it. This makes "no internet" the
+default for every container instead of something merely unused.
+
+**Docker network naming**: the diagram labels them `homeai-internal`/
+`homeai-net` — that's the compose-file key (`docker-compose.yml`'s
+`networks:` block) and the name every script in this repo treats as
+canonical. The actual Docker network name on the host is project-prefixed:
+`homeai_homeai-net`/`homeai_homeai-internal` (compose project name
+`homeai` + the compose-file key, confirmed via `docker network ls` — see
 `scripts/verify_isolation.sh`'s own header comment for the same finding).
 Scripts resolve this dynamically via `docker compose config --format json`
 rather than hardcoding either name.
@@ -176,6 +190,10 @@ what another doc says it should be.
   stack with a `ports:` entry.
 - **Internal port**: `80` (same — it's the entry point, not proxied to
   from anything else).
+- **Network (M7-01)**: `homeai-net` **and** `homeai-internal` — the only
+  service on both. `homeai-net` keeps the published port (and any egress
+  this service itself needs); `homeai-internal` is how it reaches
+  `agent-server`.
 - **Mounts**: none at runtime. `infra/caddy/Caddyfile` and the exported
   static bundle (`/srv/www`) are both baked into the image at build time,
   not bind-mounted.
@@ -200,6 +218,10 @@ what another doc says it should be.
   copied in). Dockerfile: `services/agent-server/Dockerfile`.
 - **Published port**: none.
 - **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
+- **Network (M7-01)**: `homeai-internal` only — no route to the public
+  internet. Stage 2's web access (M7-02/M7-03) is added via the reserved
+  `egress-proxy` on `homeai-net`, not by putting this service on that
+  network — see "Security model" below.
 - **Mounts**: `${WORKSPACE_DIR}:/data/workspace` (rw bind; host default
   `/srv/homeai/workspace`) — confirmed in `docker compose config`'s
   `volumes:` block for this service.
@@ -243,6 +265,8 @@ what another doc says it should be.
   `services/model-runner/Dockerfile`.
 - **Published port**: none.
 - **Internal port**: `8080`.
+- **Network (M7-01)**: `homeai-internal` only — no route to the public
+  internet.
 - **Mounts**: `./services/model-runner/models:/models:ro` (ro bind).
 - **Devices**: `/dev/dri:/dev/dri` passthrough, `group_add:
   [${RENDER_GID}, ${VIDEO_GID}]`, `ipc: host`.
@@ -270,6 +294,11 @@ what another doc says it should be.
   socket, per the Dockerfile's own comment.
 - **Published port**: none.
 - **Internal port**: `8090` (`EXPOSE 8090`, `uvicorn --port 8090`).
+- **Network (M7-01)**: `homeai-internal` only — no route to the public
+  internet. Unaffected in practice, since this service reaches the Docker
+  daemon over the bind-mounted unix socket (next bullet), not the network;
+  the exec containers it spawns keep their own separate `network_mode:
+  none` regardless (see "Security model" below).
 - **Mounts**: `/var/run/docker.sock:/var/run/docker.sock` — the *only*
   service in the compose file with this mount, enforced by
   `scripts/check_socket_exclusivity.sh`.
@@ -318,6 +347,8 @@ what another doc says it should be.
 - **Image/base**: `postgres:17`, official/unmodified.
 - **Published port**: none.
 - **Internal port**: `5432`.
+- **Network (M7-01)**: `homeai-internal` only — no route to the public
+  internet.
 - **Mounts**: named volume `pgdata:/var/lib/postgresql/data` (confirmed in
   `docker compose config` — `volumes: pgdata: name: homeai_pgdata`).
 - **Env vars consumed**: `POSTGRES_USER`, `POSTGRES_PASSWORD`,
@@ -794,14 +825,18 @@ design actually protects against them:
    oversight; it's enforced by network topology (only `caddy` publishes a
    port, `ufw` + the `DOCKER-USER` iptables rule LAN-scope that port), not
    by anything in the application layer.
-2. **Untrusted model output.** Everything the model says — including tool
+2. **No outbound internet access, by default.** Stage 2 will give the
+   agent web access, and that has to hold at the network layer, not just
+   by convention — so "no internet" is the default for every container,
+   not something merely unused. See "Network segmentation (M7-01)" below.
+3. **Untrusted model output.** Everything the model says — including tool
    names, tool-call arguments, and file paths — has to be treated as
    attacker-or-hallucination-influenced input, not as trusted instruction.
    The path-traversal guard ("Contracts" above) and the files/media APIs'
    workspace-relative path handling exist specifically because the model
    can be prompted (by a user, or by content it reads from a file) into
    requesting a path that tries to escape the workspace.
-3. **Untrusted executed code.** The `execute_code` tool runs arbitrary
+4. **Untrusted executed code.** The `execute_code` tool runs arbitrary
    shell/Python/etc. the model asked for — genuinely untrusted code by
    construction, since a user (or content the model summarized) can steer
    what gets run. This is the boundary the isolation suite below exists
@@ -854,6 +889,42 @@ manager session, and the throwaway "runner" container used to reach the
 manager's REST API (see the script's own header comment for why a runner
 container is needed at all — `code-exec-manager` publishes no host port)
 are all cleaned up in an `EXIT` trap.
+
+### Network segmentation (M7-01)
+
+**No container except `caddy` and the (not-yet-built) `egress-proxy` has a
+route to the internet.** Before this ticket, every compose service sat on
+one plain bridge network with default Docker egress — nothing used it,
+but nothing prevented it either. M7-01 makes "no internet" the default
+instead of merely-unused, ahead of Stage 2 giving the agent web access:
+
+- **`homeai-internal`** (`docker-compose.yml`'s `networks:` block,
+  `internal: true`) — Docker attaches no default route/NAT to an
+  `internal: true` network, so no container on it can reach the public
+  internet at the network layer, full stop, regardless of what the
+  container itself tries. `agent-server`, `model-runner`,
+  `code-exec-manager`, and `postgres` are on this network **only**.
+- **`homeai-net`** — the original bridge network, kept as the
+  egress-capable one. Reserved for exactly two services: `caddy` (needs it
+  to keep its published port) and the M7-02 `egress-proxy` (not built
+  yet — the single, deliberately-narrow chokepoint Stage 2's web access
+  will be routed through). No other service may ever join `homeai-net`;
+  there is no mechanism in this repo that enforces that as code yet (the
+  same kind of compose-config assertion `scripts/check_socket_exclusivity.sh`
+  makes for `docker.sock` would be the natural fast-follow, tracked
+  alongside M7-02/M7-03 rather than built speculatively here).
+- **Verification**: `scripts/verify_network.sh` checks 6–8 (M7-01) assert,
+  against the live stack, that each of the four internal-only services
+  genuinely cannot open an outbound TCP connection to a public IP, that
+  `agent-server` can still reach `model-runner`/`postgres` on
+  `homeai-internal`, and that the UI is still served on `:80` from the LAN
+  through `caddy`, unaffected.
+- **Exec containers unaffected**: the session-scoped exec containers
+  (`network_mode: none`, above) were never on any compose network to begin
+  with — this split doesn't touch them. `code-exec-manager` itself reaches
+  the Docker daemon over the bind-mounted unix socket, not the network, so
+  moving it to `homeai-internal` doesn't affect its ability to manage
+  those containers either.
 
 ### Documented fast-follows (not built for v1)
 
@@ -915,7 +986,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
-| `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit, `ufw`, `DOCKER-USER`) | After touching `docker-compose.yml` port mappings, firewall scripts, or the network hardware |
+| `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and

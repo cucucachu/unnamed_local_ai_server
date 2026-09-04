@@ -14,7 +14,7 @@
 # Usage:
 #   sudo scripts/verify_network.sh
 #
-# 5 checks, run in this order:
+# 8 checks, run in this order:
 #   1. `avahi-resolve -n homeai.local` resolves to this host's current LAN
 #      IPv4 address (not an IPv6/link-local address, not a Docker bridge
 #      address — the exact two failure modes setup-avahi.sh itself guards
@@ -40,6 +40,23 @@
 #      ahead of plain `ufw allow`/`deny` (see docs/NETWORKING.md's "How
 #      LAN-only isolation works" section for the full explanation of why
 #      check 4 alone is not sufficient).
+#   6. M7-01 no-egress: for each of `agent-server`, `model-runner`,
+#      `code-exec-manager`, `postgres` (every service moved onto the
+#      `homeai-internal` network, `internal: true`), a real outbound TCP
+#      connect attempt from inside that container to a public IP
+#      (`1.1.1.1:443`, 3s timeout) is asserted to FAIL. Confirms `internal:
+#      true` is actually enforced by the live Docker network, not just
+#      declared in `docker-compose.yml`.
+#   7. M7-01 internal reachability still works: from inside `agent-server`,
+#      a TCP connect to `model-runner:8080` and to `postgres:5432` (both on
+#      the same `homeai-internal` network) both succeed — proves the
+#      internal-only move didn't also sever the connectivity the app
+#      actually needs.
+#   8. M7-01 UI still served on :80 from the LAN: `GET http://homeai.local/`
+#      returns 200 with the Expo web bundle's `<script>` tag (same check
+#      `scripts/e2e/gate_m2.sh` uses) — `caddy` staying on `homeai-net` (the
+#      one network that keeps a published port) means the network split
+#      didn't affect the one thing every device on the LAN actually hits.
 #
 # Every check failing is printed in RED and the suite continues (collects
 # ALL failures, same convention as verify_isolation.sh) then exits 1 at the
@@ -290,6 +307,171 @@ check_5() {
   fi
 }
 
+# ---- check 6: M7-01 no-egress ----------------------------------------------
+#
+# `agent-server`, `model-runner`, `code-exec-manager`, and `postgres` were
+# all moved onto `homeai-internal` (`internal: true`) by M7-01. This probes
+# each one for real, from inside the container, rather than trusting the
+# compose file's declared intent.
+
+# Prints "python3" or "bash" (whichever tool the container actually has),
+# or "none" if neither is present to even attempt the probe.
+egress_probe_tool() {
+  local cid="$1"
+  if docker exec "$cid" sh -c 'command -v python3' >/dev/null 2>&1; then
+    echo python3
+  elif docker exec "$cid" sh -c 'command -v bash' >/dev/null 2>&1; then
+    echo bash
+  else
+    echo none
+  fi
+}
+
+# $1: container id/name. Returns 0 if an outbound TCP connect to a public
+# IP (1.1.1.1:443, 3s timeout) FAILS (the expected, no-egress outcome), 1 if
+# it SUCCEEDS (egress leaked -- assertion violated), 2 if neither python3
+# nor bash's `/dev/tcp` pseudo-device is available in the container to even
+# run the probe (inconclusive, per the ticket's own "use python3 -c or bash
+# /dev/tcp, whichever the image has" wording -- if it has neither, that's
+# a script gap to report, not a silent pass).
+egress_blocked() {
+  local cid="$1" tool
+  tool="$(egress_probe_tool "$cid")"
+  case "$tool" in
+    python3)
+      if docker exec "$cid" python3 -c "
+import socket, sys
+try:
+    socket.create_connection(('1.1.1.1', 443), 3)
+    sys.exit(1)  # connected -- egress leaked
+except Exception:
+    sys.exit(0)  # blocked/timed out -- expected
+" >/dev/null 2>&1; then
+        return 0
+      else
+        return 1
+      fi
+      ;;
+    bash)
+      if docker exec "$cid" timeout 3 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' >/dev/null 2>&1; then
+        return 1  # connected -- egress leaked
+      else
+        return 0  # blocked/timed out -- expected
+      fi
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+check_6() {
+  local svc cid rc
+  for svc in agent-server model-runner code-exec-manager postgres; do
+    cid="$(docker compose ps -q "$svc" 2>/dev/null)"
+    if [ -z "$cid" ]; then
+      fail 6 "no-egress: ${svc} (homeai-internal) cannot reach 1.1.1.1:443" \
+        "container not running -- is the stack up? (docker compose up -d)"
+      continue
+    fi
+    egress_blocked "$cid"
+    rc=$?
+    case "$rc" in
+      0) pass 6 "no-egress: ${svc} (homeai-internal) cannot reach 1.1.1.1:443" ;;
+      1) fail 6 "no-egress: ${svc} (homeai-internal) cannot reach 1.1.1.1:443" \
+           "connection to 1.1.1.1:443 SUCCEEDED -- egress leaked, internal: true not holding" ;;
+      2) fail 6 "no-egress: ${svc} (homeai-internal) cannot reach 1.1.1.1:443" \
+           "neither python3 nor bash found in the ${svc} container -- could not run the probe" ;;
+    esac
+  done
+}
+
+# ---- check 7: M7-01 internal reachability still works ---------------------
+
+check_7() {
+  local cid out rc
+
+  cid="$(docker compose ps -q agent-server 2>/dev/null)"
+  if [ -z "$cid" ]; then
+    fail 7 "agent-server -> model-runner:8080 and agent-server -> postgres:5432 still succeed (homeai-internal)" \
+      "agent-server container not running -- is the stack up? (docker compose up -d)"
+    return
+  fi
+
+  if out="$(docker exec "$cid" python3 -c "
+import socket, sys
+try:
+    socket.create_connection(('model-runner', 8080), 3)
+except Exception as e:
+    print(f'model-runner:8080 error: {e}')
+    sys.exit(1)
+" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass 7 "agent-server -> model-runner:8080 succeeds (homeai-internal)"
+  else
+    fail 7 "agent-server -> model-runner:8080 succeeds (homeai-internal)" "$out"
+  fi
+
+  if out="$(docker exec "$cid" python3 -c "
+import socket, sys
+try:
+    socket.create_connection(('postgres', 5432), 3)
+except Exception as e:
+    print(f'postgres:5432 error: {e}')
+    sys.exit(1)
+" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass 7 "agent-server -> postgres:5432 succeeds (homeai-internal)"
+  else
+    fail 7 "agent-server -> postgres:5432 succeeds (homeai-internal)" "$out"
+  fi
+}
+
+# ---- check 8: M7-01 UI still served on :80 from the LAN --------------------
+#
+# Same assertion `scripts/e2e/gate_m2.sh`'s `step_web_build_serves` makes
+# (the Expo web bundle's own `<script src=".../_expo/static/js/...">` tag),
+# run here over the real mDNS name instead of `localhost` -- proves `caddy`
+# staying on `homeai-net` (the one network that keeps its published port)
+# means the network split had no effect on what every device on the LAN
+# actually hits.
+
+check_8() {
+  local out rc
+  if out="$(python3 -c "
+import urllib.request, sys
+try:
+    with urllib.request.urlopen('http://homeai.local/', timeout=5) as resp:
+        status = resp.status
+        body = resp.read().decode(errors='replace')
+except Exception as e:
+    print(f'error: {e}')
+    sys.exit(1)
+has_tag = '_expo/static/js/' in body
+if status != 200 or not has_tag:
+    print(f'status={status} expo_bundle_tag_found={has_tag}')
+    sys.exit(1)
+print(f'status={status}, Expo bundle tag found')
+" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass 8 "GET http://homeai.local/ -> 200 with Expo bundle tag (UI still served on :80 from the LAN) -- ${out}"
+  else
+    fail 8 "GET http://homeai.local/ -> 200 with Expo bundle tag (UI still served on :80 from the LAN)" "$out"
+  fi
+}
+
 summary() {
   local total=$((PASS_COUNT + FAIL_COUNT))
   echo
@@ -307,6 +489,9 @@ main() {
   check_3
   check_4
   check_5
+  check_6
+  check_7
+  check_8
   summary
 }
 
