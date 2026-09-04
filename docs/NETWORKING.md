@@ -29,8 +29,11 @@ Three independent layers, because no single one is sufficient on its own:
 
 1. **Only `caddy` publishes a host port.** Every other compose service
    (`agent-server`, `model-runner`, `postgres`, `code-exec-manager`) is only
-   reachable from inside the `homeai-net` bridge network — there's no host
-   port to attack even from the LAN.
+   reachable from inside a Docker bridge network — there's no host port to
+   attack even from the LAN. (As of M7-01, that network is
+   `homeai-internal`, not `homeai-net` — see docs/ARCHITECTURE.md §5's
+   "Network segmentation" section for the full internal/egress split; this
+   LAN-only story is unaffected either way.)
 2. **`ufw`** enforces LAN-only access for anything running *directly on the
    host* (default-deny incoming, `192.168.x.x/24 -> tcp/80` allowed,
    `OpenSSH` allowed if installed). On its own this does **not** protect

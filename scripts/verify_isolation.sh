@@ -22,10 +22,16 @@
 # ---- The "no published port" problem -------------------------------------
 #
 # `code-exec-manager` has no published port (M4-03's intentional compose
-# design — only reachable at `http://code-exec-manager:8090` from inside the
-# `homeai-net` bridge network, never from this script's own host/localhost).
-# Worked around by spinning up a throwaway "runner" container
-# (`python:3.12-slim`, already present on this host and on `homeai-net` via
+# design — only reachable at `http://code-exec-manager:8090` from inside its
+# own bridge network, never from this script's own host/localhost). As of
+# M7-01, that network is `homeai-internal` (`internal: true` — no route to
+# the public internet — see docs/ARCHITECTURE.md §5's "Network segmentation"
+# section), not `homeai-net`; `internal: true` only removes the network's
+# own default route/NAT out, it does NOT block containers on the same
+# network from reaching each other, so this runner-container workaround
+# still works unchanged, just joining the other network now. Worked around
+# by spinning up a throwaway "runner" container (`python:3.12-slim`,
+# already present on this host and on `homeai-internal` via
 # `--network`) for the script's duration, then `docker exec`-ing a small
 # `urllib.request`-based Python snippet into it for every REST call
 # (ensure/execute/delete) — that container has Python but no `curl`, and
@@ -38,10 +44,10 @@
 #
 # The compose network name is resolved at runtime via
 # `docker compose config --format json` (not hardcoded as a guess) — it
-# happens to be `homeai_homeai-net` (compose project name `homeai` + the
-# network's own compose-file name `homeai-net`), confirmed once against
-# `docker network ls` during development, but resolving it live means this
-# script keeps working even if the project name ever changes.
+# happens to be `homeai_homeai-internal` (compose project name `homeai` +
+# the network's own compose-file name `homeai-internal`), confirmed once
+# against `docker network ls` during development, but resolving it live
+# means this script keeps working even if the project name ever changes.
 #
 # ---- cgroup v1 vs v2 (check 13) -------------------------------------------
 #
@@ -434,10 +440,10 @@ EOF
 # ---- setup / teardown -------------------------------------------------------
 
 preflight() {
-  log "Resolving compose network name for 'homeai-net' ..."
+  log "Resolving compose network name for 'homeai-internal' (M7-01 - where code-exec-manager now lives) ..."
   NETWORK_NAME="$(docker compose config --format json | python3 -c "
 import json, sys
-print(json.load(sys.stdin)['networks']['homeai-net']['name'])
+print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
 ")"
   if ! docker network ls --format '{{.Name}}' | grep -qx "$NETWORK_NAME"; then
     log "ERROR: resolved network '${NETWORK_NAME}' not found via 'docker network ls' - is the stack up?"

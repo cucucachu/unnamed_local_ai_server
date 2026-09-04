@@ -8,14 +8,31 @@
 #   code-exec-manager  -> M4-03 (sole docker.sock holder, idle reaper) [added]
 #
 # Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
-# `caddy` publishes a host port (80). Every other service is reachable
-# only from inside the `homeai-net` bridge network.
+# `caddy` publishes a host port (80). M7-01 splits the single bridge that
+# used to hold everything into two networks, so "no internet" is the
+# default rather than something merely unused:
+#   homeai-net      -> the egress-capable network (default Docker NAT, a
+#                      route to the internet). Reserved for `caddy` (needs
+#                      it to keep the published port) and the M7-02
+#                      `egress-proxy` (not built yet - see docs/ARCHITECTURE.md
+#                      §5). No other service may ever join this network.
+#   homeai-internal -> `internal: true` - Docker refuses to attach any
+#                      default route/NAT to this network, so no container
+#                      on it can reach the public internet at the network
+#                      layer, not merely by omission. Every other service
+#                      (agent-server, model-runner, code-exec-manager,
+#                      postgres) lives ONLY here.
+# `caddy` is the sole service on both: `homeai-internal` to reach
+# `agent-server`, `homeai-net` to keep its published port.
 
 name: homeai
 
 networks:
   homeai-net:
     driver: bridge
+  homeai-internal:
+    driver: bridge
+    internal: true
 
 volumes:
   pgdata:
@@ -27,14 +44,18 @@ services:
       dockerfile: infra/caddy/Dockerfile
     ports:
       - "80:80"
+    # Only service on BOTH networks (see the top-of-file comment): needs
+    # homeai-net for the published port, homeai-internal to reach agent-server.
     networks:
       - homeai-net
+      - homeai-internal
     restart: unless-stopped
 
   model-runner:
     build: ./services/model-runner
     restart: unless-stopped
-    networks: [homeai-net]
+    # internal-only (M7-01) - no route to the public internet.
+    networks: [homeai-internal]
     devices:
       - /dev/dri:/dev/dri
     group_add:
@@ -61,7 +82,10 @@ services:
   agent-server:
     build: ./services/agent-server
     restart: unless-stopped
-    networks: [homeai-net]
+    # internal-only (M7-01) - no route to the public internet. Stage 2's
+    # web access (M7-02/M7-03) will go through the reserved `egress-proxy`
+    # on `homeai-net`, not by adding this service to that network.
+    networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     depends_on:
       postgres:
@@ -84,7 +108,8 @@ services:
   postgres:
     image: postgres:17
     restart: unless-stopped
-    networks: [homeai-net]
+    # internal-only (M7-01) - no route to the public internet.
+    networks: [homeai-internal]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -104,11 +129,16 @@ services:
   # session-scoped exec container lifecycle (ensure/execute/delete, M4-02)
   # and the idle reaper (M4-03) that stops+removes containers idle past
   # EXEC_IDLE_MINUTES. `scripts/check_socket_exclusivity.sh` enforces that no
-  # other service in this file ever gains its own docker.sock mount.
+  # other service in this file ever gains its own docker.sock mount. Reaches
+  # the Docker daemon via the bind-mounted unix socket below, not over the
+  # network, so `internal: true` on homeai-internal (M7-01) doesn't affect
+  # it - the exec containers it spawns keep their own `network_mode: none`
+  # regardless (see docs/ARCHITECTURE.md §5), independent of this network split.
   code-exec-manager:
     build: ./services/code-exec-manager
     restart: unless-stopped
-    networks: [homeai-net]
+    # internal-only (M7-01) - no route to the public internet.
+    networks: [homeai-internal]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:

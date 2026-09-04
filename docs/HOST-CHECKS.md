@@ -69,3 +69,7 @@ agent run.
 - [ ] (M6-03) From a phone, run README.md's "What using it looks like" list end to end: organize a messy folder via chat; batch-rename via script; summarize a text file to a new file; play the result media; download a file. Each works from the couch.
 
 > **PM sign-off: v1 accepted ____**
+
+## M7
+
+- [ ] (M7-01) From a phone on the LAN, `http://homeai.local` still loads and a chat turn completes (proves the `homeai-internal`/`homeai-net` split didn't break anything a real device on the LAN actually uses).
