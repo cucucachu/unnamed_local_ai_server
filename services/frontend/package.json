@@ -40,7 +40,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "jest"
+    "check:platform": "node scripts/check-platform.mjs",
+    "test": "npm run check:platform && jest"
   },
   "private": true,
   "jest": {

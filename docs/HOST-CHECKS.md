@@ -65,3 +65,4 @@ agent run.
 
 - [ ] (M6-01) Phone browser (iOS + Android if available): `http://homeai.local` loads the app; note Android mDNS result.
 - [ ] (M6-01) From a non-LAN network (phone on cellular): the address does not load.
+- [ ] (M6-02) Expo Go (iOS and/or Android): chat streams; threads switch; files browse/upload/download; video plays with seek; exec card renders. Note any platform break as a new ticket rather than fixing ad hoc.
