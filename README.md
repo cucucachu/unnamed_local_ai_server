@@ -69,16 +69,13 @@ secrets, and every other service — see the isolation boundary described
 below. The whole stack is LAN-only by design (no auth, no TLS, no internet
 exposure) via network topology + host firewall, not application logic.
 
-**Full as-built detail — the real service catalog (ports/mounts/env,
-cross-checked against `docker compose config`), system diagrams, model
-operations, security model, and day-to-day operations — now lives in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).** This section is
+**Full as-built detail — the service catalog (ports/mounts/env), system
+diagrams, model operations, security model, and day-to-day operations —
+lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).** This section is
 intentionally just a summary so the same content isn't maintained in two
 places; that document is the source of truth for anything more detailed
-than the paragraph above, including the "Documented fast-follows" list
-(moved there, under its Security model section) and the three system
-diagrams (moved there, under System overview, with corrections vs. this
-repo's earlier drafts called out explicitly).
+than the paragraph above, including the "Documented fast-follows" list and
+the system diagrams.
 
 ## Repository layout
 

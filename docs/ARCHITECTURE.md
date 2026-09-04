@@ -20,10 +20,8 @@ Six sections:
 
 ## 1. System overview
 
-The system diagrams below are copied from `README.md`'s original "System
-diagrams" section and corrected against the real `docker-compose.yml` and
-code, with an explicit "(corrected: ...)" note wherever something drifted
-during implementation.
+The diagrams below show the system as actually deployed: the LAN/host
+topology, the chat + tool-call flow, and media playback.
 
 ```mermaid
 flowchart TB
@@ -69,37 +67,29 @@ flowchart TB
     model -.->|device passthrough| dri
 ```
 
-**(corrected: removed the separate `frontend` node.)** The original README
-version showed `proxy --> frontend` as if the Expo web export were its own
-compose service reachable over `homeai-net`. In reality there is no
-`frontend` service in `docker-compose.yml` — `infra/caddy/Dockerfile` is a
-multi-stage build: stage 1 (`node:22-alpine`) runs `npx expo export
+There is no separate `frontend` compose service. `infra/caddy/Dockerfile`
+is a multi-stage build: stage 1 (`node:22-alpine`) runs `npx expo export
 --platform web` against `services/frontend/`, then stage 2 (`caddy:2-alpine`)
 `COPY --from=frontend-build /out /srv/www` bakes the static bundle directly
 into the final Caddy image. Caddy serves it straight off local disk
 (`infra/caddy/Caddyfile`'s `handle { root * /srv/www; file_server }`) — no
 network hop, no second container.
 
-**(corrected: dropped `/dev/kfd`.)** The original README version listed
-`/dev/dri, /dev/kfd` as the passed-through iGPU device nodes. The real
-`model-runner` service in `docker-compose.yml` only passes through
-`/dev/dri:/dev/dri` (plus `group_add: [RENDER_GID, VIDEO_GID]` and `ipc:
-host`) — no `/dev/kfd`. `/dev/kfd` is the ROCm/KFD compute-queue device node;
-this project deliberately runs the **Vulkan** (RADV/Mesa) backend instead of
-ROCm (see "Model operations" below for why), and Vulkan only needs the
-render node at `/dev/dri`, never `/dev/kfd`. Listing it in the diagram was
-carried over from an earlier, ROCm-flavored draft and never removed.
+`model-runner` passes through only `/dev/dri:/dev/dri` (plus `group_add:
+[RENDER_GID, VIDEO_GID]` and `ipc: host`) — the Vulkan/RADV render node.
+This project deliberately runs the **Vulkan** (RADV/Mesa) backend instead
+of ROCm (see "Model operations" below for why), and Vulkan only needs
+`/dev/dri`; `/dev/kfd` (the ROCm/KFD compute-queue device node) is never
+passed through.
 
-**Note on the Docker network name**: the diagram labels it `homeai-net` —
-that's the compose-file key (`docker-compose.yml`'s `networks:` block) and
-the name every script in this repo treats as canonical, but the actual
-resulting Docker network name on the host is project-prefixed:
-`homeai_homeai-net` (compose project name `homeai` + `homeai-net`,
-confirmed via `docker network ls` — see `scripts/verify_isolation.sh`'s own
-header comment for the same finding). Scripts resolve this dynamically via
-`docker compose config --format json` rather than hardcoding either name;
-nothing here needed correcting, just worth knowing if you go looking for
-the network by its literal Docker name.
+**Docker network naming**: the diagram labels it `homeai-net` — that's the
+compose-file key (`docker-compose.yml`'s `networks:` block) and the name
+every script in this repo treats as canonical. The actual Docker network
+name on the host is project-prefixed: `homeai_homeai-net` (compose project
+name `homeai` + `homeai-net`, confirmed via `docker network ls` — see
+`scripts/verify_isolation.sh`'s own header comment for the same finding).
+Scripts resolve this dynamically via `docker compose config --format json`
+rather than hardcoding either name.
 
 ### Chat + tool-call flow (direct file ops vs. code execution)
 
@@ -132,15 +122,14 @@ sequenceDiagram
     A-->>U: tokens + tool-status events over WebSocket
 ```
 
-**(corrected: removed the separate `F` / "Expo Web Export" participant.)**
-Same underlying drift as the flowchart above — Caddy answers `GET
-homeai.local` directly from its own baked-in static files, it doesn't proxy
-to a second process. Everything else in this sequence (the WS upgrade, the
-tool-call round trips through `model-runner` and `code-exec-manager`)
-matches the real `app/api/chat_ws.py` / `app/agent/execute_code_tool.py` /
-`app/sessions.py` flow as implemented, and the `code-exec-manager` API
-calls (`POST /sessions/{id}/ensure`, `POST /sessions/{id}/execute`) match
-the real contract in [issue #34 §7](https://github.com/cucucachu/unnamed_local_ai_server/issues/34).
+Caddy answers `GET homeai.local` directly from its own baked-in static
+files — no second process involved, matching the flowchart above.
+Everything else in this sequence (the WS upgrade, the tool-call round
+trips through `model-runner` and `code-exec-manager`) matches the real
+`app/api/chat_ws.py` / `app/agent/execute_code_tool.py` / `app/sessions.py`
+flow, and the `code-exec-manager` API calls (`POST /sessions/{id}/ensure`,
+`POST /sessions/{id}/execute`) match the contract in
+[issue #34 §7](https://github.com/cucucachu/unnamed_local_ai_server/issues/34).
 
 ### Media file playback flow
 
@@ -161,8 +150,7 @@ sequenceDiagram
     A-->>U: 206 Partial Content from offset X
 ```
 
-No drift found here — checked against the real `app/api/media.py`
-implementation: it parses `Range` per RFC 9110 §14.1.2, streams in 1 MiB
+`app/api/media.py` parses `Range` per RFC 9110 §14.1.2, streams in 1 MiB
 chunks via `anyio.to_thread`, and returns `206`/`Content-Range` exactly as
 diagrammed (plus a `HEAD` path and a `416` path for unsatisfiable ranges,
 both omitted here as diagram-level detail).
@@ -225,14 +213,13 @@ what another doc says it should be.
   `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `TEST_PG_DSN`
   (only read by `tests/test_checkpointer_pg.py`'s integration fixture, not
   by the application itself — compose's own comment on this line says so).
-  **Nuance, not a bug**: `HOMEAI_UID`/`HOMEAI_GID`/`WORKSPACE_DIR` are used
-  by *compose* to set this service's `user:` field and bind-mount source —
-  they are never actually injected into the container's own environment,
-  and `Settings.workspace_root` is a hardcoded `/data/workspace` default,
-  not read from a `WORKSPACE_DIR`/`WORKSPACE_ROOT` env var. `.env.example`'s
-  own "Consumed by" comments already reflect this (they don't list
-  `agent-server` for `WORKSPACE_DIR`), so there's no drift to fix — just
-  worth spelling out here since it's easy to assume otherwise.
+  **Nuance**: `HOMEAI_UID`/`HOMEAI_GID`/`WORKSPACE_DIR` are used by
+  *compose* to set this service's `user:` field and bind-mount source —
+  they are never actually injected into the container's own environment.
+  `Settings.workspace_root` is a hardcoded `/data/workspace` default, not
+  read from a `WORKSPACE_DIR`/`WORKSPACE_ROOT` env var (`.env.example`'s own
+  "Consumed by" comments reflect this — they don't list `agent-server` for
+  `WORKSPACE_DIR`).
 - **Tests**: `services/agent-server/tests/` — `test_health.py`,
   `test_chat.py`, `test_chat_ws.py`, `test_files_rest.py`,
   `test_media_stream.py`, `test_paths.py`, `test_agent_build.py`,
@@ -398,28 +385,21 @@ flag the conflict rather than resolving it silently.
 ### Model
 
 - **HF repo**: [`ggml-org/gemma-4-26B-A4B-it-GGUF`](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF)
-- **File / quant actually used**: `gemma-4-26B-A4B-it-Q8_0.gguf` (see
-  "Chosen default" below — updated from `Q4_0` by the M1-04 benchmark).
-  - **Deviation from the original spec**: the Conventions & Contracts
-    reference issue assumed a `Q4_K_M` quant (~16.8 GB). Verified against
-    the live HF repo tree (`/api/models/ggml-org/gemma-4-26B-A4B-it-GGUF/tree/main`)
-    on 2026-08-29: no `Q4_K_M` file exists. This repo is auto-converted (per
-    its own README: "automatically converted using
-    https://github.com/ggml-org/convert") and only ships legacy quant types
-    — `Q4_0` (~14.6 GB), `Q8_0` (~26.9 GB), `BF16` (~50.5 GB) — plus
-    unrelated siblings (`mmproj-*` vision adapter, `dflash-*`
-    speculative-decode draft model, `mtp-*` multi-token-prediction heads)
-    that are out of scope for this text-only v1. See
-    `services/model-runner/fetch-model.sh` for the full rationale.
-- **Size on disk**: `Q4_0` was 14,618,145,824 bytes (13.62 GiB / 14.62 GB
-  decimal), confirmed with `stat` and matching the HF API's reported size
-  for that file exactly, before the default moved to `Q8_0` (~26.9 GB).
-- **Model load time**: ~4.5 seconds observed for the `Q4_0` file when it
-  was still fully resident in the host's page cache (91 GB RAM) right
-  after the fetch script downloaded it — expect a load time closer to the
-  time it takes to read the file off disk on a cold cache (e.g. after a
-  host reboot); scales with file size, so `Q8_0`'s ~26.9 GB will take
-  longer than `Q4_0`'s figure above under the same cold-cache conditions.
+- **File / quant used**: `gemma-4-26B-A4B-it-Q8_0.gguf` — see "Chosen
+  default" below for the benchmark behind that choice.
+- **Available quants**: this repo (`ggml-org/gemma-4-26B-A4B-it-GGUF`,
+  auto-converted per its own README) ships no K-quants — only the legacy
+  `Q4_0` (~14.6 GB), `Q8_0` (~26.9 GB), and `BF16` (~50.5 GB) — plus
+  unrelated siblings (`mmproj-*` vision adapter, `dflash-*`
+  speculative-decode draft model, `mtp-*` multi-token-prediction heads)
+  out of scope for this text-only v1. See
+  `services/model-runner/fetch-model.sh` for detail.
+- **Size on disk**: see the per-quant file sizes in the benchmark results
+  table below.
+- **Model load time**: ~4.5 seconds for a file already resident in the
+  host's page cache (91 GB RAM); a cold-cache load (e.g. after a host
+  reboot) takes closer to however long the file takes to read off disk,
+  scaling with the quant's file size.
 - **GPU offload (Vulkan)**: confirmed full GPU offload, no CPU-only
   fallback. Key log lines (`docker compose logs model-runner`, requires
   `MODEL_EXTRA_ARGS` to include `--verbose` — see `.env.example` comment,
@@ -439,8 +419,7 @@ flag the conflict rather than resolving it silently.
   allocation bug (ROCm only sees VRAM; Vulkan sees VRAM+GTT via
   `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`). This is why `model-runner` passes
   through `/dev/dri` (the Vulkan/RADV render node), never `/dev/kfd` (the
-  ROCm compute-queue node) — see the corrected system-overview diagram
-  above.
+  ROCm compute-queue node) — see the system overview diagram above.
 - **Sampling defaults**: `--temp 1.0 --top-p 0.95 --top-k 64` (per the
   model card, in `docker-compose.yml`'s `command:`).
 - **`MODEL_EXTRA_ARGS` additions**: `--verbose --reasoning-budget 0`.
@@ -527,19 +506,17 @@ between three legacy-type quants: `Q4_0` (noticeably lossy), `Q8_0`
   GPU-access config from the `model-runner` service definition still
   apply to `run` the same as `up`.
 - **Serving container was stopped** (confirmed via `docker compose ps -a`
-  showing no containers) before every benchmark run, per the ticket's
-  GTT-contention warning.
-- **Repetitions**: `-r 3` (3 repetitions per quant, per spec); `llama-bench`
-  reports the mean ± stddev across those 3 reps directly.
-- **Deviation — discarded a contaminated Q4_0 run**: an early sanity check
-  (`-r 1`) was run in parallel with the still-in-progress `BF16` download
-  and showed higher, misleadingly optimistic numbers (pp512 ≈ 411 t/s,
-  tg128 ≈ 24.7 t/s) than the clean re-run after all downloads finished
-  (pp512 ≈ 293, tg128 ≈ 17.8) — most likely explained by reduced
-  memory-bandwidth contention once the download finished, on top of only
-  1 rep vs. 3. All numbers in the table below are from the **clean runs**,
-  with no concurrent network/disk activity and no other containers
-  running.
+  showing no containers) before every benchmark run, to avoid GTT
+  contention with an already-loaded model.
+- **Repetitions**: `-r 3` (3 repetitions per quant); `llama-bench` reports
+  the mean ± stddev across those 3 reps directly.
+- All numbers in the table below are from **clean runs**, with no
+  concurrent network/disk activity and no other containers running — an
+  early `Q4_0` sanity check (`-r 1`) run in parallel with an in-progress
+  `BF16` download showed higher, misleadingly optimistic numbers (pp512 ≈
+  411 t/s, tg128 ≈ 24.7 t/s) than the clean numbers below, most likely from
+  memory-bandwidth contention with the concurrent download plus only 1 rep
+  vs. 3.
 
 #### Results
 
@@ -779,10 +756,6 @@ container is needed at all — `code-exec-manager` publishes no host port)
 are all cleaned up in an `EXIT` trap.
 
 ### Documented fast-follows (not built for v1)
-
-Moved here verbatim from `README.md` — this is now the canonical copy;
-`README.md`'s own "Architecture" summary links back to this list instead
-of keeping a second copy.
 
 - Docker-socket-proxy in front of code-exec-manager's docker.sock access.
 - HTTPS via Caddy internal CA + device trust, or a real cert if a domain is ever added.
