@@ -89,9 +89,22 @@ egress). `agent-server`, `model-runner`, `code-exec-manager`, and
 on both: it needs `homeai-internal` to reach `agent-server`, and
 `homeai-net` to keep its published port (and thus a route out, for
 whatever it itself needs). `homeai-net` is reserved exclusively for
-`caddy` and the M7-02 `egress-proxy` (not built yet — see "Security model"
-below) — no other service may ever join it. This makes "no internet" the
-default for every container instead of something merely unused.
+`caddy` and the M7-02 `egress-proxy` — no other service may ever join it.
+This makes "no internet" the default for every container instead of
+something merely unused.
+
+**Egress proxy (M7-02)**: `egress-proxy` is the second (and, by design,
+last) service on `homeai-net` — it also sits on `homeai-internal`, so any
+future internal-only consumer (M7-03/M7-04's `agent-server`) can reach it
+at `http://egress-proxy:8080` without joining `homeai-net` itself. It's a
+`mitmproxy`-based filtering forward proxy: it terminates TLS with its own
+locally-generated CA (a plain `CONNECT` tunnel would hide the HTTP method
+from any filter sitting in front of it) and enforces a GET/HEAD-only +
+destination-guard policy in its `policy.py` addon before forwarding
+anything. See "Security model" below for the full policy and the CA-trust
+recipe. Not wired up as anyone's actual outbound proxy yet — that's
+M7-03/M7-04; this ticket only stands the proxy itself up and proves it
+enforces its policy (`scripts/verify_egress.sh`).
 
 **Docker network naming**: the diagram labels them `homeai-internal`/
 `homeai-net` — that's the compose-file key (`docker-compose.yml`'s
@@ -207,6 +220,73 @@ what another doc says it should be.
   run with `cd services/frontend && npm test` (`check-platform.mjs` +
   `jest`/`jest-expo`; suites live under `lib/__tests__/`,
   `components/__tests__/`, `src/app/**/__tests__/`).
+
+### `egress-proxy`
+
+- **Purpose**: M7-02's filtering forward proxy — the single, deliberately
+  narrow chokepoint any future outbound-web-access feature (M7-03/M7-04)
+  must route through. Enforces the read-only-web guarantee at the network
+  layer (destination guard + GET/HEAD-only) rather than trusting a
+  fetcher's own code to behave, per "Security model" below.
+- **Image/base**: `mitmproxy/mitmproxy` pinned by digest (multi-platform
+  manifest-list digest for the `12` tag, resolved via the Docker Hub v2
+  tags API — see `services/egress-proxy/Dockerfile`'s own comment for why
+  that method was used instead of `docker inspect`/`buildx imagetools
+  inspect`, the method every other digest-pinned Dockerfile in this repo
+  uses, and for the re-verification command to run once real
+  docker+registry access is available). Dockerfile:
+  `services/egress-proxy/Dockerfile`.
+- **Published port**: none.
+- **Internal port**: `8080` (`mitmdump --listen-port 8080`).
+- **Network (M7-01/M7-02)**: `homeai-net` **and** `homeai-internal` — the
+  second of only two services ever on `homeai-net` (alongside `caddy`).
+  `homeai-net` is what gives it an actual route to the public internet;
+  `homeai-internal` is how any future internal-only consumer reaches it at
+  `http://egress-proxy:8080` without that consumer itself ever joining
+  `homeai-net`.
+- **Mounts**: named volume `egress-proxy-ca:/home/mitmproxy/.mitmproxy` —
+  where mitmproxy writes its self-generated CA (private key + cert) on
+  first start; not baked into the image. See "Security model" below for
+  the exact consumer-side mount/trust recipe.
+- **Env vars consumed** (compose `environment:` block, cross-checked
+  against `policy.py`'s own `max_bytes()`): `EGRESS_MAX_BYTES` (default 20
+  MB if unset/unparseable — see `.env.example`).
+- **Policy** (`services/egress-proxy/policy.py`, a mitmproxy addon loaded
+  via `-s /app/policy.py`): in `request()` — method allowlist (`GET`/`HEAD`
+  only, else `403 {"error": "method not allowed by egress policy"}`),
+  then a destination guard (else `403 {"error": "destination not allowed
+  by egress policy"}`) that denies non-80/443 ports, bare hostnames (no
+  dot), the `.local`/`.internal` TLDs, and any resolved IP that is
+  loopback/RFC1918/link-local/CGNAT (`100.64.0.0/10`)/IPv6
+  loopback+ULA+link-local/multicast/unspecified — then strips the
+  `Cookie`/`Authorization` request headers on anything that passes. In
+  `responseheaders()` — kills the flow if `Content-Length` exceeds
+  `EGRESS_MAX_BYTES`, otherwise marks the response to stream rather than
+  buffer the full body. Logs one line per completed request (method, host,
+  path truncated to 200 chars, status, bytes).
+- **DNS-rebinding tradeoff (deliberate, documented, not fixed here)**: the
+  destination guard resolves the host itself (`policy.py`'s
+  `resolve_host()`) and makes its allow/deny decision against THOSE
+  resolved IPs — it does not, and structurally cannot from inside a plain
+  mitmproxy addon, pin mitmproxy's own subsequent upstream connection to
+  the exact same IPs. A DNS answer that changes between this check and
+  mitmproxy's own connect (attacker-controlled DNS rebinding) could in
+  principle let a private IP through after this check passed on a public
+  one. Out of scope for this ticket (the spec's own "out of scope" list
+  covers domain allow/deny-lists and rate limiting, not full anti-rebinding
+  connection pinning) — flagged here as a known gap for anyone hardening
+  this further, not silently accepted.
+- **Tests**: `services/egress-proxy/tests/test_policy.py` — table-driven
+  pure-function tests for the method allowlist and destination guard
+  (every denial category in the spec, plus the "resolution failed" and
+  "one-of-several-resolved-IPs-is-bad" fail-closed cases), plus the
+  `request()`/`responseheaders()`/`response()` addon hooks driven directly
+  through `mitmproxy.test.tflow`/`tutils` (the same test helpers
+  mitmproxy's own addon suite uses) for the 403/kill/streaming/logging
+  paths. Run: `cd services/egress-proxy && uv run ruff check . && uv run
+  pytest`. No integration test drives a real mitmproxy process end to end
+  from this repo — `scripts/verify_egress.sh` (below) is that check,
+  against the live stack with real internet.
 
 ### `agent-server`
 
@@ -825,10 +905,15 @@ design actually protects against them:
    oversight; it's enforced by network topology (only `caddy` publishes a
    port, `ufw` + the `DOCKER-USER` iptables rule LAN-scope that port), not
    by anything in the application layer.
-2. **No outbound internet access, by default.** Stage 2 will give the
-   agent web access, and that has to hold at the network layer, not just
-   by convention — so "no internet" is the default for every container,
-   not something merely unused. See "Network segmentation (M7-01)" below.
+2. **No outbound internet access, by default — and when Stage 2 grants it,
+   it's read-only and filtered by a proxy, not trusted client code.**
+   "No internet" is the default for every container, enforced at the
+   network layer, not by convention — see "Network segmentation (M7-01)"
+   below. The one exception, `egress-proxy` (M7-02), is a filtering MITM
+   proxy specifically so this guarantee doesn't depend on whatever
+   eventually fetches through it (M7-03/M7-04) being bug-free: "agent can
+   read the public web; cannot write to it; cannot reach the LAN via the
+   proxy" — see "Egress proxy (M7-02)" below for exactly how.
 3. **Untrusted model output.** Everything the model says — including tool
    names, tool-call arguments, and file paths — has to be treated as
    attacker-or-hallucination-influenced input, not as trusted instruction.
@@ -926,6 +1011,92 @@ instead of merely-unused, ahead of Stage 2 giving the agent web access:
   moving it to `homeai-internal` doesn't affect its ability to manage
   those containers either.
 
+### Egress proxy (M7-02)
+
+**"Agent can read the public web; cannot write to it; cannot reach the LAN
+via the proxy."** `egress-proxy` (`mitmproxy` + `services/egress-proxy/policy.py`,
+see its "Service catalog" entry above for the exact policy and image pin)
+is how that guarantee is enforced independently of any fetcher's own code:
+
+- **Why MITM at all, not just a `CONNECT` tunnel**: a plain HTTPS
+  `CONNECT` tunnel hides the actual HTTP method and destination path from
+  anything sitting in front of it — the proxy would only ever see
+  `CONNECT host:443`, never whether the tunneled request inside was a
+  `GET` or a `POST`. `egress-proxy` terminates TLS itself (using its own
+  locally-generated CA) specifically so `policy.py`'s `request()` hook can
+  see, and act on, the real method/host/port/path before anything is
+  forwarded.
+- **Method allowlist**: only `GET`/`HEAD` are forwarded; everything else
+  (`POST`, `PUT`, `DELETE`, etc.) gets `403 {"error": "method not allowed
+  by egress policy"}` without ever reaching the destination. This is the
+  "cannot write to it" half of the guarantee — enforced here, at the one
+  chokepoint, rather than trusted to hold in every current and future
+  caller.
+- **Destination guard**: denies loopback, RFC1918, link-local, CGNAT
+  (`100.64.0.0/10`), IPv6 loopback/ULA/link-local, the `.local`/`.internal`
+  TLDs, bare hostnames (no dot — catches Docker service names like
+  `agent-server`), and any port other than 80/443 — `403 {"error":
+  "destination not allowed by egress policy"}`. This is the "cannot reach
+  the LAN via the proxy" half — it's what stops the agent from using its
+  own egress proxy as a side channel back into `homeai-internal` (e.g. a
+  hallucinated or attacker-steered fetch of `http://agent-server:8000/...`
+  or `http://code-exec-manager:8090/...`).
+- **DNS-rebinding tradeoff**: the guard resolves the host itself and
+  decides against those resolved IPs; it does not pin mitmproxy's own
+  later upstream connection to the exact same IPs (a plain mitmproxy addon
+  has no hook for that). A DNS answer that changes between the check and
+  mitmproxy's own connect could in principle slip a private IP through
+  after the check passed on a public one — a known, documented gap, not a
+  silent one; see the "Service catalog" entry above and the ticket's own
+  "out of scope" list (domain allow/deny-lists, rate limiting — the same
+  category of hardening this would belong to).
+- **Body size cap**: `EGRESS_MAX_BYTES` (default 20 MB) — if the upstream
+  response's `Content-Length` exceeds it, the flow is killed before the
+  body is read; otherwise the response streams rather than buffers fully
+  in memory.
+- **Verification**: `scripts/verify_egress.sh`, against the live stack
+  with real internet (not runnable offline/in CI — see its own header
+  comment for why). `scripts/verify_network.sh` (M7-01) still passes
+  unmodified — `egress-proxy` is the only new egress-capable container,
+  and it's on `homeai-net` by design, not `homeai-internal`, so it isn't
+  in scope for that script's "internal services can't reach the internet"
+  checks; those checks continue to cover exactly the same four services
+  they always did.
+
+**CA handling — how M7-03/M7-04 (or anything else that fetches through
+this proxy) must mount the volume and trust the cert:**
+
+1. Mount the SAME named volume `egress-proxy-ca` **read-only** at whatever
+   path the consumer's own HOME resolves to for its HTTPS client's trust
+   store — e.g. `egress-proxy-ca:/ca:ro` if the consumer just needs the
+   raw file, or directly reusing mitmproxy's own layout if the consumer is
+   itself a mitmproxy-family tool. Do NOT mount it read-write anywhere but
+   `egress-proxy`'s own service block — the CA private key lives in this
+   volume too (`mitmproxy-ca.pem`), and nothing but the proxy that
+   generated it should ever be able to write to it.
+2. mitmproxy writes several formats into that directory on first start;
+   the one every ordinary HTTPS client (`curl --cacert`, Python
+   `requests`/`httpx` via `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE`, Node's
+   `NODE_EXTRA_CA_CERTS`, a JVM truststore import, etc.) should trust is
+   **`mitmproxy-ca-cert.pem`** (PEM, cert only — not `mitmproxy-ca.pem`,
+   which also bundles the private key and must never leave `egress-proxy`
+   itself in practice, even though the read-only mount technically exposes
+   it too).
+3. Point the consumer's outbound HTTP client at the proxy
+   (`HTTPS_PROXY=http://egress-proxy:8080` / `HTTP_PROXY=http://egress-proxy:8080`,
+   reachable over `homeai-internal` — see "Egress proxy (M7-02)" above for
+   why no `homeai-net` membership is needed on the consumer's side) AND at
+   the mounted cert (however that consumer's language/runtime expects a
+   custom CA bundle to be specified — this repo's own
+   `scripts/verify_egress.sh` does this with plain `curl --cacert
+   /ca/mitmproxy-ca-cert.pem`, the simplest concrete example to copy).
+4. The volume is populated lazily — mitmproxy only writes the CA files the
+   **first time `egress-proxy` actually starts**. Any consumer/verification
+   script that depends on the cert being present must either depend on
+   `egress-proxy` via `depends_on` + a startup order, or poll for the file
+   (as `scripts/verify_egress.sh` does), rather than assuming it exists
+   immediately after `docker compose up`.
+
 ### Documented fast-follows (not built for v1)
 
 - Docker-socket-proxy in front of code-exec-manager's docker.sock access.
@@ -987,6 +1158,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
+| `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and

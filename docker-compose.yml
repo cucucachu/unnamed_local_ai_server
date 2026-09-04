@@ -14,16 +14,21 @@
 #   homeai-net      -> the egress-capable network (default Docker NAT, a
 #                      route to the internet). Reserved for `caddy` (needs
 #                      it to keep the published port) and the M7-02
-#                      `egress-proxy` (not built yet - see docs/ARCHITECTURE.md
-#                      §5). No other service may ever join this network.
+#                      `egress-proxy` (the sole other service allowed a
+#                      route out - see docs/ARCHITECTURE.md §5). No other
+#                      service may ever join this network.
 #   homeai-internal -> `internal: true` - Docker refuses to attach any
 #                      default route/NAT to this network, so no container
 #                      on it can reach the public internet at the network
 #                      layer, not merely by omission. Every other service
 #                      (agent-server, model-runner, code-exec-manager,
-#                      postgres) lives ONLY here.
-# `caddy` is the sole service on both: `homeai-internal` to reach
-# `agent-server`, `homeai-net` to keep its published port.
+#                      postgres, egress-proxy) lives here too, since it's
+#                      how those services (once wired up in M7-03/M7-04)
+#                      reach `egress-proxy` in the first place.
+# `caddy` and `egress-proxy` are the only services on `homeai-net`; `caddy`
+# additionally needs `homeai-internal` to reach `agent-server`, and
+# `egress-proxy` additionally needs `homeai-internal` to be reachable BY
+# `agent-server` (the only realistic future consumer, M7-03/M7-04).
 
 name: homeai
 
@@ -36,6 +41,12 @@ networks:
 
 volumes:
   pgdata:
+  # mitmproxy's own generated CA (private key + cert), written to
+  # ~/.mitmproxy inside the egress-proxy container on its first start - not
+  # baked into any image. M7-03/M7-04 mount this SAME volume read-only and
+  # trust `mitmproxy-ca-cert.pem` from it (docs/ARCHITECTURE.md §5 has the
+  # exact steps).
+  egress-proxy-ca:
 
 services:
   caddy:
@@ -50,6 +61,30 @@ services:
       - homeai-net
       - homeai-internal
     restart: unless-stopped
+
+  # M7-02: the single, deliberately-narrow egress chokepoint - the only
+  # other service besides `caddy` allowed on `homeai-net`. Terminates TLS
+  # with its own locally-generated CA (mounted at `egress-proxy-ca` below)
+  # so `policy.py` can see the real method/host/path of HTTPS requests
+  # rather than an opaque `CONNECT host:443` tunnel, and enforces the
+  # GET/HEAD-only + destination-guard policy documented in
+  # docs/ARCHITECTURE.md §5 before anything is forwarded. Not yet wired up
+  # as any service's actual `HTTPS_PROXY` (that's M7-03/M7-04) - this
+  # ticket only stands the proxy itself up and proves it works via
+  # `scripts/verify_egress.sh`.
+  egress-proxy:
+    build: ./services/egress-proxy
+    restart: unless-stopped
+    # Both networks: homeai-net for its own route out to the public
+    # internet (the entire point of this service), homeai-internal so that
+    # agent-server (M7-03/M7-04) can reach it as `http://egress-proxy:8080`.
+    networks:
+      - homeai-net
+      - homeai-internal
+    volumes:
+      - egress-proxy-ca:/home/mitmproxy/.mitmproxy
+    environment:
+      EGRESS_MAX_BYTES: ${EGRESS_MAX_BYTES}
 
   model-runner:
     build: ./services/model-runner
@@ -83,8 +118,9 @@ services:
     build: ./services/agent-server
     restart: unless-stopped
     # internal-only (M7-01) - no route to the public internet. Stage 2's
-    # web access (M7-02/M7-03) will go through the reserved `egress-proxy`
-    # on `homeai-net`, not by adding this service to that network.
+    # web access (M7-03/M7-04) will go through the M7-02 `egress-proxy` on
+    # `homeai-net` (reachable here at `http://egress-proxy:8080` over
+    # `homeai-internal`), not by adding this service to `homeai-net` itself.
     networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     depends_on:
