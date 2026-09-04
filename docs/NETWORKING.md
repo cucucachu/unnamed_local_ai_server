@@ -145,7 +145,106 @@ options, roughly in order of how much they're worth the effort here:
   problem; a changing IP is only inconvenient if you're bypassing
   `homeai.local` and hardcoding an IP somewhere yourself.
 
+## Port & exposure audit
+
+`scripts/verify_network.sh` (run with `sudo`, full stack up) is the
+after-the-fact check that the three isolation layers above are actually
+holding, against the real running system rather than just "the setup
+scripts exited 0 once." Five checks:
+
+1. **mDNS resolution** — `avahi-resolve -n homeai.local` returns an IPv4
+   address matching the LAN interface's current IP (re-checks the exact two
+   `setup-avahi.sh` gotchas above: no IPv6/link-local answer, no stale
+   Docker-bridge answer).
+2. **End-to-end reachability** — `GET http://homeai.local/api/health`
+   returns `200`, proving mDNS + Caddy + agent-server all work together
+   from the host's own point of view, not just each piece in isolation.
+3. **Port audit, Docker-stack scope** — `docker compose config` and live
+   `docker ps` output agree that **only** `caddy` publishes a host port,
+   and that it publishes **only** port 80. Deliberately scoped to the
+   compose stack, not to every process on the dev machine: an unrelated
+   host tool (an IDE helper, another project's dev server, etc.) listening
+   on some other port isn't a regression in *this* stack's isolation
+   posture, and flagging it would just be noise. `sshd` on port 22 (if
+   installed) is the one explicitly-allowed non-Docker exception — its own
+   exposure is `ufw`'s job (check 4), not this check's.
+4. **`ufw` posture** — active, default-deny incoming, and the LAN-subnet
+   allow rule for tcp/80 that `setup-ufw.sh` installs.
+5. **`DOCKER-USER` chain** — contains the actual enforcement rule (`ufw`
+   alone does not restrict Docker-published ports; see "How LAN-only
+   isolation works" above for why).
+
+Re-run this any time after touching `docker-compose.yml`'s port mappings,
+the firewall scripts, or the network hardware itself (new NIC, switched
+from Wi-Fi to Ethernet, etc.).
+
+## Adding a device
+
+There's no per-device setup beyond "join the same Wi-Fi/LAN and know the
+URL" — no certificates to install, no accounts to create, no router
+changes:
+
+- **Any browser** (phone, laptop, tablet): navigate to `http://homeai.local`.
+  If mDNS doesn't resolve on that specific device (see "Troubleshooting
+  mDNS" below), use the host's LAN IP directly instead — `verify_network.sh`
+  prints it, or check `ip -4 addr` on the host.
+- **Expo Go** (iOS/Android): the native app has no "origin" to be relative
+  to the way the web build does, so it needs an explicit API host. Set
+  `EXPO_PUBLIC_API_HOST=http://homeai.local` in `services/frontend/.env`
+  (see `.env.example`) before starting the Expo dev server, or
+  `http://<LAN-IP>` if mDNS isn't resolving on that device. No other
+  per-device configuration — the same Expo Go app on any phone on the LAN
+  works identically once that one variable points at the right host.
+
+## Troubleshooting mDNS
+
+`.local` resolution is a client-side feature, not something this server can
+force — if a specific device won't resolve `homeai.local`, that's almost
+always the device, not this setup:
+
+- **iOS / macOS / most modern Android**: mDNS ("Bonjour") support is
+  built into the OS's own resolver; `homeai.local` should just work in any
+  browser or app once it's on the LAN.
+- **Some Android versions / some browsers**: `.local` name resolution in
+  the OS-level resolver used by `WebView`/Chrome on Android has historically
+  been inconsistent across OEM builds and Android versions — this is a
+  well-known platform limitation (Android's own DNS resolver doesn't
+  implement multicast DNS the way iOS/desktop OSes do; some ROMs patch it
+  in, many don't), not a bug in `avahi-daemon` or this repo's setup.
+  **Fallback**: use the host's LAN IP directly (`http://192.168.x.x`)
+  instead of `http://homeai.local` — works identically, just without the
+  friendly name. `verify_network.sh`'s check 1 output shows the current IP,
+  or run `ip -4 addr show` on the host.
+- **Expo Go specifically**: React Native's networking stack inherits
+  whatever the OS resolver does, so the same Android quirk above applies;
+  same fallback (`EXPO_PUBLIC_API_HOST=http://<LAN-IP>` instead of
+  `http://homeai.local`).
+- **A previously-working device suddenly can't resolve it**: check whether
+  the host's IP changed and mDNS just hasn't been given a moment to
+  re-announce (should be near-instant — see "How this handles the host's
+  IP changing" above), or whether the *device* changed networks (mDNS
+  never crosses subnets/routers by design — both the host and the client
+  must be on the same LAN segment).
+
+## What would change for internet exposure
+
+Nothing here is designed for it, and the recommendation is: don't — this
+setup's entire security model (no auth, no TLS, no rate limiting, an
+`execute_code` tool that runs arbitrary shell commands) assumes a trusted
+LAN, and none of that is safe to expose to the public internet as-is. If
+remote access is ever genuinely needed (e.g. checking on a home server
+while traveling), the sanctioned path is a VPN — WireGuard is the natural
+fit (lightweight, works well on a home router or as a container on this
+same host) — so a remote device joins the LAN itself (or an
+equivalent virtual one) and everything above just works unchanged, rather
+than trying to safely expose `homeai.local`/port 80 directly to the
+internet. See README.md's "Documented fast-follows" for where this and the
+auth/TLS work it would actually require (shared-password auth at the
+proxy, real TLS certs) are tracked — none of it is in scope for v1.
+
 ## Verifying from a phone
 
-_(Completed by ticket M6-01, once `caddy` is actually serving something on
-port 80 — see `docs/HOST-CHECKS.md` for the Tier B checklist items.)_
+See `docs/HOST-CHECKS.md`'s `## M6` section for the Tier B checklist:
+phone-browser reachability (iOS + Android, noting any Android mDNS
+fallback needed) and confirming a non-LAN network (phone on cellular)
+cannot reach it at all.
