@@ -145,7 +145,7 @@ describe('useChat — plain text turn', () => {
       latestSocket().emit({ type: 'turn_start' });
       latestSocket().emit({ type: 'token', content: 'hello ' });
       latestSocket().emit({ type: 'token', content: 'world' });
-      latestSocket().emit({ type: 'turn_end' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
     });
 
     const { items, busy } = hook.current();
@@ -186,7 +186,7 @@ describe('useChat — tool turn', () => {
         result_preview: 'wrote 1 file',
       });
       latestSocket().emit({ type: 'token', content: 'done' });
-      latestSocket().emit({ type: 'turn_end' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
     });
 
     const { items, busy } = hook.current();
@@ -253,7 +253,7 @@ describe('useChat — two turns in sequence', () => {
       hook.current().sendMessage('message one');
       latestSocket().emit({ type: 'turn_start' });
       latestSocket().emit({ type: 'token', content: 'first reply' });
-      latestSocket().emit({ type: 'turn_end' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
     });
 
     expect(hook.current().items).toHaveLength(2); // user + assistant
@@ -263,7 +263,7 @@ describe('useChat — two turns in sequence', () => {
       hook.current().sendMessage('message two');
       latestSocket().emit({ type: 'turn_start' });
       latestSocket().emit({ type: 'token', content: 'second reply' });
-      latestSocket().emit({ type: 'turn_end' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
     });
 
     const { items } = hook.current();
@@ -307,13 +307,67 @@ describe('useChat — tool-only turn with no trailing text (substituted edge cas
         status: 'success',
         result_preview: 'a.txt\nb.txt',
       });
-      latestSocket().emit({ type: 'turn_end' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
     });
 
     const { items, busy } = hook.current();
     expect(items).toHaveLength(1);
     expect(items[0].kind).toBe('tool');
     expect(busy).toBe(false);
+  });
+});
+
+describe('useChat — stopTurn / cancelled turn_end (M8-01)', () => {
+  it('marks the currently-streaming assistant item stopped:true on turn_end status "cancelled", and clears busy', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      hook.current().sendMessage('count slowly');
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ type: 'token', content: 'one two three' });
+    });
+    expect(hook.current().busy).toBe(true);
+
+    act(() => {
+      hook.current().stopTurn();
+    });
+    expect(latestSocket().sent).toContain(JSON.stringify({ type: 'cancel' }));
+
+    act(() => {
+      latestSocket().emit({ type: 'turn_end', status: 'cancelled' });
+    });
+
+    const { items, busy } = hook.current();
+    expect(busy).toBe(false);
+    const assistant = findItem(items, 'assistant');
+    expect(assistant.text).toBe('one two three');
+    expect(assistant.streaming).toBe(false);
+    expect(assistant.stopped).toBe(true);
+  });
+
+  it('does NOT mark the item stopped on a normal turn_end status "completed"', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ type: 'token', content: 'hello' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
+    });
+
+    const assistant = findItem(hook.current().items, 'assistant');
+    expect(assistant.stopped).toBeFalsy();
+  });
+
+  it('a cancel with no streaming item in flight is a harmless no-op', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      hook.current().stopTurn();
+    });
+
+    expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'cancel' })]);
+    expect(hook.current().items).toEqual([]);
+    expect(hook.current().busy).toBe(false);
   });
 });
 

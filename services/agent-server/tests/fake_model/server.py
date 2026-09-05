@@ -10,6 +10,7 @@ terminated by `data: [DONE]\\n\\n`), driven by a scripted `FakeModel` queue of
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -93,6 +94,8 @@ async def _stream_turn(
             _choice_chunk(completion_id, created, model, {"role": "assistant", "content": ""}, None)
         )
         for piece in chunk_text(turn.text, turn.chunk_size):
+            if turn.chunk_delay_s:
+                await asyncio.sleep(turn.chunk_delay_s)
             yield _sse(_choice_chunk(completion_id, created, model, {"content": piece}, None))
         yield _sse(_choice_chunk(completion_id, created, model, {}, "stop"))
 

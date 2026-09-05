@@ -47,7 +47,8 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
  * `[threadId]` segment, never a parent/sibling route's params. */
 export default function ChatScreen() {
   const { threadId } = useLocalSearchParams<{ threadId: string }>();
-  const { items, sendMessage, busy, connectionState, hydrationState, retryHydration } = useChat(threadId);
+  const { items, sendMessage, stopTurn, busy, connectionState, hydrationState, retryHydration } =
+    useChat(threadId);
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<ChatItem>>(null);
 
@@ -58,6 +59,12 @@ export default function ChatScreen() {
     sendMessage(draft.trim());
     setDraft('');
   }, [canSend, draft, sendMessage]);
+
+  // M8-01: while a turn is in flight, the Send button becomes a Stop
+  // button (same slot in the composer, swapped by `busy`).
+  const handleStop = useCallback(() => {
+    stopTurn();
+  }, [stopTurn]);
 
   // Web: Enter sends, Shift+Enter inserts a newline (standard chat-app
   // convention). Native: Enter/Return always inserts a newline — RN's
@@ -146,15 +153,27 @@ export default function ChatScreen() {
             placeholderTextColor={theme.textMuted}
             multiline
           />
-          <Pressable
-            style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
-            onPress={handleSend}
-            disabled={!canSend}
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-          >
-            <Ionicons name="send" size={18} color={canSend ? theme.text : theme.textMuted} />
-          </Pressable>
+          {busy ? (
+            <Pressable
+              style={styles.sendButton}
+              onPress={handleStop}
+              accessibilityRole="button"
+              accessibilityLabel="Stop generating"
+              testID="chat-stop"
+            >
+              <Ionicons name="square" size={16} color={theme.text} />
+            </Pressable>
+          ) : (
+            <Pressable
+              style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
+              onPress={handleSend}
+              disabled={!canSend}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+            >
+              <Ionicons name="send" size={18} color={canSend ? theme.text : theme.textMuted} />
+            </Pressable>
+          )}
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -186,6 +205,11 @@ function ChatItemRow({ item }: { item: ChatItem }): ReactElement {
               {item.text}
               {item.streaming ? STREAMING_CURSOR : ''}
             </Text>
+            {item.stopped ? (
+              <Text style={styles.stoppedCaption} testID="chat-item-stopped-caption">
+                Stopped
+              </Text>
+            ) : null}
           </View>
         </View>
       );
@@ -602,6 +626,12 @@ const styles = StyleSheet.create({
     color: theme.danger,
     fontSize: 14,
     lineHeight: 19,
+  },
+  stoppedCaption: {
+    color: theme.textMuted,
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   toolCard: {
     alignSelf: 'flex-start',

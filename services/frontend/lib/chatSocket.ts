@@ -34,8 +34,13 @@ export interface ToolEndFrame {
   result_preview: string;
 }
 
+/** `status` (M8-01): `"completed"` for a normal finish, `"cancelled"` when
+ * the turn was stopped early by a client `cancel` frame. */
+export type TurnEndStatus = 'completed' | 'cancelled';
+
 export interface TurnEndFrame {
   type: 'turn_end';
+  status: TurnEndStatus;
 }
 
 export interface ErrorFrame {
@@ -52,10 +57,16 @@ export type ServerFrame =
   | TurnEndFrame
   | ErrorFrame;
 
-/** The only client -> server frame. */
+/** Client -> server frames. */
 export interface UserMessageFrame {
   type: 'user_message';
   content: string;
+}
+
+/** M8-01: cancels the in-flight turn. Only meaningful while a turn is in
+ * flight — a no-op server-side otherwise (see `chat_ws.py`). */
+export interface CancelFrame {
+  type: 'cancel';
 }
 
 /** Connection lifecycle states a UI can render directly (e.g. a "connecting…"
@@ -81,6 +92,9 @@ export interface ChatSocketHandlers {
 export interface ChatSocket {
   /** Serialize and send a `user_message` frame. */
   send(userMessage: string): void;
+  /** Serialize and send a `cancel` frame (M8-01) — asks the server to stop
+   * the in-flight turn. A no-op server-side if no turn is in flight. */
+  cancel(): void;
   /** Cleanly close the socket; cancels any pending reconnect attempt. */
   close(): void;
 }
@@ -243,6 +257,10 @@ export function openChatSocket(
   return {
     send(userMessage: string): void {
       const frame: UserMessageFrame = { type: 'user_message', content: userMessage };
+      socket?.send(JSON.stringify(frame));
+    },
+    cancel(): void {
+      const frame: CancelFrame = { type: 'cancel' };
       socket?.send(JSON.stringify(frame));
     },
     close(): void {

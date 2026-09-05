@@ -9,6 +9,7 @@ import {
   type ToolEndFrame,
   type ToolStartFrame,
   type ToolStatus,
+  type TurnEndFrame,
   type WebSocketCtor,
 } from './chatSocket';
 import { getThreadMessages, type ThreadMessage } from './threads';
@@ -33,6 +34,11 @@ export interface ChatAssistantItem {
   kind: 'assistant';
   text: string;
   streaming: boolean;
+  /** M8-01: `true` if this item was cut short by a client `cancel` — the
+   * server-side turn ended early with `turn_end {"status": "cancelled"}`.
+   * Never set on a hydrated (history) item — only a live turn can be
+   * stopped. UI shows a small "Stopped" caption for these. */
+  stopped?: boolean;
 }
 
 export interface ChatToolItem {
@@ -167,6 +173,9 @@ export function mapHistoryToItems(messages: ThreadMessage[]): ChatItem[] {
 export interface UseChatResult {
   items: ChatItem[];
   sendMessage: (text: string) => void;
+  /** M8-01: sends a `cancel` frame for the in-flight turn (a no-op
+   * server-side if `busy` is already `false`). */
+  stopTurn: () => void;
   busy: boolean;
   connectionState: ChatConnectionState;
   /** `'loading'` | `'error'` | `'done'` — see `HydrationState`. Gate any
@@ -324,13 +333,18 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
             ),
           );
         },
-        onTurnEnd: () => {
+        onTurnEnd: (frame: TurnEndFrame) => {
           const id = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
           setBusy(false);
           if (id === null) return;
+          const stopped = frame.status === 'cancelled';
           setItems((prev) =>
-            prev.map((item) => (item.id === id && item.kind === 'assistant' ? { ...item, streaming: false } : item)),
+            prev.map((item) =>
+              item.id === id && item.kind === 'assistant'
+                ? { ...item, streaming: false, ...(stopped ? { stopped: true } : {}) }
+                : item,
+            ),
           );
         },
         onError: (frame: ErrorFrame) => {
@@ -368,5 +382,9 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     socketRef.current?.send(text);
   }, []);
 
-  return { items, sendMessage, busy, connectionState, hydrationState, retryHydration };
+  const stopTurn = useCallback(() => {
+    socketRef.current?.cancel();
+  }, []);
+
+  return { items, sendMessage, stopTurn, busy, connectionState, hydrationState, retryHydration };
 }

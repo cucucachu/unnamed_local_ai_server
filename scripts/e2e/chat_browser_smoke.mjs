@@ -54,6 +54,11 @@ const EXEC_MESSAGE = 'Use execute_code to run: echo HELLO-UI';
 // to (M7-05 added `web_search`/`web_fetch` themselves; this script's own
 // prior steps had no coverage of either tool at all until this addition).
 const WEB_SEARCH_MESSAGE = 'Use web_search to search for: llama.cpp github repository';
+// M8-01: reliably produces many small token chunks over several seconds
+// (rather than one quick reply), giving the script room to click Stop
+// within ~2s of sending and still be mid-stream when it does.
+const COUNT_SLOWLY_MESSAGE = 'Count slowly from 1 to 200, one number per line';
+const STOP_FOLLOW_UP_MESSAGE = 'Say exactly: PONG once more, after being stopped.';
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
@@ -316,6 +321,39 @@ async function main() {
       throw new Error(`Step 7: expected the opened result link to be an https:// URL, got "${popupUrl}"`);
     }
     console.log(`Step 7 OK — expanded search card's first result opens an https:// link (${popupUrl})`);
+
+    // --- Step 8: Stop a running turn (M8-01) ----------------------------
+    // Send a message that streams slowly, click Stop (testID="chat-stop")
+    // within ~2s (well before the reply could finish), assert the composer
+    // re-enables (Send button reappears) and the bubble shows "Stopped",
+    // then confirm a normal follow-up message still completes.
+    const priorAssistantCountForStop = await assistantBubbleLocator.count();
+    await input.fill(COUNT_SLOWLY_MESSAGE);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const stopButton = page.locator('[data-testid="chat-stop"]');
+    await stopButton.waitFor({ state: 'visible', timeout: 10_000 });
+    await page.waitForTimeout(2_000);
+    await stopButton.click();
+    console.log('Step 8 OK — clicked Stop within 2s of sending');
+
+    // Composer re-enabled: the Stop button is gone and Send is back.
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: 15_000 });
+    console.log('Step 8 OK — composer re-enabled (Send button reappeared)');
+
+    // The stopped bubble shows a "Stopped" caption.
+    const stoppedCaptionLocator = page.locator('[data-testid="chat-item-stopped-caption"]');
+    await stoppedCaptionLocator.first().waitFor({ state: 'visible', timeout: 15_000 });
+    console.log('Step 8 OK — stopped bubble shows a "Stopped" caption');
+
+    const postStopAssistantCount = await assistantBubbleLocator.count();
+    if (postStopAssistantCount <= priorAssistantCountForStop) {
+      throw new Error('Step 8: no new assistant bubble appeared for the stopped turn');
+    }
+
+    // A follow-up message on the same socket still completes normally.
+    const stopFollowUpReply = await sendMessageAndAwaitReply(page, STOP_FOLLOW_UP_MESSAGE, postStopAssistantCount);
+    console.log(`Step 8 OK — follow-up after Stop completed normally: ${stopFollowUpReply}`);
 
     const elapsedMs = Date.now() - startedAt;
     console.log(`PASS: full create -> send -> list -> reopen -> follow-up flow completed in ${elapsedMs}ms`);
