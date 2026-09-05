@@ -21,11 +21,13 @@ import {
 
 import { Markdown } from '@/components/Markdown';
 import { TurnActivityPanel } from '@/components/TurnActivityPanel';
+import { useSettings } from '@/components/SettingsProvider';
 import { copyToClipboard } from '@/lib/clipboard';
 import { formatDuration } from '@/lib/chatTurns';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
-import type { ApprovalDecision } from '@/lib/chatSocket';
+import type { ApprovalDecision, EditMode } from '@/lib/chatSocket';
+import type { ThreadBranchPoint } from '@/lib/threads';
 import {
   useChat,
   type ChatAssistantItem,
@@ -72,9 +74,14 @@ export default function ChatScreen() {
     retryHydration,
     pendingApproval,
     respondToApproval,
+    branches,
+    switchBranch,
   } = useChat(threadId);
+  const { settings } = useSettings();
+  const defaultEditMode: EditMode = settings?.edit_mode_default ?? 'truncate';
   const [draft, setDraft] = useState('');
   const [editingItem, setEditingItem] = useState<ChatUserItem | null>(null);
+  const [editMode, setEditMode] = useState<EditMode>(defaultEditMode);
   const [actionMenu, setActionMenu] = useState<
     { kind: 'user'; item: ChatUserItem } | { kind: 'assistant'; item: ChatAssistantItem } | null
   >(null);
@@ -89,13 +96,13 @@ export default function ChatScreen() {
     if (!canSend) return;
     const text = draft.trim();
     if (editingItem !== null) {
-      sendMessage(text, { replaceFromMessageId: editingItem.id, mode: 'truncate' });
+      sendMessage(text, { replaceFromMessageId: editingItem.id, mode: editMode });
       setEditingItem(null);
     } else {
       sendMessage(text);
     }
     setDraft('');
-  }, [canSend, draft, editingItem, sendMessage]);
+  }, [canSend, draft, editingItem, editMode, sendMessage]);
 
   const handleCancelEdit = useCallback(() => {
     setEditingItem(null);
@@ -105,17 +112,18 @@ export default function ChatScreen() {
   const handleEdit = useCallback((item: ChatUserItem) => {
     setEditingItem(item);
     setDraft(item.text);
+    setEditMode(defaultEditMode);
     setActionMenu(null);
-  }, []);
+  }, [defaultEditMode]);
 
   const handleResend = useCallback(
     (item: ChatUserItem) => {
       setActionMenu(null);
       setEditingItem(null);
       setDraft('');
-      sendMessage(item.text, { replaceFromMessageId: item.id, mode: 'truncate' });
+      sendMessage(item.text, { replaceFromMessageId: item.id, mode: defaultEditMode });
     },
-    [sendMessage],
+    [sendMessage, defaultEditMode],
   );
 
   const handleRegenerate = useCallback(
@@ -123,9 +131,9 @@ export default function ChatScreen() {
       setActionMenu(null);
       const turn = turns.find((candidate) => candidate.final?.id === assistant.id);
       if (turn?.user == null) return;
-      sendMessage(turn.user.text, { replaceFromMessageId: turn.user.id, mode: 'truncate' });
+      sendMessage(turn.user.text, { replaceFromMessageId: turn.user.id, mode: defaultEditMode });
     },
-    [turns, sendMessage],
+    [turns, sendMessage, defaultEditMode],
   );
 
   const lastAssistantId = (() => {
@@ -211,6 +219,14 @@ export default function ChatScreen() {
               turn={turn}
               isLastAssistant={turn.final != null && turn.final.id === lastAssistantId}
               menuDisabled={menuDisabled}
+              branchPoint={
+                turn.user != null
+                  ? branches.find((point) => point.anchor_message_id === turn.user?.id)
+                  : undefined
+              }
+              onSwitchBranch={(checkpointId) => {
+                void switchBranch(checkpointId);
+              }}
               onUserMenu={(user) => setActionMenu({ kind: 'user', item: user })}
               onAssistantMenu={(assistant) => setActionMenu({ kind: 'assistant', item: assistant })}
             />
@@ -231,9 +247,44 @@ export default function ChatScreen() {
         ) : null}
         {editingItem !== null ? (
           <View style={styles.editBanner} testID="chat-edit-banner">
-            <Text style={styles.editBannerText}>
-              Editing — sending replaces everything after this message
-            </Text>
+            <View style={styles.editBannerMain}>
+              <Text style={styles.editBannerText}>
+                {editMode === 'fork'
+                  ? 'Editing — sending keeps the old continuation as a branch'
+                  : 'Editing — sending replaces everything after this message'}
+              </Text>
+              <View style={styles.editModeRow}>
+                <Pressable
+                  style={[styles.editModeChip, editMode === 'truncate' && styles.editModeChipSelected]}
+                  onPress={() => setEditMode('truncate')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Replace"
+                  testID="chat-edit-mode-truncate"
+                >
+                  <Text
+                    style={[
+                      styles.editModeChipText,
+                      editMode === 'truncate' && styles.editModeChipTextSelected,
+                    ]}
+                  >
+                    Replace
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.editModeChip, editMode === 'fork' && styles.editModeChipSelected]}
+                  onPress={() => setEditMode('fork')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Branch"
+                  testID="chat-edit-mode-fork"
+                >
+                  <Text
+                    style={[styles.editModeChipText, editMode === 'fork' && styles.editModeChipTextSelected]}
+                  >
+                    Branch
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
             <Pressable
               onPress={handleCancelEdit}
               accessibilityRole="button"
@@ -304,6 +355,8 @@ interface ChatTurnRowProps {
   turn: ChatTurn;
   isLastAssistant: boolean;
   menuDisabled: boolean;
+  branchPoint?: ThreadBranchPoint;
+  onSwitchBranch: (checkpointId: string) => void;
   onUserMenu: (item: ChatUserItem) => void;
   onAssistantMenu: (item: ChatAssistantItem) => void;
 }
@@ -319,6 +372,8 @@ function ChatTurnRow({
   turn,
   isLastAssistant,
   menuDisabled,
+  branchPoint,
+  onSwitchBranch,
   onUserMenu,
   onAssistantMenu,
 }: ChatTurnRowProps): ReactElement {
@@ -330,21 +385,26 @@ function ChatTurnRow({
   return (
     <View style={styles.turnBlock} testID="chat-turn">
       {user != null ? (
-        <View style={[styles.bubbleRow, styles.bubbleRowRight]} testID="chat-item-user">
-          <MessageMenuAffordance
-            testID="chat-item-user-menu"
-            accessibilityLabel="Message actions"
-            disabled={menuDisabled}
-            onOpen={() => onUserMenu(user)}
-          />
-          <Pressable
-            style={[styles.bubble, styles.userBubble]}
-            onLongPress={menuDisabled ? undefined : () => onUserMenu(user)}
-            delayLongPress={400}
-            testID="chat-item-user-bubble"
-          >
-            <Text style={styles.bubbleText}>{user.text}</Text>
-          </Pressable>
+        <View style={styles.userColumn} testID="chat-item-user">
+          <View style={[styles.bubbleRow, styles.bubbleRowRight]}>
+            <MessageMenuAffordance
+              testID="chat-item-user-menu"
+              accessibilityLabel="Message actions"
+              disabled={menuDisabled}
+              onOpen={() => onUserMenu(user)}
+            />
+            <Pressable
+              style={[styles.bubble, styles.userBubble]}
+              onLongPress={menuDisabled ? undefined : () => onUserMenu(user)}
+              delayLongPress={400}
+              testID="chat-item-user-bubble"
+            >
+              <Text style={styles.bubbleText}>{user.text}</Text>
+            </Pressable>
+          </View>
+          {branchPoint != null ? (
+            <BranchSwitcher point={branchPoint} disabled={menuDisabled} onSwitch={onSwitchBranch} />
+          ) : null}
         </View>
       ) : null}
       {showPanel ? (
@@ -632,6 +692,55 @@ function WebFetchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: Pars
         <Text style={styles.toolDetailText}>{parsed.text}</Text>
         {parsed.truncatedByTool ? <Text style={styles.execTruncatedText}>{WEB_FETCH_TRUNCATED_MARKER}</Text> : null}
       </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// M8-05: branch switcher
+// ---------------------------------------------------------------------------
+
+function BranchSwitcher({
+  point,
+  disabled,
+  onSwitch,
+}: {
+  point: ThreadBranchPoint;
+  disabled: boolean;
+  onSwitch: (checkpointId: string) => void;
+}): ReactElement {
+  const total = point.branches.length;
+  const current = point.active_index + 1;
+  const go = (delta: number) => {
+    if (disabled || total < 2) return;
+    const nextIndex = (point.active_index + delta + total) % total;
+    const next = point.branches[nextIndex];
+    if (next && nextIndex !== point.active_index) onSwitch(next.checkpoint_id);
+  };
+
+  return (
+    <View style={styles.branchSwitcher} testID="chat-branch-switcher">
+      <Pressable
+        onPress={() => go(-1)}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel="Previous branch"
+        testID="chat-branch-prev"
+      >
+        <Text style={[styles.branchSwitcherText, disabled && styles.branchSwitcherDisabled]}>‹</Text>
+      </Pressable>
+      <Text style={styles.branchSwitcherText} testID="chat-branch-label">
+        {`${current}/${total}`}
+      </Text>
+      <Pressable
+        onPress={() => go(1)}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel="Next branch"
+        testID="chat-branch-next"
+      >
+        <Text style={[styles.branchSwitcherText, disabled && styles.branchSwitcherDisabled]}>›</Text>
+      </Pressable>
     </View>
   );
 }
@@ -1250,15 +1359,60 @@ const styles = StyleSheet.create({
     borderColor: theme.accent,
     backgroundColor: theme.surface,
   },
-  editBannerText: {
+  editBannerMain: {
     flex: 1,
+    gap: 8,
+  },
+  editBannerText: {
     color: theme.text,
     fontSize: 13,
+  },
+  editModeRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  editModeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.bg,
+  },
+  editModeChipSelected: {
+    borderColor: theme.accent,
+    backgroundColor: theme.accent,
+  },
+  editModeChipText: {
+    color: theme.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  editModeChipTextSelected: {
+    color: theme.text,
   },
   editBannerCancel: {
     color: theme.accent,
     fontSize: 13,
     fontWeight: '600',
+  },
+  userColumn: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  branchSwitcher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 4,
+  },
+  branchSwitcherText: {
+    color: theme.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  branchSwitcherDisabled: {
+    opacity: 0.4,
   },
   composer: {
     flexDirection: 'row',

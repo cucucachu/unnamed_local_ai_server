@@ -90,8 +90,7 @@ export type ServerFrame =
   | TurnEndFrame
   | ErrorFrame;
 
-/** M8-04: how an edit/resend/regenerate should rewrite history. `fork` is
- * M8-05 — the server answers it with `error` + close 1008 until then. */
+/** M8-04/M8-05: how an edit/resend/regenerate should rewrite history. */
 export type EditMode = 'truncate' | 'fork';
 
 /** Optional fields on an outbound `user_message` (M8-04). */

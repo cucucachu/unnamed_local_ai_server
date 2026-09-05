@@ -230,15 +230,30 @@ turn lifecycle (the wire format above is untouched — no new/changed frames):
   appended without waiting for a history refetch.
 - Optional `replace_from_message_id` + `mode` (`"truncate"` | `"fork"`).
   Omitted `mode` falls back to `SettingsStore.edit_mode_default` (M8-02).
-- `mode: "fork"` is M8-05 — until then, any replace that resolves to fork
-  is `error` + close 1008.
 - `mode: "truncate"` (under the per-thread lock, BEFORE the new turn):
-  `aget_state`, locate the message with that id (must be a `HumanMessage`,
-  else `error` + 1008; unknown id is the same), then
+  `aget_state` at the thread's `active_checkpoint_id` (or latest if null),
+  locate the message with that id (must be a `HumanMessage`, else `error`
+  + 1008; unknown id is the same), then
   `aupdate_state(config, {"messages": [RemoveMessage(id=m.id) for m in
   messages[idx:]]})`. LangGraph's `add_messages` reducer honors
   `RemoveMessage`, so this is one call. Then the new `HumanMessage` runs
-  normally.
+  normally from the post-truncate checkpoint.
+- `mode: "fork"` (M8-05): walk `aget_state_history` along the active
+  lineage to the checkpoint whose `messages` end just before the target
+  `HumanMessage`, then run the new turn with that `checkpoint_id` in
+  `configurable` (LangGraph time-travel fork). The old continuation
+  stays as a sibling branch; the new tip becomes `active_checkpoint_id`.
+
+## M8-05 active branch
+
+`threads.active_checkpoint_id` (null = chronological latest) is the tip
+the user is looking at. `aget_state` without a checkpoint id returns the
+newest checkpoint by id, which may be a sibling the user is not viewing,
+so history + WS + pending-approval reads pass `checkpoint_id` when set.
+Every turn that writes a checkpoint (completed / cancelled /
+awaiting_approval) stores that run's new tip as `active_checkpoint_id`.
+New turns (and approval resumes) start from the active tip so a message
+typed on an old branch extends that branch.
 """
 
 from __future__ import annotations
@@ -442,13 +457,48 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
     return {"interrupt_id": str(interrupt.id), "actions": actions}
 
 
-async def get_pending_approval(agent: Any, thread_id: str) -> dict | None:
+def graph_config(
+    thread_id: str,
+    checkpoint_id: str | None = None,
+    *,
+    hitl_enabled: bool | None = None,
+    thinking_enabled: bool | None = None,
+) -> dict[str, Any]:
+    """RunnableConfig for this thread, optionally pinned to a checkpoint (M8-05)."""
+    configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": ""}
+    if checkpoint_id:
+        configurable["checkpoint_id"] = checkpoint_id
+    if hitl_enabled is not None:
+        configurable["hitl_enabled"] = hitl_enabled
+    if thinking_enabled is not None:
+        configurable["thinking_enabled"] = thinking_enabled
+    return {"configurable": configurable}
+
+
+def checkpoint_id_of(config_or_state: Any) -> str | None:
+    """`configurable.checkpoint_id` on a `StateSnapshot` or config dict."""
+    config = getattr(config_or_state, "config", config_or_state)
+    if not isinstance(config, dict):
+        return None
+    value = (config.get("configurable") or {}).get("checkpoint_id")
+    return value if isinstance(value, str) and value else None
+
+
+async def list_state_history(agent: Any, thread_id: str) -> list[StateSnapshot]:
+    """All checkpoints for `thread_id`, newest first (no `checkpoint_id` filter)."""
+    return [s async for s in agent.aget_state_history(graph_config(thread_id))]
+
+
+async def get_pending_approval(
+    agent: Any, thread_id: str, checkpoint_id: str | None = None
+) -> dict | None:
     """Public helper for `GET /api/threads/{id}/state` (`app/api/chat.py`).
 
     Re-derives the pending approval purely from the checkpointer's own
     state — no extra persistent storage needed (see module docstring).
+    M8-05: pin to `checkpoint_id` when the thread has an active tip.
     """
-    state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
+    state = await agent.aget_state(graph_config(thread_id, checkpoint_id))
     return _pending_approval_from_state(state)
 
 
@@ -574,8 +624,10 @@ def _last_assistant_id(state: StateSnapshot) -> str | None:
     return last_ai.id if last_ai.id is not None else None
 
 
-async def _snapshot_last_assistant_id(agent: Any, thread_id: str) -> str | None:
-    state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
+async def _snapshot_last_assistant_id(
+    agent: Any, thread_id: str, checkpoint_id: str | None = None
+) -> str | None:
+    state = await agent.aget_state(graph_config(thread_id, checkpoint_id))
     return _last_assistant_id(state)
 
 
@@ -598,7 +650,9 @@ async def _persist_turn_stat(
     store = getattr(websocket.app.state, "turn_stats_store", None)
     if store is None:
         return
-    state = await websocket.app.state.agent.aget_state({"configurable": {"thread_id": thread_id}})
+    # After the turn we just wrote, chronological latest is this run's tip
+    # (per-thread lock). Do not re-read with the *starting* checkpoint_id.
+    state = await websocket.app.state.agent.aget_state(graph_config(thread_id))
     final_id = _last_assistant_id(state)
     if final_id is None or final_id == prior_assistant_id:
         return
@@ -638,6 +692,7 @@ async def _run_turn(
     started_mono: float,
     started_at: datetime,
     prior_assistant_id: str | None,
+    checkpoint_id: str | None = None,
 ) -> tuple[str, dict | None]:
     """Run one turn (fresh `user_message` OR a resumed `Command(resume=...)`).
 
@@ -655,20 +710,22 @@ async def _run_turn(
     # `thinking_enabled` is read by `ReasoningChatOpenAI._default_params`
     # (configurable -> model kwargs) and turned into
     # extra_body.chat_template_kwargs.enable_thinking. Not `model.bind(...)`.
-    config = {
-        "configurable": {
-            "thread_id": thread_id,
-            "hitl_enabled": hitl_enabled,
-            "thinking_enabled": thinking_enabled,
-        }
-    }
+    # `checkpoint_id` (M8-05): start from the active tip or a fork parent.
+    # After the stream, we re-read WITHOUT that id so we get the new tip
+    # (passing the start id would return the pre-turn snapshot).
+    config = graph_config(
+        thread_id,
+        checkpoint_id,
+        hitl_enabled=hitl_enabled,
+        thinking_enabled=thinking_enabled,
+    )
 
     await websocket.send_json({"type": "turn_start"})
     async for event in agent.astream_events(run_input, config=config, version="v2"):
         for frame in _frames_for_event(event):
             await websocket.send_json(frame)
 
-    state = await agent.aget_state(config)
+    state = await agent.aget_state(graph_config(thread_id))
     pending_approval = _pending_approval_from_state(state)
     if pending_approval is not None:
         await websocket.send_json(
@@ -728,6 +785,7 @@ async def _run_turn_or_interrupt(
     run_input: Any,
     hitl_enabled: bool,
     thinking_enabled: bool,
+    checkpoint_id: str | None = None,
 ) -> tuple[str, dict | None]:
     """Run one turn (see `_run_turn`), racing it against `_watch_inbound`.
 
@@ -744,7 +802,9 @@ async def _run_turn_or_interrupt(
     """
     started_mono = time.monotonic()
     started_at = datetime.now(UTC)
-    prior_assistant_id = await _snapshot_last_assistant_id(websocket.app.state.agent, thread_id)
+    prior_assistant_id = await _snapshot_last_assistant_id(
+        websocket.app.state.agent, thread_id, checkpoint_id
+    )
 
     turn_task = asyncio.create_task(
         _run_turn(
@@ -756,6 +816,7 @@ async def _run_turn_or_interrupt(
             started_mono,
             started_at,
             prior_assistant_id,
+            checkpoint_id,
         )
     )
     watch_task = asyncio.create_task(_watch_inbound(websocket))
@@ -822,25 +883,87 @@ async def _current_thinking_enabled(websocket: WebSocket) -> bool:
     return document.thinking_enabled
 
 
-async def _truncate_from_message(agent: Any, thread_id: str, message_id: str) -> str | None:
+async def _truncate_from_message(
+    agent: Any, thread_id: str, message_id: str, checkpoint_id: str | None
+) -> tuple[str | None, str | None]:
     """Drop checkpointed messages from `message_id` onward (M8-04 truncate).
 
-    Returns `None` on success, or an error string the caller sends as
-    `error` + close 1008 (unknown id, or the id is not a `HumanMessage`).
+    Returns `(error, new_checkpoint_id)`. `error` is sent as `error` +
+    close 1008 (unknown id, or the id is not a `HumanMessage`).
+    `new_checkpoint_id` is the post-truncate tip to run the new turn from.
     Must be called while holding the per-thread lock.
     """
-    config = {"configurable": {"thread_id": thread_id}}
+    config = graph_config(thread_id, checkpoint_id)
     state = await agent.aget_state(config)
     messages = state.values.get("messages", [])
     idx = next((i for i, m in enumerate(messages) if getattr(m, "id", None) == message_id), None)
     if idx is None:
-        return f"unknown message id: {message_id}"
+        return f"unknown message id: {message_id}", None
     if not isinstance(messages[idx], HumanMessage):
-        return "replace_from_message_id must refer to a user message"
+        return "replace_from_message_id must refer to a user message", None
     removals = [RemoveMessage(id=m.id) for m in messages[idx:] if getattr(m, "id", None)]
     if removals:
-        await agent.aupdate_state(config, {"messages": removals})
-    return None
+        new_config = await agent.aupdate_state(config, {"messages": removals})
+        return None, checkpoint_id_of(new_config)
+    return None, checkpoint_id or checkpoint_id_of(state)
+
+
+async def _find_fork_checkpoint_id(
+    agent: Any, thread_id: str, message_id: str, active_checkpoint_id: str | None
+) -> tuple[str | None, str | None]:
+    """Walk the active lineage to the checkpoint just before `message_id`.
+
+    Returns `(parent_checkpoint_id, error)` — same error strings as
+    truncate (unknown id / not a user message).
+    """
+    state = await agent.aget_state(graph_config(thread_id, active_checkpoint_id))
+    messages = state.values.get("messages", [])
+    target = next((m for m in messages if getattr(m, "id", None) == message_id), None)
+    if target is None:
+        return None, f"unknown message id: {message_id}"
+    if not isinstance(target, HumanMessage):
+        return None, "replace_from_message_id must refer to a user message"
+
+    snapshots = await list_state_history(agent, thread_id)
+    by_id: dict[str, StateSnapshot] = {}
+    parent_of: dict[str, str | None] = {}
+    for snap in snapshots:
+        cid = checkpoint_id_of(snap)
+        if not cid:
+            continue
+        by_id[cid] = snap
+        parent_of[cid] = checkpoint_id_of(snap.parent_config) if snap.parent_config else None
+
+    current = active_checkpoint_id if active_checkpoint_id in by_id else checkpoint_id_of(state)
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        snap = by_id.get(current)
+        if snap is None:
+            break
+        msgs = snap.values.get("messages", [])
+        ids = {getattr(m, "id", None) for m in msgs}
+        # Skip mid-step snapshots (`next` non-empty). Starting from
+        # `__start__` of the original turn would replay the pending write
+        # that adds the target HumanMessage, so the fork would keep it.
+        if message_id not in ids and not snap.next:
+            return current, None
+        current = parent_of.get(current)
+    return None, f"unknown message id: {message_id}"
+
+
+async def persist_active_tip(thread_store: Any, agent: Any, thread_id: str) -> str | None:
+    """Store the chronological-latest checkpoint as this thread's active tip."""
+    state = await agent.aget_state(graph_config(thread_id))
+    tip = checkpoint_id_of(state)
+    if tip:
+        await thread_store.set_active_checkpoint_id(thread_id, tip)
+    return tip
+
+
+async def active_checkpoint_id_for(thread_store: Any, thread_id: str) -> str | None:
+    record = await thread_store.get(thread_id)
+    return record.active_checkpoint_id if record is not None else None
 
 
 @router.websocket("/ws/chat/{thread_id}")
@@ -860,7 +983,9 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     # checkpointer on connect rather than starting at `None` and treating
     # a legitimate resume as an invalid idle-frame (1008).
     pending_approval: dict | None = await get_pending_approval(
-        websocket.app.state.agent, thread_id
+        websocket.app.state.agent,
+        thread_id,
+        await active_checkpoint_id_for(thread_store, thread_id),
     )
 
     while True:
@@ -899,9 +1024,19 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             run_input = Command(resume={"decisions": decisions})
             async with lock:
                 try:
+                    resume_from = await active_checkpoint_id_for(thread_store, thread_id)
                     outcome, new_pending = await _run_turn_or_interrupt(
-                        websocket, thread_id, run_input, hitl_enabled, thinking_enabled
+                        websocket,
+                        thread_id,
+                        run_input,
+                        hitl_enabled,
+                        thinking_enabled,
+                        resume_from,
                     )
+                    if outcome != "disconnected":
+                        await persist_active_tip(
+                            thread_store, websocket.app.state.agent, thread_id
+                        )
                 except WebSocketDisconnect:
                     return
                 except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
@@ -934,17 +1069,11 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
         hitl_enabled = document.hitl_enabled
         thinking_enabled = document.thinking_enabled
 
-        # M8-04: `mode` is only meaningful with `replace_from_message_id`.
-        # Omitted mode falls back to `edit_mode_default`. `fork` is M8-05.
+        # M8-04/M8-05: `mode` is only meaningful with `replace_from_message_id`.
+        # Omitted mode falls back to `edit_mode_default`.
+        mode: Literal["truncate", "fork"] | None = None
         if parsed.replace_from_message_id is not None:
             mode = parsed.mode or document.edit_mode_default
-            if mode != "truncate":
-                await _send_error_and_close(
-                    websocket,
-                    "fork mode is not implemented yet",
-                    code=1008,
-                )
-                return
         else:
             # New message at the end of the thread — title auto-set still
             # applies. Edit/resend/regenerate deliberately skip this.
@@ -954,16 +1083,42 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
 
         async with lock:
             try:
+                start_checkpoint = await active_checkpoint_id_for(thread_store, thread_id)
                 if parsed.replace_from_message_id is not None:
-                    truncate_error = await _truncate_from_message(
-                        websocket.app.state.agent, thread_id, parsed.replace_from_message_id
-                    )
-                    if truncate_error is not None:
-                        await _send_error_and_close(websocket, truncate_error, code=1008)
-                        return
+                    assert mode in ("truncate", "fork")
+                    if mode == "fork":
+                        fork_id, fork_error = await _find_fork_checkpoint_id(
+                            websocket.app.state.agent,
+                            thread_id,
+                            parsed.replace_from_message_id,
+                            start_checkpoint,
+                        )
+                        if fork_error is not None:
+                            await _send_error_and_close(websocket, fork_error, code=1008)
+                            return
+                        start_checkpoint = fork_id
+                    else:
+                        truncate_error, start_checkpoint = await _truncate_from_message(
+                            websocket.app.state.agent,
+                            thread_id,
+                            parsed.replace_from_message_id,
+                            start_checkpoint,
+                        )
+                        if truncate_error is not None:
+                            await _send_error_and_close(websocket, truncate_error, code=1008)
+                            return
                 outcome, new_pending = await _run_turn_or_interrupt(
-                    websocket, thread_id, {"messages": [human]}, hitl_enabled, thinking_enabled
+                    websocket,
+                    thread_id,
+                    {"messages": [human]},
+                    hitl_enabled,
+                    thinking_enabled,
+                    start_checkpoint,
                 )
+                if outcome != "disconnected":
+                    await persist_active_tip(
+                        thread_store, websocket.app.state.agent, thread_id
+                    )
             except WebSocketDisconnect:
                 return
             except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011

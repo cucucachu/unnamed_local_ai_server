@@ -49,11 +49,23 @@ const Ctor = FakeWebSocket as unknown as WebSocketCtor;
  * /api/threads/{id}/messages` with `messages` — same mocking approach as
  * `lib/__tests__/api.test.ts`, reused here for consistency. */
 function mockThreadMessages(messages: ThreadMessage[]): void {
-  global.fetch = jest.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => messages,
+  global.fetch = jest.fn().mockImplementation((url: string) => {
+    const href = String(url);
+    if (href.includes('/branches')) {
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [] });
+    }
+    if (href.includes('/state')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ pending_approval: null }),
+      });
+    }
+    if (href.includes('/active_branch')) {
+      return Promise.resolve({ ok: true, status: 204, statusText: 'No Content', json: async () => undefined });
+    }
+    return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => messages });
   }) as unknown as typeof fetch;
 }
 
@@ -486,6 +498,99 @@ describe('useChat — sendMessage', () => {
       mode: 'truncate',
       id: items[0].id,
     });
+  });
+});
+
+describe('useChat — branches (M8-05)', () => {
+  const branchPoint = {
+    anchor_message_id: 'u-2',
+    active_index: 1,
+    branches: [
+      { checkpoint_id: 'tip-a', preview: 'turn two', created_at: '2026-01-01T00:00:00Z' },
+      { checkpoint_id: 'tip-b', preview: 'turn two forked', created_at: '2026-01-01T00:01:00Z' },
+    ],
+  };
+
+  it('hydrates branches from GET /api/threads/{id}/branches', async () => {
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      const href = String(url);
+      if (href.includes('/branches')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [branchPoint],
+        });
+      }
+      if (href.includes('/state')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ pending_approval: null }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    const hook = await renderUseChat();
+    expect(hook.current().branches).toEqual([branchPoint]);
+  });
+
+  it('switchBranch PUTs the tip then re-hydrates', async () => {
+    const putUrls: string[] = [];
+    global.fetch = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.includes('/active_branch')) {
+        putUrls.push(href);
+        expect(init?.method).toBe('PUT');
+        expect(init?.body).toBe(JSON.stringify({ checkpoint_id: 'tip-a' }));
+        return Promise.resolve({
+          ok: true,
+          status: 204,
+          statusText: 'No Content',
+          json: async () => undefined,
+        });
+      }
+      if (href.includes('/branches')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [branchPoint],
+        });
+      }
+      if (href.includes('/state')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ pending_approval: null }),
+        });
+      }
+      if (href.includes('/messages')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [
+            { id: 'u-1', role: 'user', content: 'turn one', tool_name: null, tool_calls: null },
+            { id: 'u-2', role: 'user', content: 'turn two', tool_name: null, tool_calls: null },
+          ],
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    const hook = await renderUseChat();
+    await act(async () => {
+      await hook.current().switchBranch('tip-a');
+    });
+    await flush();
+
+    expect(putUrls).toHaveLength(1);
+    expect(hook.current().items.map((item) => item.kind)).toEqual(['user', 'user']);
+    expect(hook.current().hydrationState).toBe('done');
   });
 });
 

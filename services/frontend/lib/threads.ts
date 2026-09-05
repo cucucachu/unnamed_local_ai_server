@@ -55,6 +55,21 @@ export interface ThreadState {
   pending_approval: PendingApproval | null;
 }
 
+/** One sibling continuation at a fork (M8-05). `checkpoint_id` is that
+ * branch's tip — the value `PUT /active_branch` accepts. */
+export interface ThreadBranch {
+  checkpoint_id: string;
+  preview: string;
+  created_at: string | null;
+}
+
+/** One point on the active lineage with more than one child branch. */
+export interface ThreadBranchPoint {
+  anchor_message_id: string;
+  branches: ThreadBranch[];
+  active_index: number;
+}
+
 /** `POST /api/threads` — `title` omitted/`undefined` lets the server default
  * it to `"New chat"` (see `CreateThreadBody.title: str | None = None`). */
 export async function createThread(title?: string): Promise<Thread> {
@@ -80,6 +95,20 @@ export async function getThreadMessages(threadId: string): Promise<ThreadMessage
  * pending approval (from before a page reload / reconnect) is restored. */
 export async function getThreadState(threadId: string): Promise<ThreadState> {
   return apiFetch<ThreadState>(`/api/threads/${encodeURIComponent(threadId)}/state`);
+}
+
+/** `GET /api/threads/{id}/branches` (M8-05) — fork points on the active lineage. */
+export async function getThreadBranches(threadId: string): Promise<ThreadBranchPoint[]> {
+  return apiFetch<ThreadBranchPoint[]>(`/api/threads/${encodeURIComponent(threadId)}/branches`);
+}
+
+/** `PUT /api/threads/{id}/active_branch` (M8-05) — pin the tip the user is viewing. */
+export async function setActiveBranch(threadId: string, checkpointId: string): Promise<void> {
+  await apiFetch<void>(`/api/threads/${encodeURIComponent(threadId)}/active_branch`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checkpoint_id: checkpointId }),
+  });
 }
 
 /** `DELETE /api/threads/{id}` — `204 No Content`; `apiFetch`'s `response.json()` call throws on

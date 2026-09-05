@@ -24,7 +24,14 @@ import {
   type ChatTurnStatus,
   ORPHAN_TURN_KEY,
 } from './chatTurns';
-import { getThreadMessages, getThreadState, type ThreadMessage } from './threads';
+import {
+  getThreadBranches,
+  getThreadMessages,
+  getThreadState,
+  setActiveBranch,
+  type ThreadBranchPoint,
+  type ThreadMessage,
+} from './threads';
 
 export type { ChatTurn, ChatTurnMeta, ChatTurnStatus };
 export { extractTurnMetaFromHistory, groupItemsIntoTurns };
@@ -265,6 +272,10 @@ export interface UseChatResult {
    * 'rejected'` right away, since no real `tool_start`/`tool_end` frame
    * will ever arrive for it. */
   respondToApproval: (decisions: ApprovalDecision[]) => void;
+  /** M8-05: fork points on the active lineage (empty until a fork exists). */
+  branches: ThreadBranchPoint[];
+  /** M8-05: PUT the tip, then re-hydrate so the transcript matches. */
+  switchBranch: (checkpointId: string) => Promise<void>;
 }
 
 /**
@@ -322,6 +333,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   const [connectionState, setConnectionState] = useState<ChatConnectionState>('connecting');
   const [hydrationState, setHydrationState] = useState<HydrationState>('loading');
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [branches, setBranches] = useState<ThreadBranchPoint[]>([]);
   // Bumped by `retryHydration` to re-trigger the hydration effect below
   // without needing `threadId` itself to change.
   const [hydrationAttempt, setHydrationAttempt] = useState(0);
@@ -350,6 +362,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     setItems([]);
     setTurnMetas({});
     setPendingApproval(null);
+    setBranches([]);
     pendingApprovalRef.current = null;
     currentTurnUserIdRef.current = null;
     turnStartedAtRef.current = null;
@@ -381,6 +394,12 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
         } catch {
           // Best-effort restore only — see comment above.
         }
+        try {
+          const nextBranches = await getThreadBranches(threadId);
+          if (!cancelled) setBranches(nextBranches);
+        } catch {
+          if (!cancelled) setBranches([]);
+        }
         if (!cancelled) setHydrationState('done');
       })
       .catch(() => {
@@ -397,6 +416,14 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     setHydrationAttempt((n) => n + 1);
   }, []);
 
+  const switchBranch = useCallback(
+    async (checkpointId: string) => {
+      await setActiveBranch(threadId, checkpointId);
+      setHydrationAttempt((n) => n + 1);
+    },
+    [threadId],
+  );
+
   useEffect(() => {
     // Spec: hydration failure -> error banner with retry, socket not
     // opened. Also gates the initial `'loading'` phase — the socket only
@@ -405,6 +432,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
 
     currentAssistantIdRef.current = null;
     currentReasoningIdRef.current = null;
+    let cancelled = false;
 
     const socket = openChatSocket(
       threadId,
@@ -519,6 +547,15 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           currentAssistantIdRef.current = null;
           currentReasoningIdRef.current = null;
           setBusy(false);
+          if (frame.status === 'completed' || frame.status === 'cancelled') {
+            void getThreadBranches(threadId)
+              .then((next) => {
+                if (!cancelled) setBranches(next);
+              })
+              .catch(() => {
+                /* keep the last known branch list */
+              });
+          }
           const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
           const durationMs =
             frame.duration_ms ??
@@ -570,6 +607,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
 
     socketRef.current = socket;
     return () => {
+      cancelled = true;
       socket.close();
       socketRef.current = null;
     };
@@ -659,5 +697,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     retryHydration,
     pendingApproval,
     respondToApproval,
+    branches,
+    switchBranch,
   };
 }

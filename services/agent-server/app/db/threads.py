@@ -46,6 +46,8 @@ class ThreadRecord:
     title: str
     created_at: datetime
     updated_at: datetime
+    # M8-05: tip the history/WS paths should read. `None` = chronological latest.
+    active_checkpoint_id: str | None = None
 
 
 class ThreadStore(Protocol):
@@ -70,6 +72,10 @@ class ThreadStore(Protocol):
     async def set_title_if_new(self, thread_id: str, title: str) -> None: ...
 
     async def touch(self, thread_id: str) -> None: ...
+
+    async def set_active_checkpoint_id(
+        self, thread_id: str, checkpoint_id: str | None
+    ) -> None: ...
 
 
 def _is_valid_uuid(value: str) -> bool:
@@ -105,7 +111,7 @@ class PgThreadStore:
     this guard never fires for the ticket's own primary path.
     """
 
-    _SELECT_COLUMNS = "id, title, created_at, updated_at"
+    _SELECT_COLUMNS = "id, title, created_at, updated_at, active_checkpoint_id"
 
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
@@ -171,6 +177,17 @@ class PgThreadStore:
                 "UPDATE threads SET updated_at = now() WHERE id = %s", (thread_id,)
             )
 
+    async def set_active_checkpoint_id(
+        self, thread_id: str, checkpoint_id: str | None
+    ) -> None:
+        if not _is_valid_uuid(thread_id):
+            return
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE threads SET active_checkpoint_id = %s WHERE id = %s",
+                (checkpoint_id, thread_id),
+            )
+
 
 def _record_from_row(row: dict) -> ThreadRecord:
     return ThreadRecord(
@@ -178,6 +195,7 @@ def _record_from_row(row: dict) -> ThreadRecord:
         title=row["title"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        active_checkpoint_id=row.get("active_checkpoint_id"),
     )
 
 
@@ -250,3 +268,11 @@ class InMemoryThreadStore:
             return
         self._rows[thread_id] = replace(record, updated_at=datetime.now(UTC))
         self._bump_recency(thread_id)
+
+    async def set_active_checkpoint_id(
+        self, thread_id: str, checkpoint_id: str | None
+    ) -> None:
+        record = self._rows.get(thread_id)
+        if record is None:
+            return
+        self._rows[thread_id] = replace(record, active_checkpoint_id=checkpoint_id)
