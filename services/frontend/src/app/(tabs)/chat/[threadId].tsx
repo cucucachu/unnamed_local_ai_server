@@ -4,7 +4,6 @@ import { useCallback, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
-  KeyboardAvoidingView,
   FlatList,
   Linking,
   Modal,
@@ -19,6 +18,7 @@ import {
   type TextInputKeyPressEventData,
 } from 'react-native';
 
+import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { Markdown } from '@/components/Markdown';
 import { TurnActivityPanel } from '@/components/TurnActivityPanel';
 import { useSettings } from '@/components/SettingsProvider';
@@ -207,7 +207,7 @@ export default function ChatScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <AppKeyboardAvoidingView style={styles.flex}>
       <View style={styles.container}>
         {connectionLabel ? (
           <View style={styles.connectionPill}>
@@ -345,7 +345,7 @@ export default function ChatScreen() {
           }}
         />
       </View>
-    </KeyboardAvoidingView>
+    </AppKeyboardAvoidingView>
   );
 }
 
