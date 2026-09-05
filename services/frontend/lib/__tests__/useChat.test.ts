@@ -379,9 +379,55 @@ describe('useChat — sendMessage', () => {
       hook.current().sendMessage('hi there');
     });
 
-    expect(hook.current().items).toEqual([expect.objectContaining({ kind: 'user', text: 'hi there' })]);
+    const user = findItem(hook.current().items, 'user');
+    expect(user.text).toBe('hi there');
     expect(hook.current().busy).toBe(true);
-    expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'user_message', content: 'hi there' })]);
+    expect(JSON.parse(latestSocket().sent[0])).toEqual({
+      type: 'user_message',
+      content: 'hi there',
+      id: user.id,
+    });
+  });
+
+  it('replaceFromMessageId drops items from that user item onward and sends truncate fields (M8-04)', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      hook.current().sendMessage('one');
+    });
+    const firstId = findItem(hook.current().items, 'user').id;
+
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ type: 'token', content: 'reply one' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
+      hook.current().sendMessage('two');
+    });
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ type: 'token', content: 'reply two' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
+    });
+
+    expect(hook.current().items.map((item) => item.kind)).toEqual(['user', 'assistant', 'user', 'assistant']);
+
+    act(() => {
+      hook.current().sendMessage('one edited', { replaceFromMessageId: firstId, mode: 'truncate' });
+    });
+
+    const items = hook.current().items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual(expect.objectContaining({ kind: 'user', text: 'one edited' }));
+    expect(hook.current().busy).toBe(true);
+
+    const sent = JSON.parse(latestSocket().sent[latestSocket().sent.length - 1]);
+    expect(sent).toEqual({
+      type: 'user_message',
+      content: 'one edited',
+      replace_from_message_id: firstId,
+      mode: 'truncate',
+      id: items[0].id,
+    });
   });
 });
 
@@ -740,6 +786,38 @@ describe('mapHistoryToItems', () => {
           resultPreview: 'wrote 1 file',
         },
         { id: 'a-3', kind: 'assistant', text: 'done', streaming: false },
+      ],
+    },
+    {
+      name: 'a tool row recovers args from the paired assistant tool_calls via tool_call_id (M8-04)',
+      input: [
+        {
+          id: 'a-5',
+          role: 'assistant',
+          content: '',
+          tool_name: null,
+          tool_calls: [{ id: 'call-9', name: 'write_file', args: { file_path: '/x.txt', content: 'y' } }],
+        },
+        {
+          id: 't-5',
+          role: 'tool',
+          content: 'wrote 1 file',
+          tool_name: 'write_file',
+          tool_calls: null,
+          tool_call_id: 'call-9',
+        },
+      ],
+      expected: [
+        {
+          id: 't-5',
+          kind: 'tool',
+          toolCallId: 'call-9',
+          name: 'write_file',
+          category: 'file',
+          status: 'success',
+          args: { file_path: '/x.txt', content: 'y' },
+          resultPreview: 'wrote 1 file',
+        },
       ],
     },
     {

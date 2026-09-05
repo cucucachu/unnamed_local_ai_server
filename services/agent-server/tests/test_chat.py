@@ -176,6 +176,11 @@ async def test_get_messages_normalizes_tool_call_turn(
     assert tool_result_msg["tool_name"] == "write_file"
     assert tool_result_msg["content"] == "Updated file /x.txt"
     assert tool_result_msg["tool_calls"] is None
+    assert tool_result_msg["tool_call_id"] == "call_1"
+
+    assert user_msg["tool_call_id"] is None
+    assert tool_call_msg["tool_call_id"] is None
+    assert final_msg["tool_call_id"] is None
 
     assert final_msg["content"] == "done"
     assert final_msg["tool_calls"] is None

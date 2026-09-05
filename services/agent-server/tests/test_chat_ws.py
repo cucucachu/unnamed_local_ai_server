@@ -420,3 +420,161 @@ async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, tmp_path
     expected_title = " ".join(long_message.split())[:60] + "..."
     assert after_turns.title == expected_title
     assert after_turns.updated_at > created.updated_at
+
+
+async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
+    """M8-04: replace_from_message_id + mode=truncate drops from that user
+    message onward, then runs the new HumanMessage. Title is not re-derived."""
+    fake_model.queue(TextTurn("reply one"), TextTurn("reply two"), TextTurn("reply three"))
+    thread_store = InMemoryThreadStore()
+    thread_id = "truncate-then-run"
+
+    with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "turn one"})
+        _drain_turn(ws)
+        ws.send_json({"type": "user_message", "content": "turn two"})
+        _drain_turn(ws)
+        ws.send_json({"type": "user_message", "content": "turn three"})
+        _drain_turn(ws)
+
+        before = client.get(f"/api/threads/{thread_id}/messages").json()
+        assert [m["role"] for m in before] == ["user", "assistant", "user", "assistant", "user", "assistant"]
+        assert [m["content"] for m in before if m["role"] == "user"] == [
+            "turn one",
+            "turn two",
+            "turn three",
+        ]
+        turn_two_id = before[2]["id"]
+        assert before[2]["role"] == "user"
+        title_after_three = (await thread_store.get(thread_id)).title
+
+        fake_model.queue(TextTurn("edited reply"))
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "turn two edited",
+                "replace_from_message_id": turn_two_id,
+                "mode": "truncate",
+            }
+        )
+        frames = _drain_turn(ws)
+        assert frames[0] == {"type": "turn_start"}
+        assert frames[-1] == {"type": "turn_end", "status": "completed"}
+        assert "".join(f["content"] for f in frames if f["type"] == "token") == "edited reply"
+
+        after = client.get(f"/api/threads/{thread_id}/messages").json()
+
+    assert [m["role"] for m in after] == ["user", "assistant", "user", "assistant"]
+    assert [m["content"] for m in after if m["role"] == "user"] == ["turn one", "turn two edited"]
+    assert [m["content"] for m in after if m["role"] == "assistant"] == ["reply one", "edited reply"]
+    # Title stays the first-turn derivation, not the edited content.
+    assert (await thread_store.get(thread_id)).title == title_after_three
+    assert all(isinstance(m["id"], str) and m["id"] for m in after)
+
+
+async def test_truncate_unknown_id(fake_model: FakeModel, tmp_path) -> None:
+    """M8-04: replace_from_message_id that isn't in the checkpoint -> error + 1008."""
+    fake_model.queue(TextTurn("hello"))
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/truncate-unknown"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_turn(ws)
+
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "edit missing",
+                "replace_from_message_id": "does-not-exist",
+                "mode": "truncate",
+            }
+        )
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert "unknown message id" in frame["message"]
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_json()
+        assert exc_info.value.code == 1008
+
+
+async def test_truncate_non_user_id(fake_model: FakeModel, tmp_path) -> None:
+    """M8-04: replace_from_message_id pointing at an assistant row -> error + 1008."""
+    fake_model.queue(TextTurn("hello"))
+    thread_id = "truncate-non-user"
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_turn(ws)
+
+        messages = client.get(f"/api/threads/{thread_id}/messages").json()
+        assistant = next(m for m in messages if m["role"] == "assistant")
+
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "nope",
+                "replace_from_message_id": assistant["id"],
+                "mode": "truncate",
+            }
+        )
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert "user message" in frame["message"]
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_json()
+        assert exc_info.value.code == 1008
+
+
+async def test_fork_mode_rejected_until_m8_05(fake_model: FakeModel, tmp_path) -> None:
+    """M8-04: mode=fork (explicit, or via edit_mode_default) is error + 1008."""
+    fake_model.queue(TextTurn("hello"))
+    thread_id = "truncate-fork-rejected"
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_turn(ws)
+        user_id = next(
+            m["id"] for m in client.get(f"/api/threads/{thread_id}/messages").json() if m["role"] == "user"
+        )
+
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "forked",
+                "replace_from_message_id": user_id,
+                "mode": "fork",
+            }
+        )
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert "fork" in frame["message"]
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_json()
+        assert exc_info.value.code == 1008
+
+
+async def test_user_message_id_is_stored_langchain_id(fake_model: FakeModel, tmp_path) -> None:
+    """M8-04: an explicit `id` on user_message is the stored MessageOut.id."""
+    fake_model.queue(TextTurn("hello"))
+    thread_id = "stable-user-id"
+    client_id = "11111111-1111-1111-1111-111111111111"
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi", "id": client_id})
+        _drain_turn(ws)
+        messages = client.get(f"/api/threads/{thread_id}/messages").json()
+
+    user = next(m for m in messages if m["role"] == "user")
+    assert user["id"] == client_id

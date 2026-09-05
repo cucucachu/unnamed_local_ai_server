@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   FlatList,
   Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -21,7 +22,15 @@ import {
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision } from '@/lib/chatSocket';
-import { useChat, type ChatItem, type ChatToolItem, type PendingApproval, type PendingApprovalAction } from '@/lib/useChat';
+import {
+  useChat,
+  type ChatAssistantItem,
+  type ChatItem,
+  type ChatToolItem,
+  type ChatUserItem,
+  type PendingApproval,
+  type PendingApprovalAction,
+} from '@/lib/useChat';
 import {
   hostnameFromUrl,
   parseFetchResult,
@@ -60,17 +69,74 @@ export default function ChatScreen() {
     respondToApproval,
   } = useChat(threadId);
   const [draft, setDraft] = useState('');
+  const [editingItem, setEditingItem] = useState<ChatUserItem | null>(null);
+  const [actionMenu, setActionMenu] = useState<
+    { kind: 'user'; item: ChatUserItem } | { kind: 'assistant'; item: ChatAssistantItem } | null
+  >(null);
   const listRef = useRef<FlatList<ChatItem>>(null);
 
   // M8-03: the composer/Send button is disabled while an approval is
   // pending, in addition to the existing `busy` disable from M8-01.
   const canSend = !busy && pendingApproval === null && hydrationState === 'done' && draft.trim().length > 0;
+  const menuDisabled = busy || pendingApproval !== null;
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
-    sendMessage(draft.trim());
+    const text = draft.trim();
+    if (editingItem !== null) {
+      sendMessage(text, { replaceFromMessageId: editingItem.id, mode: 'truncate' });
+      setEditingItem(null);
+    } else {
+      sendMessage(text);
+    }
     setDraft('');
-  }, [canSend, draft, sendMessage]);
+  }, [canSend, draft, editingItem, sendMessage]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingItem(null);
+    setDraft('');
+  }, []);
+
+  const handleEdit = useCallback((item: ChatUserItem) => {
+    setEditingItem(item);
+    setDraft(item.text);
+    setActionMenu(null);
+  }, []);
+
+  const handleResend = useCallback(
+    (item: ChatUserItem) => {
+      setActionMenu(null);
+      setEditingItem(null);
+      setDraft('');
+      sendMessage(item.text, { replaceFromMessageId: item.id, mode: 'truncate' });
+    },
+    [sendMessage],
+  );
+
+  const handleRegenerate = useCallback(
+    (assistant: ChatAssistantItem) => {
+      setActionMenu(null);
+      const assistantIndex = items.findIndex((item) => item.id === assistant.id);
+      let precedingUser: ChatUserItem | null = null;
+      for (let i = assistantIndex - 1; i >= 0; i -= 1) {
+        const candidate = items[i];
+        if (candidate?.kind === 'user') {
+          precedingUser = candidate;
+          break;
+        }
+      }
+      if (precedingUser === null) return;
+      sendMessage(precedingUser.text, { replaceFromMessageId: precedingUser.id, mode: 'truncate' });
+    },
+    [items, sendMessage],
+  );
+
+  const lastAssistantId = (() => {
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      if (items[i]?.kind === 'assistant') return items[i].id;
+    }
+    return null;
+  })();
 
   // M8-01: while a turn is in flight, the Send button becomes a Stop
   // button (same slot in the composer, swapped by `busy`).
@@ -142,7 +208,15 @@ export default function ChatScreen() {
           ref={listRef}
           data={items}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <ChatItemRow item={item} />}
+          renderItem={({ item }) => (
+            <ChatItemRow
+              item={item}
+              isLastAssistant={item.kind === 'assistant' && item.id === lastAssistantId}
+              menuDisabled={menuDisabled}
+              onUserMenu={(user) => setActionMenu({ kind: 'user', item: user })}
+              onAssistantMenu={(assistant) => setActionMenu({ kind: 'assistant', item: assistant })}
+            />
+          )}
           contentContainerStyle={styles.listContent}
           style={styles.list}
           // A plain (non-inverted) list + scroll-to-end on growth, rather
@@ -157,6 +231,21 @@ export default function ChatScreen() {
         />
         {pendingApproval !== null ? (
           <ApprovalCard pendingApproval={pendingApproval} onRespond={respondToApproval} />
+        ) : null}
+        {editingItem !== null ? (
+          <View style={styles.editBanner} testID="chat-edit-banner">
+            <Text style={styles.editBannerText}>
+              Editing — sending replaces everything after this message
+            </Text>
+            <Pressable
+              onPress={handleCancelEdit}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel editing"
+              testID="chat-edit-cancel"
+            >
+              <Text style={styles.editBannerCancel}>Cancel</Text>
+            </Pressable>
+          </View>
         ) : null}
         <View style={styles.composer}>
           <TextInput
@@ -191,6 +280,13 @@ export default function ChatScreen() {
             </Pressable>
           )}
         </View>
+        <MessageActionSheet
+          menu={actionMenu}
+          onClose={() => setActionMenu(null)}
+          onEdit={handleEdit}
+          onResend={handleResend}
+          onRegenerate={handleRegenerate}
+        />
       </View>
     </KeyboardAvoidingView>
   );
@@ -203,20 +299,52 @@ const CONNECTION_LABEL: Record<ReturnType<typeof useChat>['connectionState'], st
   open: null,
 };
 
-function ChatItemRow({ item }: { item: ChatItem }): ReactElement {
+interface ChatItemRowProps {
+  item: ChatItem;
+  isLastAssistant: boolean;
+  menuDisabled: boolean;
+  onUserMenu: (item: ChatUserItem) => void;
+  onAssistantMenu: (item: ChatAssistantItem) => void;
+}
+
+function ChatItemRow({
+  item,
+  isLastAssistant,
+  menuDisabled,
+  onUserMenu,
+  onAssistantMenu,
+}: ChatItemRowProps): ReactElement {
   switch (item.kind) {
     case 'user':
       return (
         <View style={[styles.bubbleRow, styles.bubbleRowRight]} testID="chat-item-user">
-          <View style={[styles.bubble, styles.userBubble]}>
+          <MessageMenuAffordance
+            testID="chat-item-user-menu"
+            accessibilityLabel="Message actions"
+            disabled={menuDisabled}
+            onOpen={() => onUserMenu(item)}
+          />
+          <Pressable
+            style={[styles.bubble, styles.userBubble]}
+            onLongPress={menuDisabled ? undefined : () => onUserMenu(item)}
+            delayLongPress={400}
+            testID="chat-item-user-bubble"
+          >
             <Text style={styles.bubbleText}>{item.text}</Text>
-          </View>
+          </Pressable>
         </View>
       );
     case 'assistant':
       return (
         <View style={[styles.bubbleRow, styles.bubbleRowLeft]} testID="chat-item-assistant">
-          <View style={[styles.bubble, styles.assistantBubble]}>
+          <Pressable
+            style={[styles.bubble, styles.assistantBubble]}
+            onLongPress={
+              isLastAssistant && !menuDisabled ? () => onAssistantMenu(item) : undefined
+            }
+            delayLongPress={400}
+            testID="chat-item-assistant-bubble"
+          >
             <Text style={styles.bubbleText}>
               {item.text}
               {item.streaming ? STREAMING_CURSOR : ''}
@@ -226,7 +354,15 @@ function ChatItemRow({ item }: { item: ChatItem }): ReactElement {
                 Stopped
               </Text>
             ) : null}
-          </View>
+          </Pressable>
+          {isLastAssistant ? (
+            <MessageMenuAffordance
+              testID="chat-item-assistant-menu"
+              accessibilityLabel="Regenerate actions"
+              disabled={menuDisabled}
+              onOpen={() => onAssistantMenu(item)}
+            />
+          ) : null}
         </View>
       );
     case 'tool':
@@ -469,6 +605,95 @@ function WebFetchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: Pars
         {parsed.truncatedByTool ? <Text style={styles.execTruncatedText}>{WEB_FETCH_TRUNCATED_MARKER}</Text> : null}
       </ScrollView>
     </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// M8-04: Edit / Resend / Regenerate
+// ---------------------------------------------------------------------------
+
+/** Web: hover "⋯" button (always in the DOM so Playwright can click it).
+ * Native: the parent bubble's `onLongPress` is the affordance — this
+ * control is hidden off-web. */
+function MessageMenuAffordance({
+  testID,
+  accessibilityLabel,
+  disabled,
+  onOpen,
+}: {
+  testID: string;
+  accessibilityLabel: string;
+  disabled: boolean;
+  onOpen: () => void;
+}): ReactElement | null {
+  if (Platform.OS !== 'web') return null;
+  return (
+    <Pressable
+      style={[styles.messageMenuButton, disabled && styles.messageMenuButtonDisabled]}
+      onPress={disabled ? undefined : onOpen}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      testID={testID}
+    >
+      <Ionicons name="ellipsis-horizontal" size={16} color={disabled ? theme.textMuted : theme.text} />
+    </Pressable>
+  );
+}
+
+interface MessageActionSheetProps {
+  menu: { kind: 'user'; item: ChatUserItem } | { kind: 'assistant'; item: ChatAssistantItem } | null;
+  onClose: () => void;
+  onEdit: (item: ChatUserItem) => void;
+  onResend: (item: ChatUserItem) => void;
+  onRegenerate: (item: ChatAssistantItem) => void;
+}
+
+/** Bottom sheet matching `FileActionSheet`'s custom-Modal convention. */
+function MessageActionSheet({
+  menu,
+  onClose,
+  onEdit,
+  onResend,
+  onRegenerate,
+}: MessageActionSheetProps): ReactElement | null {
+  if (menu === null) return null;
+
+  const actions =
+    menu.kind === 'user'
+      ? [
+          { key: 'edit', label: 'Edit', icon: 'create-outline' as const, run: () => onEdit(menu.item) },
+          { key: 'resend', label: 'Resend', icon: 'refresh-outline' as const, run: () => onResend(menu.item) },
+        ]
+      : [
+          {
+            key: 'regenerate',
+            label: 'Regenerate',
+            icon: 'refresh-outline' as const,
+            run: () => onRegenerate(menu.item),
+          },
+        ];
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose} testID="chat-message-menu">
+      <Pressable style={styles.messageMenuOverlay} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
+        <Pressable style={styles.messageMenuSheet} onPress={(event) => event.stopPropagation()}>
+          {actions.map((action) => (
+            <Pressable
+              key={action.key}
+              style={styles.messageMenuRow}
+              onPress={action.run}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              testID={`chat-message-action-${action.key}`}
+            >
+              <Ionicons name={action.icon} size={20} color={theme.text} />
+              <Text style={styles.messageMenuLabel}>{action.label}</Text>
+            </Pressable>
+          ))}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -915,6 +1140,66 @@ const styles = StyleSheet.create({
   },
   fetchUrlLink: {
     color: theme.accent,
+  },
+  messageMenuButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  messageMenuButtonDisabled: {
+    opacity: 0.4,
+  },
+  messageMenuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  messageMenuSheet: {
+    backgroundColor: theme.surface,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+    paddingHorizontal: 8,
+    paddingTop: 12,
+    paddingBottom: 24,
+  },
+  messageMenuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+  },
+  messageMenuLabel: {
+    color: theme.text,
+    fontSize: 16,
+  },
+  editBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 12,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    backgroundColor: theme.surface,
+  },
+  editBannerText: {
+    flex: 1,
+    color: theme.text,
+    fontSize: 13,
+  },
+  editBannerCancel: {
+    color: theme.accent,
+    fontSize: 13,
+    fontWeight: '600',
   },
   composer: {
     flexDirection: 'row',

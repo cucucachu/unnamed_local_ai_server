@@ -81,10 +81,28 @@ export type ServerFrame =
   | TurnEndFrame
   | ErrorFrame;
 
+/** M8-04: how an edit/resend/regenerate should rewrite history. `fork` is
+ * M8-05 — the server answers it with `error` + close 1008 until then. */
+export type EditMode = 'truncate' | 'fork';
+
+/** Optional fields on an outbound `user_message` (M8-04). */
+export interface SendUserMessageOptions {
+  /** Drop checkpointed messages from this user-message id onward, then run. */
+  replaceFromMessageId?: string;
+  /** Defaults server-side to `SettingsStore.edit_mode_default` when omitted. */
+  mode?: EditMode;
+  /** Client-supplied LangChain message id so the local bubble is addressable
+   * in the same session (server falls back to `uuid4()` when omitted). */
+  id?: string;
+}
+
 /** Client -> server frames. */
 export interface UserMessageFrame {
   type: 'user_message';
   content: string;
+  replace_from_message_id?: string;
+  mode?: EditMode;
+  id?: string;
 }
 
 /** M8-01: cancels the in-flight turn. Only meaningful while a turn is in
@@ -134,8 +152,9 @@ export interface ChatSocketHandlers {
 }
 
 export interface ChatSocket {
-  /** Serialize and send a `user_message` frame. */
-  send(userMessage: string): void;
+  /** Serialize and send a `user_message` frame. `options` (M8-04) add
+   * `replace_from_message_id` / `mode` / a client-supplied `id`. */
+  send(userMessage: string, options?: SendUserMessageOptions): void;
   /** Serialize and send a `cancel` frame (M8-01) — asks the server to stop
    * the in-flight turn. A no-op server-side if no turn is in flight (M8-03:
    * reject-all if awaiting approval instead — see `CancelFrame`'s doc). */
@@ -306,8 +325,17 @@ export function openChatSocket(
   connect();
 
   return {
-    send(userMessage: string): void {
+    send(userMessage: string, options?: SendUserMessageOptions): void {
       const frame: UserMessageFrame = { type: 'user_message', content: userMessage };
+      if (options?.replaceFromMessageId) {
+        frame.replace_from_message_id = options.replaceFromMessageId;
+      }
+      if (options?.mode) {
+        frame.mode = options.mode;
+      }
+      if (options?.id) {
+        frame.id = options.id;
+      }
       socket?.send(JSON.stringify(frame));
     },
     cancel(): void {

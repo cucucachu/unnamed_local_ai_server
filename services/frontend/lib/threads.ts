@@ -27,6 +27,8 @@ export interface ThreadMessage {
   content: string;
   tool_name: string | null;
   tool_calls: ToolCall[] | null;
+  /** M8-04: on `tool` rows, the paired assistant `tool_calls[].id`. */
+  tool_call_id?: string | null;
 }
 
 /** M8-03: one pending mutating tool call awaiting a human decision — same

@@ -5,7 +5,9 @@ WebSocket chat protocol) — do not deviate; the frontend is built against it
 exactly.
 
 Client -> server (four valid incoming frames):
-    {"type": "user_message", "content": "string"}
+    {"type": "user_message", "content": "string",
+     "replace_from_message_id": "str?",   # M8-04: optional; truncate/fork from here
+     "mode": "truncate"|"fork"?}          # M8-04: optional; default SettingsStore.edit_mode_default
     {"type": "cancel"}   # M8-01: cancels a running turn; M8-03: while
                           # awaiting approval, rejects all pending actions
     {"type": "approval_response", "interrupt_id": "str",
@@ -200,9 +202,31 @@ turn lifecycle (the wire format above is untouched — no new/changed frames):
 - On each well-formed `user_message`, before running the turn: set the
   thread's title to the first 60 chars of the message IF the title is still
   the default `"New chat"` (a no-op otherwise) — see `_derive_title`.
+  M8-04: skipped when `replace_from_message_id` is set (title is not
+  re-derived on edit/resend/regenerate).
 - After a turn completes normally (i.e. `_run_turn_or_disconnect` returns
   `False` — NOT on disconnect-mid-turn or an unhandled-error abort): bump
   `updated_at = now()`.
+
+## M8-04 edit / resend / regenerate (`replace_from_message_id`)
+
+- Every fresh `HumanMessage` is constructed with `id=str(uuid4())` so user
+  rows are addressable via `GET /api/threads/{id}/messages` (`MessageOut.id`
+  is that stored LangChain id). The client may also send an `id` on the
+  `user_message` frame; if it's a non-empty string, that value is used
+  instead so a same-session Edit/Resend can address the bubble it just
+  appended without waiting for a history refetch.
+- Optional `replace_from_message_id` + `mode` (`"truncate"` | `"fork"`).
+  Omitted `mode` falls back to `SettingsStore.edit_mode_default` (M8-02).
+- `mode: "fork"` is M8-05 — until then, any replace that resolves to fork
+  is `error` + close 1008.
+- `mode: "truncate"` (under the per-thread lock, BEFORE the new turn):
+  `aget_state`, locate the message with that id (must be a `HumanMessage`,
+  else `error` + 1008; unknown id is the same), then
+  `aupdate_state(config, {"messages": [RemoveMessage(id=m.id) for m in
+  messages[idx:]]})`. LangGraph's `add_messages` reducer honors
+  `RemoveMessage`, so this is one call. Then the new `HumanMessage` runs
+  normally.
 """
 
 from __future__ import annotations
@@ -210,10 +234,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -304,8 +330,25 @@ def _tool_result_preview(output: Any) -> str:
     return str(source)[:_RESULT_PREVIEW_TRUNCATE_LEN]
 
 
-def _validate_user_message(raw: object) -> str | None:
-    """Return the message `content` if `raw` is a well-formed `user_message` frame, else `None`."""
+@dataclass(frozen=True)
+class _ParsedUserMessage:
+    """A well-formed inbound `user_message` frame (M8-04 fields optional)."""
+
+    content: str
+    replace_from_message_id: str | None = None
+    mode: Literal["truncate", "fork"] | None = None
+    message_id: str | None = None
+
+
+def _parse_user_message(raw: object) -> _ParsedUserMessage | None:
+    """Return a parsed `user_message` if `raw` is well-formed, else `None`.
+
+    Required: `type == "user_message"` and `content` a `str`. Optional M8-04
+    fields, when present, must have the right type/`Literal` or the whole
+    frame is rejected (same 1008 path as any other invalid idle frame):
+    `replace_from_message_id` a non-empty `str`, `mode` `"truncate"` or
+    `"fork"`, `id` a non-empty `str` (client-supplied LangChain message id).
+    """
     if not isinstance(raw, dict):
         return None
     if raw.get("type") != "user_message":
@@ -313,7 +356,30 @@ def _validate_user_message(raw: object) -> str | None:
     content = raw.get("content")
     if not isinstance(content, str):
         return None
-    return content
+
+    replace_from = raw.get("replace_from_message_id")
+    if replace_from is not None and not (isinstance(replace_from, str) and replace_from):
+        return None
+
+    mode = raw.get("mode")
+    parsed_mode: Literal["truncate", "fork"] | None
+    if mode is None:
+        parsed_mode = None
+    elif mode in ("truncate", "fork"):
+        parsed_mode = mode
+    else:
+        return None
+
+    message_id = raw.get("id")
+    if message_id is not None and not (isinstance(message_id, str) and message_id):
+        return None
+
+    return _ParsedUserMessage(
+        content=content,
+        replace_from_message_id=replace_from,
+        mode=parsed_mode,
+        message_id=message_id,
+    )
 
 
 def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
@@ -594,6 +660,27 @@ async def _current_hitl_enabled(websocket: WebSocket) -> bool:
     return document.hitl_enabled
 
 
+async def _truncate_from_message(agent: Any, thread_id: str, message_id: str) -> str | None:
+    """Drop checkpointed messages from `message_id` onward (M8-04 truncate).
+
+    Returns `None` on success, or an error string the caller sends as
+    `error` + close 1008 (unknown id, or the id is not a `HumanMessage`).
+    Must be called while holding the per-thread lock.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await agent.aget_state(config)
+    messages = state.values.get("messages", [])
+    idx = next((i for i, m in enumerate(messages) if getattr(m, "id", None) == message_id), None)
+    if idx is None:
+        return f"unknown message id: {message_id}"
+    if not isinstance(messages[idx], HumanMessage):
+        return "replace_from_message_id must refer to a user message"
+    removals = [RemoveMessage(id=m.id) for m in messages[idx:] if getattr(m, "id", None)]
+    if removals:
+        await agent.aupdate_state(config, {"messages": removals})
+    return None
+
+
 @router.websocket("/ws/chat/{thread_id}")
 async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     await websocket.accept()
@@ -665,13 +752,13 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
 
         # M8-01: `cancel` received while idle (no turn in flight, no pending
         # approval) is a no-op — ignored, not a validation error, not a
-        # close. Checked before `_validate_user_message` so it never falls
+        # close. Checked before `_parse_user_message` so it never falls
         # through to the invalid-frame/1008 path below.
         if _is_cancel_frame(raw):
             continue
 
-        content = _validate_user_message(raw)
-        if content is None:
+        parsed = _parse_user_message(raw)
+        if parsed is None:
             await _send_error_and_close(
                 websocket,
                 'invalid frame: expected {"type": "user_message", "content": <str>}',
@@ -679,13 +766,39 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             )
             return
 
-        await thread_store.set_title_if_new(thread_id, _derive_title(content))
-        hitl_enabled = await _current_hitl_enabled(websocket)
+        settings_store = websocket.app.state.settings_store
+        document = await settings_store.get_document()
+        hitl_enabled = document.hitl_enabled
+
+        # M8-04: `mode` is only meaningful with `replace_from_message_id`.
+        # Omitted mode falls back to `edit_mode_default`. `fork` is M8-05.
+        if parsed.replace_from_message_id is not None:
+            mode = parsed.mode or document.edit_mode_default
+            if mode != "truncate":
+                await _send_error_and_close(
+                    websocket,
+                    "fork mode is not implemented yet",
+                    code=1008,
+                )
+                return
+        else:
+            # New message at the end of the thread — title auto-set still
+            # applies. Edit/resend/regenerate deliberately skip this.
+            await thread_store.set_title_if_new(thread_id, _derive_title(parsed.content))
+
+        human = HumanMessage(id=parsed.message_id or str(uuid4()), content=parsed.content)
 
         async with lock:
             try:
+                if parsed.replace_from_message_id is not None:
+                    truncate_error = await _truncate_from_message(
+                        websocket.app.state.agent, thread_id, parsed.replace_from_message_id
+                    )
+                    if truncate_error is not None:
+                        await _send_error_and_close(websocket, truncate_error, code=1008)
+                        return
                 outcome, new_pending = await _run_turn_or_interrupt(
-                    websocket, thread_id, {"messages": [HumanMessage(content=content)]}, hitl_enabled
+                    websocket, thread_id, {"messages": [human]}, hitl_enabled
                 )
             except WebSocketDisconnect:
                 return

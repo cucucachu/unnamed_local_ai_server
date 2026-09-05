@@ -34,6 +34,10 @@
 // scenarios from that ticket: Approve writes `${WORKSPACE_DIR}/hello.txt`,
 // Reject leaves the reject-target file absent, HITL-off writes with no
 // approval card. Original settings are restored in `finally`.
+//
+// M8-04: a fresh three-turn thread, edit turn 2, reload, assert only
+// turns 1 + edited 2 remain (`GET /api/threads/{id}/messages` agrees),
+// then Regenerate the last answer and assert history length is unchanged.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
@@ -79,6 +83,13 @@ const HITL_OFF_MESSAGE = 'Create hello-off.txt containing hi. Use write_file.';
 const HITL_APPROVE_FILE = 'hello.txt';
 const HITL_REJECT_FILE = 'hello-reject.txt';
 const HITL_OFF_FILE = 'hello-off.txt';
+// M8-04: a fresh three-turn thread so edit/regenerate aren't fighting the
+// earlier exec/web/HITL history. "Say exactly:" keeps the real model from
+// calling mutating tools (HITL is already off after step 11).
+const EDIT_TURN_1 = 'Say exactly: ALPHA';
+const EDIT_TURN_2 = 'Say exactly: BRAVO';
+const EDIT_TURN_3 = 'Say exactly: CHARLIE';
+const EDIT_TURN_2_EDITED = 'Say exactly: BRAVO-EDITED';
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
@@ -207,6 +218,18 @@ function removeWorkspaceFileBestEffort(name) {
   }
 }
 
+function fetchThreadMessages(threadId) {
+  const script = `
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=15) as resp:
+    sys.stdout.write(resp.read().decode())
+`;
+  const raw = execFileSync('python3', ['-c', script, `${API_BASE}/threads/${threadId}/messages`], {
+    encoding: 'utf8',
+  });
+  return JSON.parse(raw);
+}
+
 function cleanupThreadBestEffort(threadId) {
   if (!threadId) return;
   const deleteThreadScript = `
@@ -256,6 +279,7 @@ async function sendAndAwaitApprovalCard(page, message, timeoutMs = TIMEOUT_MS) {
 async function main() {
   const startedAt = Date.now();
   let threadId;
+  let editThreadId;
   let savedSettings = null;
   const browser = await chromium.launch({ headless: true });
   try {
@@ -526,11 +550,110 @@ async function main() {
     }
     console.log('Step 11 OK — HITL off wrote the file with no approval card');
 
+    // --- Step 12: edit turn 2 + regenerate (M8-04) ----------------------
+    // Fresh thread so history is exactly three user/assistant turns.
+    await page.getByRole('tab', { name: 'Chat' }).click();
+    await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
+    await newChatButton.click();
+    await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
+    editThreadId = new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+
+    await sendMessageAndAwaitReply(page, EDIT_TURN_1, 0);
+    const afterTurn1Assistants = await assistantBubbleLocator.count();
+    await sendMessageAndAwaitReply(page, EDIT_TURN_2, afterTurn1Assistants);
+    const afterTurn2Assistants = await assistantBubbleLocator.count();
+    await sendMessageAndAwaitReply(page, EDIT_TURN_3, afterTurn2Assistants);
+    console.log('Step 12 OK — three-turn chat created');
+
+    const userRows = page.locator('[data-testid="chat-item-user"]');
+    if ((await userRows.count()) < 3) {
+      throw new Error(`Step 12: expected 3 user bubbles before edit, got ${await userRows.count()}`);
+    }
+    await userRows.nth(1).locator('[data-testid="chat-item-user-menu"]').click();
+    await page.locator('[data-testid="chat-message-action-edit"]').click();
+    const editBanner = page.locator('[data-testid="chat-edit-banner"]');
+    await editBanner.waitFor({ state: 'visible', timeout: 10_000 });
+    await input.fill(EDIT_TURN_2_EDITED);
+    await page.getByRole('button', { name: 'Send message' }).click();
+    const editDeadline = Date.now() + TIMEOUT_MS;
+    let sawEditedReply = false;
+    while (Date.now() < editDeadline) {
+      const userCount = await userRows.count();
+      const assistantCount = await assistantBubbleLocator.count();
+      if (userCount === 2 && assistantCount >= 2) {
+        const newest = assistantBubbleLocator.nth(assistantCount - 1);
+        const text = (await newest.textContent())?.trim() ?? '';
+        if (text.length > 0 && !text.includes(STREAMING_CURSOR)) {
+          sawEditedReply = true;
+          break;
+        }
+      }
+      await page.waitForTimeout(300);
+    }
+    if (!sawEditedReply) {
+      throw new Error('Step 12: edited turn 2 did not produce a finished assistant reply');
+    }
+    console.log('Step 12 OK — edited turn 2; waiting for reload hydration');
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForText(page, EDIT_TURN_1, 20_000);
+    await waitForText(page, EDIT_TURN_2_EDITED, 20_000);
+    if ((await page.getByText(EDIT_TURN_3, { exact: true }).count()) > 0) {
+      throw new Error('Step 12: turn 3 text still visible after editing turn 2 and reloading');
+    }
+    const hydratedUsers = await page.locator('[data-testid="chat-item-user"]').count();
+    if (hydratedUsers !== 2) {
+      throw new Error(`Step 12: expected 2 user bubbles after reload, got ${hydratedUsers}`);
+    }
+
+    const apiMessages = fetchThreadMessages(editThreadId);
+    const apiUsers = apiMessages.filter((m) => m.role === 'user');
+    const apiAssistants = apiMessages.filter((m) => m.role === 'assistant' && m.content);
+    if (apiUsers.length !== 2 || apiUsers[0].content !== EDIT_TURN_1 || apiUsers[1].content !== EDIT_TURN_2_EDITED) {
+      throw new Error(`Step 12: GET /messages user rows disagree: ${JSON.stringify(apiUsers)}`);
+    }
+    if (apiAssistants.length !== 2) {
+      throw new Error(`Step 12: GET /messages expected 2 assistant rows with content, got ${apiAssistants.length}`);
+    }
+    console.log('Step 12 OK — after reload, only turns 1 + edited 2 remain (REST agrees)');
+
+    const historyLenBeforeRegen = apiMessages.length;
+    const assistantsBeforeRegen = await page.locator('[data-testid="chat-item-assistant"]').count();
+    await page.locator('[data-testid="chat-item-assistant-menu"]').last().click();
+    await page.locator('[data-testid="chat-message-action-regenerate"]').click();
+
+    const regenDeadline = Date.now() + TIMEOUT_MS;
+    let sawRegenReply = false;
+    while (Date.now() < regenDeadline) {
+      const count = await page.locator('[data-testid="chat-item-assistant"]').count();
+      if (count >= assistantsBeforeRegen) {
+        const newest = page.locator('[data-testid="chat-item-assistant"]').nth(count - 1);
+        const text = (await newest.textContent())?.trim() ?? '';
+        if (text.length > 0 && !text.includes(STREAMING_CURSOR)) {
+          sawRegenReply = true;
+          break;
+        }
+      }
+      await page.waitForTimeout(300);
+    }
+    if (!sawRegenReply) {
+      throw new Error('Step 12: Regenerate did not produce a new finished assistant reply');
+    }
+
+    const apiAfterRegen = fetchThreadMessages(editThreadId);
+    if (apiAfterRegen.length !== historyLenBeforeRegen) {
+      throw new Error(
+        `Step 12: history length changed after Regenerate (${historyLenBeforeRegen} -> ${apiAfterRegen.length})`,
+      );
+    }
+    console.log('Step 12 OK — Regenerate produced a new answer; history length unchanged');
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
+    cleanupThreadBestEffort(editThreadId);
     removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
     removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
     removeWorkspaceFileBestEffort(HITL_OFF_FILE);
