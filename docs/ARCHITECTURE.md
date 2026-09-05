@@ -704,6 +704,16 @@ workspace root returns `400` (see the path-traversal guard below).
   Content`, `Accept-Ranges: bytes`; see "Media file playback flow" above
   for the exact request/response sequence.
 
+**Settings**
+- `GET /api/settings` → `200 {"hitl_enabled": bool, "thinking_enabled":
+  bool, "edit_mode_default": "truncate"|"fork"}` — the full document,
+  defaults applied for any key not yet stored (`hitl_enabled` defaults
+  `true`, `thinking_enabled` defaults `false`, `edit_mode_default` defaults
+  `"truncate"`)
+- `PUT /api/settings` body: any subset of the three fields above → `200`
+  the full merged document; `422` on an unknown extra key or a wrong
+  type/invalid literal value; persists to Postgres (survives a restart)
+
 ### WebSocket chat protocol (`/ws/chat/{thread_id}`)
 
 One JSON object per text frame. The connection stays open across turns;

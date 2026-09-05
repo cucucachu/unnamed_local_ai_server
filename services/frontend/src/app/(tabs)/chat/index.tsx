@@ -122,20 +122,32 @@ export default function ThreadListScreen() {
       <Stack.Screen
         options={{
           headerRight: () => (
-            <Pressable
-              onPress={handleNewChat}
-              disabled={creating}
-              accessibilityRole="button"
-              accessibilityLabel="New chat"
-              testID="new-chat-header-button"
-              style={styles.headerButton}
-            >
-              {creating ? (
-                <ActivityIndicator size="small" color={theme.text} />
-              ) : (
-                <Ionicons name="add" size={26} color={theme.text} />
-              )}
-            </Pressable>
+            <View style={styles.headerButtons}>
+              {/* M8-02: opens the settings modal screen. */}
+              <Pressable
+                onPress={() => router.push('/settings')}
+                accessibilityRole="button"
+                accessibilityLabel="Settings"
+                testID="settings-header-button"
+                style={styles.headerButton}
+              >
+                <Ionicons name="settings-outline" size={24} color={theme.text} />
+              </Pressable>
+              <Pressable
+                onPress={handleNewChat}
+                disabled={creating}
+                accessibilityRole="button"
+                accessibilityLabel="New chat"
+                testID="new-chat-header-button"
+                style={styles.headerButton}
+              >
+                {creating ? (
+                  <ActivityIndicator size="small" color={theme.text} />
+                ) : (
+                  <Ionicons name="add" size={26} color={theme.text} />
+                )}
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -256,6 +268,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   headerButton: {
     padding: 6,

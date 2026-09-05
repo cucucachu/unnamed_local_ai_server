@@ -48,6 +48,17 @@ CREATE TABLE IF NOT EXISTS threads (
 );
 """
 
+# `settings` (M8-02): one row per `SettingsDocument` field, see
+# `app/db/settings.py` for the read/merge logic. Created here, next to
+# `threads`, per the ticket's "same pattern as `app/db/threads.py`" spec.
+_SETTINGS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
 
 @dataclass
 class PostgresCheckpointer:
@@ -89,5 +100,6 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
 
     async with pool.connection() as conn:
         await conn.execute(_THREADS_TABLE_DDL)
+        await conn.execute(_SETTINGS_TABLE_DDL)
 
     return PostgresCheckpointer(pool=pool, saver=saver)
