@@ -122,6 +122,11 @@ step_stack_up_and_healthy() {
     return 1
   fi
   log "OK: model-runner healthy + ${API_BASE}/health OK"
+  # M8-03 made HITL on by default; web_research_smoke / research_browser
+  # write_file turns are not wired to send approval_response.
+  log "Turning hitl_enabled off so research write_file is not interrupted..."
+  bash "${SCRIPT_DIR}/ensure_hitl.sh" false >/dev/null
+  log "OK: hitl_enabled=false"
 }
 
 # ---- steps 1-4: the existing verify_*/smoke scripts, chained -------------

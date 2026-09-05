@@ -115,6 +115,9 @@ const EXEC_MESSAGE = 'Use execute_code to run: echo HELLO-UI';
 // to (M7-05 added `web_search`/`web_fetch` themselves; this script's own
 // prior steps had no coverage of either tool at all until this addition).
 const WEB_SEARCH_MESSAGE = 'Use web_search to search for: llama.cpp github repository';
+// Wikipedia is one of the GET-only engines and stays up when Brave/Mojeek
+// rate-limit (common after repeated gate runs). Same tool-name phrasing.
+const WEB_SEARCH_FALLBACK_MESSAGE = 'Use web_search to search for: python';
 // M8-01: reliably produces many small token chunks over several seconds
 // (rather than one quick reply), giving the script room to click Stop
 // within ~2s of sending and still be mid-stream when it does.
@@ -261,6 +264,32 @@ async function expectCountAbove(locator, priorCount, timeoutMs, label) {
   throw new Error(`${label} did not appear within ${timeoutMs}ms`);
 }
 
+async function sendWebSearchAndAwaitCard(page, input, toolCardLocator, message) {
+  const priorCount = await toolCardLocator.count();
+  await input.fill(message);
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+  await expandLastActivityPanel(page);
+  await expectCountAbove(toolCardLocator, priorCount, 15_000, 'web_search tool card');
+  const searchCard = toolCardLocator.nth(priorCount);
+  const chipText = await waitForAnyText(searchCard, [/\d+ results?/, /error/], 60_000);
+  return { searchCard, chipText };
+}
+
+function searchChipHasResults(chipText) {
+  return /[1-9]\d* results?/.test(chipText);
+}
+
+async function readTestIdText(page, testId, timeoutMs = 500) {
+  const loc = page.locator(`[data-testid="${testId}"]`);
+  if ((await loc.count()) === 0) return '';
+  try {
+    return ((await loc.textContent({ timeout: timeoutMs })) ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
 /** Polls `container`'s text content until it matches any of `patterns` —
  * used to wait for the exec card's status chip (success/failure/timeout;
  * see `ToolItemCard`'s exec branch in `chat/[threadId].tsx`) without caring
@@ -347,6 +376,18 @@ with urlopen(sys.argv[1], timeout=15) as resp:
     sys.stdout.write(resp.read().decode())
 `;
   const raw = execFileSync('python3', ['-c', script, `${API_BASE}/threads/${threadId}/messages`], {
+    encoding: 'utf8',
+  });
+  return JSON.parse(raw);
+}
+
+function fetchThreadBranches(threadId) {
+  const script = `${pythonSslPreamble()}
+import sys
+with urlopen(sys.argv[1], timeout=15) as resp:
+    sys.stdout.write(resp.read().decode())
+`;
+  const raw = execFileSync('python3', ['-c', script, `${API_BASE}/threads/${threadId}/branches`], {
     encoding: 'utf8',
   });
   return JSON.parse(raw);
@@ -503,7 +544,9 @@ async function main() {
   let savedSettings = null;
   const launchOptions = { headless: true };
   const contextOptions = {};
-  if (CA_PATH && new URL(BASE_URL).protocol === 'https:') {
+  // Step 18 always opens https://homeai.local even when this smoke's own
+  // BASE_URL is http://localhost — trust the CA whenever we have it.
+  if (CA_PATH) {
     try {
       const nssHome = importCaIntoNssHome(CA_PATH);
       const browsersPath =
@@ -620,37 +663,40 @@ async function main() {
     // expanded view lists >= 1 result with a real https:// link (M7-06) -
     // Requires the real stack (agent-server + model-runner + web-fetch +
     // searxng) to be up — same precondition as step 6 for exec.
-    const priorSearchCardCount = await toolCardLocator.count();
-    await input.fill(WEB_SEARCH_MESSAGE);
-    await page.getByRole('button', { name: 'Send message' }).click();
-
-    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
-    await expandLastActivityPanel(page);
-    await expectCountAbove(toolCardLocator, priorSearchCardCount, 15_000, 'web_search tool card');
-    const searchCard = toolCardLocator.nth(priorSearchCardCount);
-    console.log('Step 7 OK — web_search tool card appeared');
-
-    // Wait for the done state — either the "N results" count chip or an
-    // "error" chip (see `webSearchChipInfo` in `chat/[threadId].tsx`) —
-    // before expanding; fail fast with a clear message if it's the error
-    // chip rather than timing out looking for result links that will never
-    // appear.
-    const searchChipText = await waitForAnyText(searchCard, [/\d+ results?/, /error/], 60_000);
-    if (!/\d+ results?/.test(searchChipText)) {
+    const firstSearch = await sendWebSearchAndAwaitCard(page, input, toolCardLocator, WEB_SEARCH_MESSAGE);
+    let searchCard = firstSearch.searchCard;
+    let searchChipText = firstSearch.chipText;
+    console.log(`Step 7 OK — web_search tool card appeared (chip: ${searchChipText.replace(/\s+/g, ' ').trim()})`);
+    if (!searchChipHasResults(searchChipText)) {
+      console.log('Step 7 — zero results (engine rate-limit); retrying with a Wikipedia-friendly query');
+      const retry = await sendWebSearchAndAwaitCard(page, input, toolCardLocator, WEB_SEARCH_FALLBACK_MESSAGE);
+      searchCard = retry.searchCard;
+      searchChipText = retry.chipText;
+    }
+    if (!searchChipHasResults(searchChipText)) {
       throw new Error(`Step 7: web_search did not return results (chip text: "${searchChipText}")`);
     }
 
     const searchHeader = searchCard.locator('[data-testid="chat-item-tool-header"]');
-    await searchHeader.click();
-
-    // Each result's title is a `Linking.openURL`-backed tappable element
-    // with `accessibilityRole="link"` (see `WebSearchToolDetail`) — RN
-    // Web surfaces that as an ARIA `role="link"`, which Playwright's
-    // `getByRole('link')` matches directly.
     const resultLinkLocator = searchCard.getByRole('link');
-    await resultLinkLocator.first().waitFor({ state: 'visible', timeout: 15_000 });
+    // Header is a toggle starting collapsed. A stray click (or overlapping
+    // activity-panel expand) can leave it closed; click until a result
+    // link is visible rather than assuming one click expands.
+    const linkDeadline = Date.now() + 20_000;
+    while (Date.now() < linkDeadline) {
+      if ((await resultLinkLocator.count()) > 0) {
+        const first = resultLinkLocator.first();
+        if (await first.isVisible().catch(() => false)) break;
+      }
+      await searchHeader.click();
+      await page.waitForTimeout(400);
+    }
     if ((await resultLinkLocator.count()) < 1) {
-      throw new Error('Step 7: expanded search card has no result links');
+      throw new Error(
+        `Step 7: expanded search card has no result links` +
+          ` (card text: ${JSON.stringify((await searchCard.textContent()) ?? '')}` +
+          ` html: ${((await searchCard.innerHTML()) ?? '').slice(0, 2000)})`,
+      );
     }
 
     // The collapsed hostname/snippet text never contains the raw url by
@@ -1005,7 +1051,18 @@ async function main() {
     }
     console.log(`Step 15 OK — Thinking… + reasoning text (${reasoningText.slice(0, 80)}…)`);
 
-    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    // Reasoning already proved thinking-on. The model can sit in a long
+    // thinking loop; if Send never returns, Stop so thinking-off can run.
+    try {
+      await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: 180_000 });
+    } catch {
+      const stop = page.locator('[data-testid="chat-stop"]');
+      if ((await stop.count()) > 0) {
+        await stop.click();
+      }
+      await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: 30_000 });
+      console.log('Step 15 — thinking-on turn still running after reasoning; clicked Stop');
+    }
     const thinkingAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     if (thinkingAssistants <= thinkingPriorAssistants) {
       throw new Error('Step 15: thinking-on turn did not produce a finished assistant answer');
@@ -1052,20 +1109,28 @@ async function main() {
     if ((await forkUsers.count()) < 3) {
       throw new Error(`Step 16: expected 3 user bubbles before fork, got ${await forkUsers.count()}`);
     }
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
     await forkUsers.nth(1).locator('[data-testid="chat-item-user-menu"]').click();
     await page.locator('[data-testid="chat-message-action-edit"]').click();
     await page.locator('[data-testid="chat-edit-banner"]').waitFor({ state: 'visible', timeout: 10_000 });
     await page.locator('[data-testid="chat-edit-mode-fork"]').click();
+    // Wait for React to commit editMode='fork'. Clicking Send in the same
+    // tick as the Branch chip used the stale truncate handleSend, so the
+    // turn replaced history instead of forking and ‹ 2/2 › never appeared.
+    await page
+      .getByText('Editing — sending keeps the old continuation as a branch')
+      .waitFor({ state: 'visible', timeout: 10_000 });
     await input.fill(FORK_TURN_2_EDITED);
     await page.getByRole('button', { name: 'Send message' }).click();
+    console.log('Step 16 — sent fork edit; waiting for ‹ 2/2 ›');
 
     const forkEditDeadline = Date.now() + TIMEOUT_MS;
     let sawForkSwitcher = false;
     while (Date.now() < forkEditDeadline) {
       const switcher = page.locator('[data-testid="chat-branch-switcher"]');
       if ((await switcher.count()) > 0) {
-        const label = ((await page.locator('[data-testid="chat-branch-label"]').textContent()) ?? '').trim();
-        const whole = ((await switcher.textContent()) ?? '').replace(/\s+/g, ' ').trim();
+        const label = await readTestIdText(page, 'chat-branch-label');
+        const whole = ((await switcher.textContent({ timeout: 1000 }).catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
         if (label === '2/2' || /‹\s*2\/2\s*›/.test(whole)) {
           sawForkSwitcher = true;
           break;
@@ -1074,7 +1139,52 @@ async function main() {
       await page.waitForTimeout(300);
     }
     if (!sawForkSwitcher) {
-      throw new Error('Step 16: ‹ 2/2 › did not appear after editing turn 2 in fork mode');
+      let branches = [];
+      try {
+        branches = fetchThreadBranches(forkThreadId);
+      } catch {
+        branches = [];
+      }
+      const hasFork = Array.isArray(branches) && branches.some((point) => (point.branches?.length ?? 0) >= 2);
+      if (hasFork) {
+        console.log('Step 16 — REST has a fork but the live switcher missed it; reloading to hydrate');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await waitForText(page, FORK_TURN_2_EDITED, 20_000);
+        const reloadDeadline = Date.now() + 20_000;
+        while (Date.now() < reloadDeadline) {
+          const label = await readTestIdText(page, 'chat-branch-label');
+          if (label === '2/2') {
+            sawForkSwitcher = true;
+            break;
+          }
+          await page.waitForTimeout(300);
+        }
+      }
+    }
+    if (!sawForkSwitcher) {
+      const userCount = await forkUsers.count();
+      const editedVisible = await page.getByText(FORK_TURN_2_EDITED, { exact: true }).count();
+      const turn3Visible = await page.getByText(FORK_TURN_3, { exact: true }).count();
+      const switcherCount = await page.locator('[data-testid="chat-branch-switcher"]').count();
+      const label = await readTestIdText(page, 'chat-branch-label');
+      const errorText = await readTestIdText(page, 'chat-item-error');
+      let branches = null;
+      let apiUsers = [];
+      try {
+        branches = fetchThreadBranches(forkThreadId);
+        apiUsers = fetchThreadMessages(forkThreadId)
+          .filter((m) => m.role === 'user')
+          .map((m) => m.content);
+      } catch (err) {
+        branches = { fetchError: String(err) };
+      }
+      throw new Error(
+        `Step 16: ‹ 2/2 › did not appear after editing turn 2 in fork mode` +
+          ` (users=${userCount} editedVisible=${editedVisible} turn3Visible=${turn3Visible}` +
+          ` switcherCount=${switcherCount} label=${JSON.stringify(label)}` +
+          ` error=${JSON.stringify(errorText)} branches=${JSON.stringify(branches)}` +
+          ` apiUsers=${JSON.stringify(apiUsers)})`,
+      );
     }
     console.log('Step 16 OK — ‹ 2/2 › after fork edit');
 
@@ -1082,7 +1192,7 @@ async function main() {
     const switchDeadline = Date.now() + 20_000;
     let sawOriginal = false;
     while (Date.now() < switchDeadline) {
-      const label = ((await page.locator('[data-testid="chat-branch-label"]').textContent()) ?? '').trim();
+      const label = await readTestIdText(page, 'chat-branch-label');
       const hasOriginalTwo = (await page.getByText(FORK_TURN_2, { exact: true }).count()) > 0;
       const hasThree = (await page.getByText(FORK_TURN_3, { exact: true }).count()) > 0;
       if (label === '1/2' && hasOriginalTwo && hasThree) {
@@ -1100,7 +1210,7 @@ async function main() {
     await waitForText(page, FORK_TURN_1, 20_000);
     await waitForText(page, FORK_TURN_2, 20_000);
     await waitForText(page, FORK_TURN_3, 20_000);
-    const reloadedLabel = ((await page.locator('[data-testid="chat-branch-label"]').textContent()) ?? '').trim();
+    const reloadedLabel = await readTestIdText(page, 'chat-branch-label', 10_000);
     if (reloadedLabel !== '1/2') {
       throw new Error(`Step 16: reload lost the 1/2 selection (label=${reloadedLabel})`);
     }

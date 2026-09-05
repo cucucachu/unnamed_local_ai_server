@@ -80,6 +80,8 @@ agent run.
 ## M8
 
 - [ ] (M8-03) From a phone: approval card is usable one-handed; leaving the chat and returning while an approval is pending shows the card again.
+- [ ] (M8-08) From a phone (Expo Go and browser): stop a long answer; approve then reject a file write; edit an earlier message in both modes and switch branches. **(GATE G8)**
+- [ ] (M8-08) Toggle HITL off in Settings; a file write proceeds without a card. **(GATE G8)**
 
 ## M9
 
