@@ -55,14 +55,41 @@
 // the write is Approved like the M8-03 scenarios.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
-const API_BASE = process.env.CHAT_SMOKE_API_BASE ?? 'http://localhost/api';
+const API_BASE =
+  process.env.CHAT_SMOKE_API_BASE ?? new URL('/api', BASE_URL).href.replace(/\/$/, '');
+const CA_PATH = process.env.CHAT_SMOKE_CA ?? '';
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR ?? '';
 const TIMEOUT_MS = 120_000;
+
+/** Import Caddy's local CA into a throwaway NSS db so Chromium trusts
+ * `https://homeai.local` the same way a phone does after installing
+ * `homeai-root-ca.crt`. Playwright has no first-class extra-CA option;
+ * Chromium on Linux reads `$HOME/.pki/nssdb`. `PLAYWRIGHT_BROWSERS_PATH`
+ * is pinned so changing HOME doesn't hide the downloaded browser. */
+function importCaIntoNssHome(caPath) {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'homeai-pw-nss-'));
+  const nssDir = path.join(home, '.pki', 'nssdb');
+  mkdirSync(nssDir, { recursive: true });
+  execFileSync('certutil', ['-N', '-d', `sql:${nssDir}`, '--empty-password']);
+  execFileSync('certutil', [
+    '-A',
+    '-n',
+    'homeai-root',
+    '-t',
+    'C,,',
+    '-d',
+    `sql:${nssDir}`,
+    '-i',
+    caPath,
+  ]);
+  return home;
+}
 
 // Deliberately > 60 chars (and with a run of internal whitespace) so the
 // list-title assertion below actually exercises `_derive_title`'s
@@ -250,16 +277,36 @@ async function waitForAnyText(container, patterns, timeoutMs) {
  * port (M4-03), so its session is reached by execing python3 directly
  * inside its own container against its own localhost:8090. */
 /** GET/PUT `/api/settings` via python3 urllib (this host has no `curl`). */
+function pythonSslPreamble() {
+  // urllib on this host has no curl; when the smoke is pointed at
+  // https://homeai.local the Caddy local CA must be loaded explicitly.
+  return `
+import ssl, urllib.request
+def _ssl_ctx():
+    ca = ${JSON.stringify(CA_PATH)}
+    if not ca:
+        return None
+    ctx = ssl.create_default_context()
+    ctx.load_verify_locations(ca)
+    return ctx
+def urlopen(req, timeout=15):
+    ctx = _ssl_ctx()
+    if ctx is None:
+        return urllib.request.urlopen(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+`;
+}
+
 function settingsRequest(method, body) {
-  const script = `
-import json, sys, urllib.request
+  const script = `${pythonSslPreamble()}
+import json, sys
 
 url, method, raw_body = sys.argv[1], sys.argv[2], sys.argv[3]
 req = urllib.request.Request(url, method=method)
 if raw_body:
     req.data = raw_body.encode()
     req.add_header('Content-Type', 'application/json')
-with urllib.request.urlopen(req, timeout=15) as resp:
+with urlopen(req, timeout=15) as resp:
     sys.stdout.write(resp.read().decode())
 `;
   const raw = execFileSync(
@@ -286,9 +333,9 @@ function removeWorkspaceFileBestEffort(name) {
 }
 
 function fetchThreadMessages(threadId) {
-  const script = `
-import sys, urllib.request
-with urllib.request.urlopen(sys.argv[1], timeout=15) as resp:
+  const script = `${pythonSslPreamble()}
+import sys
+with urlopen(sys.argv[1], timeout=15) as resp:
     sys.stdout.write(resp.read().decode())
 `;
   const raw = execFileSync('python3', ['-c', script, `${API_BASE}/threads/${threadId}/messages`], {
@@ -299,14 +346,12 @@ with urllib.request.urlopen(sys.argv[1], timeout=15) as resp:
 
 function cleanupThreadBestEffort(threadId) {
   if (!threadId) return;
-  const deleteThreadScript = `
+  const deleteThreadScript = `${pythonSslPreamble()}
 import sys
-import urllib.error
-import urllib.request
 
 req = urllib.request.Request(sys.argv[1], method='DELETE')
 try:
-    urllib.request.urlopen(req, timeout=15)
+    urlopen(req, timeout=15)
 except Exception:
     pass
 `;
@@ -349,7 +394,32 @@ async function main() {
   let editThreadId;
   let forkThreadId;
   let savedSettings = null;
-  const browser = await chromium.launch({ headless: true });
+  const launchOptions = { headless: true };
+  const contextOptions = {};
+  if (CA_PATH && new URL(BASE_URL).protocol === 'https:') {
+    try {
+      const nssHome = importCaIntoNssHome(CA_PATH);
+      const browsersPath =
+        process.env.PLAYWRIGHT_BROWSERS_PATH ||
+        path.join(os.homedir(), '.cache', 'ms-playwright');
+      launchOptions.env = {
+        ...process.env,
+        HOME: nssHome,
+        PLAYWRIGHT_BROWSERS_PATH: browsersPath,
+      };
+      console.log(`Trusting Caddy CA via NSS db (${CA_PATH})`);
+    } catch (err) {
+      // certutil (libnss3-tools) is optional. If it isn't installed,
+      // Playwright still needs a way to load https://homeai.local — we
+      // already required the CA file on the HTTPS path, so this is a
+      // scoped fallback, not a blanket ignore.
+      console.log(
+        `certutil NSS import failed (${err.message}); using Playwright ignoreHTTPSErrors with ${CA_PATH}`,
+      );
+      contextOptions.ignoreHTTPSErrors = true;
+    }
+  }
+  const browser = await chromium.launch(launchOptions);
   try {
     // Existing steps include `execute_code` (step 6), which HITL-on would
     // pause behind an approval card. Force HITL off for those, then
@@ -357,7 +427,8 @@ async function main() {
     savedSettings = settingsRequest('GET');
     settingsRequest('PUT', { hitl_enabled: false });
 
-    const page = await browser.newPage();
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     // Explicit navigation to the Chat tab (even though it's also the `/`
