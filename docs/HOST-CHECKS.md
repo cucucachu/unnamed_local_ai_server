@@ -86,3 +86,6 @@ agent run.
 - [ ] (M9-01) Expo Go (Android/iOS): prompt "Reply with a markdown table of 3 planets and a python code block printing hello" — the same reply renders with monospace code and a scrollable table at phone width.
 - [ ] (M9-02) Phone: the collapsed panel and header read cleanly; expanding on a long research turn scrolls sensibly.
 - [ ] (M9-03) Expo Go: tapping a file link switches to the Files tab at the right folder with the file highlighted.
+- [ ] (M9-04) Android phone, Expo Go: tap the composer -> keyboard opens, composer sits directly above it, last message still visible.
+- [ ] (M9-04) Android Chrome at `homeai.local`: same behavior in the browser.
+- [ ] (M9-04) iOS Expo Go: no regression.

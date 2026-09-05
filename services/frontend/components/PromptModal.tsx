@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { theme } from '@/lib/theme';
 
 export interface PromptModalProps {
@@ -39,7 +40,10 @@ export function PromptModal({ title, initialValue = '', submitLabel = 'OK', onSu
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.overlay}>
+      {/* M9-04: same keyboard-controller KAV as chat, so the centered
+          card (autoFocus TextInput) sits above the Android keyboard
+          instead of being covered. Web is RN's KAV / viewport resize. */}
+      <AppKeyboardAvoidingView style={styles.overlay}>
         <View style={styles.card}>
           <Text style={styles.title}>{title}</Text>
           <TextInput
@@ -65,7 +69,7 @@ export function PromptModal({ title, initialValue = '', submitLabel = 'OK', onSu
             </Pressable>
           </View>
         </View>
-      </View>
+      </AppKeyboardAvoidingView>
     </Modal>
   );
 }
