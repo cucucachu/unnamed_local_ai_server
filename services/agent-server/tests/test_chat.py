@@ -147,9 +147,12 @@ async def test_get_messages_normalizes_tool_call_turn(
     # app uses (`rest_app.state.agent`), rather than through the WS endpoint
     # — this test is about `GET .../messages` normalization, not the WS
     # wire format (already covered by `test_chat_ws.py`).
+    # `hitl_enabled: False` — this test is about `GET .../messages`
+    # normalization, not M8-03's approval flow; disabling HITL here keeps it
+    # exercising direct tool execution like it always has.
     await rest_app.state.agent.ainvoke(
         {"messages": [{"role": "user", "content": "write a file"}]},
-        config={"configurable": {"thread_id": thread_id}},
+        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
     )
 
     response = await rest_client.get(f"/api/threads/{thread_id}/messages")

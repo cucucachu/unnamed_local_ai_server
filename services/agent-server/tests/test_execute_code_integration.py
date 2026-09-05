@@ -94,7 +94,18 @@ async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
     thread_id = f"exec-integration-{uuid.uuid4()}"
     prompt = "Use execute_code to run: python3 -c 'print(21*2)' and tell me the output."
 
+    # This test is about `execute_code` reaching the real exec-manager, not
+    # M8-03's approval flow. HITL defaults on, so a mutating tool would
+    # pause on `approval_request` instead of producing `tool_end`. Disable
+    # for the duration and restore whatever was there.
+    saved_settings = None
     try:
+        async with httpx.AsyncClient() as client:
+            saved = await client.get(f"{API_BASE}/settings")
+            if saved.status_code == 200:
+                saved_settings = saved.json()
+                await client.put(f"{API_BASE}/settings", json={"hitl_enabled": False})
+
         frames = await _run_ws_turn(thread_id, prompt)
         match = _execute_code_tool_end_with_42(frames)
         if match is None:
@@ -115,5 +126,14 @@ async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
         try:
             async with httpx.AsyncClient() as client:
                 await client.delete(f"{API_BASE}/threads/{thread_id}")
+                if saved_settings is not None:
+                    await client.put(
+                        f"{API_BASE}/settings",
+                        json={
+                            "hitl_enabled": saved_settings.get("hitl_enabled", True),
+                            "thinking_enabled": saved_settings.get("thinking_enabled", False),
+                            "edit_mode_default": saved_settings.get("edit_mode_default", "truncate"),
+                        },
+                    )
         except httpx.HTTPError:
             pass

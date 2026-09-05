@@ -190,6 +190,52 @@ describe('openChatSocket — send/close', () => {
 
     expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'cancel' })]);
   });
+
+  it('dispatches approval_request to onApprovalRequest (M8-03)', () => {
+    const handlers = { ...makeHandlers(), onApprovalRequest: jest.fn() };
+    openChatSocket('thread-1', handlers, Ctor);
+
+    const frame = {
+      type: 'approval_request',
+      interrupt_id: 'int-1',
+      actions: [
+        {
+          tool_call_id: 'call-1',
+          name: 'write_file',
+          category: 'file',
+          args: { file_path: '/x.txt', content: 'y' },
+          description: 'Write file `/x.txt`',
+        },
+      ],
+    };
+    latestSocket().emit(frame);
+
+    expect(handlers.onApprovalRequest).toHaveBeenCalledWith(frame);
+  });
+
+  it('dispatches an awaiting_approval turn_end to onTurnEnd (M8-03)', () => {
+    const handlers = makeHandlers();
+    openChatSocket('thread-1', handlers, Ctor);
+
+    latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+
+    expect(handlers.onTurnEnd).toHaveBeenCalledWith({ type: 'turn_end', status: 'awaiting_approval' });
+  });
+
+  it('approvalResponse() serializes an approval_response frame (M8-03)', () => {
+    const handlers = makeHandlers();
+    const chat = openChatSocket('thread-1', handlers, Ctor);
+
+    chat.approvalResponse('int-1', [{ tool_call_id: 'call-1', decision: 'approve' }]);
+
+    expect(latestSocket().sent).toEqual([
+      JSON.stringify({
+        type: 'approval_response',
+        interrupt_id: 'int-1',
+        decisions: [{ tool_call_id: 'call-1', decision: 'approve' }],
+      }),
+    ]);
+  });
 });
 
 describe('openChatSocket — reconnect behavior', () => {

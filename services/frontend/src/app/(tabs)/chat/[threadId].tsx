@@ -20,7 +20,8 @@ import {
 
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
-import { useChat, type ChatItem, type ChatToolItem } from '@/lib/useChat';
+import type { ApprovalDecision } from '@/lib/chatSocket';
+import { useChat, type ChatItem, type ChatToolItem, type PendingApproval, type PendingApprovalAction } from '@/lib/useChat';
 import {
   hostnameFromUrl,
   parseFetchResult,
@@ -47,12 +48,23 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
  * `[threadId]` segment, never a parent/sibling route's params. */
 export default function ChatScreen() {
   const { threadId } = useLocalSearchParams<{ threadId: string }>();
-  const { items, sendMessage, stopTurn, busy, connectionState, hydrationState, retryHydration } =
-    useChat(threadId);
+  const {
+    items,
+    sendMessage,
+    stopTurn,
+    busy,
+    connectionState,
+    hydrationState,
+    retryHydration,
+    pendingApproval,
+    respondToApproval,
+  } = useChat(threadId);
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<ChatItem>>(null);
 
-  const canSend = !busy && hydrationState === 'done' && draft.trim().length > 0;
+  // M8-03: the composer/Send button is disabled while an approval is
+  // pending, in addition to the existing `busy` disable from M8-01.
+  const canSend = !busy && pendingApproval === null && hydrationState === 'done' && draft.trim().length > 0;
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
@@ -143,6 +155,9 @@ export default function ChatScreen() {
           onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
           onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
         />
+        {pendingApproval !== null ? (
+          <ApprovalCard pendingApproval={pendingApproval} onRespond={respondToApproval} />
+        ) : null}
         <View style={styles.composer}>
           <TextInput
             style={styles.input}
@@ -152,6 +167,7 @@ export default function ChatScreen() {
             placeholder="Message…"
             placeholderTextColor={theme.textMuted}
             multiline
+            editable={pendingApproval === null}
           />
           {busy ? (
             <Pressable
@@ -456,6 +472,176 @@ function WebFetchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: Pars
   );
 }
 
+// ---------------------------------------------------------------------------
+// M8-03: ApprovalCard
+// ---------------------------------------------------------------------------
+
+/** First `n` lines of `text`, joined back with `\n` — used for the "first 20
+ * lines" args preview spec (`write_file`'s `content` / `edit_file`'s
+ * `new_string`). Appends a `… (N more lines)` marker when truncated, same
+ * spirit as the exec/web_fetch cards' own `[output truncated]` markers. */
+function firstNLines(text: string, n: number): string {
+  const lines = text.split('\n');
+  if (lines.length <= n) return text;
+  return `${lines.slice(0, n).join('\n')}\n… (${lines.length - n} more lines)`;
+}
+
+/** Renders one pending action's `args` per the spec's per-type rules: exec
+ * (`execute_code`) -> the command in monospace; file ops (`write_file`/
+ * `edit_file`/`delete`) -> the path + first ~20 lines of content/edit.
+ * Falls back to a raw JSON dump for anything else (defensive — the four
+ * mutating tools are the only ones `interrupt_on` ever covers today, see
+ * `app/agent/build.py`'s `MUTATING_TOOL_NAMES`). */
+function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): ReactElement {
+  const args = action.args;
+  if (action.category === 'exec') {
+    const command = typeof args.command === 'string' ? args.command : JSON.stringify(args);
+    return <Text style={[styles.toolDetailText, styles.approvalArgsText]}>{command}</Text>;
+  }
+
+  if (action.category === 'file') {
+    const path = typeof args.file_path === 'string' ? args.file_path : (typeof args.path === 'string' ? args.path : '?');
+    let bodyPreview: string | null = null;
+    if (action.name === 'write_file' && typeof args.content === 'string') {
+      bodyPreview = firstNLines(args.content, 20);
+    } else if (action.name === 'edit_file' && typeof args.new_string === 'string') {
+      const oldPreview = typeof args.old_string === 'string' ? firstNLines(args.old_string, 20) : '';
+      bodyPreview = `- ${oldPreview}\n+ ${firstNLines(args.new_string, 20)}`;
+    }
+    return (
+      <View style={styles.approvalArgsColumn}>
+        <Text style={[styles.toolDetailText, styles.approvalArgsText]} numberOfLines={1} ellipsizeMode="middle">
+          {path}
+        </Text>
+        {bodyPreview !== null ? (
+          <Text style={[styles.toolDetailText, styles.approvalArgsText]}>{bodyPreview}</Text>
+        ) : null}
+      </View>
+    );
+  }
+
+  return <Text style={[styles.toolDetailText, styles.approvalArgsText]}>{JSON.stringify(args)}</Text>;
+}
+
+interface ApprovalCardProps {
+  pendingApproval: PendingApproval;
+  onRespond: (decisions: ApprovalDecision[]) => void;
+}
+
+/**
+ * `ApprovalCard` (M8-03) — one row per pending action, with per-row
+ * Approve/Reject buttons plus an "Approve all" button when there's more
+ * than one action. All buttons disable immediately after ANY response is
+ * sent (`responded`, local state) to avoid a double-submit race — the
+ * parent's `pendingApproval` itself also flips to `null` right after
+ * (`useChat.respondToApproval`), but that happens one render later, and
+ * this card would otherwise still be mounted (and tappable) for that one
+ * frame without its own guard.
+ */
+function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactElement {
+  const [responded, setResponded] = useState(false);
+  // Per-row picks for the multi-action case: the WS contract requires one
+  // decision per pending `tool_call_id` in a single `approval_response`,
+  // so a lone Approve/Reject tap on one of N rows only records that row
+  // until every row has a pick (then we send). A single-action card
+  // still sends immediately — see `respondOne`.
+  const [rowDecisions, setRowDecisions] = useState<
+    Partial<Record<string, ApprovalDecision['decision']>>
+  >({});
+
+  const respond = useCallback(
+    (decisions: ApprovalDecision[]) => {
+      if (responded) return;
+      setResponded(true);
+      onRespond(decisions);
+    },
+    [responded, onRespond],
+  );
+
+  const respondOne = useCallback(
+    (toolCallId: string, decision: ApprovalDecision['decision']) => {
+      if (pendingApproval.actions.length === 1) {
+        respond([{ tool_call_id: toolCallId, decision }]);
+        return;
+      }
+      const next = { ...rowDecisions, [toolCallId]: decision };
+      setRowDecisions(next);
+      if (pendingApproval.actions.every((action) => next[action.toolCallId])) {
+        respond(
+          pendingApproval.actions.map((action) => ({
+            tool_call_id: action.toolCallId,
+            decision: next[action.toolCallId] as ApprovalDecision['decision'],
+          })),
+        );
+      }
+    },
+    [respond, pendingApproval.actions, rowDecisions],
+  );
+
+  const approveAll = useCallback(() => {
+    respond(pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })));
+  }, [respond, pendingApproval.actions]);
+
+  return (
+    <View style={styles.approvalCard} testID="approval-card">
+      <Text style={styles.approvalCardTitle}>
+        {pendingApproval.actions.length > 1 ? 'These actions need your approval' : 'This action needs your approval'}
+      </Text>
+      {pendingApproval.actions.map((action) => (
+        <View key={action.toolCallId} style={styles.approvalRow} testID="approval-row">
+          <View style={styles.approvalRowHeader}>
+            <Ionicons name={CATEGORY_ICON[action.category]} size={16} color={theme.textMuted} />
+            <Text style={styles.toolName}>{action.name}</Text>
+          </View>
+          <ApprovalActionArgs action={action} />
+          <Text style={styles.approvalDescription}>{action.description}</Text>
+          <View style={styles.approvalButtonRow}>
+            <Pressable
+              style={[
+                styles.approvalButton,
+                styles.approvalRejectButton,
+                rowDecisions[action.toolCallId] === 'reject' && styles.approvalRejectButtonSelected,
+                responded && styles.approvalButtonDisabled,
+              ]}
+              onPress={() => respondOne(action.toolCallId, 'reject')}
+              disabled={responded}
+              accessibilityRole="button"
+              accessibilityLabel={`Reject ${action.name}`}
+            >
+              <Text style={styles.approvalRejectButtonText}>Reject</Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.approvalButton,
+                styles.approvalApproveButton,
+                rowDecisions[action.toolCallId] === 'approve' && styles.approvalApproveButtonSelected,
+                responded && styles.approvalButtonDisabled,
+              ]}
+              onPress={() => respondOne(action.toolCallId, 'approve')}
+              disabled={responded}
+              accessibilityRole="button"
+              accessibilityLabel={`Approve ${action.name}`}
+            >
+              <Text style={styles.approvalApproveButtonText}>Approve</Text>
+            </Pressable>
+          </View>
+        </View>
+      ))}
+      {pendingApproval.actions.length > 1 ? (
+        <Pressable
+          style={[styles.approvalButton, styles.approvalApproveAllButton, responded && styles.approvalButtonDisabled]}
+          onPress={approveAll}
+          disabled={responded}
+          accessibilityRole="button"
+          accessibilityLabel="Approve all"
+        >
+          <Text style={styles.approvalApproveButtonText}>Approve all</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const isExec = item.category === 'exec';
@@ -498,6 +684,14 @@ function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
         )}
         {item.status === 'running' ? (
           <ActivityIndicator size="small" color={theme.accent} style={styles.toolStatusIcon} />
+        ) : item.status === 'rejected' ? (
+          // M8-03: mirrors the exec-chip visual convention exactly (small
+          // pill, colored border+text) for a locally-synthesized rejected
+          // action — see `useChat.respondToApproval`'s doc for why this
+          // item has no real `tool_start`/`tool_end` frame behind it.
+          <View style={[styles.execChip, { borderColor: theme.danger }]} testID="chat-item-tool-rejected-chip">
+            <Text style={[styles.execChipText, { color: theme.danger }]}>rejected</Text>
+          </View>
         ) : chip !== null ? (
           <View style={[styles.execChip, { borderColor: chip.color }]}>
             <Text style={[styles.execChipText, { color: chip.color }]}>{chip.text}</Text>
@@ -755,5 +949,88 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: theme.surface,
+  },
+  approvalCard: {
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    backgroundColor: theme.surface,
+    padding: 10,
+    gap: 8,
+  },
+  approvalCardTitle: {
+    color: theme.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  approvalRow: {
+    gap: 4,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+    paddingTop: 8,
+  },
+  approvalRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  approvalArgsColumn: {
+    gap: 2,
+  },
+  approvalArgsText: {
+    color: theme.text,
+  },
+  approvalDescription: {
+    color: theme.textMuted,
+    fontSize: 12,
+  },
+  approvalButtonRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  approvalButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  approvalButtonDisabled: {
+    opacity: 0.5,
+  },
+  approvalRejectButton: {
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.danger,
+  },
+  approvalRejectButtonSelected: {
+    borderWidth: 2,
+  },
+  approvalApproveButtonSelected: {
+    borderWidth: 2,
+    borderColor: theme.text,
+  },
+  approvalRejectButtonText: {
+    color: theme.danger,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  approvalApproveButton: {
+    backgroundColor: theme.accent,
+  },
+  approvalApproveAllButton: {
+    backgroundColor: theme.accent,
+    marginTop: 4,
+    minHeight: 44,
+  },
+  approvalApproveButtonText: {
+    color: theme.text,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

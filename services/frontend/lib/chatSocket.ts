@@ -34,9 +34,32 @@ export interface ToolEndFrame {
   result_preview: string;
 }
 
-/** `status` (M8-01): `"completed"` for a normal finish, `"cancelled"` when
- * the turn was stopped early by a client `cancel` frame. */
-export type TurnEndStatus = 'completed' | 'cancelled';
+/** M8-03: one pending mutating tool call awaiting a human decision — a row
+ * in an `approval_request` frame's `actions`, or in `GET
+ * /api/threads/{id}/state`'s `pending_approval.actions`. */
+export interface PendingApprovalAction {
+  tool_call_id: string;
+  name: string;
+  category: ToolCategory;
+  args: Record<string, unknown>;
+  description: string;
+}
+
+/** M8-03: emitted instead of a normal completion when the turn ends with
+ * one or more mutating tool calls paused for human approval — ALWAYS
+ * immediately followed by `turn_end {"status": "awaiting_approval"}`. */
+export interface ApprovalRequestFrame {
+  type: 'approval_request';
+  interrupt_id: string;
+  actions: PendingApprovalAction[];
+}
+
+/** `status` (M8-01/M8-03): `"completed"` for a normal finish, `"cancelled"`
+ * when the turn was stopped early by a client `cancel` frame,
+ * `"awaiting_approval"` when the turn paused on a pending `approval_request`
+ * (see `ApprovalRequestFrame` above — always the immediately preceding
+ * frame in that case). */
+export type TurnEndStatus = 'completed' | 'cancelled' | 'awaiting_approval';
 
 export interface TurnEndFrame {
   type: 'turn_end';
@@ -54,6 +77,7 @@ export type ServerFrame =
   | TokenFrame
   | ToolStartFrame
   | ToolEndFrame
+  | ApprovalRequestFrame
   | TurnEndFrame
   | ErrorFrame;
 
@@ -64,9 +88,27 @@ export interface UserMessageFrame {
 }
 
 /** M8-01: cancels the in-flight turn. Only meaningful while a turn is in
- * flight — a no-op server-side otherwise (see `chat_ws.py`). */
+ * flight — a no-op server-side otherwise (see `chat_ws.py`). M8-03: while
+ * AWAITING APPROVAL instead, this rejects every pending action (message
+ * "The user cancelled.") rather than being a no-op — see `chat_ws.py`. */
 export interface CancelFrame {
   type: 'cancel';
+}
+
+/** M8-03: one decision for one pending `tool_call_id`, sent as part of an
+ * `ApprovalResponseFrame`. */
+export interface ApprovalDecision {
+  tool_call_id: string;
+  decision: 'approve' | 'reject';
+}
+
+/** M8-03: resumes a turn paused on `interrupt_id` (must match the pending
+ * `approval_request`'s own `interrupt_id`) with one decision per pending
+ * `tool_call_id`. Only valid while awaiting approval — see `chat_ws.py`. */
+export interface ApprovalResponseFrame {
+  type: 'approval_response';
+  interrupt_id: string;
+  decisions: ApprovalDecision[];
 }
 
 /** Connection lifecycle states a UI can render directly (e.g. a "connecting…"
@@ -81,6 +123,8 @@ export interface ChatSocketHandlers {
   onToken?: (frame: TokenFrame) => void;
   onToolStart?: (frame: ToolStartFrame) => void;
   onToolEnd?: (frame: ToolEndFrame) => void;
+  /** M8-03. */
+  onApprovalRequest?: (frame: ApprovalRequestFrame) => void;
   onTurnEnd?: (frame: TurnEndFrame) => void;
   onError?: (frame: ErrorFrame) => void;
   /** Optional: fires whenever the socket's own connection lifecycle state
@@ -93,8 +137,12 @@ export interface ChatSocket {
   /** Serialize and send a `user_message` frame. */
   send(userMessage: string): void;
   /** Serialize and send a `cancel` frame (M8-01) — asks the server to stop
-   * the in-flight turn. A no-op server-side if no turn is in flight. */
+   * the in-flight turn. A no-op server-side if no turn is in flight (M8-03:
+   * reject-all if awaiting approval instead — see `CancelFrame`'s doc). */
   cancel(): void;
+  /** Serialize and send an `approval_response` frame (M8-03). Only
+   * meaningful while awaiting approval on the matching `interruptId`. */
+  approvalResponse(interruptId: string, decisions: ApprovalDecision[]): void;
   /** Cleanly close the socket; cancels any pending reconnect attempt. */
   close(): void;
 }
@@ -163,6 +211,9 @@ export function openChatSocket(
         return;
       case 'tool_end':
         handlers.onToolEnd?.(frame);
+        return;
+      case 'approval_request':
+        handlers.onApprovalRequest?.(frame);
         return;
       case 'turn_end':
         turnInFlight = false;
@@ -261,6 +312,14 @@ export function openChatSocket(
     },
     cancel(): void {
       const frame: CancelFrame = { type: 'cancel' };
+      socket?.send(JSON.stringify(frame));
+    },
+    approvalResponse(interruptId: string, decisions: ApprovalDecision[]): void {
+      const frame: ApprovalResponseFrame = {
+        type: 'approval_response',
+        interrupt_id: interruptId,
+        decisions,
+      };
       socket?.send(JSON.stringify(frame));
     },
     close(): void {

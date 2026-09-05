@@ -385,6 +385,208 @@ describe('useChat — sendMessage', () => {
   });
 });
 
+describe('useChat — HITL approvals (M8-03)', () => {
+  const action = {
+    tool_call_id: 'call-1',
+    name: 'write_file',
+    category: 'file' as const,
+    args: { file_path: '/x.txt', content: 'y' },
+    description: 'Write file `/x.txt`',
+  };
+
+  it('approval_request populates pendingApproval and turn_end "awaiting_approval" does not clear it', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({
+        type: 'tool_start',
+        tool_call_id: 'ignored',
+        name: 'write_file',
+        category: 'file',
+        args: {},
+      });
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+
+    const { pendingApproval, busy } = hook.current();
+    expect(busy).toBe(false);
+    expect(pendingApproval).toEqual({
+      interruptId: 'int-1',
+      actions: [
+        {
+          toolCallId: 'call-1',
+          name: 'write_file',
+          category: 'file',
+          args: { file_path: '/x.txt', content: 'y' },
+          description: 'Write file `/x.txt`',
+        },
+      ],
+    });
+  });
+
+  it('respondToApproval sends approval_response, clears pendingApproval, and sets busy', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+    expect(hook.current().pendingApproval).not.toBeNull();
+
+    act(() => {
+      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'approve' }]);
+    });
+
+    expect(hook.current().pendingApproval).toBeNull();
+    expect(hook.current().busy).toBe(true);
+    expect(latestSocket().sent).toContain(
+      JSON.stringify({
+        type: 'approval_response',
+        interrupt_id: 'int-1',
+        decisions: [{ tool_call_id: 'call-1', decision: 'approve' }],
+      }),
+    );
+  });
+
+  it('respondToApproval with a reject decision synthesizes a rejected ChatToolItem immediately', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+
+    act(() => {
+      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'reject' }]);
+    });
+
+    const tool = findItem(hook.current().items, 'tool');
+    expect(tool).toMatchObject({
+      toolCallId: 'call-1',
+      name: 'write_file',
+      category: 'file',
+      status: 'rejected',
+      args: { file_path: '/x.txt', content: 'y' },
+    });
+  });
+
+  it('respondToApproval is a no-op if called again after the first response (avoids double-submit)', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+
+    act(() => {
+      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'approve' }]);
+      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'reject' }]);
+    });
+
+    const sentApprovalResponses = latestSocket().sent.filter((s) => JSON.parse(s).type === 'approval_response');
+    expect(sentApprovalResponses).toHaveLength(1);
+  });
+
+  it('a real (approved) tool_start/tool_end after the resumed turn produces a normal (non-rejected) tool item', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'approve' }]);
+    });
+
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({
+        type: 'tool_start',
+        tool_call_id: 'call-1',
+        name: 'write_file',
+        category: 'file',
+        args: { file_path: '/x.txt', content: 'y' },
+      });
+      latestSocket().emit({
+        type: 'tool_end',
+        tool_call_id: 'call-1',
+        name: 'write_file',
+        status: 'success',
+        result_preview: 'wrote 1 file',
+      });
+      latestSocket().emit({ type: 'turn_end', status: 'completed' });
+    });
+
+    const tool = findItem(hook.current().items, 'tool');
+    expect(tool.status).toBe('success');
+  });
+});
+
+describe('useChat — pending approval hydration (M8-03)', () => {
+  it('restores pendingApproval from GET /api/threads/{id}/state after history hydration', async () => {
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      if (url.includes('/state')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            pending_approval: {
+              interrupt_id: 'int-restored',
+              actions: [
+                {
+                  tool_call_id: 'call-9',
+                  name: 'delete',
+                  category: 'file',
+                  args: { file_path: '/y.txt' },
+                  description: 'Delete `/y.txt`',
+                },
+              ],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    const hook = renderUseChatSync();
+    await flush();
+
+    expect(hook.current().hydrationState).toBe('done');
+    expect(hook.current().pendingApproval).toEqual({
+      interruptId: 'int-restored',
+      actions: [
+        {
+          toolCallId: 'call-9',
+          name: 'delete',
+          category: 'file',
+          args: { file_path: '/y.txt' },
+          description: 'Delete `/y.txt`',
+        },
+      ],
+    });
+  });
+
+  it('leaves pendingApproval null when GET .../state reports none pending', async () => {
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      if (url.includes('/state')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ pending_approval: null }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [] });
+    }) as unknown as typeof fetch;
+
+    const hook = renderUseChatSync();
+    await flush();
+
+    expect(hook.current().pendingApproval).toBeNull();
+  });
+});
+
 describe('useChat — connectionState', () => {
   it('reflects the underlying socket connection lifecycle', async () => {
     const hook = await renderUseChat();

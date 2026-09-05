@@ -678,6 +678,15 @@ workspace root returns `400` (see the path-traversal guard below).
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
   "tool_calls": [{"id", "name", "args"}]|null}, ...]`, normalized from the
   LangGraph checkpoint (`tool` rows carry the tool result text)
+- `GET /api/threads/{id}/state` (M8-03) → `200 {"pending_approval":
+  {"interrupt_id": str, "actions": [{"tool_call_id": str, "name": str,
+  "category": "file"|"exec"|"plan"|"web"|"other", "args": {},
+  "description": str}]} | null}` — same payload as the live
+  `approval_request` frame (minus the frame's `type` envelope). Derived
+  from the checkpointer's pending interrupt (no extra storage). The
+  frontend calls this after history hydration on (re)connect so an
+  approval card survives a reload. Unknown / never-run thread ids return
+  `{"pending_approval": null}` rather than 404.
 - `DELETE /api/threads/{id}` → `204` (deletes the row and the
   checkpointer state for that thread)
 
@@ -725,15 +734,33 @@ Client → server:
 ```json
 {"type": "user_message", "content": "string"}
 {"type": "cancel"}
+{"type": "approval_response", "interrupt_id": "str",
+ "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
 ```
 
 `cancel` (M8-01) stops the in-flight turn early. It's only meaningful while
 a turn is in flight; sent outside a turn (idle, waiting for the next
-`user_message`) it's a **no-op** — ignored, no error/close, no frame sent
-in response. Any other, non-`cancel` frame received mid-turn is likewise
-ignored (looped past) rather than misinterpreted; sending anything other
-than a well-formed `user_message` (or `cancel`) *while idle* still gets the
-usual `error` frame + close (see below).
+`user_message`, and **not** awaiting approval) it's a **no-op** — ignored,
+no error/close, no frame sent in response. Any other, non-`cancel` frame
+received mid-turn is likewise ignored (looped past) rather than
+misinterpreted; sending anything other than a well-formed `user_message`
+(or `cancel`) *while idle* still gets the usual `error` frame + close (see
+below).
+
+`approval_response` (M8-03) is only valid while a previous turn ended
+`awaiting_approval` (or a reconnect hydrated the same pending interrupt
+from `GET /api/threads/{id}/state`). It resumes the paused graph as a
+**new turn** on the same per-thread lock (`turn_start` … `turn_end`) via
+`Command(resume={"decisions": [...]})`. Each decision is mapped to
+deepagents' HITL shape: `{"type": "approve"}` or `{"type": "reject",
+"message": "The user rejected this action."}`. One decision is required
+per pending `tool_call_id`; a mismatched `interrupt_id` or incomplete
+decision list is an invalid frame (`error` + close 1008).
+
+`cancel` **while awaiting approval** is not the M8-01 cancel-a-running-task
+path (there is no running task — the graph is paused). It rejects every
+pending action with message `"The user cancelled."` and resumes the same
+way an all-reject `approval_response` would.
 
 Server → client, in order within a turn:
 
@@ -744,14 +771,26 @@ Server → client, in order within a turn:
  "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}     // args truncated to 500 chars/value
 {"type": "tool_end", "tool_call_id": "str", "name": "str",
  "status": "success"|"error", "result_preview": "str"}     // truncated to 2000 chars
-{"type": "turn_end", "status": "completed"|"cancelled"}
+{"type": "approval_request", "interrupt_id": "str",
+ "actions": [{"tool_call_id": "str", "name": "str",
+              "category": "file"|"exec"|"plan"|"web"|"other",
+              "args": {}, "description": "str"}]}           // args truncated like tool_start
+{"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval"}
 {"type": "error", "message": "str"}                        // followed by a normal close, code 1011
 ```
 
-`turn_end.status` (M8-01) is `"completed"` for a normal finish, or
-`"cancelled"` if the client sent `cancel` mid-turn. On `cancel`: the
-server cancels the turn task, awaits it, sends `turn_end
-{"status": "cancelled"}`, and — unlike a client disconnect —
+`turn_end.status` (M8-01 / M8-03) is `"completed"` for a normal finish,
+`"cancelled"` if the client sent `cancel` mid-turn, or `"awaiting_approval"`
+when the turn paused on one or more mutating tool calls (`write_file`,
+`edit_file`, `delete`, `execute_code`) with HITL on. `approval_request` is
+**always** immediately followed by `turn_end {"status": "awaiting_approval"}`
+— there is no `turn_end {"status": "completed"}` for that turn. HITL is
+gated per turn by `SettingsStore.hitl_enabled` (read at the start of every
+fresh and resumed turn into `configurable.hitl_enabled`); with HITL off
+those four tools run without an interrupt, same as any other tool.
+
+On `cancel` mid-turn: the server cancels the turn task, awaits it, sends
+`turn_end {"status": "cancelled"}`, and — unlike a client disconnect —
 **keeps the connection open**; the per-thread lock is released normally
 and the thread's `updated_at` is still bumped, so the very next
 `user_message` on the same socket runs a normal turn. The `error` frame

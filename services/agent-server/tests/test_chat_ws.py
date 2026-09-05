@@ -18,6 +18,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.db.settings import InMemorySettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, ThreadStore
 from app.main import create_app
 from tests.fake_exec_manager.scripting import FakeExecManager
@@ -25,7 +26,12 @@ from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.fake_web_fetch.scripting import FakeWebFetch
 
 
-def _make_client(fake_model: FakeModel, tmp_path, thread_store: ThreadStore | None = None) -> TestClient:
+def _make_client(
+    fake_model: FakeModel,
+    tmp_path,
+    thread_store: ThreadStore | None = None,
+    settings_store: SettingsStore | None = None,
+) -> TestClient:
     settings = fake_model.settings(workspace_root=str(tmp_path))
     # `checkpointer_override`/`thread_store_override` keep this on
     # `MemorySaver`/`InMemoryThreadStore` (fast, no real Postgres) rather
@@ -33,12 +39,23 @@ def _make_client(fake_model: FakeModel, tmp_path, thread_store: ThreadStore | No
     # `app.main.create_app`'s docstring. Callers that want to assert on
     # `ThreadStore` state (M3-02) pass their own `thread_store` instance in;
     # everyone else gets a private, unobservable one (unchanged behavior).
+    # `settings_store` (M8-03): most pre-HITL tests here are about tool
+    # execution mechanics, not the approval flow, so they pass one
+    # pre-seeded with `hitl_enabled: False` (see `_no_hitl_settings_store`)
+    # to keep exercising direct tool execution like before this ticket.
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),
         thread_store_override=thread_store or InMemoryThreadStore(),
+        settings_store_override=settings_store or InMemorySettingsStore(),
     )
     return TestClient(app)
+
+
+async def _no_hitl_settings_store() -> InMemorySettingsStore:
+    store = InMemorySettingsStore()
+    await store.update_document({"hitl_enabled": False})
+    return store
 
 
 def _drain_turn(ws) -> list[dict]:
@@ -70,14 +87,17 @@ async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
 
 
 async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
+    """`hitl_enabled: False` (M8-03): this test is about the `write_file`
+    tool-call wire format, not the approval flow — see `test_hitl_*` below
+    for HITL coverage of the exact same tool."""
     fake_model.queue(
         ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}),
         TextTurn("done"),
     )
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
-        "/ws/chat/tool-thread"
-    ) as ws:
+    with _make_client(
+        fake_model, tmp_path, settings_store=await _no_hitl_settings_store()
+    ) as client, client.websocket_connect("/ws/chat/tool-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
 
@@ -124,7 +144,12 @@ async def test_execute_code_tool_turn(
         workspace_root=str(tmp_path), exec_manager_url=fake_exec_manager.base_url
     )
     app = create_app(
-        settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()
+        settings,
+        checkpointer_override=MemorySaver(),
+        thread_store_override=InMemoryThreadStore(),
+        # `hitl_enabled: False` (M8-03): this test is about `execute_code`'s
+        # wire format, not the approval flow.
+        settings_store_override=await _no_hitl_settings_store(),
     )
 
     with TestClient(app) as client, client.websocket_connect("/ws/chat/exec-thread") as ws:
