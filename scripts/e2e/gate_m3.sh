@@ -80,6 +80,8 @@ if [ -z "$WORKSPACE_DIR" ]; then
   exit 1
 fi
 HOST_FILE_PATH="${WORKSPACE_DIR}/${FILE_PATH}"
+# Empty until we successfully PUT hitl_enabled=false after the API is up.
+SAVED_HITL=""
 
 log() {
   echo "[gate-m3] $(date '+%H:%M:%S') $*"
@@ -436,6 +438,9 @@ cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable
   # (Tier A requires two green runs in a row) - mirrors `gate_m2.sh`'s and
   # `files_rest_smoke.sh`'s own EXIT-trap convention.
+  if [ -n "$SAVED_HITL" ]; then
+    bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
+  fi
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
   rmdir "${WORKSPACE_DIR}/${FILE_DIR}" 2>/dev/null || true
   if [ -n "${THREAD_ID:-}" ]; then
@@ -457,6 +462,11 @@ trap cleanup EXIT
 main() {
   log "=== GATE M3 (G3): restart persistence + files round-trip ==="
   step_stack_up_and_healthy
+  # M8-03 made HITL on by default; this gate's mutating tools are not
+  # wired to send approval_response, so turn HITL off for the run.
+  log "Turning hitl_enabled off so write_file/execute_code are not interrupted..."
+  SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
+  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
   step_create_thread_and_write_file
   step_files_api_round_trip
   step_full_restart

@@ -548,9 +548,20 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           currentReasoningIdRef.current = null;
           setBusy(false);
           if (frame.status === 'completed' || frame.status === 'cancelled') {
+            // turn_end can race persist_active_tip: the first GET /branches
+            // may still be empty right after a fork. One delayed retry
+            // picks up the sibling without polling forever on unforked turns.
             void getThreadBranches(threadId)
-              .then((next) => {
-                if (!cancelled) setBranches(next);
+              .then(async (next) => {
+                if (cancelled) return;
+                setBranches(next);
+                if (next.length > 0) return;
+                await new Promise((resolve) => {
+                  setTimeout(resolve, 300);
+                });
+                if (cancelled) return;
+                const again = await getThreadBranches(threadId);
+                if (!cancelled && again.length > 0) setBranches(again);
               })
               .catch(() => {
                 /* keep the last known branch list */

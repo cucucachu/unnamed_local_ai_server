@@ -11,18 +11,32 @@
 #      gate_m7.sh to scripts/e2e/gate_full.sh" - the first milestone gate
 #      script appended to this chain since M6-03 first wrote it; future
 #      milestone gates append the same way)
+#   -> gate_m8.sh (M8-08, same append convention: Stop/HITL/edit/fork/
+#      thinking via chat_browser_smoke.sh + pending-approval restart via
+#      persistence_smoke.sh. Re-runs those two scripts after the earlier
+#      standalone steps; left in place deliberately, same idempotent
+#      reasoning as gate_m7.sh re-running verify_network.sh.)
+#
+# M8-08: after the initial compose up, this script waits for /api/health
+# and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
+# gates (m2/m3/m4/exec/research) send write_file/execute_code without an
+# approval_response and would stall on approval_request. Those scripts also
+# disable HITL themselves now; this chain-level PUT is belt-and-suspenders
+# so a leftover `true` from a previous UI toggle cannot fail the first
+# step. persistence_smoke.sh / chat_browser_smoke.sh / gate_m8.sh turn HITL
+# back on for their own assertions and restore afterwards.
 #
 # Every one of these is already a self-contained script that exits non-zero
 # on its own failure and does its own health-waiting/cleanup (several also
 # do their own internal `docker compose up -d --build` — left in place
 # deliberately, per the ticket: after this script's own initial `up`, those
-# calls are just fast no-ops). This script's only job is to run all 10 in
+# calls are just fast no-ops). This script's only job is to run all 12 in
 # order, capture PASS/FAIL + wall-clock seconds for each, and CONTINUE to
 # the next one even if a step fails — so a single run gives the full
 # picture instead of stopping at the first red — then print a summary table
 # and exit 1 if anything failed.
 #
-# M6-03 also did a naming/idempotency/cleanup sweep across these 10 scripts
+# M6-03 also did a naming/idempotency/cleanup sweep across these scripts
 # (see each script's own "M6-03:" comments for exactly what changed) so
 # they don't fight over thread ids/files when run back-to-back inside this
 # one chain, twice in a row, against the same live stack.
@@ -68,10 +82,37 @@ STEP_NAMES=()
 STEP_STATUSES=()
 STEP_SECONDS=()
 
+API_BASE="http://localhost/api"
+API_HEALTH_TIMEOUT_S=120
+
+http_ok() {
+  wget -q -O /dev/null --timeout=10 --tries=1 "$1" >/dev/null 2>&1
+}
+
+wait_for_api_health() {
+  local timeout_s="$1"
+  local deadline=$(( $(date +%s) + timeout_s ))
+  while (( $(date +%s) < deadline )); do
+    if http_ok "${API_BASE}/health"; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
 step_stack_up() {
   log "=== Bringing up the full compose stack (one docker compose up -d --build for the whole chain) ==="
   docker compose up -d --build
-  log "OK: docker compose up -d --build done"
+  log "Waiting for agent-server API health (timeout ${API_HEALTH_TIMEOUT_S}s)..."
+  if ! wait_for_api_health "$API_HEALTH_TIMEOUT_S"; then
+    log "ERROR: ${API_BASE}/health never came up within ${API_HEALTH_TIMEOUT_S}s"
+    return 1
+  fi
+  # HITL-on-by-default would stall pre-M8 mutating gates on approval_request.
+  log "Turning hitl_enabled off for pre-M8 mutating steps..."
+  bash "${SCRIPT_DIR}/ensure_hitl.sh" false >/dev/null
+  log "OK: docker compose up -d --build done; hitl_enabled=false"
 }
 
 # $1: display name for the summary table. $2..: the command to run.
@@ -139,6 +180,10 @@ main() {
   # each other is fine, they're idempotent" reasoning M6-03 already applied
   # to every other step above.
   run_step "gate_m7.sh"              bash "${SCRIPT_DIR}/gate_m7.sh"
+  # M8-08: gate_m8.sh re-runs chat_browser_smoke.sh + persistence_smoke.sh
+  # as part of its own chain (see that script's header). Same "self-contained
+  # scripts are idempotent" reasoning as the gate_m7.sh step above.
+  run_step "gate_m8.sh"              bash "${SCRIPT_DIR}/gate_m8.sh"
 
   print_summary
 

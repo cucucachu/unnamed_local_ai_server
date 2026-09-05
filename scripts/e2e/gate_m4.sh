@@ -112,6 +112,8 @@ if [ -z "$WORKSPACE_DIR" ]; then
 fi
 GATE_M4_DIR="${WORKSPACE_DIR}/gate-m4"
 PHOTOS_DIR="${GATE_M4_DIR}/photos"
+# Empty until we successfully PUT hitl_enabled=false after the API is up.
+SAVED_HITL=""
 
 log() {
   echo "[gate-m4] $(date '+%H:%M:%S') $*"
@@ -394,6 +396,9 @@ cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable
   # (Tier A requires two green runs in a row) - mirrors `gate_m2.sh`'s/
   # `gate_m3.sh`'s own EXIT-trap convention.
+  if [ -n "$SAVED_HITL" ]; then
+    bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
+  fi
   rm -rf "$GATE_M4_DIR" 2>/dev/null || true
 
   # Defensive: a failed attempt can leave a STRAY "${WORKSPACE_DIR}/workspace/"
@@ -432,6 +437,11 @@ trap cleanup EXIT
 main() {
   log "=== GATE M4 (G4): agent writes+runs a script on real files; isolation green ==="
   step_stack_up_and_healthy
+  # M8-03 made HITL on by default; this gate's write_file/execute_code
+  # prompts are not wired to send approval_response, so turn HITL off.
+  log "Turning hitl_enabled off so mutating tools are not interrupted..."
+  SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
+  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
   step_seed_workspace
   step_agent_writes_and_runs_script
   step_ws_frame_categories

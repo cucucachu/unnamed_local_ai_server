@@ -59,6 +59,8 @@ if [ -z "$WORKSPACE_DIR" ]; then
   exit 1
 fi
 HOST_FILE_PATH="${WORKSPACE_DIR}/${FILE_NAME}"
+# Empty until we successfully PUT hitl_enabled=false after the API is up.
+SAVED_HITL=""
 
 log() {
   echo "[exec-crossview-smoke] $(date '+%H:%M:%S') $*"
@@ -213,7 +215,8 @@ step_read_file_sees_same_content() {
   # the same directory" nuance the M4-04 system-prompt addition documents -
   # spelled out here so this plumbing check isn't gated on model path
   # reasoning it wasn't specifically prompted to get right.
-  local prompt="Now use your read_file tool with file_path '/${FILE_NAME}' (the file you just created via execute_code) and tell me exactly what it contains."
+  local prompt="Now use your read_file tool with file_path exactly '${FILE_NAME}' (workspace-relative; do NOT prefix /workspace — that prefix is only for execute_code shell commands) and tell me exactly what it contains."
+  local retry_prompt="Wrong path. Call read_file now with file_path exactly '${FILE_NAME}' — not '/workspace/${FILE_NAME}', not '/${FILE_NAME}'. Then quote the file contents."
 
   log "Sending read_file prompt (attempt 1/2)..."
   run_ws_turn "$prompt" /tmp/exec-crossview-read-attempt-1.log
@@ -223,7 +226,7 @@ step_read_file_sees_same_content() {
   fi
 
   log "WARN: read_file tool_end not observed on attempt 1 - retrying once (LLM nondeterminism allowance)"
-  run_ws_turn "$prompt" /tmp/exec-crossview-read-attempt-2.log
+  run_ws_turn "$retry_prompt" /tmp/exec-crossview-read-attempt-2.log
   if successful_tool_end /tmp/exec-crossview-read-attempt-2.log "read_file"; then
     log "OK: read_file tool_end succeeded on attempt 2"
     return 0
@@ -262,6 +265,9 @@ step_host_file_final_check() {
 
 cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
+  if [ -n "$SAVED_HITL" ]; then
+    bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
+  fi
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
   rm -f /tmp/exec-crossview-attempt-1.log /tmp/exec-crossview-attempt-2.log \
         /tmp/exec-crossview-read-attempt-1.log /tmp/exec-crossview-read-attempt-2.log 2>/dev/null || true
@@ -285,6 +291,11 @@ trap cleanup EXIT
 main() {
   log "=== EXEC CROSSVIEW SMOKE (M4-04): execute_code + read_file see the same /workspace ==="
   step_stack_healthy
+  # M8-03 made HITL on by default; this smoke's execute_code prompt is not
+  # wired to send approval_response, so turn HITL off for the run.
+  log "Turning hitl_enabled off so execute_code is not interrupted..."
+  SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
+  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
   step_execute_code_writes_file
   step_read_file_sees_same_content
   step_no_error_frames

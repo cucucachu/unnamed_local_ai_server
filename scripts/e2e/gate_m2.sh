@@ -47,6 +47,8 @@ cd "$REPO_ROOT"
 THREAD_ID="gate-m2"
 FILE_NAME="gate-m2.txt"
 EXPECTED_CONTENT="GATE-OK"
+# Empty until we successfully PUT hitl_enabled=false after the API is up.
+SAVED_HITL=""
 
 # WORKSPACE_DIR is the host path bind-mounted into agent-server at
 # /data/workspace (see docker-compose.yml + .env) - read it from the real
@@ -254,6 +256,9 @@ step_web_build_serves() {
 
 cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
+  if [ -n "$SAVED_HITL" ]; then
+    bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
+  fi
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
   # M6-03: also delete the "gate-m2" checkpoint. `PgThreadStore.delete`/
   # `ensure_exists` no-op for this non-UUID thread id (see
@@ -275,6 +280,11 @@ trap cleanup EXIT
 main() {
   log "=== GATE M2 (G1+G2): browser -> agent -> real file write ==="
   step_stack_up_and_healthy
+  # M8-03 made HITL on by default; this gate's write_file prompt is not
+  # wired to send approval_response, so turn HITL off for the run.
+  log "Turning hitl_enabled off so write_file is not interrupted..."
+  SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
+  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
   step_chat_streams
   step_agent_writes_file
   step_persistence_across_restart
