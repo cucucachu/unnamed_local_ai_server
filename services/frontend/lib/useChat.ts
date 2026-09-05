@@ -12,6 +12,7 @@ import {
   type ToolEndFrame,
   type ToolStartFrame,
   type ToolStatus,
+  type ReasoningFrame,
   type TurnEndFrame,
   type WebSocketCtor,
 } from './chatSocket';
@@ -118,7 +119,14 @@ export interface ChatErrorItem {
   message: string;
 }
 
-export type ChatItem = ChatUserItem | ChatAssistantItem | ChatToolItem | ChatErrorItem;
+/** M8-07: live thought text for the current turn. Never hydrated from history. */
+export interface ChatReasoningItem {
+  id: string;
+  kind: 'reasoning';
+  text: string;
+}
+
+export type ChatItem = ChatUserItem | ChatAssistantItem | ChatToolItem | ChatErrorItem | ChatReasoningItem;
 
 /**
  * `'loading'` while `GET /api/threads/{id}/messages` (M3-02/M3-04's history
@@ -267,6 +275,9 @@ export interface UseChatResult {
  * - `turn_start` opens a new streaming assistant item.
  * - `token` appends to "the current streaming item" (tracked via
  *   `currentAssistantIdRef` below, not a list search — O(1) per token).
+ * - `reasoning` (M8-07) accumulates into a `ChatReasoningItem` on the
+ *   current turn (activity, never history). A new item starts after a
+ *   tool split; consecutive deltas append.
  * - `tool_start` appends a running tool item AND clears
  *   `currentAssistantIdRef`, so any tokens that arrive after it start a
  *   fresh assistant item (the "split" behavior the ticket calls out).
@@ -321,6 +332,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   // if the next `token` should start a fresh item (right after connect,
   // after a `tool_start`, or after a `turn_end`/`error`).
   const currentAssistantIdRef = useRef<string | null>(null);
+  const currentReasoningIdRef = useRef<string | null>(null);
   const socketRef = useRef<ChatSocket | null>(null);
   // Mirrors `pendingApproval` for synchronous reads from `respondToApproval`
   // (a plain state closure would risk acting on a stale value if called
@@ -392,6 +404,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     if (hydrationState !== 'done') return;
 
     currentAssistantIdRef.current = null;
+    currentReasoningIdRef.current = null;
 
     const socket = openChatSocket(
       threadId,
@@ -405,7 +418,35 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           }));
           const id = makeId('assistant');
           currentAssistantIdRef.current = id;
+          currentReasoningIdRef.current = null;
           setItems((prev) => [...prev, { id, kind: 'assistant', text: '', streaming: true }]);
+        },
+        onReasoning: (frame: ReasoningFrame) => {
+          const id = currentReasoningIdRef.current ?? makeId('reasoning');
+          currentReasoningIdRef.current = id;
+          const assistantId = currentAssistantIdRef.current;
+          setItems((prev) => {
+            const existing = prev.find((item) => item.id === id);
+            if (existing) {
+              return prev.map((item) =>
+                item.id === id && item.kind === 'reasoning'
+                  ? { ...item, text: item.text + frame.content }
+                  : item,
+              );
+            }
+            const reasoningItem = { id, kind: 'reasoning' as const, text: frame.content };
+            // Insert before the turn_start placeholder assistant so the
+            // latest activity item is still that assistant — once tokens
+            // arrive, `runningStatusLine` can switch from Thinking… to
+            // Writing… instead of staying stuck on a trailing reasoning row.
+            if (assistantId) {
+              const idx = prev.findIndex((item) => item.id === assistantId);
+              if (idx !== -1) {
+                return [...prev.slice(0, idx), reasoningItem, ...prev.slice(idx)];
+              }
+            }
+            return [...prev, reasoningItem];
+          });
         },
         onToken: (frame) => {
           const id = currentAssistantIdRef.current ?? makeId('assistant');
@@ -429,6 +470,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           // item — see `onToken` above — rather than creating it here.
           const previousStreamingId = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
+          currentReasoningIdRef.current = null;
 
           const toolItem: ChatToolItem = {
             id: makeId('tool'),
@@ -475,6 +517,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
         onTurnEnd: (frame: TurnEndFrame) => {
           const id = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
+          currentReasoningIdRef.current = null;
           setBusy(false);
           const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
           const durationMs =
@@ -502,6 +545,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
         onError: (frame: ErrorFrame) => {
           const streamingId = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
+          currentReasoningIdRef.current = null;
           setBusy(false);
           const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
           const durationMs =

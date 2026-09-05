@@ -392,6 +392,13 @@ function ActivityItemRow({ item }: { item: ChatItem }): ReactElement | null {
           {item.text}
         </Text>
       );
+    case 'reasoning':
+      if (item.text === '') return null;
+      return (
+        <Text style={styles.activityReasoningText} testID="turn-activity-reasoning">
+          {item.text}
+        </Text>
+      );
     case 'tool':
       return <ToolItemCard item={item} />;
     case 'error':
@@ -1055,6 +1062,12 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontSize: 13,
     lineHeight: 18,
+  },
+  activityReasoningText: {
+    color: theme.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    fontStyle: 'italic',
   },
   bubbleRow: {
     flexDirection: 'row',

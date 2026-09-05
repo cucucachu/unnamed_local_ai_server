@@ -163,6 +163,48 @@ describe('useChat — plain text turn', () => {
   });
 });
 
+describe('useChat — reasoning frames (M8-07)', () => {
+  it('accumulates reasoning into the current turn activity and keeps it out of final', async () => {
+    const hook = await renderUseChat();
+
+    act(() => {
+      hook.current().sendMessage('what is 2+2?');
+    });
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ type: 'reasoning', content: 'The user asked ' });
+      latestSocket().emit({ type: 'reasoning', content: '2+2.' });
+    });
+
+    const mid = hook.current();
+    const reasoning = findItem(mid.items, 'reasoning');
+    expect(reasoning.text).toBe('The user asked 2+2.');
+    expect(mid.turns[0].activity.some((item) => item.kind === 'reasoning')).toBe(true);
+    expect(mid.turns[0].status).toBe('running');
+
+    act(() => {
+      latestSocket().emit({ type: 'token', content: '4' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed', duration_ms: 1200 });
+    });
+
+    const { items, turns } = hook.current();
+    expect(findItem(items, 'reasoning').text).toBe('The user asked 2+2.');
+    expect(turns[0].activity.map((i) => i.kind)).toEqual(['reasoning']);
+    expect(turns[0].final?.text).toBe('4');
+    expect(turns[0].status).toBe('completed');
+  });
+
+  it('does not invent reasoning items from history hydration', async () => {
+    mockThreadMessages([
+      { id: 'u1', role: 'user', content: 'hi', tool_name: null, tool_calls: null },
+      { id: 'a1', role: 'assistant', content: 'hello', tool_name: null, tool_calls: null },
+    ]);
+    const hook = await renderUseChat();
+    expect(hook.current().items.some((item) => item.kind === 'reasoning')).toBe(false);
+    expect(hook.current().turns[0].activity.some((item) => item.kind === 'reasoning')).toBe(false);
+  });
+});
+
 describe('useChat — tool turn', () => {
   it('produces a tool item with the right status/name/category, and a SEPARATE assistant item after it', async () => {
     const hook = await renderUseChat();

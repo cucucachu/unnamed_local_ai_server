@@ -42,6 +42,12 @@ describe('runningStatusLine', () => {
     expect(runningStatusLine([assistant('a', '', { streaming: true })])).toBe('Thinking…');
   });
 
+  it('is Thinking… while a reasoning item is the latest activity (M8-07)', () => {
+    const reasoning: ChatItem = { id: 'r1', kind: 'reasoning', text: 'The user asked 2+2.' };
+    expect(runningStatusLine([reasoning])).toBe('Thinking…');
+    expect(runningStatusLine([assistant('a', '', { streaming: true }), reasoning])).toBe('Thinking…');
+  });
+
   it('is Writing… when the latest event is assistant text', () => {
     expect(runningStatusLine([assistant('a', 'hello', { streaming: true })])).toBe('Writing…');
   });

@@ -18,6 +18,12 @@ export interface TokenFrame {
   content: string;
 }
 
+/** M8-07: one streamed thought-delta. Not persisted to history. */
+export interface ReasoningFrame {
+  type: 'reasoning';
+  content: string;
+}
+
 export interface ToolStartFrame {
   type: 'tool_start';
   tool_call_id: string;
@@ -77,6 +83,7 @@ export interface ErrorFrame {
 export type ServerFrame =
   | TurnStartFrame
   | TokenFrame
+  | ReasoningFrame
   | ToolStartFrame
   | ToolEndFrame
   | ApprovalRequestFrame
@@ -141,6 +148,7 @@ export type ChatConnectionState = 'connecting' | 'open' | 'reconnecting' | 'clos
 export interface ChatSocketHandlers {
   onTurnStart?: (frame: TurnStartFrame) => void;
   onToken?: (frame: TokenFrame) => void;
+  onReasoning?: (frame: ReasoningFrame) => void;
   onToolStart?: (frame: ToolStartFrame) => void;
   onToolEnd?: (frame: ToolEndFrame) => void;
   /** M8-03. */
@@ -226,6 +234,9 @@ export function openChatSocket(
         return;
       case 'token':
         handlers.onToken?.(frame);
+        return;
+      case 'reasoning':
+        handlers.onReasoning?.(frame);
         return;
       case 'tool_start':
         handlers.onToolStart?.(frame);

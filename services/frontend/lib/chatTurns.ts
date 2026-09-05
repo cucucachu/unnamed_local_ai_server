@@ -70,6 +70,7 @@ export function runningStatusLine(activity: ChatItem[]): string {
     const item = activity[i];
     if (item.kind === 'tool') return statusForTool(item.name, item.args);
     if (item.kind === 'assistant' && item.text.length > 0) return 'Writing…';
+    if (item.kind === 'reasoning' && item.text.length > 0) return 'Thinking…';
   }
   return 'Thinking…';
 }
@@ -104,7 +105,7 @@ function splitActivityAndFinal(
 
 /**
  * Group a flat `ChatItem[]` into turns. Each user row starts a turn;
- * following assistant/tool/error items belong to that turn. A leading
+ * following assistant/tool/error/reasoning items belong to that turn. A leading
  * run of non-user items (no user row yet) becomes an orphan turn.
  *
  * At `completed`, the last non-empty assistant text is `final` and the

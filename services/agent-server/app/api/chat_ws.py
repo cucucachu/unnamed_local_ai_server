@@ -16,6 +16,7 @@ Client -> server (four valid incoming frames):
 
 Server -> client (in order within a turn):
     {"type": "turn_start"}
+    {"type": "reasoning", "content": "str"}  # M8-07: thought deltas; not persisted
     {"type": "token", "content": "str"}
     {"type": "tool_start", "tool_call_id": "str", "name": "str",
      "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}
@@ -153,7 +154,17 @@ M2-04's final report for the full transcript):
   that only carry `tool_call_chunks` (tool-call-argument deltas, no visible
   token) — so skipping empty `.text` handles both "empty chunk" and
   "tool-call-only chunk" in one check, no need to separately inspect
-  `tool_call_chunks`.
+  `tool_call_chunks`. M8-07: the same chunk may also carry
+  `additional_kwargs["reasoning_content"]` (surfaced by
+  `ReasoningChatOpenAI`); those emit a `reasoning` frame *before* any
+  `token` frame from the same event. Reasoning is live-only — it is not
+  written to `turn_stats` or the history DTO.
+- Per-turn thinking (M8-07): `_run_turn` sets
+  `configurable["thinking_enabled"]` from `SettingsStore` (same fresh
+  per-turn read as `hitl_enabled`). `ReasoningChatOpenAI._default_params`
+  turns that into
+  `extra_body={"chat_template_kwargs": {"enable_thinking": <bool>}}`
+  (configurable -> model kwargs, not `model.bind(...)`).
 - `on_tool_start`'s event dict does NOT carry the model's own tool-call id
   anywhere (checked `data` — only has `input` — and `metadata` in full).
   `on_tool_end` doesn't either (`data` has `input` and `output`). Only
@@ -482,27 +493,42 @@ def _decisions_from_approval_response(raw: object, pending_approval: dict) -> li
     return ordered
 
 
-def _frame_for_event(event: dict) -> dict | None:
-    """Map one `astream_events` event to an outgoing frame dict, or `None` to skip it."""
+def _reasoning_content(chunk: Any) -> str:
+    """Reasoning delta on an `AIMessageChunk`, or `""` if the chunk has none."""
+    extra = getattr(chunk, "additional_kwargs", None) or {}
+    if not isinstance(extra, dict):
+        return ""
+    value = extra.get("reasoning_content")
+    return value if isinstance(value, str) else ""
+
+
+def _frames_for_event(event: dict) -> list[dict]:
+    """Map one `astream_events` event to zero or more outgoing frame dicts."""
     kind = event.get("event")
     data = event.get("data") or {}
 
     if kind == "on_chat_model_stream":
         chunk = data.get("chunk")
+        frames: list[dict] = []
+        reasoning = _reasoning_content(chunk)
+        if reasoning:
+            frames.append({"type": "reasoning", "content": reasoning})
         text = getattr(chunk, "text", "")
-        if not text:
-            return None
-        return {"type": "token", "content": text}
+        if text:
+            frames.append({"type": "token", "content": text})
+        return frames
 
     if kind == "on_tool_start":
         name = event.get("name", "")
-        return {
-            "type": "tool_start",
-            "tool_call_id": str(event.get("run_id", "")),
-            "name": name,
-            "category": _category_for_tool(name),
-            "args": _truncated_args(data.get("input")),
-        }
+        return [
+            {
+                "type": "tool_start",
+                "tool_call_id": str(event.get("run_id", "")),
+                "name": name,
+                "category": _category_for_tool(name),
+                "args": _truncated_args(data.get("input")),
+            }
+        ]
 
     if kind == "on_tool_end":
         name = event.get("name", "")
@@ -510,26 +536,30 @@ def _frame_for_event(event: dict) -> dict | None:
         status = getattr(output, "status", "success")
         if status not in ("success", "error"):
             status = "success"
-        return {
-            "type": "tool_end",
-            "tool_call_id": str(event.get("run_id", "")),
-            "name": name,
-            "status": status,
-            "result_preview": _tool_result_preview(output),
-        }
+        return [
+            {
+                "type": "tool_end",
+                "tool_call_id": str(event.get("run_id", "")),
+                "name": name,
+                "status": status,
+                "result_preview": _tool_result_preview(output),
+            }
+        ]
 
     if kind == "on_tool_error":
         name = event.get("name", "")
         error = data.get("error")
-        return {
-            "type": "tool_end",
-            "tool_call_id": str(event.get("run_id", "")),
-            "name": name,
-            "status": "error",
-            "result_preview": repr(error)[:_RESULT_PREVIEW_TRUNCATE_LEN],
-        }
+        return [
+            {
+                "type": "tool_end",
+                "tool_call_id": str(event.get("run_id", "")),
+                "name": name,
+                "status": "error",
+                "result_preview": repr(error)[:_RESULT_PREVIEW_TRUNCATE_LEN],
+            }
+        ]
 
-    return None
+    return []
 
 
 def _elapsed_ms(started_mono: float) -> int:
@@ -604,6 +634,7 @@ async def _run_turn(
     thread_id: str,
     run_input: Any,
     hitl_enabled: bool,
+    thinking_enabled: bool,
     started_mono: float,
     started_at: datetime,
     prior_assistant_id: str | None,
@@ -621,12 +652,20 @@ async def _run_turn(
     returned (only non-`None` when `status == "awaiting_approval"`).
     """
     agent = websocket.app.state.agent
-    config = {"configurable": {"thread_id": thread_id, "hitl_enabled": hitl_enabled}}
+    # `thinking_enabled` is read by `ReasoningChatOpenAI._default_params`
+    # (configurable -> model kwargs) and turned into
+    # extra_body.chat_template_kwargs.enable_thinking. Not `model.bind(...)`.
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "hitl_enabled": hitl_enabled,
+            "thinking_enabled": thinking_enabled,
+        }
+    }
 
     await websocket.send_json({"type": "turn_start"})
     async for event in agent.astream_events(run_input, config=config, version="v2"):
-        frame = _frame_for_event(event)
-        if frame is not None:
+        for frame in _frames_for_event(event):
             await websocket.send_json(frame)
 
     state = await agent.aget_state(config)
@@ -684,7 +723,11 @@ async def _watch_inbound(websocket: WebSocket) -> str:
 
 
 async def _run_turn_or_interrupt(
-    websocket: WebSocket, thread_id: str, run_input: Any, hitl_enabled: bool
+    websocket: WebSocket,
+    thread_id: str,
+    run_input: Any,
+    hitl_enabled: bool,
+    thinking_enabled: bool,
 ) -> tuple[str, dict | None]:
     """Run one turn (see `_run_turn`), racing it against `_watch_inbound`.
 
@@ -709,6 +752,7 @@ async def _run_turn_or_interrupt(
             thread_id,
             run_input,
             hitl_enabled,
+            thinking_enabled,
             started_mono,
             started_at,
             prior_assistant_id,
@@ -765,6 +809,17 @@ async def _current_hitl_enabled(websocket: WebSocket) -> bool:
     settings_store = websocket.app.state.settings_store
     document = await settings_store.get_document()
     return document.hitl_enabled
+
+
+async def _current_thinking_enabled(websocket: WebSocket) -> bool:
+    """Fresh per-turn read of `SettingsStore.get_document().thinking_enabled` (M8-07).
+
+    Same "read at the start of every turn" rule as `_current_hitl_enabled`.
+    Default is `False` (`SettingsDocument.thinking_enabled`).
+    """
+    settings_store = websocket.app.state.settings_store
+    document = await settings_store.get_document()
+    return document.thinking_enabled
 
 
 async def _truncate_from_message(agent: Any, thread_id: str, message_id: str) -> str | None:
@@ -840,11 +895,12 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                     return
 
             hitl_enabled = await _current_hitl_enabled(websocket)
+            thinking_enabled = await _current_thinking_enabled(websocket)
             run_input = Command(resume={"decisions": decisions})
             async with lock:
                 try:
                     outcome, new_pending = await _run_turn_or_interrupt(
-                        websocket, thread_id, run_input, hitl_enabled
+                        websocket, thread_id, run_input, hitl_enabled, thinking_enabled
                     )
                 except WebSocketDisconnect:
                     return
@@ -876,6 +932,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
         settings_store = websocket.app.state.settings_store
         document = await settings_store.get_document()
         hitl_enabled = document.hitl_enabled
+        thinking_enabled = document.thinking_enabled
 
         # M8-04: `mode` is only meaningful with `replace_from_message_id`.
         # Omitted mode falls back to `edit_mode_default`. `fork` is M8-05.
@@ -905,7 +962,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                         await _send_error_and_close(websocket, truncate_error, code=1008)
                         return
                 outcome, new_pending = await _run_turn_or_interrupt(
-                    websocket, thread_id, {"messages": [human]}, hitl_enabled
+                    websocket, thread_id, {"messages": [human]}, hitl_enabled, thinking_enabled
                 )
             except WebSocketDisconnect:
                 return

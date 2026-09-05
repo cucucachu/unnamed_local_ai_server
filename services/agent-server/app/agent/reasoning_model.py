@@ -33,10 +33,9 @@ Candidates considered (see the M8-06 ticket spec / docs/TOOL_CALLING.md):
    change to `bind_tools`/`tools=` call sites, no change to how
    `deepagents.create_deep_agent` is invoked.
 
-This module is a **prototype only** (per the ticket spec) — `build_model`
-in `model_client.py` is unchanged and still returns a plain `ChatOpenAI`.
-Wiring `ReasoningChatOpenAI` into the real WS handler / turn loop is
-M8-07's job, contingent on the GO/NO-GO verdict in docs/TOOL_CALLING.md.
+M8-07 wires this class into `build_model` (`model_client.py`). Per-turn
+`enable_thinking` is injected here via `_default_params` from
+`configurable["thinking_enabled"]` (see that method) — not `model.bind(...)`.
 """
 
 from __future__ import annotations
@@ -45,6 +44,7 @@ from typing import Any
 
 import openai
 from langchain_core.outputs import ChatResult
+from langchain_core.runnables.config import var_child_runnable_config
 from langchain_openai import ChatOpenAI
 
 
@@ -68,11 +68,38 @@ class ReasoningChatOpenAI(ChatOpenAI):
     message also has the complete `reasoning_content` string.
 
     No behavior changes for a server that never sends `reasoning_content`
-    (e.g. today's `--reasoning-budget 0` config, or the plain fake-model
-    fixture with `reasoning_content=None`) — the extra key is only ever
-    added when the field is actually present in the delta, and every other
-    field/branch of the base class's conversion is untouched.
+    (e.g. `enable_thinking=false`, or the plain fake-model fixture with
+    `reasoning_content=None`) — the extra key is only ever added when the
+    field is actually present in the delta, and every other field/branch of
+    the base class's conversion is untouched.
+
+    Per-turn thinking (M8-07): `_default_params` reads
+    `configurable["thinking_enabled"]` from the in-flight `RunnableConfig`
+    (the same dict `chat_ws.py` already uses for `hitl_enabled`) and merges
+    `extra_body={"chat_template_kwargs": {"enable_thinking": <bool>}}` into
+    the OpenAI request. Default is `False` when the key is absent, matching
+    `SettingsDocument.thinking_enabled`.
     """
+
+    @property
+    def _default_params(self) -> dict[str, Any]:
+        """Base ChatOpenAI params plus per-turn `enable_thinking` extra_body.
+
+        Configurable -> model kwargs (not `model.bind(...)`): the compiled
+        agent already owns this instance, so a per-turn `.bind()` would
+        never reach the in-graph model. `var_child_runnable_config` is the
+        same context LangGraph sets on `astream_events(..., config=...)`.
+        """
+        params = super()._default_params
+        runtime_config = var_child_runnable_config.get()
+        configurable = (runtime_config or {}).get("configurable") or {}
+        if "thinking_enabled" not in configurable:
+            return params
+        extra_body = dict(params.get("extra_body") or {})
+        chat_template_kwargs = dict(extra_body.get("chat_template_kwargs") or {})
+        chat_template_kwargs["enable_thinking"] = bool(configurable["thinking_enabled"])
+        extra_body["chat_template_kwargs"] = chat_template_kwargs
+        return {**params, "extra_body": extra_body}
 
     def _convert_chunk_to_generation_chunk(  # type: ignore[override]
         self,

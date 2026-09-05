@@ -43,6 +43,23 @@ function renderedText(renderer: ReturnType<typeof create>): string {
 }
 
 describe('TurnActivityPanel', () => {
+  it('running with reasoning: collapsed status is Thinking…', () => {
+    let renderer: ReturnType<typeof create> | undefined;
+    act(() => {
+      renderer = create(
+        createElement(TurnActivityPanel, {
+          turn: runningTurn({
+            activity: [{ id: 'r1', kind: 'reasoning', text: 'Let me work this out.' }],
+          }),
+        }),
+      );
+    });
+
+    expect(renderer!.root.findByProps({ testID: 'turn-activity-status' }).props.children).toBe(
+      'Thinking…',
+    );
+  });
+
   it('running: shows a spinner and Writing…, hides activity until expanded', () => {
     let renderer: ReturnType<typeof create> | undefined;
     act(() => {

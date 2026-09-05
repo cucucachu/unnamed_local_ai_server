@@ -792,6 +792,7 @@ Server → client, in order within a turn:
 
 ```json
 {"type": "turn_start"}
+{"type": "reasoning", "content": "str"}                   // M8-07: thought delta; not persisted to history
 {"type": "token", "content": "str"}                       // one per streamed model token chunk
 {"type": "tool_start", "tool_call_id": "str", "name": "str",
  "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}     // args truncated to 500 chars/value
@@ -815,6 +816,18 @@ when the turn paused on one or more mutating tool calls (`write_file`,
 gated per turn by `SettingsStore.hitl_enabled` (read at the start of every
 fresh and resumed turn into `configurable.hitl_enabled`); with HITL off
 those four tools run without an interrupt, same as any other tool.
+
+`reasoning` frames (M8-07) are emitted from `on_chat_model_stream` chunks
+whose `additional_kwargs` carry `reasoning_content` (surfaced by
+`ReasoningChatOpenAI`). They precede any `token` frame from the same
+chunk. They are live-only: not written to `GET /api/threads/{id}/messages`
+and not restored on history hydration. Per-turn
+`configurable.thinking_enabled` (from `SettingsStore.thinking_enabled`,
+default `false`) is mapped to model kwargs as
+`extra_body={"chat_template_kwargs": {"enable_thinking": <bool>}}` —
+configurable → model kwargs, not `model.bind(...)`. With thinking off the
+model does not emit reasoning deltas, so no `reasoning` frames appear;
+`token` frames are unchanged.
 
 On `cancel` mid-turn: the server cancels the turn task, awaits it, sends
 `turn_end {"status": "cancelled"}`, and — unlike a client disconnect —
@@ -1051,19 +1064,15 @@ must be rejected).
   (the ROCm compute-queue node) — see the system overview diagram above.
 - **Sampling defaults**: `--temp 1.0 --top-p 0.95 --top-k 64` (per the
   model card, in `docker-compose.yml`'s `command:`).
-- **`MODEL_EXTRA_ARGS` additions**: `--verbose --reasoning-budget 0`.
+- **`MODEL_EXTRA_ARGS` additions**: `--verbose --reasoning-format deepseek`.
   `--verbose` is required to see the Vulkan offload lines above (default
-  verbosity threshold hides them). `--reasoning-budget 0` disables Gemma
-  4's default "auto" thinking mode — without it, short `max_tokens`
-  completions (e.g. a `max_tokens: 8` smoke test) can spend the entire
-  budget on hidden `<|channel>thought` content and return an empty
-  `message.content`. **M8-06 re-validated tool-calling with this flag
-  removed (thinking re-enabled) and got a GO** (see "M8-06: thinking
-  re-enabled" below) — so this flag is no longer strictly load-bearing for
-  tool-calling reliability itself. It is, however, still the live config
-  as of this writing (M8-06 was a spike only; no production config change)
-  — see `.env.example`'s `MODEL_EXTRA_ARGS` comment for the currently
-  recommended flags for a future ticket that actually wants to flip it.
+  verbosity threshold hides them). `--reasoning-format deepseek` streams
+  thought tokens as `delta.reasoning_content` before `delta.content`.
+  Thinking itself is a **per-request** decision (M8-07):
+  `chat_template_kwargs.enable_thinking` is bound from
+  `SettingsStore.thinking_enabled` (default `false`) on every turn, so
+  there is no `--reasoning-budget 0` cap. M8-06's GO (see below) is what
+  made this production flip safe.
 
 ### Swapping quant/model in practice
 
@@ -1327,18 +1336,15 @@ freshly-measured 1.45s baseline — **1.77x**, under the ticket's 2x
 threshold. Per-request `chat_template_kwargs.enable_thinking=false` against
 that same server config reproduced today's exact 75/75 with
 baseline-equivalent latency. Both of the ticket's GO criteria were met, so
-this is a clean GO — but note **`--reasoning-budget 0` was NOT removed from
-the live `MODEL_EXTRA_ARGS`** by this ticket (M8-06 was a spike:
-investigation + doc/fixture/prototype changes only); flipping the live
-config to actually ship thinking-mode output is M8-07's job, which this
-verdict leaves **open** rather than closing as not-planned. Also confirmed
-via curl: `--reasoning-format deepseek` streams `delta.reasoning_content`
-before `delta.content`, and per-request `enable_thinking=false` fully
-suppresses it (wire-level parity with today's `--reasoning-budget 0`
-behavior). Full per-configuration result tables, the client-side
-`reasoning_content` prototype (`ReasoningChatOpenAI` in
-`app/agent/reasoning_model.py`), and the fake-model fixture's new
-`reasoning_content` support: `docs/TOOL_CALLING.md`'s M8-06 section.
+this is a clean GO. **M8-07 shipped the production flip**: live
+`MODEL_EXTRA_ARGS` is now `--verbose --reasoning-format deepseek` (no
+`--reasoning-budget` cap), `ReasoningChatOpenAI` is the real model client,
+and per-request `enable_thinking` is bound from
+`SettingsStore.thinking_enabled` (default off). Also confirmed via curl:
+`--reasoning-format deepseek` streams `delta.reasoning_content` before
+`delta.content`, and per-request `enable_thinking=false` fully suppresses
+it. Full per-configuration result tables and the client approach:
+`docs/TOOL_CALLING.md`'s M8-06 section.
 
 ---
 

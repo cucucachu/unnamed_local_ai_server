@@ -549,6 +549,41 @@ describe('ChatScreen ([threadId])', () => {
       expect(renderer?.root.findByProps({ testID: 'markdown' })).toBeTruthy();
       expect(renderedText(renderer!)).toContain('Finished heading');
     });
+
+    it('expanded panel shows reasoning as dimmed italic text (M8-07)', () => {
+      setUseChatResult({
+        items: [
+          { id: 'u1', kind: 'user', text: '2+2?' },
+          { id: 'r1', kind: 'reasoning', text: 'The user asked 2+2. That is 4.' },
+          { id: 'a1', kind: 'assistant', text: '4', streaming: true },
+        ],
+        turns: groupItemsIntoTurns(
+          [
+            { id: 'u1', kind: 'user', text: '2+2?' },
+            { id: 'r1', kind: 'reasoning', text: 'The user asked 2+2. That is 4.' },
+            { id: 'a1', kind: 'assistant', text: '4', streaming: true },
+          ],
+          { u1: { status: 'running' } },
+        ),
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderer?.root.findByProps({ testID: 'turn-activity-status' }).props.children).toBe(
+        'Writing…',
+      );
+      expect(() => renderer?.root.findByProps({ testID: 'turn-activity-reasoning' })).toThrow();
+
+      expandActivityPanel(renderer!);
+      const reasoning = renderer!.root.findByProps({ testID: 'turn-activity-reasoning' });
+      expect(reasoning.props.children).toBe('The user asked 2+2. That is 4.');
+      expect(reasoning.props.style).toEqual(
+        expect.objectContaining({ fontStyle: 'italic' }),
+      );
+    });
   });
 
   describe('ApprovalCard (M8-03)', () => {
