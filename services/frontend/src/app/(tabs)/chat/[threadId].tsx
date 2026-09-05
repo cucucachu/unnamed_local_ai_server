@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -22,9 +22,11 @@ import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { Markdown } from '@/components/Markdown';
 import { TurnActivityPanel } from '@/components/TurnActivityPanel';
 import { useSettings } from '@/components/SettingsProvider';
+import { Toast, useToast } from '@/components/Toast';
 import { copyToClipboard } from '@/lib/clipboard';
 import { formatDuration } from '@/lib/chatTurns';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
+import { isSpeechSupported, startListening, stopListening } from '@/lib/speech';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision, EditMode } from '@/lib/chatSocket';
 import type { ThreadBranchPoint } from '@/lib/threads';
@@ -82,6 +84,7 @@ export default function ChatScreen() {
     switchBranch,
   } = useChat(threadId);
   const { settings } = useSettings();
+  const { message: toast, showToast } = useToast();
   const defaultEditMode: EditMode = settings?.edit_mode_default ?? 'truncate';
   const [draft, setDraft] = useState('');
   const [editingItem, setEditingItem] = useState<ChatUserItem | null>(null);
@@ -89,14 +92,25 @@ export default function ChatScreen() {
   const [actionMenu, setActionMenu] = useState<
     { kind: 'user'; item: ChatUserItem } | { kind: 'assistant'; item: ChatAssistantItem } | null
   >(null);
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState('');
   const listRef = useRef<FlatList<ChatTurn>>(null);
+  const ignoreBlurStopRef = useRef(false);
+  const speechSupported = isSpeechSupported();
 
   // M8-03: the composer/Send button is disabled while an approval is
   // pending, in addition to the existing `busy` disable from M8-01.
   const canSend = !busy && pendingApproval === null && hydrationState === 'done' && draft.trim().length > 0;
   const menuDisabled = busy || pendingApproval !== null;
 
+  const haltListening = useCallback(() => {
+    stopListening();
+    setListening(false);
+    setInterim('');
+  }, []);
+
   const handleSend = useCallback(() => {
+    haltListening();
     if (!canSend) return;
     const text = draft.trim();
     if (editingItem !== null) {
@@ -106,7 +120,7 @@ export default function ChatScreen() {
       sendMessage(text);
     }
     setDraft('');
-  }, [canSend, draft, editingItem, editMode, sendMessage]);
+  }, [canSend, draft, editingItem, editMode, sendMessage, haltListening]);
 
   const handleCancelEdit = useCallback(() => {
     setEditingItem(null);
@@ -151,8 +165,55 @@ export default function ChatScreen() {
   // M8-01: while a turn is in flight, the Send button becomes a Stop
   // button (same slot in the composer, swapped by `busy`).
   const handleStop = useCallback(() => {
+    haltListening();
     stopTurn();
-  }, [stopTurn]);
+  }, [stopTurn, haltListening]);
+
+  const handleMic = useCallback(() => {
+    ignoreBlurStopRef.current = true;
+    if (listening) {
+      haltListening();
+      return;
+    }
+    setListening(true);
+    setInterim('');
+    startListening({
+      onInterim: (text) => setInterim(text),
+      onFinal: (text) => {
+        const piece = text.trim();
+        if (piece) {
+          setDraft((prev) => (prev.trim() ? `${prev.replace(/\s+$/, '')} ${piece}` : piece));
+        }
+        setInterim('');
+        setListening(false);
+      },
+      onError: (error) => {
+        setListening(false);
+        setInterim('');
+        if (error === 'not-allowed' || error === 'audio-capture') {
+          showToast('Allow microphone for homeai.local');
+        }
+      },
+      onEnd: () => {
+        setListening(false);
+        setInterim('');
+      },
+    });
+  }, [listening, haltListening, showToast]);
+
+  const handleComposerBlur = useCallback(() => {
+    if (ignoreBlurStopRef.current) {
+      ignoreBlurStopRef.current = false;
+      return;
+    }
+    haltListening();
+  }, [haltListening]);
+
+  useEffect(() => {
+    return () => {
+      stopListening();
+    };
+  }, []);
 
   // Web: Enter sends, Shift+Enter inserts a newline (standard chat-app
   // convention). Native: Enter/Return always inserts a newline — RN's
@@ -301,16 +362,40 @@ export default function ChatScreen() {
           </View>
         ) : null}
         <View style={styles.composer}>
-          <TextInput
-            style={styles.input}
-            value={draft}
-            onChangeText={setDraft}
-            onKeyPress={handleKeyPress}
-            placeholder="Message…"
-            placeholderTextColor={theme.textMuted}
-            multiline
-            editable={pendingApproval === null}
-          />
+          <View style={styles.input}>
+            <TextInput
+              style={styles.inputField}
+              value={draft}
+              onChangeText={setDraft}
+              onKeyPress={handleKeyPress}
+              onBlur={handleComposerBlur}
+              placeholder="Message…"
+              placeholderTextColor={theme.textMuted}
+              multiline
+              editable={pendingApproval === null}
+            />
+            {interim ? (
+              <Text style={styles.interimText} testID="chat-speech-interim">
+                {interim}
+              </Text>
+            ) : null}
+          </View>
+          {speechSupported ? (
+            <Pressable
+              style={[styles.sendButton, listening ? styles.micButtonListening : styles.sendButtonDisabled]}
+              onPress={handleMic}
+              accessibilityRole="button"
+              accessibilityLabel={listening ? 'Stop voice input' : 'Start voice input'}
+              accessibilityState={{ selected: listening }}
+              testID="chat-mic"
+            >
+              <Ionicons
+                name={listening ? 'mic' : 'mic-outline'}
+                size={20}
+                color={listening ? theme.text : theme.textMuted}
+              />
+            </Pressable>
+          ) : null}
           {busy ? (
             <Pressable
               style={styles.sendButton}
@@ -333,6 +418,7 @@ export default function ChatScreen() {
             </Pressable>
           )}
         </View>
+        <Toast message={toast} testID="chat-toast" />
         <MessageActionSheet
           menu={actionMenu}
           onClose={() => setActionMenu(null)}
@@ -1445,10 +1531,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     backgroundColor: theme.surface,
-    color: theme.text,
     paddingHorizontal: 12,
     paddingVertical: 8,
+  },
+  inputField: {
+    color: theme.text,
     fontSize: 15,
+    padding: 0,
+    margin: 0,
+  },
+  interimText: {
+    color: theme.textMuted,
+    fontSize: 15,
+    marginTop: 2,
+  },
+  micButtonListening: {
+    backgroundColor: theme.danger,
   },
   sendButton: {
     width: 40,

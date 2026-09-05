@@ -53,6 +53,11 @@
 // the answer must contain a `file:` link, and clicking it opens the Files
 // tab at that path with the entry highlighted. HITL is on (default), so
 // the write is Approved like the M8-03 scenarios.
+//
+// M9-06: a fake `SpeechRecognition` is injected via `addInitScript`. Over
+// `https://homeai.local` the composer mic is visible and a transcript
+// lands in the draft (never auto-sent). Over `http://` the button is
+// absent (`isSecureContext` is false).
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
@@ -157,6 +162,9 @@ const FORK_TURN_2_EDITED = 'Say exactly: ECHO-FORKED';
 const FILE_LINK_MESSAGE =
   'Create notes/link-test.md with one line, then tell me where you saved it';
 const FILE_LINK_REL = 'notes/link-test.md';
+const HTTPS_VOICE_URL = process.env.CHAT_SMOKE_HTTPS_URL ?? 'https://homeai.local/';
+const HTTP_VOICE_URL = process.env.CHAT_SMOKE_HTTP_URL ?? 'http://homeai.local/';
+const VOICE_TRANSCRIPT = 'hello world';
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
  * docstring) — collapse whitespace runs to single spaces, then truncate to
@@ -377,6 +385,105 @@ except Exception:
   }
 }
 
+/** Injected into the page before any script runs so Chromium's missing
+ * (or vendor-backed) SpeechRecognition is replaced with a deterministic
+ * interim → final sequence. Must be a self-contained function — Playwright
+ * serializes it into the page. */
+function installFakeSpeechRecognition() {
+  class FakeSpeechRecognition {
+    constructor() {
+      this.continuous = false;
+      this.interimResults = false;
+      this.lang = '';
+      this.onresult = null;
+      this.onerror = null;
+      this.onend = null;
+    }
+    start() {
+      const emit = (transcript, isFinal) => {
+        const result = [{ transcript, confidence: 1 }];
+        result.isFinal = isFinal;
+        this.onresult?.({ resultIndex: 0, results: [result] });
+      };
+      setTimeout(() => {
+        emit('hello ', false);
+        setTimeout(() => {
+          emit('hello world', true);
+          this.onend?.();
+        }, 40);
+      }, 20);
+    }
+    stop() {
+      this.onend?.();
+    }
+    abort() {
+      this.onend?.();
+    }
+  }
+  window.SpeechRecognition = FakeSpeechRecognition;
+  window.webkitSpeechRecognition = FakeSpeechRecognition;
+}
+
+async function openNewChatOn(page, origin) {
+  await page.goto(origin, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('tab', { name: 'Chat' }).click();
+  const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
+  await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
+  await newChatButton.click();
+  await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
+  return new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+}
+
+async function assertVoiceInput(browser, httpsContextOptions) {
+  const httpsContext = await browser.newContext(httpsContextOptions);
+  await httpsContext.addInitScript(installFakeSpeechRecognition);
+  const httpsPage = await httpsContext.newPage();
+  let httpsThreadId;
+  try {
+    httpsThreadId = await openNewChatOn(httpsPage, HTTPS_VOICE_URL);
+    const mic = httpsPage.locator('[data-testid="chat-mic"]');
+    await mic.waitFor({ state: 'visible', timeout: 10_000 });
+    await httpsPage.getByPlaceholder('Message…').waitFor({ state: 'visible', timeout: 15_000 });
+    await mic.click();
+    const input = httpsPage.getByPlaceholder('Message…');
+    const deadline = Date.now() + 10_000;
+    let value = '';
+    while (Date.now() < deadline) {
+      value = await input.inputValue();
+      if (value.includes(VOICE_TRANSCRIPT)) break;
+      await httpsPage.waitForTimeout(100);
+    }
+    if (!value.includes(VOICE_TRANSCRIPT)) {
+      throw new Error(
+        `Step 18: expected composer to contain "${VOICE_TRANSCRIPT}" over ${HTTPS_VOICE_URL}, got "${value}"`,
+      );
+    }
+    console.log(`Step 18 OK — https mic visible; transcript landed in composer ("${value}")`);
+  } finally {
+    await httpsContext.close();
+    cleanupThreadBestEffort(httpsThreadId);
+  }
+
+  const httpContext = await browser.newContext();
+  await httpContext.addInitScript(installFakeSpeechRecognition);
+  const httpPage = await httpContext.newPage();
+  let httpThreadId;
+  try {
+    httpThreadId = await openNewChatOn(httpPage, HTTP_VOICE_URL);
+    await httpPage.getByPlaceholder('Message…').waitFor({ state: 'visible', timeout: 15_000 });
+    const httpMicCount = await httpPage.locator('[data-testid="chat-mic"]').count();
+    if (httpMicCount !== 0) {
+      throw new Error(
+        `Step 18: expected no mic button on ${HTTP_VOICE_URL} (insecure context), found ${httpMicCount}`,
+      );
+    }
+    console.log(`Step 18 OK — http (${HTTP_VOICE_URL}) has no mic button`);
+  } finally {
+    await httpContext.close();
+    cleanupThreadBestEffort(httpThreadId);
+  }
+}
+
 async function sendAndAwaitApprovalCard(page, message, timeoutMs = TIMEOUT_MS) {
   const input = page.getByPlaceholder('Message…');
   await input.waitFor({ state: 'visible', timeout: 15_000 });
@@ -428,6 +535,7 @@ async function main() {
     settingsRequest('PUT', { hitl_enabled: false });
 
     const context = await browser.newContext(contextOptions);
+    await context.addInitScript(installFakeSpeechRecognition);
     const page = await context.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
@@ -1079,8 +1187,13 @@ async function main() {
     }
     console.log(`Step 17 OK — clicked file: link, opened /files?path=${FILE_LINK_REL}, entry highlighted`);
 
+    // --- Step 18: voice-to-text mic (M9-06) -----------------------------
+    // Dedicated https / http contexts so this does not depend on
+    // CHAT_SMOKE_BASE_URL (localhost over http is a secure context).
+    await assertVoiceInput(browser, contextOptions);
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch + file-link completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch + file-link + voice-input completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
