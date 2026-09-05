@@ -80,6 +80,10 @@ class MessageOut(BaseModel):
     content: str
     tool_name: str | None = None
     tool_calls: list[ToolCallOut] | None = None
+    # M8-04: on `tool` rows, the paired `AIMessage.tool_calls[].id` so the
+    # frontend can recover `args` from that assistant row (the known
+    # `args: {}` gap in `mapHistoryToItems`). `None` on user/assistant rows.
+    tool_call_id: str | None = None
 
 
 def _thread_store(request: Request) -> ThreadStore:
@@ -122,7 +126,11 @@ def _normalize_message(message: BaseMessage) -> MessageOut | None:
         )
     if isinstance(message, ToolMessage):
         return MessageOut(
-            id=_msg_id(message), role="tool", content=str(message.text), tool_name=message.name
+            id=_msg_id(message),
+            role="tool",
+            content=str(message.text),
+            tool_name=message.name,
+            tool_call_id=message.tool_call_id or None,
         )
     # Unknown/future message type: skip rather than raise, since silently
     # dropping an unrecognized message from history is safer than a 500 on

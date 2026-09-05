@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { Linking } from 'react-native';
 import { act, create } from 'react-test-renderer';
 
-import type { ChatToolItem, UseChatResult } from '@/lib/useChat';
+import type { ChatToolItem, ChatUserItem, UseChatResult } from '@/lib/useChat';
 
 // Per the ticket's own text ("one shallow render of the screen"): mock
 // `useChat` entirely rather than exercising the real WebSocket layer, so
@@ -692,6 +692,119 @@ describe('ChatScreen ([threadId])', () => {
 
       expect(renderer?.root.findByProps({ testID: 'chat-item-tool-rejected-chip' })).toBeTruthy();
       expect(renderedText(renderer!)).toContain('rejected');
+    });
+  });
+
+  describe('Edit / Resend / Regenerate (M8-04)', () => {
+    const userOne: ChatUserItem = { id: 'u-1', kind: 'user', text: 'turn one' };
+    const assistantOne = { id: 'a-1', kind: 'assistant' as const, text: 'reply one', streaming: false };
+    const userTwo: ChatUserItem = { id: 'u-2', kind: 'user', text: 'turn two' };
+    const assistantTwo = { id: 'a-2', kind: 'assistant' as const, text: 'reply two', streaming: false };
+
+    it('long-press on a user bubble opens Edit + Resend; Edit prefills the composer and shows the banner', () => {
+      setUseChatResult({ items: [userOne, assistantOne, userTwo, assistantTwo] });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'chat-edit-banner' })).toThrow();
+
+      const userBubbles = renderer!.root
+        .findAllByProps({ testID: 'chat-item-user-bubble' })
+        .filter((node) => typeof (node.props as { onLongPress?: unknown }).onLongPress === 'function');
+      act(() => {
+        (userBubbles[1].props as { onLongPress: () => void }).onLongPress();
+      });
+
+      expect(renderer?.root.findByProps({ testID: 'chat-message-menu' })).toBeTruthy();
+      expect(renderer?.root.findByProps({ testID: 'chat-message-action-edit' })).toBeTruthy();
+      expect(renderer?.root.findByProps({ testID: 'chat-message-action-resend' })).toBeTruthy();
+
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-message-action-edit' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(renderer?.root.findByProps({ testID: 'chat-edit-banner' })).toBeTruthy();
+      expect(renderedText(renderer!)).toContain('Editing — sending replaces everything after this message');
+      const input = renderer?.root.findByProps({ placeholder: 'Message…' });
+      expect((input?.props as { value: string }).value).toBe('turn two');
+    });
+
+    it('Cancel on the edit banner dismisses it and clears the composer', () => {
+      setUseChatResult({ items: [userOne, assistantOne] });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const cancelUserBubble = renderer!.root
+        .findAllByProps({ testID: 'chat-item-user-bubble' })
+        .find((node) => typeof (node.props as { onLongPress?: unknown }).onLongPress === 'function');
+      act(() => {
+        (cancelUserBubble?.props as { onLongPress: () => void }).onLongPress();
+      });
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-message-action-edit' }).props as { onPress: () => void }).onPress();
+      });
+      expect(renderer?.root.findByProps({ testID: 'chat-edit-banner' })).toBeTruthy();
+
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-edit-cancel' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'chat-edit-banner' })).toThrow();
+      const input = renderer?.root.findByProps({ placeholder: 'Message…' });
+      expect((input?.props as { value: string }).value).toBe('');
+    });
+
+    it('Resend sends the user text with replaceFromMessageId and mode truncate', () => {
+      const sendMessage = jest.fn();
+      setUseChatResult({ items: [userOne, assistantOne], sendMessage });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const resendUserBubble = renderer!.root
+        .findAllByProps({ testID: 'chat-item-user-bubble' })
+        .find((node) => typeof (node.props as { onLongPress?: unknown }).onLongPress === 'function');
+      act(() => {
+        (resendUserBubble?.props as { onLongPress: () => void }).onLongPress();
+      });
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-message-action-resend' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith('turn one', { replaceFromMessageId: 'u-1', mode: 'truncate' });
+    });
+
+    it('Regenerate on the last assistant resends the preceding user message unchanged', () => {
+      const sendMessage = jest.fn();
+      setUseChatResult({ items: [userOne, assistantOne, userTwo, assistantTwo], sendMessage });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const assistantBubbles = renderer!.root
+        .findAllByProps({ testID: 'chat-item-assistant-bubble' })
+        .filter((node) => typeof (node.props as { onLongPress?: unknown }).onLongPress === 'function');
+      const lastBubble = assistantBubbles[assistantBubbles.length - 1];
+      expect((lastBubble.props as { onLongPress?: () => void }).onLongPress).toBeDefined();
+
+      act(() => {
+        (lastBubble.props as { onLongPress: () => void }).onLongPress();
+      });
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-message-action-regenerate' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith('turn two', { replaceFromMessageId: 'u-2', mode: 'truncate' });
     });
   });
 });

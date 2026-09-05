@@ -676,8 +676,13 @@ workspace root returns `400` (see the path-traversal guard below).
 - `GET /api/threads` → `200 [{thread}, ...]`, ordered by `updated_at` desc
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
-  "tool_calls": [{"id", "name", "args"}]|null}, ...]`, normalized from the
-  LangGraph checkpoint (`tool` rows carry the tool result text)
+  "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null},
+  ...]`, normalized from the LangGraph checkpoint. `id` is the stored
+  LangChain message id (`HumanMessage` is constructed with
+  `id=str(uuid4())` so user rows are addressable for edit/resend).
+  `tool` rows carry the tool result text and `tool_call_id` (the paired
+  assistant `tool_calls[].id`) so the frontend can recover `args`.
+  `tool_call_id` is `null` on user/assistant rows.
 - `GET /api/threads/{id}/state` (M8-03) → `200 {"pending_approval":
   {"interrupt_id": str, "actions": [{"tool_call_id": str, "name": str,
   "category": "file"|"exec"|"plan"|"web"|"other", "args": {},
@@ -732,7 +737,9 @@ turns for one thread are serialized server-side by a per-thread
 Client → server:
 
 ```json
-{"type": "user_message", "content": "string"}
+{"type": "user_message", "content": "string",
+ "replace_from_message_id": "str?",
+ "mode": "truncate"|"fork"?}
 {"type": "cancel"}
 {"type": "approval_response", "interrupt_id": "str",
  "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
@@ -761,6 +768,19 @@ decision list is an invalid frame (`error` + close 1008).
 path (there is no running task — the graph is paused). It rejects every
 pending action with message `"The user cancelled."` and resumes the same
 way an all-reject `approval_response` would.
+
+`user_message.replace_from_message_id` + `mode` (M8-04) edit/resend a
+prior user message. Omitted `mode` falls back to
+`SettingsStore.edit_mode_default` (`"truncate"` | `"fork"`). `fork` is
+M8-05 — until then a replace that resolves to fork is `error` + close
+1008. `truncate` (under the per-thread lock, before the new turn):
+`aget_state`, locate the message with that id (must be a `HumanMessage`,
+else `error` + 1008; unknown id is the same), then one
+`aupdate_state` of `RemoveMessage` for every message from that index
+onward. The new `HumanMessage` then runs normally. Thread title is not
+re-derived. The client may also send `id` on `user_message`; when
+present it becomes the stored LangChain message id so a same-session
+edit can address the bubble it just appended.
 
 Server → client, in order within a turn:
 

@@ -173,6 +173,23 @@ describe('openChatSocket — send/close', () => {
     expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'user_message', content: 'hi there' })]);
   });
 
+  it('send() includes replace_from_message_id, mode, and id when provided (M8-04)', () => {
+    const handlers = makeHandlers();
+    const chat = openChatSocket('thread-1', handlers, Ctor);
+
+    chat.send('edited', { replaceFromMessageId: 'user-2', mode: 'truncate', id: 'new-id' });
+
+    expect(latestSocket().sent).toEqual([
+      JSON.stringify({
+        type: 'user_message',
+        content: 'edited',
+        replace_from_message_id: 'user-2',
+        mode: 'truncate',
+        id: 'new-id',
+      }),
+    ]);
+  });
+
   it('close() closes the underlying socket', () => {
     const handlers = makeHandlers();
     const chat = openChatSocket('thread-1', handlers, Ctor);

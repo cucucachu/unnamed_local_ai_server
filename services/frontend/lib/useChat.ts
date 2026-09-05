@@ -7,6 +7,7 @@ import {
   type ChatConnectionState,
   type ChatSocket,
   type ErrorFrame,
+  type SendUserMessageOptions,
   type ToolCategory,
   type ToolEndFrame,
   type ToolStartFrame,
@@ -16,6 +17,8 @@ import {
 } from './chatSocket';
 import { getThreadMessages, getThreadState, type ThreadMessage } from './threads';
 
+export type { SendUserMessageOptions };
+
 let nextItemId = 0;
 /** Monotonic id generator — good enough for a single-session client list key
  * (no need for crypto-strength uniqueness, just stable React keys and a way
@@ -23,6 +26,19 @@ let nextItemId = 0;
 function makeId(prefix: string): string {
   nextItemId += 1;
   return `${prefix}-${nextItemId}`;
+}
+
+/** Stable id for a newly-sent user bubble (M8-04). Prefer `crypto.randomUUID`
+ * so the same value can be sent on the `user_message` frame and stored as
+ * the LangChain `HumanMessage.id` — Edit/Resend in the same session can
+ * then address the bubble without a history refetch. Falls back to
+ * `makeId` in environments without `randomUUID`. */
+function newUserMessageId(): string {
+  const cryptoObj = globalThis.crypto;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return makeId('user');
 }
 
 export interface ChatUserItem {
@@ -152,12 +168,21 @@ function categoryForToolName(name: string): ToolCategory {
  *   `content` (the full stored tool output, reused as the "preview" — the
  *   §5 DTO doesn't distinguish a separate preview vs. full-content field
  *   the way the live `tool_end` frame's `result_preview` truncation does).
- *   `toolCallId` has no real value to recover here (there's no live
- *   `tool_end` frame to correlate against for a hydrated row) — judgement
- *   call: fabricate one from the row's own `id` (unique, stable across
- *   re-renders of the same hydration), documented per the ticket's request.
+ *   `toolCallId` is the row's `tool_call_id` when present (M8-04 — the
+ *   paired assistant `tool_calls[].id`), else the row's own `id` (unique,
+ *   stable across re-renders of the same hydration). `args` are recovered
+ *   from that paired assistant row's `tool_calls` via `tool_call_id`
+ *   (fixes the pre-M8-04 `args: {}` gap).
  */
 export function mapHistoryToItems(messages: ThreadMessage[]): ChatItem[] {
+  const argsByToolCallId = new Map<string, Record<string, unknown>>();
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.tool_calls) continue;
+    for (const toolCall of message.tool_calls) {
+      if (toolCall.id) argsByToolCallId.set(toolCall.id, toolCall.args);
+    }
+  }
+
   const items: ChatItem[] = [];
   for (const message of messages) {
     if (message.role === 'user') {
@@ -165,22 +190,15 @@ export function mapHistoryToItems(messages: ThreadMessage[]): ChatItem[] {
       continue;
     }
     if (message.role === 'tool') {
+      const toolCallId = message.tool_call_id || message.id;
       items.push({
         id: message.id,
         kind: 'tool',
-        toolCallId: message.id,
+        toolCallId,
         name: message.tool_name ?? '',
         category: categoryForToolName(message.tool_name ?? ''),
         status: 'success',
-        // §5's `tool` DTO row has no `args` field at all (only the paired
-        // `assistant` row's `tool_calls[].args` carries them, and that row
-        // exposes no id shared with this `tool` row to correlate against —
-        // `ToolCallOut` has its own `id`, but `_normalize_message` doesn't
-        // thread the matching `ToolMessage.tool_call_id` into `MessageOut`
-        // for `tool`-role rows). Rather than guess at positional pairing,
-        // hydrated tool cards simply show no args (the expandable detail
-        // panel still shows the real `resultPreview`).
-        args: {},
+        args: argsByToolCallId.get(toolCallId) ?? {},
         resultPreview: message.content,
       });
       continue;
@@ -195,7 +213,7 @@ export function mapHistoryToItems(messages: ThreadMessage[]): ChatItem[] {
 
 export interface UseChatResult {
   items: ChatItem[];
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string, options?: SendUserMessageOptions) => void;
   /** M8-01: sends a `cancel` frame for the in-flight turn (a no-op
    * server-side if `busy` is already `false`). M8-03: while
    * `pendingApproval` is set, this rejects every pending action instead
@@ -471,10 +489,18 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     // eslint-disable-next-line react-hooks/exhaustive-deps -- WebSocketImpl is a test-only override, stable in real usage
   }, [threadId, hydrationState]);
 
-  const sendMessage = useCallback((text: string) => {
-    setItems((prev) => [...prev, { id: makeId('user'), kind: 'user', text }]);
+  const sendMessage = useCallback((text: string, options?: SendUserMessageOptions) => {
+    const id = newUserMessageId();
+    setItems((prev) => {
+      let next = prev;
+      if (options?.replaceFromMessageId) {
+        const cutAt = prev.findIndex((item) => item.id === options.replaceFromMessageId);
+        if (cutAt !== -1) next = prev.slice(0, cutAt);
+      }
+      return [...next, { id, kind: 'user', text }];
+    });
     setBusy(true);
-    socketRef.current?.send(text);
+    socketRef.current?.send(text, { ...options, id });
   }, []);
 
   const stopTurn = useCallback(() => {
