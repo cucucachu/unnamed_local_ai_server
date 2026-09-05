@@ -95,3 +95,8 @@ agent run.
 - [ ] (M9-05) `http://homeai.local` still works on a device without the CA.
 - [ ] (M9-06) Android Chrome over `https://homeai.local`: tap mic, speak, text appears, edit, send.
 - [ ] (M9-06) Expo Go Android: keyboard mic dictates into the composer. Native has no in-app mic button — the OS keyboard's built-in dictation (Gboard / iOS keyboard mic) is the supported path.
+- [ ] (M9-07) Android phone (Chrome, https): keyboard behaves; dictate a request that makes the agent research something and write a file; watch the spinner/status; expand "Worked for"; tap the file link; the file opens in Files.
+- [ ] (M9-07) Same scenario in Expo Go (keyboard dictation instead of the mic button).
+- [ ] (M9-07) iOS Safari/Expo Go: markdown and panel render; no regressions.
+
+> **PM sign-off: G9 passed ____**

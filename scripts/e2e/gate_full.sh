@@ -16,6 +16,12 @@
 #      persistence_smoke.sh. Re-runs those two scripts after the earlier
 #      standalone steps; left in place deliberately, same idempotent
 #      reasoning as gate_m7.sh re-running verify_network.sh.)
+#   -> gate_m9.sh (M9-07, same append convention: verify_network.sh +
+#      chat_browser_smoke.sh's markdown/activity-panel/file-link/voice
+#      coverage, this time over `https://homeai.local` with Caddy's
+#      local CA trusted. Re-runs verify_network.sh and
+#      chat_browser_smoke.sh yet again — same idempotent reasoning as the
+#      gate_m7.sh/gate_m8.sh steps above.)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -30,7 +36,7 @@
 # on its own failure and does its own health-waiting/cleanup (several also
 # do their own internal `docker compose up -d --build` — left in place
 # deliberately, per the ticket: after this script's own initial `up`, those
-# calls are just fast no-ops). This script's only job is to run all 12 in
+# calls are just fast no-ops). This script's only job is to run all 13 in
 # order, capture PASS/FAIL + wall-clock seconds for each, and CONTINUE to
 # the next one even if a step fails — so a single run gives the full
 # picture instead of stopping at the first red — then print a summary table
@@ -184,6 +190,11 @@ main() {
   # as part of its own chain (see that script's header). Same "self-contained
   # scripts are idempotent" reasoning as the gate_m7.sh step above.
   run_step "gate_m8.sh"              bash "${SCRIPT_DIR}/gate_m8.sh"
+  # M9-07: gate_m9.sh re-runs verify_network.sh + chat_browser_smoke.sh
+  # (this time over https://homeai.local) as part of its own chain (see
+  # that script's header). Same idempotent reasoning as the gate_m7.sh/
+  # gate_m8.sh steps above.
+  run_step "gate_m9.sh"              bash "${SCRIPT_DIR}/gate_m9.sh"
 
   print_summary
 
