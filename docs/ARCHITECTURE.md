@@ -30,11 +30,11 @@ flowchart TB
         nativeapp[Expo Native App\niOS/Android, same codebase]
     end
 
-    browser -->|"http://homeai.local"| proxy
-    nativeapp -->|"ws/http to homeai.local"| proxy
+    browser -->|"http(s)://homeai.local"| proxy
+    nativeapp -->|"ws/http(s) to homeai.local"| proxy
 
     subgraph host [Linux Host]
-        proxy["Caddy Reverse Proxy\n(serves the Expo web build directly\nfrom /srv/www, baked in at build time)\nhomeai-net + homeai-internal — the only service on both"]
+        proxy["Caddy Reverse Proxy\n(serves the Expo web build directly\nfrom /srv/www, baked in at build time)\n:80 + :443 tls internal, homeai-net + homeai-internal — the only service on both"]
         avahi[avahi-daemon\nmDNS: homeai.local]
 
         subgraph internalnet [Docker network: homeai-internal, internal: true — no route to the internet]
@@ -201,22 +201,30 @@ what another doc says it should be.
 
 - **Purpose**: the single ingress point for the whole LAN — reverse proxy
   for `/api`/`/ws` to `agent-server`, and static file server for the Expo
-  web build. The only service that publishes a host port.
+  web build. The only service that publishes host ports. HTTP on `:80`
+  stays first-class (no redirect to HTTPS) so Expo Go and phones that
+  have not installed the local CA keep working. HTTPS on
+  `https://homeai.local` uses Caddy's `tls internal` CA (M9-05) so
+  browsers get a secure context (needed for microphone access). The same
+  public root cert is served at `http://homeai.local/ca.crt` (trusted-LAN
+  trade-off — see `docs/NETWORKING.md`).
 - **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
   `npx expo export --platform web` against `services/frontend/`), final
   stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
-- **Published port**: `80` — confirmed via `docker compose config`
-  (`ports: [{target: 80, published: "80"}]`); the *only* service in the
-  stack with a `ports:` entry.
-- **Internal port**: `80` (same — it's the entry point, not proxied to
-  from anything else).
+- **Published ports**: `80` and `443` — confirmed via `docker compose
+  config`; the *only* service in the stack with a `ports:` entry. 443 is
+  the one intentional amendment to the original v1 "no new published
+  ports" rule.
+- **Internal ports**: `80` and `443` (same — it's the entry point, not
+  proxied to from anything else).
 - **Network (M7-01)**: `homeai-net` **and** `homeai-internal` — the only
-  service on both. `homeai-net` keeps the published port (and any egress
+  service on both. `homeai-net` keeps the published ports (and any egress
   this service itself needs); `homeai-internal` is how it reaches
   `agent-server`.
-- **Mounts**: none at runtime. `infra/caddy/Caddyfile` and the exported
-  static bundle (`/srv/www`) are both baked into the image at build time,
-  not bind-mounted.
+- **Mounts**: named volume `caddy-data:/data` so the local CA stays
+  stable across container recreates. `infra/caddy/Caddyfile` and the
+  exported static bundle (`/srv/www`) are both baked into the image at
+  build time, not bind-mounted.
 - **Env vars consumed**: none.
 - **Tests**: no dedicated unit tests for Caddy itself (it's a stock image +
   a static Caddyfile). Verified indirectly by every browser e2e smoke
@@ -637,12 +645,12 @@ host and are set up/verified by scripts under `infra/host/` and `scripts/`.
   `infra/host/setup-avahi.sh` (idempotent, handles the IPv6-link-local and
   Docker-bridge-address gotchas documented in `docs/NETWORKING.md`).
   Verified by `scripts/verify_network.sh` check 1.
-- **`ufw` + the `DOCKER-USER` iptables rule** — LAN-only firewall for
-  port 80. Installed by `infra/host/setup-ufw.sh`, which also installs a
-  small systemd oneshot unit (`homeai-docker-user-fw.service`) to
-  re-insert the `DOCKER-USER` rule on every boot (the rule itself doesn't
-  survive a reboot or a `dockerd` restart otherwise). Verified by
-  `scripts/verify_network.sh` checks 3–5.
+- **`ufw` + the `DOCKER-USER` iptables rules** — LAN-only firewall for
+  ports 80 and 443. Installed by `infra/host/setup-ufw.sh`, which also
+  installs a small systemd oneshot unit (`homeai-docker-user-fw.service`)
+  to re-insert both `DOCKER-USER` rules on every boot (the rules
+  themselves don't survive a reboot or a `dockerd` restart otherwise).
+  Verified by `scripts/verify_network.sh` checks 3–5.
 - **`homeai-backup.timer` / `homeai-backup.service`** (systemd) — runs
   `infra/host/backup-workspace.sh` daily at 03:00. Installed/removed by
   `infra/host/install-backup-timer.sh`. See "Operations" below and
@@ -1395,11 +1403,15 @@ Three real trust boundaries this system has, in order of how much this
 design actually protects against them:
 
 1. **Trusted LAN.** The whole product assumes it's reachable only from a
-   small, trusted home network — no auth, no TLS, no rate limiting. This
-   is a deliberate v1 scope decision (see `docs/NETWORKING.md`), not an
-   oversight; it's enforced by network topology (only `caddy` publishes a
-   port, `ufw` + the `DOCKER-USER` iptables rule LAN-scope that port), not
-   by anything in the application layer.
+   small, trusted home network — no auth, no rate limiting. Local HTTPS
+   (`https://homeai.local`, Caddy `tls internal`) is confidentiality on
+   the LAN (and a browser secure context), **not** authentication: anyone
+   who can reach the host still has the full API. HTTP on `:80` remains
+   available on purpose. This is a deliberate v1 scope decision (see
+   `docs/NETWORKING.md`), not an oversight; it's enforced by network
+   topology (only `caddy` publishes ports, `ufw` + the `DOCKER-USER`
+   iptables rules LAN-scope 80 and 443), not by anything in the
+   application layer.
 2. **No outbound internet access, by default — and when Stage 2 grants it,
    it's read-only and filtered by a proxy, not trusted client code.**
    "No internet" is the default for every container, enforced at the
@@ -1619,7 +1631,8 @@ M7-03; the recipe below is what it actually does, not a plan):**
 ### Documented fast-follows (not built for v1)
 
 - Docker-socket-proxy in front of code-exec-manager's docker.sock access.
-- HTTPS via Caddy internal CA + device trust, or a real cert if a domain is ever added.
+- Public ACME certificates / a real domain (local HTTPS via Caddy's
+  internal CA shipped in M9-05; HTTP is not redirected and HSTS is off).
 - Simple shared-password auth at the proxy if the network trust model changes.
 - Multi-user thread ownership (currently single-user/home-trusted).
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
@@ -1676,7 +1689,8 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
-| `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
+| `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
+| `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
 | `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |
 | `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host workspace) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |

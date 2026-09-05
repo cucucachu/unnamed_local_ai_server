@@ -1,4 +1,10 @@
-:80 {
+{
+	# HTTP stays first-class (Expo Go + phones without the CA). Do not
+	# auto-redirect :80 -> :443 — that would break those clients.
+	auto_https disable_redirects
+}
+
+(app) {
 	encode gzip
 
 	handle /api/* {
@@ -12,4 +18,23 @@
 		try_files {path} /index.html
 		file_server
 	}
+}
+
+:80 {
+	# Same file scripts/export-ca.sh copies to ${BACKUP_DIR}/homeai-root-ca.crt.
+	# Served over HTTP on a trusted LAN so a device can fetch it *before*
+	# it trusts the CA (see docs/NETWORKING.md). The CA private key is
+	# never served.
+	handle /ca.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		file_server
+	}
+	import app
+}
+
+https://homeai.local {
+	tls internal
+	import app
 }

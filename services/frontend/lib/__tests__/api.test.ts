@@ -1,4 +1,6 @@
-import { apiFetch, ApiError } from '../api';
+import { Platform } from 'react-native';
+
+import { apiFetch, ApiError, wsUrl } from '../api';
 
 describe('apiFetch', () => {
   const originalFetch = global.fetch;
@@ -66,5 +68,59 @@ describe('apiFetch', () => {
     const [calledPath, calledInit] = fetchMock.mock.calls[0];
     expect(calledPath).toContain('/api/threads');
     expect(calledInit).toMatchObject({ method: 'POST', body: '{}' });
+  });
+});
+
+describe('wsUrl', () => {
+  const originalOS = Platform.OS;
+  const originalEnv = process.env.EXPO_PUBLIC_API_HOST;
+
+  afterEach(() => {
+    Platform.OS = originalOS;
+    if (originalEnv === undefined) {
+      delete process.env.EXPO_PUBLIC_API_HOST;
+    } else {
+      process.env.EXPO_PUBLIC_API_HOST = originalEnv;
+    }
+  });
+
+  it('derives wss:// from location.protocol on https web', () => {
+    Platform.OS = 'web';
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { protocol: 'https:', host: 'homeai.local' },
+    });
+    try {
+      expect(wsUrl('/ws/chat/abc')).toBe('wss://homeai.local/ws/chat/abc');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: originalLocation,
+      });
+    }
+  });
+
+  it('derives ws:// from location.protocol on http web', () => {
+    Platform.OS = 'web';
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { protocol: 'http:', host: 'homeai.local' },
+    });
+    try {
+      expect(wsUrl('/ws/chat/abc')).toBe('ws://homeai.local/ws/chat/abc');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: originalLocation,
+      });
+    }
+  });
+
+  it('maps https:// EXPO_PUBLIC_API_HOST to wss:// on native', () => {
+    Platform.OS = 'ios';
+    process.env.EXPO_PUBLIC_API_HOST = 'https://homeai.local';
+    expect(wsUrl('/ws/chat/abc')).toBe('wss://homeai.local/ws/chat/abc');
   });
 });

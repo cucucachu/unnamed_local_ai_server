@@ -89,3 +89,5 @@ agent run.
 - [ ] (M9-04) Android phone, Expo Go: tap the composer -> keyboard opens, composer sits directly above it, last message still visible.
 - [ ] (M9-04) Android Chrome at `homeai.local`: same behavior in the browser.
 - [ ] (M9-04) iOS Expo Go: no regression.
+- [ ] (M9-05) Android + iOS phone: install the CA per NETWORKING.md; `https://homeai.local` loads with no warning; a chat turn completes over `wss://`.
+- [ ] (M9-05) `http://homeai.local` still works on a device without the CA.

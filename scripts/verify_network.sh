@@ -4,7 +4,7 @@
 # wrote and ran infra/host/setup-avahi.sh/setup-ufw.sh; this is the
 # after-the-fact check that their combined effect, plus the actual compose
 # stack, together deliver on the isolation claim in docs/NETWORKING.md:
-# reachable by name from the LAN, port 80 only, nothing else exposed).
+# reachable by name from the LAN, ports 80 and 443 only, nothing else exposed).
 #
 # Must be run with sudo — checks 4/5 read ufw/iptables state, both of which
 # refuse to run (or lie) as a non-root user (`ufw status` exits with "You
@@ -30,16 +30,16 @@
 #      choice is deliberate): `docker compose config` shows only caddy with
 #      a ports: mapping, and live `docker ps` output confirms no running
 #      container other than caddy has a host-published port, and that
-#      caddy's own published port is exactly 80.
+#      caddy's own published ports are exactly 80 and 443.
 #   4. `ufw status verbose` shows the firewall active, default-deny
 #      incoming, and the LAN-subnet allow rule for tcp/80 that setup-ufw.sh
-#      installs.
+#      installs for tcp/80 and tcp/443.
 #   5. `iptables -L DOCKER-USER -n -v` contains the DROP rule setup-ufw.sh
-#      inserts directly into that chain — the actual enforcement point for
-#      Docker-published ports, since Docker's own NAT rules are consulted
-#      ahead of plain `ufw allow`/`deny` (see docs/NETWORKING.md's "How
-#      LAN-only isolation works" section for the full explanation of why
-#      check 4 alone is not sufficient).
+#      inserts directly into that chain for both tcp/80 and tcp/443 — the
+#      actual enforcement point for Docker-published ports, since Docker's
+#      own NAT rules are consulted ahead of plain `ufw allow`/`deny` (see
+#      docs/NETWORKING.md's "How LAN-only isolation works" section for the
+#      full explanation of why check 4 alone is not sufficient).
 #   6. M7-01 no-egress: for each of `agent-server`, `model-runner`,
 #      `code-exec-manager`, `postgres` (every service moved onto the
 #      `homeai-internal` network, `internal: true`), a real outbound TCP
@@ -195,7 +195,7 @@ except Exception as e:
 # socket on this dev machine" — a developer's own host can legitimately run
 # unrelated tooling on other ports (IDE helpers, other projects, etc.) that
 # have nothing to do with this ticket's actual security question ("does the
-# homeai stack expose anything besides caddy:80"). The ticket's own
+# homeai stack expose anything besides caddy:80/443"). The ticket's own
 # acceptance wording confirms this scope: "fail if any other HOMEAI
 # CONTAINER publishes a port" — not any other process. sshd on 22 is
 # explicitly named as an allowed EXCEPTION precisely because it's the one
@@ -212,17 +212,34 @@ bad = [name for name, svc in cfg.get('services', {}).items() if name != 'caddy' 
 print('\n'.join(bad))
 ")"
 
+  compose_caddy_ports="$(docker compose config --format json 2>/dev/null | python3 -c "
+import json, sys
+cfg = json.load(sys.stdin)
+ports = cfg.get('services', {}).get('caddy', {}).get('ports') or []
+published = []
+for p in ports:
+    if isinstance(p, dict):
+        published.append(str(p.get('published', '')))
+    else:
+        published.append(str(p).split(':')[0])
+print(' '.join(published))
+")"
+
   live_offenders="$(docker ps --format '{{.Names}}\t{{.Ports}}' | awk -F'\t' '
     $2 ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && $1 !~ /caddy/ { print }
     $2 ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && $1 ~ /caddy/ {
       line = $2
       n = split(line, parts, ", ")
       for (i = 1; i <= n; i++) {
-        if (parts[i] ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && parts[i] !~ /(0\.0\.0\.0|\[::\]):80->/) {
-          print $1 " publishes non-80 port: " parts[i]
+        if (parts[i] ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && parts[i] !~ /(0\.0\.0\.0|\[::\]):(80|443)->/) {
+          print $1 " publishes unexpected port: " parts[i]
         }
       }
     }
+  ')"
+
+  live_caddy_ports="$(docker ps --format '{{.Names}}\t{{.Ports}}' | awk -F'\t' '
+    $1 ~ /caddy/ { print $2 }
   ')"
 
   sshd_state="inactive"
@@ -231,11 +248,21 @@ print('\n'.join(bad))
   fi
   log "  (check 3) sshd: ${sshd_state}"
 
-  if [[ -z "${compose_offenders}" ]] && [[ -z "${live_offenders}" ]]; then
-    pass 3 "only caddy publishes a host port, and only port 80 (docker compose config + docker ps)"
+  local missing=()
+  [[ " ${compose_caddy_ports} " == *" 80 "* ]] || missing+=("compose missing published 80")
+  [[ " ${compose_caddy_ports} " == *" 443 "* ]] || missing+=("compose missing published 443")
+  if [[ -n "${live_caddy_ports}" ]]; then
+    [[ "${live_caddy_ports}" == *":80->"* ]] || missing+=("live caddy missing 80")
+    [[ "${live_caddy_ports}" == *":443->"* ]] || missing+=("live caddy missing 443")
   else
-    local detail="${compose_offenders}${compose_offenders:+; }${live_offenders}"
-    fail 3 "only caddy publishes a host port, and only port 80 (docker compose config + docker ps)" "${detail}"
+    missing+=("caddy container not running or has no published ports")
+  fi
+
+  if [[ -z "${compose_offenders}" ]] && [[ -z "${live_offenders}" ]] && [[ "${#missing[@]}" -eq 0 ]]; then
+    pass 3 "only caddy publishes host ports, and only 80 and 443 (docker compose config + docker ps)"
+  else
+    local detail="${compose_offenders}${compose_offenders:+; }${live_offenders}${live_offenders:+; }$(IFS='; '; echo "${missing[*]}")"
+    fail 3 "only caddy publishes host ports, and only 80 and 443 (docker compose config + docker ps)" "${detail}"
   fi
 }
 
@@ -244,7 +271,7 @@ print('\n'.join(bad))
 check_4() {
   local status_out
   if ! status_out="$(ufw status verbose 2>&1)"; then
-    fail 4 "ufw active, default-deny incoming, LAN-subnet allow rule for tcp/80" "$status_out"
+    fail 4 "ufw active, default-deny incoming, LAN-subnet allow rules for tcp/80 and tcp/443" "$status_out"
     return
   fi
 
@@ -261,11 +288,14 @@ check_4() {
   if ! grep -qE "^80/tcp[[:space:]]+ALLOW IN[[:space:]]+${LAN_SUBNET//./\\.}" <<<"$status_out"; then
     errors+=("no '80/tcp ALLOW IN ${LAN_SUBNET}' rule found")
   fi
+  if ! grep -qE "^443/tcp[[:space:]]+ALLOW IN[[:space:]]+${LAN_SUBNET//./\\.}" <<<"$status_out"; then
+    errors+=("no '443/tcp ALLOW IN ${LAN_SUBNET}' rule found")
+  fi
 
   if [ "${#errors[@]}" -eq 0 ]; then
-    pass 4 "ufw active, default-deny incoming, LAN-subnet allow rule for tcp/80"
+    pass 4 "ufw active, default-deny incoming, LAN-subnet allow rules for tcp/80 and tcp/443"
   else
-    fail 4 "ufw active, default-deny incoming, LAN-subnet allow rule for tcp/80" \
+    fail 4 "ufw active, default-deny incoming, LAN-subnet allow rules for tcp/80 and tcp/443" \
       "$(IFS='; '; echo "${errors[*]}")"$'\n'"$status_out"
   fi
 }
@@ -274,14 +304,14 @@ check_4() {
 
 check_5() {
   if [[ -z "${DEFAULT_IFACE}" ]]; then
-    fail 5 "DOCKER-USER chain contains the LAN-only DROP rule for tcp/80" \
+    fail 5 "DOCKER-USER chain contains the LAN-only DROP rules for tcp/80 and tcp/443" \
       "could not auto-detect the default-route interface — cannot verify which interface the rule should be scoped to"
     return
   fi
 
   local rule_out
   if ! rule_out="$(iptables -L DOCKER-USER -n -v 2>&1)"; then
-    fail 5 "DOCKER-USER chain contains the LAN-only DROP rule for tcp/80" "$rule_out"
+    fail 5 "DOCKER-USER chain contains the LAN-only DROP rules for tcp/80 and tcp/443" "$rule_out"
     return
   fi
 
@@ -289,21 +319,30 @@ check_5() {
   # iptables-nft compatibility mode format their -v -n output slightly
   # differently (spacing, whether "!" is its own column or glued to the
   # address), and this combination of tokens (DROP + tcp + this exact
-  # interface + this exact LAN subnet + dpt:80, all appearing together on
-  # one line) is specific enough that a false positive is effectively
-  # impossible — this is exactly the rule setup-ufw.sh inserts:
+  # interface + this exact LAN subnet + dpt:80/dpt:443, all appearing
+  # together on one line) is specific enough that a false positive is
+  # effectively impossible — these are exactly the rules setup-ufw.sh
+  # inserts:
   #   iptables -I DOCKER-USER -i <iface> ! -s <LAN_SUBNET> -p tcp --dport 80 -j DROP
-  local matched
-  matched="$(awk -v iface="$DEFAULT_IFACE" -v subnet="$LAN_SUBNET" '
+  #   iptables -I DOCKER-USER -i <iface> ! -s <LAN_SUBNET> -p tcp --dport 443 -j DROP
+  local matched80 matched443
+  matched80="$(awk -v iface="$DEFAULT_IFACE" -v subnet="$LAN_SUBNET" '
     /DROP/ && /tcp/ && $0 ~ iface && index($0, subnet) > 0 && /dpt:80/ { found=1 }
     END { exit !found }
   ' <<<"$rule_out"; echo $?)"
+  matched443="$(awk -v iface="$DEFAULT_IFACE" -v subnet="$LAN_SUBNET" '
+    /DROP/ && /tcp/ && $0 ~ iface && index($0, subnet) > 0 && /dpt:443/ { found=1 }
+    END { exit !found }
+  ' <<<"$rule_out"; echo $?)"
 
-  if [[ "$matched" == "0" ]]; then
-    pass 5 "DOCKER-USER chain contains the LAN-only DROP rule for tcp/80 on ${DEFAULT_IFACE}"
+  if [[ "$matched80" == "0" && "$matched443" == "0" ]]; then
+    pass 5 "DOCKER-USER chain contains the LAN-only DROP rules for tcp/80 and tcp/443 on ${DEFAULT_IFACE}"
   else
-    fail 5 "DOCKER-USER chain contains the LAN-only DROP rule for tcp/80 on ${DEFAULT_IFACE}" \
-      "no line in 'iptables -L DOCKER-USER -n -v' matched DROP+tcp+${DEFAULT_IFACE}+${LAN_SUBNET}+dpt:80"$'\n'"$rule_out"
+    local missing=()
+    [[ "$matched80" == "0" ]] || missing+=("dpt:80")
+    [[ "$matched443" == "0" ]] || missing+=("dpt:443")
+    fail 5 "DOCKER-USER chain contains the LAN-only DROP rules for tcp/80 and tcp/443 on ${DEFAULT_IFACE}" \
+      "no line in 'iptables -L DOCKER-USER -n -v' matched DROP+tcp+${DEFAULT_IFACE}+${LAN_SUBNET}+${missing[*]}"$'\n'"$rule_out"
   fi
 }
 

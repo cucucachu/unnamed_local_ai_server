@@ -17,8 +17,8 @@ Run these in order (all idempotent, all under `infra/host/`, all need `sudo`):
    Sets the hostname to `homeai` (unless `--keep-hostname` is passed) and
    verifies `homeai.local` resolves over mDNS.
 4. **Firewall** — `sudo infra/host/setup-ufw.sh`
-   LAN-only `ufw` rule for port 80 plus the `DOCKER-USER` iptables rule (see
-   below for why both are needed).
+   LAN-only `ufw` rules for ports 80 and 443 plus the matching
+   `DOCKER-USER` iptables rules (see below for why both are needed).
 
 Re-run any of these safely at any time — they're all written to converge on
 the same end state rather than fail on a second run.
@@ -27,27 +27,31 @@ the same end state rather than fail on a second run.
 
 Three independent layers, because no single one is sufficient on its own:
 
-1. **Only `caddy` publishes a host port.** Every other compose service
-   (`agent-server`, `model-runner`, `postgres`, `code-exec-manager`) is only
-   reachable from inside a Docker bridge network — there's no host port to
-   attack even from the LAN. (As of M7-01, that network is
+1. **Only `caddy` publishes host ports (80 and 443).** Every other compose
+   service (`agent-server`, `model-runner`, `postgres`, `code-exec-manager`)
+   is only reachable from inside a Docker bridge network — there's no host
+   port to attack even from the LAN. (As of M7-01, that network is
    `homeai-internal`, not `homeai-net` — see docs/ARCHITECTURE.md §5's
    "Network segmentation" section for the full internal/egress split; this
-   LAN-only story is unaffected either way.)
+   LAN-only story is unaffected either way.) 443 is the one intentional
+   exception to the original v1 "no new published ports" rule (M9-05,
+   local HTTPS).
 2. **`ufw`** enforces LAN-only access for anything running *directly on the
-   host* (default-deny incoming, `192.168.x.x/24 -> tcp/80` allowed,
-   `OpenSSH` allowed if installed). On its own this does **not** protect
-   `caddy`'s published port — see the next point.
+   host* (default-deny incoming, `192.168.x.x/24 -> tcp/80` and `tcp/443`
+   allowed, `OpenSSH` allowed if installed). On its own this does **not**
+   protect `caddy`'s published ports — see the next point.
 3. **The `DOCKER-USER` iptables chain.** Docker manages its own
    iptables/nftables NAT rules for published container ports, and inserts
    them *ahead of* `ufw`'s chain — this is a well-known Docker/ufw
-   interaction, not a bug in this setup. So a bare `ufw allow`/`deny` on port
-   80 is silently bypassed for traffic Docker is forwarding to the `caddy`
-   container. The real fix, which `setup-ufw.sh` implements, is a rule
-   directly in `DOCKER-USER` (which Docker guarantees to consult first):
+   interaction, not a bug in this setup. So a bare `ufw allow`/`deny` on
+   ports 80/443 is silently bypassed for traffic Docker is forwarding to
+   the `caddy` container. The real fix, which `setup-ufw.sh` implements, is
+   a rule per published port directly in `DOCKER-USER` (which Docker
+   guarantees to consult first):
 
    ```
    iptables -I DOCKER-USER -i <default-route-iface> ! -s <LAN_SUBNET> -p tcp --dport 80 -j DROP
+   iptables -I DOCKER-USER -i <default-route-iface> ! -s <LAN_SUBNET> -p tcp --dport 443 -j DROP
    ```
 
    `setup-ufw.sh` auto-detects `<default-route-iface>` from
@@ -78,8 +82,10 @@ Three independent layers, because no single one is sufficient on its own:
    the host by name without router DNS changes — this is a convenience, not
    a security boundary.
 
-Also out of scope for v1 by design (see README): TLS/HTTPS, auth,
-docker-socket-proxy, router/VLAN changes.
+Also out of scope for v1 by design (see README): public ACME
+certificates, forcing HTTPS / HSTS, auth, docker-socket-proxy,
+router/VLAN changes. Local HTTPS for `homeai.local` (Caddy internal CA)
+is in — see "Local HTTPS (Caddy internal CA)" below.
 
 ### Known gotcha: `avahi-daemon` doesn't notice a live hostname change
 
@@ -176,19 +182,19 @@ scripts exited 0 once." Five checks:
    returns `200`, proving mDNS + Caddy + agent-server all work together
    from the host's own point of view, not just each piece in isolation.
 3. **Port audit, Docker-stack scope** — `docker compose config` and live
-   `docker ps` output agree that **only** `caddy` publishes a host port,
-   and that it publishes **only** port 80. Deliberately scoped to the
-   compose stack, not to every process on the dev machine: an unrelated
-   host tool (an IDE helper, another project's dev server, etc.) listening
-   on some other port isn't a regression in *this* stack's isolation
-   posture, and flagging it would just be noise. `sshd` on port 22 (if
-   installed) is the one explicitly-allowed non-Docker exception — its own
-   exposure is `ufw`'s job (check 4), not this check's.
+   `docker ps` output agree that **only** `caddy` publishes host ports,
+   and that it publishes **only** ports 80 and 443. Deliberately scoped to
+   the compose stack, not to every process on the dev machine: an
+   unrelated host tool (an IDE helper, another project's dev server, etc.)
+   listening on some other port isn't a regression in *this* stack's
+   isolation posture, and flagging it would just be noise. `sshd` on port
+   22 (if installed) is the one explicitly-allowed non-Docker exception —
+   its own exposure is `ufw`'s job (check 4), not this check's.
 4. **`ufw` posture** — active, default-deny incoming, and the LAN-subnet
-   allow rule for tcp/80 that `setup-ufw.sh` installs.
-5. **`DOCKER-USER` chain** — contains the actual enforcement rule (`ufw`
-   alone does not restrict Docker-published ports; see "How LAN-only
-   isolation works" above for why).
+   allow rules for tcp/80 and tcp/443 that `setup-ufw.sh` installs.
+5. **`DOCKER-USER` chain** — contains the actual enforcement rules for
+   both published ports (`ufw` alone does not restrict Docker-published
+   ports; see "How LAN-only isolation works" above for why).
 
 Re-run this any time after touching `docker-compose.yml`'s port mappings,
 the firewall scripts, or the network hardware itself (new NIC, switched
@@ -196,21 +202,137 @@ from Wi-Fi to Ethernet, etc.).
 
 ## Adding a device
 
-There's no per-device setup beyond "join the same Wi-Fi/LAN and know the
-URL" — no certificates to install, no accounts to create, no router
-changes:
+HTTP needs no per-device setup beyond "join the same Wi-Fi/LAN and know
+the URL" — no accounts to create, no router changes.
+`http://homeai.local` stays available on purpose (no HTTP→HTTPS redirect)
+so Expo Go and phones that have not installed the local CA keep working.
 
-- **Any browser** (phone, laptop, tablet): navigate to `http://homeai.local`.
-  If mDNS doesn't resolve on that specific device (see "Troubleshooting
-  mDNS" below), use the host's LAN IP directly instead — `verify_network.sh`
-  prints it, or check `ip -4 addr` on the host.
+HTTPS (`https://homeai.local`) needs the Caddy local CA installed once
+per device — see "Local HTTPS (Caddy internal CA)" below. That is
+confidentiality on the LAN (and a browser secure context for microphone
+access), **not** authentication.
+
+- **Any browser** (phone, laptop, tablet): navigate to `http://homeai.local`
+  immediately, or `https://homeai.local` after installing the CA. If mDNS
+  doesn't resolve on that specific device (see "Troubleshooting mDNS"
+  below), use the host's LAN IP directly instead — `verify_network.sh`
+  prints it, or check `ip -4 addr` on the host. HTTPS by IP will not match
+  the `homeai.local` certificate; use the name, or stay on HTTP.
 - **Expo Go** (iOS/Android): the native app has no "origin" to be relative
   to the way the web build does, so it needs an explicit API host. Set
   `EXPO_PUBLIC_API_HOST=http://homeai.local` in `services/frontend/.env`
   (see `.env.example`) before starting the Expo dev server, or
-  `http://<LAN-IP>` if mDNS isn't resolving on that device. No other
-  per-device configuration — the same Expo Go app on any phone on the LAN
-  works identically once that one variable points at the right host.
+  `http://<LAN-IP>` if mDNS isn't resolving on that device. Once the phone
+  trusts the CA you may set `EXPO_PUBLIC_API_HOST=https://homeai.local`
+  (`lib/api.ts` maps that to `wss://`). Leave `http://` if the device
+  does not have the CA — phones without it would break if we forced
+  HTTPS.
+
+## Local HTTPS (Caddy internal CA)
+
+Caddy issues a certificate for `homeai.local` from its own local CA
+(`tls internal` in `infra/caddy/Caddyfile`). Each device that wants
+`https://homeai.local` (lock icon, no warning, `wss://` chat, browser
+microphone access) installs that root **once**. HTTP on `:80` is not
+redirected and stays the default for anything that has not installed
+the CA.
+
+TLS here is confidentiality on the LAN, not authentication — there is
+still no login. Anyone on the allowed subnet who can reach the host has
+the full API, HTTP or HTTPS.
+
+### Get the root certificate
+
+The public root (never the private key) is available two ways:
+
+1. **HTTP on the LAN** — open `http://homeai.local/ca.crt` in a browser
+   or fetch it from another device. Serving the CA over HTTP is a
+   documented trade-off: the LAN is already trusted, and a device cannot
+   use HTTPS to fetch the CA before it trusts the CA.
+2. **Host copy** — `scripts/export-ca.sh` writes the same file to
+   `${BACKUP_DIR}/homeai-root-ca.crt` (default
+   `/srv/homeai/backups/homeai-root-ca.crt`). Re-run after the first
+   HTTPS boot or after a rotation. Writing under `/srv` may need
+   `sudo scripts/export-ca.sh`.
+
+The CA lives in the `caddy-data` Docker volume (`/data` in the caddy
+container) so it stays stable across `docker compose up` / container
+recreates.
+
+### Install on a device
+
+**Android (Chrome / system user CA)**
+
+1. Download `http://homeai.local/ca.crt` on the phone (Chrome will
+   usually treat it as a download, not install it automatically).
+2. Settings → Security → Encryption & credentials → Install a
+   certificate → CA certificate (wording varies by OEM / Android
+   version). Select the downloaded file.
+3. Chrome 64+: also enable the user CA for that profile if prompted
+   ("Trust on first use" / "CA installed" notification). Some OEMs
+   hide this under Settings → Privacy → More security settings.
+4. Open `https://homeai.local` — the warning should be gone. A chat
+   turn should stream over `wss://`.
+
+**iOS (Safari / system)**
+
+1. Open `http://homeai.local/ca.crt` in Safari. iOS offers to download
+   a profile.
+2. Settings → Profile Downloaded → Install. Enter the device passcode.
+3. Settings → General → About → Certificate Trust Settings → enable
+   full trust for the Home AI / Caddy root.
+4. Open `https://homeai.local` in Safari.
+
+**macOS**
+
+1. Fetch the cert (`http://homeai.local/ca.crt` or copy
+   `homeai-root-ca.crt` from the host).
+2. Double-click it, or `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain homeai-root-ca.crt`.
+3. Keychain Access → the cert → Get Info → Trust → "When using this
+   certificate: Always Trust" if the `security` command was not used.
+4. Restart Chrome if it was already open (Chrome on macOS uses the
+   system keychain).
+
+**Windows**
+
+1. Download `ca.crt` / `homeai-root-ca.crt`.
+2. `certlm.msc` (Local Computer) → Trusted Root Certification
+   Authorities → Certificates → All Tasks → Import. Or:
+   `certutil -addstore -f Root homeai-root-ca.crt` (elevated).
+3. Restart the browser.
+
+**Linux / Chrome**
+
+Chrome and Chromium on Linux do **not** use the OpenSSL system store.
+Either:
+
+- Import into Chrome: Settings → Privacy and security → Security →
+  Manage certificates → Authorities → Import `homeai-root-ca.crt`,
+  check "Trust this certificate for identifying websites", or
+- System store (Firefox ESR / `curl` / Python):
+  `sudo cp homeai-root-ca.crt /usr/local/share/ca-certificates/homeai-root-ca.crt && sudo update-ca-certificates`
+
+**Firefox** (any OS) uses its own store: Settings → Privacy & Security
+→ Certificates → View Certificates → Authorities → Import. Check
+"Trust this CA to identify websites."
+
+### Rotate the CA
+
+Rotation is rare (the volume keeps the same CA across normal restarts).
+Do it if the private key may have leaked, or after a deliberate
+`docker volume rm` of `caddy-data`.
+
+1. Stop caddy: `docker compose stop caddy`
+2. Remove the volume (this destroys the old CA **and** its private
+   key): `docker compose down` is not enough — the named volume
+   persists. `docker volume rm homeai_caddy-data` after caddy is gone.
+3. `docker compose up -d caddy` — Caddy mints a new local CA on first
+   HTTPS request.
+4. `scripts/export-ca.sh` (or re-download `http://homeai.local/ca.crt`).
+5. On every device that had the old CA: delete the old root, then
+   install the new one using the same steps as above. Until they do,
+   `https://homeai.local` will warn; `http://homeai.local` is
+   unaffected.
 
 ## Troubleshooting mDNS
 
@@ -245,18 +367,19 @@ always the device, not this setup:
 ## What would change for internet exposure
 
 Nothing here is designed for it, and the recommendation is: don't — this
-setup's entire security model (no auth, no TLS, no rate limiting, an
+setup's entire security model (no auth, no rate limiting, an
 `execute_code` tool that runs arbitrary shell commands) assumes a trusted
-LAN, and none of that is safe to expose to the public internet as-is. If
-remote access is ever genuinely needed (e.g. checking on a home server
+LAN, and none of that is safe to expose to the public internet as-is.
+Local HTTPS encrypts the LAN hop; it does not authenticate callers.
+If remote access is ever genuinely needed (e.g. checking on a home server
 while traveling), the sanctioned path is a VPN — WireGuard is the natural
 fit (lightweight, works well on a home router or as a container on this
 same host) — so a remote device joins the LAN itself (or an
 equivalent virtual one) and everything above just works unchanged, rather
-than trying to safely expose `homeai.local`/port 80 directly to the
-internet. See README.md's "Documented fast-follows" for where this and the
-auth/TLS work it would actually require (shared-password auth at the
-proxy, real TLS certs) are tracked — none of it is in scope for v1.
+than trying to safely expose `homeai.local`/ports 80 and 443 directly to
+the internet. See README.md's "Documented fast-follows" for where this and
+the remaining hardening (shared-password auth at the proxy, public ACME
+certs) are tracked — none of that is in scope for v1.
 
 ## Verifying from a phone
 
