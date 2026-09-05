@@ -139,7 +139,9 @@ unnamed_local_ai/
 
 ## Project status & roadmap
 
-Delivery is organized into seven milestones, each ending in a **gate** — a scripted + human-verified checkpoint before the next milestone starts:
+Delivery is organized into two stages, each broken into milestones that end in a **gate** — a scripted + human-verified checkpoint before the next milestone starts.
+
+**Stage 1 — v1** (seven milestones):
 
 | Milestone | Value delivered | Gate |
 |---|---|---|
@@ -151,15 +153,25 @@ Delivery is organized into seven milestones, each ending in a **gate** — a scr
 | M5 — Media | Video/audio playback with seek from the files UI | Phone-browser seek/scrub |
 | M6 — LAN + integration | `homeai.local`, native parity, docs, backup | Full product scenario works from a phone |
 
+**Stage 2 — agent harness + chat experience** (three further milestones; see the
+[Stage 2 backlog reference](../../issues/72) for the full dependency graph, parallel lanes, and
+risk register):
+
+| Milestone | Value delivered | Gate |
+|---|---|---|
+| M7 — Web research (read-only) | Agent can search and read the public web through an infrastructure-enforced GET/HEAD-only egress path; nothing else in the stack can reach the internet | G7: agent researches a question end-to-end; egress + isolation suites green |
+| M8 — Agent controls | Stop, edit/resend (truncate + fork), configurable human-in-the-loop approvals, and (spike-gated) model thinking | G8: stop / approve-reject / edit (truncate + fork) from a browser |
+| M9 — Chat experience | Markdown, turn activity panel with runtime, file deep links, Android keyboard fix, local HTTPS, voice input | G9: full chat experience from a phone over HTTPS + Expo Go |
+
 Track live progress on the [Milestones](../../milestones) and [Issues](../../issues) pages.
 
 ## Working with the GitHub issues
 
-This repo's issue tracker **is** the project plan — there are no separate local planning files. Every backlog ticket across all seven milestones is closed; the [Issues](../../issues) page is the delivery history.
+This repo's issue tracker **is** the project plan — there are no separate local planning files. Every backlog ticket across Stage 1's seven milestones is closed; Stage 2 (M7–M9) is in progress. The [Issues](../../issues) page is the delivery history.
 
-The binding technical contracts every ticket built against — environment variables, service topology, HTTP/WebSocket API shapes, the path-traversal guard — live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#3-contracts). The full dependency graph, ordered backlog table, parallel work lanes, and risk register that governed build order are preserved on the closed [Reference: Backlog — Ordering, Dependencies & Gates](../../issues/35) issue.
+The binding technical contracts every ticket built against — environment variables, service topology, HTTP/WebSocket API shapes, the path-traversal guard — live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#3-contracts). The full dependency graph, ordered backlog table, parallel work lanes, and risk register that governed build order are preserved on the closed [Reference: Backlog — Ordering, Dependencies & Gates](../../issues/35) issue (Stage 1) and the [Reference: Stage 2 backlog](../../issues/72) issue (M7–M9).
 
-- **Milestones** map 1:1 to the phases in the table above (`M0 - Foundations` … `M6 - LAN + integration`). A milestone was done once its gate issue passed.
+- **Milestones** map 1:1 to the phases in the tables above (`M0 - Foundations` … `M9 - Chat experience`). A milestone was done once its gate issue passed.
 - **Labels**:
   - `ticket` — a unit of implementation work.
   - `size:S` / `size:M` / `size:L` — rough effort sizing.
