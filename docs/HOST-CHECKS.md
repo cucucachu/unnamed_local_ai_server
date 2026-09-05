@@ -91,3 +91,5 @@ agent run.
 - [ ] (M9-04) iOS Expo Go: no regression.
 - [ ] (M9-05) Android + iOS phone: install the CA per NETWORKING.md; `https://homeai.local` loads with no warning; a chat turn completes over `wss://`.
 - [ ] (M9-05) `http://homeai.local` still works on a device without the CA.
+- [ ] (M9-06) Android Chrome over `https://homeai.local`: tap mic, speak, text appears, edit, send.
+- [ ] (M9-06) Expo Go Android: keyboard mic dictates into the composer. Native has no in-app mic button — the OS keyboard's built-in dictation (Gboard / iOS keyboard mic) is the supported path.

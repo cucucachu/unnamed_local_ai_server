@@ -108,6 +108,10 @@ export default function SettingsScreen() {
           >
             <SegmentedChoice value={settings.edit_mode_default} onChange={handleSetEditMode} />
           </SettingRow>
+
+          <Text style={styles.footnote} testID="settings-voice-footnote">
+            Voice input uses your browser&apos;s speech service.
+          </Text>
         </View>
       )}
 
@@ -263,5 +267,11 @@ const styles = StyleSheet.create({
   },
   segmentButtonTextSelected: {
     color: theme.text,
+  },
+  footnote: {
+    color: theme.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 8,
   },
 });

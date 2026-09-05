@@ -4,6 +4,7 @@ import { act, create } from 'react-test-renderer';
 
 import { groupItemsIntoTurns } from '@/lib/chatTurns';
 import type { EditMode } from '@/lib/chatSocket';
+import type { StartListeningOptions } from '@/lib/speech';
 import type { ChatToolItem, ChatUserItem, UseChatResult } from '@/lib/useChat';
 
 // Per the ticket's own text ("one shallow render of the screen"): mock
@@ -40,6 +41,15 @@ jest.mock('@/components/SettingsProvider', () => ({
   }),
 }));
 
+const mockIsSpeechSupported = jest.fn(() => false);
+const mockStartListening = jest.fn((_options: StartListeningOptions) => () => {});
+const mockStopListening = jest.fn();
+jest.mock('@/lib/speech', () => ({
+  isSpeechSupported: () => mockIsSpeechSupported(),
+  startListening: (options: StartListeningOptions) => mockStartListening(options),
+  stopListening: () => mockStopListening(),
+}));
+
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import ChatScreen from '../[threadId]';
 
@@ -69,6 +79,11 @@ describe('ChatScreen ([threadId])', () => {
     mockCopyToClipboard.mockClear();
     mockPush.mockReset();
     mockEditModeDefault = 'truncate';
+    mockIsSpeechSupported.mockReset();
+    mockIsSpeechSupported.mockReturnValue(false);
+    mockStartListening.mockReset();
+    mockStartListening.mockImplementation(() => () => {});
+    mockStopListening.mockReset();
   });
 
   it('passes the route threadId through to useChat', () => {
@@ -1056,6 +1071,95 @@ describe('ChatScreen ([threadId])', () => {
         replaceFromMessageId: 'u-1',
         mode: 'fork',
       });
+    });
+  });
+
+  describe('Voice input (M9-06)', () => {
+    it('hides the mic button when speech is unsupported', () => {
+      mockIsSpeechSupported.mockReturnValue(false);
+      setUseChatResult();
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'chat-mic' })).toThrow();
+    });
+
+    it('hides the mic button in an insecure context (speech reports unsupported)', () => {
+      mockIsSpeechSupported.mockReturnValue(false);
+      setUseChatResult();
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'chat-mic' })).toThrow();
+    });
+
+    it('shows the mic button when speech is supported and appends interim then final', () => {
+      mockIsSpeechSupported.mockReturnValue(true);
+      let captured: {
+        onInterim?: (text: string) => void;
+        onFinal?: (text: string) => void;
+        onError?: (error: string) => void;
+      } = {};
+      mockStartListening.mockImplementation((options: StartListeningOptions) => {
+        captured = options;
+        return () => {};
+      });
+      setUseChatResult();
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const mic = renderer!.root.findByProps({ testID: 'chat-mic' });
+      expect(mic.props.accessibilityLabel).toBe('Start voice input');
+
+      act(() => {
+        (mic.props as { onPress: () => void }).onPress();
+      });
+      expect(mockStartListening).toHaveBeenCalled();
+
+      act(() => {
+        captured.onInterim?.('hello');
+      });
+      expect(renderer!.root.findByProps({ testID: 'chat-speech-interim' }).props.children).toBe('hello');
+
+      act(() => {
+        captured.onFinal?.('hello world');
+      });
+      expect(renderer!.root.findAllByProps({ testID: 'chat-speech-interim' })).toHaveLength(0);
+      const input = renderer!.root.findByProps({ placeholder: 'Message…' });
+      expect(input.props.value).toBe('hello world');
+    });
+
+    it('toasts a microphone hint on not-allowed / audio-capture errors', () => {
+      mockIsSpeechSupported.mockReturnValue(true);
+      let captured: { onError?: (error: string) => void } = {};
+      mockStartListening.mockImplementation((options: StartListeningOptions) => {
+        captured = options;
+        return () => {};
+      });
+      setUseChatResult();
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-mic' }).props as { onPress: () => void }).onPress();
+      });
+      act(() => {
+        captured.onError?.('not-allowed');
+      });
+
+      expect(JSON.stringify(renderer!.toJSON())).toContain('Allow microphone for homeai.local');
     });
   });
 });

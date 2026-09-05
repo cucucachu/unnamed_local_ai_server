@@ -101,6 +101,7 @@ describe('SettingsScreen', () => {
     expect(flatStyle(replaceLabel.props.style).color).toBe(theme.textMuted);
 
     expect(textOf(renderer)).toContain('Require approval before the agent writes files or runs code.');
+    expect(textOf(renderer)).toContain("Voice input uses your browser's speech service.");
   });
 
   it('toggling the HITL switch calls updateSettings with the new value', async () => {
