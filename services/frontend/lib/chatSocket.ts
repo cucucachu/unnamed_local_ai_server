@@ -64,6 +64,8 @@ export type TurnEndStatus = 'completed' | 'cancelled' | 'awaiting_approval';
 export interface TurnEndFrame {
   type: 'turn_end';
   status: TurnEndStatus;
+  /** M9-02: elapsed milliseconds since this turn's `turn_start`. */
+  duration_ms?: number;
 }
 
 export interface ErrorFrame {

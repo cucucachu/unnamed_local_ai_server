@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   openChatSocket,
@@ -15,7 +15,18 @@ import {
   type TurnEndFrame,
   type WebSocketCtor,
 } from './chatSocket';
+import {
+  extractTurnMetaFromHistory,
+  groupItemsIntoTurns,
+  type ChatTurn,
+  type ChatTurnMeta,
+  type ChatTurnStatus,
+  ORPHAN_TURN_KEY,
+} from './chatTurns';
 import { getThreadMessages, getThreadState, type ThreadMessage } from './threads';
+
+export type { ChatTurn, ChatTurnMeta, ChatTurnStatus };
+export { extractTurnMetaFromHistory, groupItemsIntoTurns };
 
 export type { SendUserMessageOptions };
 
@@ -213,6 +224,8 @@ export function mapHistoryToItems(messages: ThreadMessage[]): ChatItem[] {
 
 export interface UseChatResult {
   items: ChatItem[];
+  /** M9-02: `items` grouped into turns for the activity-panel UI. */
+  turns: ChatTurn[];
   sendMessage: (text: string, options?: SendUserMessageOptions) => void;
   /** M8-01: sends a `cancel` frame for the in-flight turn (a no-op
    * server-side if `busy` is already `false`). M8-03: while
@@ -293,6 +306,7 @@ function toPendingApprovalAction(action: {
 
 export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseChatResult {
   const [items, setItems] = useState<ChatItem[]>([]);
+  const [turnMetas, setTurnMetas] = useState<Record<string, ChatTurnMeta>>({});
   const [busy, setBusy] = useState(false);
   const [connectionState, setConnectionState] = useState<ChatConnectionState>('connecting');
   const [hydrationState, setHydrationState] = useState<HydrationState>('loading');
@@ -300,6 +314,8 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   // Bumped by `retryHydration` to re-trigger the hydration effect below
   // without needing `threadId` itself to change.
   const [hydrationAttempt, setHydrationAttempt] = useState(0);
+  const currentTurnUserIdRef = useRef<string | null>(null);
+  const turnStartedAtRef = useRef<number | null>(null);
 
   // Id of the assistant item currently receiving `token` frames, or `null`
   // if the next `token` should start a fresh item (right after connect,
@@ -320,13 +336,17 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     let cancelled = false;
     setHydrationState('loading');
     setItems([]);
+    setTurnMetas({});
     setPendingApproval(null);
     pendingApprovalRef.current = null;
+    currentTurnUserIdRef.current = null;
+    turnStartedAtRef.current = null;
 
     getThreadMessages(threadId)
       .then(async (messages) => {
         if (cancelled) return;
         setItems(mapHistoryToItems(messages));
+        setTurnMetas(extractTurnMetaFromHistory(messages));
 
         // M8-03: restore a pending approval left over from before a
         // reconnect/reload. Best-effort relative to hydration itself (a
@@ -377,6 +397,12 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
       threadId,
       {
         onTurnStart: () => {
+          turnStartedAtRef.current = Date.now();
+          const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
+          setTurnMetas((prev) => ({
+            ...prev,
+            [userId]: { status: 'running', durationMs: prev[userId]?.durationMs },
+          }));
           const id = makeId('assistant');
           currentAssistantIdRef.current = id;
           setItems((prev) => [...prev, { id, kind: 'assistant', text: '', streaming: true }]);
@@ -450,8 +476,21 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           const id = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
           setBusy(false);
-          if (id === null) return;
+          const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
+          const durationMs =
+            frame.duration_ms ??
+            (turnStartedAtRef.current != null ? Date.now() - turnStartedAtRef.current : undefined);
+          const status: ChatTurnStatus = frame.status;
+          setTurnMetas((prev) => {
+            const prior = prev[userId];
+            const summed =
+              prior?.status === 'awaiting_approval' && prior.durationMs != null && durationMs != null
+                ? prior.durationMs + durationMs
+                : durationMs;
+            return { ...prev, [userId]: { status, durationMs: summed } };
+          });
           const stopped = frame.status === 'cancelled';
+          if (id === null) return;
           setItems((prev) =>
             prev.map((item) =>
               item.id === id && item.kind === 'assistant'
@@ -464,6 +503,10 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           const streamingId = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
           setBusy(false);
+          const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
+          const durationMs =
+            turnStartedAtRef.current != null ? Date.now() - turnStartedAtRef.current : undefined;
+          setTurnMetas((prev) => ({ ...prev, [userId]: { status: 'error', durationMs } }));
           setItems((prev) => {
             // Close out any dangling streaming item first, so an error mid-turn
             // doesn't leave a permanently-"streaming" bubble (cursor forever).
@@ -491,11 +534,27 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
 
   const sendMessage = useCallback((text: string, options?: SendUserMessageOptions) => {
     const id = newUserMessageId();
+    currentTurnUserIdRef.current = id;
     setItems((prev) => {
       let next = prev;
       if (options?.replaceFromMessageId) {
         const cutAt = prev.findIndex((item) => item.id === options.replaceFromMessageId);
-        if (cutAt !== -1) next = prev.slice(0, cutAt);
+        if (cutAt !== -1) {
+          const removedUserIds = new Set(
+            prev.slice(cutAt).filter((item) => item.kind === 'user').map((item) => item.id),
+          );
+          setTurnMetas((metas) => {
+            const kept: Record<string, ChatTurnMeta> = {};
+            for (const [key, value] of Object.entries(metas)) {
+              if (!removedUserIds.has(key)) kept[key] = value;
+            }
+            kept[id] = { status: 'running' };
+            return kept;
+          });
+          next = prev.slice(0, cutAt);
+        }
+      } else {
+        setTurnMetas((prevMetas) => ({ ...prevMetas, [id]: { status: 'running' } }));
       }
       return [...next, { id, kind: 'user', text }];
     });
@@ -543,8 +602,11 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     socketRef.current?.approvalResponse(pending.interruptId, decisions);
   }, []);
 
+  const turns = useMemo(() => groupItemsIntoTurns(items, turnMetas), [items, turnMetas]);
+
   return {
     items,
+    turns,
     sendMessage,
     stopTurn,
     busy,

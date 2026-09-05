@@ -18,7 +18,7 @@ from __future__ import annotations
 from app.db.settings import InMemorySettingsStore
 from app.db.threads import InMemoryThreadStore
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
-from tests.test_chat_ws import _drain_turn, _make_client
+from tests.test_chat_ws import _assert_turn_end, _drain_turn, _make_client
 
 
 async def _hitl_settings_store(enabled: bool) -> InMemorySettingsStore:
@@ -37,7 +37,7 @@ async def test_write_file_with_hitl_on_emits_approval_request(fake_model: FakeMo
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "awaiting_approval"}
+    _assert_turn_end(frames[-1], "awaiting_approval")
 
     approval_frames = [f for f in frames if f["type"] == "approval_request"]
     assert len(approval_frames) == 1
@@ -80,7 +80,7 @@ async def test_approve_writes_file_and_completes_turn(fake_model: FakeModel, tmp
         resume_frames = _drain_turn(ws)
 
     assert resume_frames[0] == {"type": "turn_start"}
-    assert resume_frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(resume_frames[-1], "completed")
 
     types = [f["type"] for f in resume_frames]
     assert "tool_start" in types
@@ -119,7 +119,7 @@ async def test_reject_does_not_write_file_and_informs_model(fake_model: FakeMode
         resume_frames = _drain_turn(ws)
 
     assert resume_frames[0] == {"type": "turn_start"}
-    assert resume_frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(resume_frames[-1], "completed")
     # No tool execution frames — the tool call was rejected, never run.
     assert not any(f["type"] in ("tool_start", "tool_end") for f in resume_frames)
 
@@ -141,14 +141,14 @@ async def test_cancel_while_awaiting_approval_rejects_all(fake_model: FakeModel,
     ) as client, client.websocket_connect("/ws/chat/hitl-cancel-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
-        assert frames[-1] == {"type": "turn_end", "status": "awaiting_approval"}
+        _assert_turn_end(frames[-1], "awaiting_approval")
 
         fake_model.queue(TextTurn("no problem"))
         ws.send_json({"type": "cancel"})
         resume_frames = _drain_turn(ws)
 
     assert resume_frames[0] == {"type": "turn_start"}
-    assert resume_frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(resume_frames[-1], "completed")
 
     written = tmp_path / "x.txt"
     assert not written.exists()
@@ -172,7 +172,7 @@ async def test_hitl_off_no_approval_request_at_all(fake_model: FakeModel, tmp_pa
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
     assert not any(f["type"] == "approval_request" for f in frames)
 
     written = tmp_path / "x.txt"
@@ -239,7 +239,7 @@ async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, 
             resume_frames = _drain_turn(ws)
 
     assert resume_frames[0] == {"type": "turn_start"}
-    assert resume_frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(resume_frames[-1], "completed")
     written = tmp_path / "x.txt"
     assert written.exists()
     assert written.read_text() == "y"

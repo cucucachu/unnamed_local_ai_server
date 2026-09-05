@@ -154,6 +154,12 @@ describe('useChat — plain text turn', () => {
     expect(assistant.text).toBe('hello world');
     expect(assistant.streaming).toBe(false);
     expect(busy).toBe(false);
+
+    const { turns } = hook.current();
+    expect(turns).toHaveLength(1);
+    expect(turns[0].final?.text).toBe('hello world');
+    expect(turns[0].activity).toEqual([]);
+    expect(turns[0].status).toBe('completed');
   });
 });
 
@@ -206,6 +212,11 @@ describe('useChat — tool turn', () => {
 
     // Prove the split: the tool item comes before the post-tool assistant item.
     expect(items.indexOf(tool)).toBeLessThan(items.indexOf(assistant));
+
+    const turn = hook.current().turns[0];
+    expect(turn.activity.map((i) => i.kind)).toEqual(['tool']);
+    expect(turn.final?.text).toBe('done');
+    expect(turn.status).toBe('completed');
   });
 });
 
@@ -343,6 +354,11 @@ describe('useChat — stopTurn / cancelled turn_end (M8-01)', () => {
     expect(assistant.text).toBe('one two three');
     expect(assistant.streaming).toBe(false);
     expect(assistant.stopped).toBe(true);
+
+    const cancelledTurn = hook.current().turns[0];
+    expect(cancelledTurn.status).toBe('cancelled');
+    expect(cancelledTurn.final).toBeNull();
+    expect(cancelledTurn.activity.some((item) => item.kind === 'assistant' && item.stopped)).toBe(true);
   });
 
   it('does NOT mark the item stopped on a normal turn_end status "completed"', async () => {

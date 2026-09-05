@@ -676,13 +676,19 @@ workspace root returns `400` (see the path-traversal guard below).
 - `GET /api/threads` → `200 [{thread}, ...]`, ordered by `updated_at` desc
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
-  "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null},
-  ...]`, normalized from the LangGraph checkpoint. `id` is the stored
-  LangChain message id (`HumanMessage` is constructed with
-  `id=str(uuid4())` so user rows are addressable for edit/resend).
-  `tool` rows carry the tool result text and `tool_call_id` (the paired
-  assistant `tool_calls[].id`) so the frontend can recover `args`.
-  `tool_call_id` is `null` on user/assistant rows.
+  "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null,
+  "turn": {"status": "completed"|"cancelled"|"awaiting_approval",
+  "duration_ms": int}|null}, ...]`, normalized from the LangGraph
+  checkpoint. `id` is the stored LangChain message id (`HumanMessage` is
+  constructed with `id=str(uuid4())` so user rows are addressable for
+  edit/resend). `tool` rows carry the tool result text and `tool_call_id`
+  (the paired assistant `tool_calls[].id`) so the frontend can recover
+  `args`. `tool_call_id` is `null` on user/assistant rows. `turn` (M9-02)
+  is present on the final assistant row of a turn that has a
+  `turn_stats` row keyed by that message id; `null` everywhere else.
+  `turn_stats` is `(thread_id, final_message_id, status, duration_ms,
+  started_at)`, written at `turn_end` when the checkpoint gained a new
+  last assistant message.
 - `GET /api/threads/{id}/state` (M8-03) → `200 {"pending_approval":
   {"interrupt_id": str, "actions": [{"tool_call_id": str, "name": str,
   "category": "file"|"exec"|"plan"|"web"|"other", "args": {},
@@ -795,7 +801,8 @@ Server → client, in order within a turn:
  "actions": [{"tool_call_id": "str", "name": "str",
               "category": "file"|"exec"|"plan"|"web"|"other",
               "args": {}, "description": "str"}]}           // args truncated like tool_start
-{"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval"}
+{"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval",
+ "duration_ms": int}   // M9-02: elapsed since this turn's turn_start
 {"type": "error", "message": "str"}                        // followed by a normal close, code 1011
 ```
 

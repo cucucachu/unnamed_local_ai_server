@@ -27,7 +27,8 @@ Server -> client (in order within a turn):
      # one or more mutating tool calls paused for human approval; ALWAYS
      # immediately followed by `turn_end {"status": "awaiting_approval"}`
      # (no `turn_end {"status": "completed"}` for that turn).
-    {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval"}
+    {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval",
+     "duration_ms": int}   # M9-02: elapsed since this turn's `turn_start`
     {"type": "error", "message": "str"}   # then close, code 1011
 
 Anything other than a well-formed `user_message` frame, received while idle
@@ -234,7 +235,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -244,6 +247,7 @@ from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.build import MUTATING_TOOL_NAMES
+from app.db.turn_stats import TurnStat
 
 router = APIRouter()
 
@@ -528,8 +532,81 @@ def _frame_for_event(event: dict) -> dict | None:
     return None
 
 
+def _elapsed_ms(started_mono: float) -> int:
+    return max(0, int((time.monotonic() - started_mono) * 1000))
+
+
+def _last_assistant_id(state: StateSnapshot) -> str | None:
+    messages = state.values.get("messages", [])
+    last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+    if last_ai is None:
+        return None
+    return last_ai.id if last_ai.id is not None else None
+
+
+async def _snapshot_last_assistant_id(agent: Any, thread_id: str) -> str | None:
+    state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
+    return _last_assistant_id(state)
+
+
+async def _persist_turn_stat(
+    websocket: WebSocket,
+    thread_id: str,
+    status: str,
+    duration_ms: int,
+    started_at: datetime,
+    prior_assistant_id: str | None,
+) -> None:
+    """Write `turn_stats` for this turn's final assistant message, if any.
+
+    Skips when the last checkpointed `AIMessage` is unchanged from
+    `prior_assistant_id` — the usual cancelled-mid-stream case, where
+    LangGraph never checkpoints the interrupted model node (see module
+    docstring). A completed / awaiting_approval turn always has a new
+    last assistant id to attach to.
+    """
+    store = getattr(websocket.app.state, "turn_stats_store", None)
+    if store is None:
+        return
+    state = await websocket.app.state.agent.aget_state({"configurable": {"thread_id": thread_id}})
+    final_id = _last_assistant_id(state)
+    if final_id is None or final_id == prior_assistant_id:
+        return
+    await store.upsert(
+        TurnStat(
+            thread_id=thread_id,
+            final_message_id=final_id,
+            status=status,
+            duration_ms=duration_ms,
+            started_at=started_at,
+        )
+    )
+
+
+async def _send_turn_end(
+    websocket: WebSocket,
+    thread_id: str,
+    status: str,
+    started_mono: float,
+    started_at: datetime,
+    prior_assistant_id: str | None,
+) -> int:
+    duration_ms = _elapsed_ms(started_mono)
+    await _persist_turn_stat(
+        websocket, thread_id, status, duration_ms, started_at, prior_assistant_id
+    )
+    await websocket.send_json({"type": "turn_end", "status": status, "duration_ms": duration_ms})
+    return duration_ms
+
+
 async def _run_turn(
-    websocket: WebSocket, thread_id: str, run_input: Any, hitl_enabled: bool
+    websocket: WebSocket,
+    thread_id: str,
+    run_input: Any,
+    hitl_enabled: bool,
+    started_mono: float,
+    started_at: datetime,
+    prior_assistant_id: str | None,
 ) -> tuple[str, dict | None]:
     """Run one turn (fresh `user_message` OR a resumed `Command(resume=...)`).
 
@@ -562,10 +639,19 @@ async def _run_turn(
                 "actions": pending_approval["actions"],
             }
         )
-        await websocket.send_json({"type": "turn_end", "status": "awaiting_approval"})
+        await _send_turn_end(
+            websocket,
+            thread_id,
+            "awaiting_approval",
+            started_mono,
+            started_at,
+            prior_assistant_id,
+        )
         return "awaiting_approval", pending_approval
 
-    await websocket.send_json({"type": "turn_end", "status": "completed"})
+    await _send_turn_end(
+        websocket, thread_id, "completed", started_mono, started_at, prior_assistant_id
+    )
     return "completed", None
 
 
@@ -613,7 +699,21 @@ async def _run_turn_or_interrupt(
     connection; no frame is sent — the socket is already gone). Propagates
     any exception the turn itself raised (unhandled model/agent error).
     """
-    turn_task = asyncio.create_task(_run_turn(websocket, thread_id, run_input, hitl_enabled))
+    started_mono = time.monotonic()
+    started_at = datetime.now(UTC)
+    prior_assistant_id = await _snapshot_last_assistant_id(websocket.app.state.agent, thread_id)
+
+    turn_task = asyncio.create_task(
+        _run_turn(
+            websocket,
+            thread_id,
+            run_input,
+            hitl_enabled,
+            started_mono,
+            started_at,
+            prior_assistant_id,
+        )
+    )
     watch_task = asyncio.create_task(_watch_inbound(websocket))
     try:
         done, _pending = await asyncio.wait(
@@ -631,7 +731,14 @@ async def _run_turn_or_interrupt(
             await turn_task
 
         if outcome == "cancel":
-            await websocket.send_json({"type": "turn_end", "status": "cancelled"})
+            await _send_turn_end(
+                websocket,
+                thread_id,
+                "cancelled",
+                started_mono,
+                started_at,
+                prior_assistant_id,
+            )
             return "cancelled", None
         return "disconnected", None
     finally:
