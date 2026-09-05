@@ -991,8 +991,13 @@ must be rejected).
   4's default "auto" thinking mode — without it, short `max_tokens`
   completions (e.g. a `max_tokens: 8` smoke test) can spend the entire
   budget on hidden `<|channel>thought` content and return an empty
-  `message.content`. **This flag is load-bearing for the tool-calling GO
-  verdict below — do not remove it without re-running the spike.**
+  `message.content`. **M8-06 re-validated tool-calling with this flag
+  removed (thinking re-enabled) and got a GO** (see "M8-06: thinking
+  re-enabled" below) — so this flag is no longer strictly load-bearing for
+  tool-calling reliability itself. It is, however, still the live config
+  as of this writing (M8-06 was a spike only; no production config change)
+  — see `.env.example`'s `MODEL_EXTRA_ARGS` comment for the currently
+  recommended flags for a future ticket that actually wants to flip it.
 
 ### Swapping quant/model in practice
 
@@ -1237,10 +1242,37 @@ against the real `model-runner` (llama.cpp server-vulkan + Gemma 4,
 **75/75 real-model runs passed** across three full repetitions of a 5-case
 matrix (single call, tool loop, multi-step, tool restraint, a full
 deepagents smoke test), all at the server's default non-zero sampling
-temperature. This is load-bearing on `--reasoning-budget 0` staying set in
-`MODEL_EXTRA_ARGS` (see "Model" above) — re-run the spike before trusting
-native tool-calling again if that flag is ever removed. Full methodology,
-per-case breakdown, and what was explicitly *not* tested: `docs/TOOL_CALLING.md`.
+temperature. This was originally load-bearing on `--reasoning-budget 0`
+staying set in `MODEL_EXTRA_ARGS` — see "M8-06: thinking re-enabled"
+immediately below for the re-validation that relaxed this. Full
+methodology, per-case breakdown, and what was explicitly *not* tested:
+`docs/TOOL_CALLING.md`.
+
+### M8-06: thinking re-enabled re-validation
+
+**GO** (re-confirmed). The M1-03 GO verdict above was flagged as
+load-bearing on `--reasoning-budget 0` — Gemma 4's thinking/reasoning mode
+being fully disabled server-side. M8-06 re-ran the identical 75-run,
+3-repetition, 5-case matrix against `model-runner` reconfigured with
+`--reasoning-format deepseek` and **no** `--reasoning-budget` cap (thinking
+fully on): **75/75 passed**, **zero** empty-`content` completions, **zero**
+observed "thinking loops", and median end-to-end latency of 2.57s vs a
+freshly-measured 1.45s baseline — **1.77x**, under the ticket's 2x
+threshold. Per-request `chat_template_kwargs.enable_thinking=false` against
+that same server config reproduced today's exact 75/75 with
+baseline-equivalent latency. Both of the ticket's GO criteria were met, so
+this is a clean GO — but note **`--reasoning-budget 0` was NOT removed from
+the live `MODEL_EXTRA_ARGS`** by this ticket (M8-06 was a spike:
+investigation + doc/fixture/prototype changes only); flipping the live
+config to actually ship thinking-mode output is M8-07's job, which this
+verdict leaves **open** rather than closing as not-planned. Also confirmed
+via curl: `--reasoning-format deepseek` streams `delta.reasoning_content`
+before `delta.content`, and per-request `enable_thinking=false` fully
+suppresses it (wire-level parity with today's `--reasoning-budget 0`
+behavior). Full per-configuration result tables, the client-side
+`reasoning_content` prototype (`ReasoningChatOpenAI` in
+`app/agent/reasoning_model.py`), and the fake-model fixture's new
+`reasoning_content` support: `docs/TOOL_CALLING.md`'s M8-06 section.
 
 ---
 

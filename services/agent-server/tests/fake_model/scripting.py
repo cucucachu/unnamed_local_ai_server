@@ -29,11 +29,23 @@ class TextTurn:
     frame mid-turn with room to spare) without a real model or real wall-
     clock-heavy sleep. `0` (the default) preserves the old
     instant-streaming behavior for every other test.
+
+    `reasoning_content` (M8-06): if set, emitted as its own `delta.reasoning_content`
+    chunks *before* any `content` chunks in the streamed case (matching the
+    real llama-server `--reasoning-format deepseek` wire order confirmed in
+    docs/TOOL_CALLING.md's M8-06 section: `reasoning_content` deltas, then
+    `content` deltas), and as a sibling `message.reasoning_content` field
+    alongside `message.content` in the non-streamed case (matching
+    llama-server's real non-streamed JSON shape). `None` (the default)
+    preserves the old behavior of never emitting the field at all, for
+    every pre-M8-06 test.
     """
 
     text: str
     chunk_size: int = 8
     chunk_delay_s: float = 0
+    reasoning_content: str | None = None
+    reasoning_chunk_size: int = 8
 
 
 @dataclass
