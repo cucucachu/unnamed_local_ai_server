@@ -21,10 +21,19 @@ if TYPE_CHECKING:
 
 @dataclass
 class TextTurn:
-    """Model responds with a plain assistant text message."""
+    """Model responds with a plain assistant text message.
+
+    `chunk_delay_s` (M8-01): if non-zero, `_stream_turn` `await
+    asyncio.sleep(chunk_delay_s)` before yielding each streamed piece —
+    lets a test simulate a slow-streaming model (e.g. to send a `cancel`
+    frame mid-turn with room to spare) without a real model or real wall-
+    clock-heavy sleep. `0` (the default) preserves the old
+    instant-streaming behavior for every other test.
+    """
 
     text: str
     chunk_size: int = 8
+    chunk_delay_s: float = 0
 
 
 @dataclass

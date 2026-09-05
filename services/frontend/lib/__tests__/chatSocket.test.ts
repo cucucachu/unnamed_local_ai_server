@@ -111,14 +111,24 @@ describe('openChatSocket — frame dispatch', () => {
     expect(handlers.onToolEnd).toHaveBeenCalledWith(frame);
   });
 
-  it('dispatches turn_end to onTurnEnd', () => {
+  it('dispatches turn_end to onTurnEnd, including its status field', () => {
     const handlers = makeHandlers();
     openChatSocket('thread-1', handlers, Ctor);
 
     latestSocket().emit({ type: 'turn_start' });
-    latestSocket().emit({ type: 'turn_end' });
+    latestSocket().emit({ type: 'turn_end', status: 'completed' });
 
-    expect(handlers.onTurnEnd).toHaveBeenCalledWith({ type: 'turn_end' });
+    expect(handlers.onTurnEnd).toHaveBeenCalledWith({ type: 'turn_end', status: 'completed' });
+  });
+
+  it('dispatches a cancelled turn_end to onTurnEnd', () => {
+    const handlers = makeHandlers();
+    openChatSocket('thread-1', handlers, Ctor);
+
+    latestSocket().emit({ type: 'turn_start' });
+    latestSocket().emit({ type: 'turn_end', status: 'cancelled' });
+
+    expect(handlers.onTurnEnd).toHaveBeenCalledWith({ type: 'turn_end', status: 'cancelled' });
   });
 
   it('dispatches error to onError with message', () => {
@@ -170,6 +180,15 @@ describe('openChatSocket — send/close', () => {
     chat.close();
 
     expect(latestSocket().closed).toBe(true);
+  });
+
+  it('cancel() serializes a cancel frame', () => {
+    const handlers = makeHandlers();
+    const chat = openChatSocket('thread-1', handlers, Ctor);
+
+    chat.cancel();
+
+    expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'cancel' })]);
   });
 });
 

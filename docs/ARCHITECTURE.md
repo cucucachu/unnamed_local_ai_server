@@ -714,7 +714,16 @@ Client → server:
 
 ```json
 {"type": "user_message", "content": "string"}
+{"type": "cancel"}
 ```
+
+`cancel` (M8-01) stops the in-flight turn early. It's only meaningful while
+a turn is in flight; sent outside a turn (idle, waiting for the next
+`user_message`) it's a **no-op** — ignored, no error/close, no frame sent
+in response. Any other, non-`cancel` frame received mid-turn is likewise
+ignored (looped past) rather than misinterpreted; sending anything other
+than a well-formed `user_message` (or `cancel`) *while idle* still gets the
+usual `error` frame + close (see below).
 
 Server → client, in order within a turn:
 
@@ -725,13 +734,47 @@ Server → client, in order within a turn:
  "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}     // args truncated to 500 chars/value
 {"type": "tool_end", "tool_call_id": "str", "name": "str",
  "status": "success"|"error", "result_preview": "str"}     // truncated to 2000 chars
-{"type": "turn_end"}
+{"type": "turn_end", "status": "completed"|"cancelled"}
 {"type": "error", "message": "str"}                        // followed by a normal close, code 1011
 ```
+
+`turn_end.status` (M8-01) is `"completed"` for a normal finish, or
+`"cancelled"` if the client sent `cancel` mid-turn. On `cancel`: the
+server cancels the turn task, awaits it, sends `turn_end
+{"status": "cancelled"}`, and — unlike a client disconnect —
+**keeps the connection open**; the per-thread lock is released normally
+and the thread's `updated_at` is still bumped, so the very next
+`user_message` on the same socket runs a normal turn. The `error` frame
+path (unhandled model/agent exception) is unchanged by any of this — it
+still ends the turn with `error` + close code 1011, never a `turn_end`.
 
 Category mapping by tool name: `ls|read_file|write_file|edit_file|glob|
 grep|delete` → `file`; `execute_code` → `exec`; `write_todos|task` →
 `plan`; `web_search|web_fetch` (M7-05) → `web`; anything else → `other`.
+
+**Known limitations of `cancel` (M8-01, by design — see that ticket's "out
+of scope"):**
+
+- **Partial output is not persisted.** LangGraph does not checkpoint the
+  interrupted model node, so a cancelled turn's partial assistant text
+  never lands in the thread's history — it only exists in the frontend's
+  in-memory state for that session (rendered greyed-out/"Stopped"). A page
+  reload or reopening the thread loses it entirely; `GET
+  /api/threads/{id}/messages` never returns it.
+- **`execute_code` isn't actually stopped.** Cancelling a turn while
+  `execute_code` is mid-flight only cancels agent-server's own HTTP call to
+  `code-exec-manager` — the sandboxed command keeps running inside its
+  container until its own configured timeout elapses; the tool's exec
+  session and container are unaffected.
+- **llama-server DOES abort generation on cancel.** Verified live (Tier A)
+  against the real `model-runner` container: cancelling the turn task tears
+  down the agent-server's streaming HTTP request to
+  `POST /v1/chat/completions`, and `model-runner`'s log shows the
+  in-flight generation being aborted as soon as the client connection drops
+  — see the M8-01 ticket report for the exact log line captured during
+  verification. So cancel does stop the (expensive) model inference itself
+  immediately; it's only the *tool call* HTTP round-trip (`execute_code`)
+  whose underlying side effect isn't killed.
 
 ### Agent web tools (`web_search`/`web_fetch`, M7-05)
 

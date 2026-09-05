@@ -26,6 +26,7 @@ function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
   mockUseChat.mockReturnValue({
     items: [],
     sendMessage: jest.fn(),
+    stopTurn: jest.fn(),
     busy: false,
     connectionState: 'open',
     hydrationState: 'done',
@@ -416,7 +417,67 @@ describe('ChatScreen ([threadId])', () => {
       renderer = create(createElement(ChatScreen));
     });
 
-    const sendButton = renderer?.root.findByProps({ accessibilityLabel: 'Send message' });
-    expect(sendButton?.props.disabled).toBe(true);
+    // While busy, the Send button is swapped out for the Stop button
+    // entirely (see the M8-01 tests below) — it no longer renders at all.
+    expect(() => renderer?.root.findByProps({ accessibilityLabel: 'Send message' })).toThrow();
+  });
+
+  describe('Stop button (M8-01)', () => {
+    it('shows the Send button (not Stop) while idle', () => {
+      setUseChatResult({ busy: false });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderer?.root.findByProps({ accessibilityLabel: 'Send message' })).toBeTruthy();
+      expect(() => renderer?.root.findByProps({ testID: 'chat-stop' })).toThrow();
+    });
+
+    it('swaps the Send button for a Stop button (testID="chat-stop") while busy, calling stopTurn on press', () => {
+      const stopTurn = jest.fn();
+      setUseChatResult({ busy: true, stopTurn });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const stopButton = renderer?.root.findByProps({ testID: 'chat-stop' });
+      expect(stopButton).toBeTruthy();
+
+      act(() => {
+        (stopButton?.props as { onPress: () => void }).onPress();
+      });
+      expect(stopTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows a small "Stopped" caption on an assistant item with stopped: true', () => {
+      setUseChatResult({
+        items: [{ id: 'a-stopped', kind: 'assistant', text: 'partial reply', streaming: false, stopped: true }],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderedText(renderer!)).toContain('partial reply');
+      expect(renderer?.root.findByProps({ testID: 'chat-item-stopped-caption' })).toBeTruthy();
+    });
+
+    it('does NOT show a "Stopped" caption on a normal (non-stopped) assistant item', () => {
+      setUseChatResult({
+        items: [{ id: 'a-normal', kind: 'assistant', text: 'normal reply', streaming: false }],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'chat-item-stopped-caption' })).toThrow();
+    });
   });
 });

@@ -4,8 +4,9 @@ Wire format is fixed by docs/ARCHITECTURE.md's "Contracts" section (the
 WebSocket chat protocol) — do not deviate; the frontend is built against it
 exactly.
 
-Client -> server (only valid incoming frame):
+Client -> server (two valid incoming frames):
     {"type": "user_message", "content": "string"}
+    {"type": "cancel"}   # M8-01: only meaningful while a turn is in flight
 
 Server -> client (in order within a turn):
     {"type": "turn_start"}
@@ -14,11 +15,48 @@ Server -> client (in order within a turn):
      "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}
     {"type": "tool_end", "tool_call_id": "str", "name": "str",
      "status": "success"|"error", "result_preview": "str"}
-    {"type": "turn_end"}
+    {"type": "turn_end", "status": "completed"|"cancelled"}
     {"type": "error", "message": "str"}   # then close, code 1011
 
-Anything other than a well-formed `user_message` frame -> `error` frame, then
-close code 1008 (policy violation).
+Anything other than a well-formed `user_message` frame, received while idle
+(i.e. NOT mid-turn) -> `error` frame, then close code 1008 (policy
+violation) — this now excludes `{"type": "cancel"}`, which is a no-op
+outside a turn (see `chat_ws` below) rather than a close. Any frame
+received WHILE a turn is in flight is handled by `_watch_inbound` instead:
+`{"type": "cancel"}` cancels the turn (see M8-01 notes below); every other
+frame received mid-turn is ignored (looped past), matching v1's existing
+"a well-behaved client never sends another frame before turn_end/error"
+assumption for anything other than `cancel`.
+
+## M8-01 `cancel` frame notes
+
+- `_watch_inbound` (replacing `_watch_for_disconnect`) races the turn task
+  exactly like the old disconnect watcher, but can now resolve two ways:
+  `"disconnect"` (client socket closed) or `"cancel"` (client sent
+  `{"type": "cancel"}`). On `"cancel"`: the turn task is cancelled and
+  awaited (suppressing `CancelledError`), a `turn_end
+  {"status": "cancelled"}` frame is sent, and — unlike a disconnect — the
+  connection is kept open, the per-thread lock is released normally (via
+  the caller's `async with lock:` exiting), and `thread_store.touch()`
+  still runs, so the next `user_message` on the same socket works exactly
+  like any other turn.
+- Cancelling the turn task cancels the in-flight `astream_events` iterator,
+  which propagates the cancellation down through the model call. For the
+  chat-completion model node this tears down the underlying `httpx`
+  streaming request to `model-runner`; verified live (Tier A) against a
+  real `llama-server` that it aborts generation when the client request is
+  cancelled — see the ticket report for the exact log line observed.
+- Partial assistant text from a cancelled turn is NOT persisted: LangGraph
+  never checkpoints the interrupted model node, so the partial text isn't
+  in the thread's history (a page reload / history hydration loses it — the
+  UI only keeps it, greyed out with a "Stopped" caption, for the current
+  session). See `docs/ARCHITECTURE.md` §3 for the user-facing documentation
+  of this limitation.
+- `execute_code` mid-flight: cancelling the turn only cancels the agent
+  server's own HTTP call to `code-exec-manager`; it does NOT stop the
+  sandboxed command itself, which keeps running server-side until its own
+  timeout. Acceptable per the ticket's explicit "out of scope" — documented
+  here and in `docs/ARCHITECTURE.md` §3.
 
 ## Event-shape notes (from real introspection against the M2-02 fake model,
 `langchain-core==1.6.1` / `langgraph==1.2.11` / `deepagents==0.7.11` — see
@@ -255,47 +293,70 @@ async def _run_turn(websocket: WebSocket, thread_id: str, content: str) -> None:
         frame = _frame_for_event(event)
         if frame is not None:
             await websocket.send_json(frame)
-    await websocket.send_json({"type": "turn_end"})
+    await websocket.send_json({"type": "turn_end", "status": "completed"})
 
 
-async def _watch_for_disconnect(websocket: WebSocket) -> None:
-    """Block until the client disconnects, ignoring any other message.
+def _is_cancel_frame(raw: object) -> bool:
+    return isinstance(raw, dict) and raw.get("type") == "cancel"
 
-    A well-behaved client never sends another frame before a turn's
-    `turn_end`/`error`; if one arrives anyway we just keep watching rather
-    than misinterpreting it as a disconnect (v1 doesn't define behavior for
-    that case).
+
+async def _watch_inbound(websocket: WebSocket) -> str:
+    """Block until either the client disconnects or sends a `cancel` frame.
+
+    Returns `"disconnect"` or `"cancel"`. Any other frame received mid-turn
+    (well-formed or not) is ignored — looped past — rather than
+    misinterpreted as either of those two outcomes; v1 defines no other
+    inbound behavior mid-turn.
     """
     while True:
         message = await websocket.receive()
         if message["type"] == "websocket.disconnect":
-            return
+            return "disconnect"
+
+        text = message.get("text")
+        if text is None:
+            continue
+        try:
+            raw = json.loads(text)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if _is_cancel_frame(raw):
+            return "cancel"
 
 
-async def _run_turn_or_disconnect(websocket: WebSocket, thread_id: str, content: str) -> bool:
-    """Run one turn, racing it against a disconnect watcher.
+async def _run_turn_or_interrupt(websocket: WebSocket, thread_id: str, content: str) -> str:
+    """Run one turn, racing it against `_watch_inbound`.
 
-    Returns `True` if the client disconnected mid-turn (the turn task is
-    cancelled and the caller should stop processing this connection).
-    Returns `False` if the turn ran to completion. Propagates any exception
-    the turn itself raised (unhandled model/agent error).
+    Returns `"completed"` if the turn ran to completion, `"cancelled"` if a
+    `cancel` frame arrived mid-turn (a `turn_end {"status": "cancelled"}`
+    frame has already been sent and the connection is still open), or
+    `"disconnected"` if the client's socket closed mid-turn (the caller
+    should stop processing this connection; no frame is sent — the socket
+    is already gone). Propagates any exception the turn itself raised
+    (unhandled model/agent error).
     """
     turn_task = asyncio.create_task(_run_turn(websocket, thread_id, content))
-    watch_task = asyncio.create_task(_watch_for_disconnect(websocket))
+    watch_task = asyncio.create_task(_watch_inbound(websocket))
     try:
         done, _pending = await asyncio.wait(
             {turn_task, watch_task}, return_when=asyncio.FIRST_COMPLETED
         )
         if turn_task in done:
             turn_task.result()  # re-raises if the turn itself raised
-            return False
+            return "completed"
 
-        # Disconnect observed mid-turn: cancel the in-flight turn and let the
-        # per-thread lock release cleanly via the caller's `async with`.
+        outcome = watch_task.result()  # "disconnect" or "cancel"
+
+        # Either way, cancel the in-flight turn; the per-thread lock (held
+        # by the caller's `async with`) releases cleanly once we return.
         turn_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await turn_task
-        return True
+
+        if outcome == "cancel":
+            await websocket.send_json({"type": "turn_end", "status": "cancelled"})
+            return "cancelled"
+        return "disconnected"
     finally:
         if not watch_task.done():
             watch_task.cancel()
@@ -328,6 +389,13 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             )
             return
 
+        # M8-01: `cancel` received while idle (no turn in flight) is a no-op
+        # — ignored, not a validation error, not a close. Checked before
+        # `_validate_user_message` so it never falls through to the
+        # invalid-frame/1008 path below.
+        if _is_cancel_frame(raw):
+            continue
+
         content = _validate_user_message(raw)
         if content is None:
             await _send_error_and_close(
@@ -342,12 +410,12 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
         lock = _thread_locks.setdefault(thread_id, asyncio.Lock())
         async with lock:
             try:
-                disconnected = await _run_turn_or_disconnect(websocket, thread_id, content)
+                outcome = await _run_turn_or_interrupt(websocket, thread_id, content)
             except WebSocketDisconnect:
                 return
             except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
                 await _send_error_and_close(websocket, str(exc), code=1011)
                 return
-        if disconnected:
+        if outcome == "disconnected":
             return
         await thread_store.touch(thread_id)
