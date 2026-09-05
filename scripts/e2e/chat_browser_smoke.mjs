@@ -48,9 +48,14 @@
 //
 // M8-05: a fresh three-turn thread, edit turn 2 in Branch mode, assert
 // `‹ 2/2 ›`, switch to 1/2 (original continuation), reload keeps it.
+//
+// M9-03: prompt the model to create a file and mention where it saved it;
+// the answer must contain a `file:` link, and clicking it opens the Files
+// tab at that path with the entry highlighted. HITL is on (default), so
+// the write is Approved like the M8-03 scenarios.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -122,6 +127,9 @@ const FORK_TURN_1 = 'Say exactly: DELTA';
 const FORK_TURN_2 = 'Say exactly: ECHO';
 const FORK_TURN_3 = 'Say exactly: FOXTROT';
 const FORK_TURN_2_EDITED = 'Say exactly: ECHO-FORKED';
+const FILE_LINK_MESSAGE =
+  'Create notes/link-test.md with one line, then tell me where you saved it';
+const FILE_LINK_REL = 'notes/link-test.md';
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
  * docstring) — collapse whitespace runs to single spaces, then truncate to
@@ -922,8 +930,86 @@ async function main() {
     }
     console.log('Step 16 OK — reload kept ‹ 1/2 › and the original continuation');
 
+    // --- Step 17: file: link opens Files tab at that path (M9-03) -------
+    // HITL defaults on and is restored in finally; force it on here so the
+    // write shows an approval card (same Approve pattern as step 9).
+    settingsRequest('PUT', { hitl_enabled: true, thinking_enabled: false });
+    try {
+      rmSync(workspaceFilePath(FILE_LINK_REL), { force: true });
+    } catch {
+      // best-effort
+    }
+
+    const fileLinkPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
+    await sendAndAwaitApprovalCard(page, FILE_LINK_MESSAGE);
+    console.log('Step 17 OK — approval card appeared (HITL on, create notes/link-test.md)');
+
+    await page.getByRole('button', { name: /Approve / }).click();
+    const extraApproveDeadline = Date.now() + 20_000;
+    while (Date.now() < extraApproveDeadline) {
+      if ((await page.locator('[data-testid="approval-card"]').count()) > 0) {
+        await page.getByRole('button', { name: /Approve / }).click();
+        await page.waitForTimeout(400);
+        continue;
+      }
+      break;
+    }
+
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    const fileDeadline = Date.now() + TIMEOUT_MS;
+    while (Date.now() < fileDeadline && !existsSync(workspaceFilePath(FILE_LINK_REL))) {
+      await page.waitForTimeout(300);
+    }
+    if (!existsSync(workspaceFilePath(FILE_LINK_REL))) {
+      throw new Error(`Step 17: ${workspaceFilePath(FILE_LINK_REL)} was not created after Approve`);
+    }
+
+    const fileLinkLocator = page.locator('[data-testid="file-link"]');
+    const fileLinkReplyDeadline = Date.now() + TIMEOUT_MS;
+    let fileLinkReply = '';
+    let fileLinkHtml = '';
+    while (Date.now() < fileLinkReplyDeadline) {
+      const count = await page.locator('[data-testid="chat-item-assistant"]').count();
+      if (count > fileLinkPriorAssistants) {
+        const newest = page.locator('[data-testid="chat-item-assistant"]').nth(count - 1);
+        const text = (await newest.textContent())?.trim() ?? '';
+        if (text.length > 0) {
+          fileLinkReply = text.trim();
+          fileLinkHtml = (await newest.innerHTML()) ?? '';
+          if ((await fileLinkLocator.count()) > 0) break;
+        }
+      }
+      await page.waitForTimeout(300);
+    }
+    const replyHasFileScheme = /file:/.test(fileLinkReply) || /file:/.test(fileLinkHtml);
+    if ((await fileLinkLocator.count()) < 1) {
+      throw new Error(
+        `Step 17: answer had no clickable file: link after the approved write` +
+          `${replyHasFileScheme ? ' (file: present in text, renderer missed it)' : ''}` +
+          `. reply=${fileLinkReply} html=${fileLinkHtml.slice(0, 2000)}`,
+      );
+    }
+    const fileLinkPath = (await fileLinkLocator.last().getAttribute('data-file-path')) ?? '';
+    console.log(`Step 17 OK — answer contains a file: link (path=${fileLinkPath || '(attr unset)'}); reply: ${fileLinkReply.slice(0, 160)}`);
+    await fileLinkLocator.last().click();
+    await page.waitForURL(/\/files/, { timeout: 15_000 });
+    const openedPath = new URL(page.url()).searchParams.get('path');
+    if (openedPath !== FILE_LINK_REL) {
+      throw new Error(`Step 17: expected /files?path=${FILE_LINK_REL}, got path=${openedPath} url=${page.url()}`);
+    }
+    const highlighted = page.locator('[data-testid="file-entry-highlighted"]');
+    await highlighted.waitFor({ state: 'visible', timeout: 15_000 });
+    const highlightedLabel = ((await highlighted.getAttribute('aria-label')) ?? '').trim();
+    if (highlightedLabel && highlightedLabel !== 'link-test.md') {
+      throw new Error(`Step 17: highlighted entry was "${highlightedLabel}", expected link-test.md`);
+    }
+    if (!existsSync(workspaceFilePath(FILE_LINK_REL))) {
+      throw new Error(`Step 17: ${workspaceFilePath(FILE_LINK_REL)} does not exist after the approved write`);
+    }
+    console.log(`Step 17 OK — clicked file: link, opened /files?path=${FILE_LINK_REL}, entry highlighted`);
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch + file-link completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
@@ -933,6 +1019,12 @@ async function main() {
     removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
     removeWorkspaceFileBestEffort(HITL_OFF_FILE);
     removeWorkspaceFileBestEffort(ACTIVITY_PANEL_FILE);
+    removeWorkspaceFileBestEffort(FILE_LINK_REL);
+    try {
+      rmdirSync(workspaceFilePath('notes'));
+    } catch {
+      // best-effort — leave notes/ alone if it already had other files
+    }
     if (savedSettings !== null) {
       try {
         settingsRequest('PUT', {

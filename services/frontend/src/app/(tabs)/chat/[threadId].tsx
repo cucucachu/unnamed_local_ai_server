@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
@@ -64,6 +64,10 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
  * `[threadId]` segment, never a parent/sibling route's params. */
 export default function ChatScreen() {
   const { threadId } = useLocalSearchParams<{ threadId: string }>();
+  const router = useRouter();
+  const handleFileLink = useCallback((filePath: string) => {
+    router.push({ pathname: '/files', params: { path: filePath } });
+  }, [router]);
   const {
     turns,
     sendMessage,
@@ -229,6 +233,7 @@ export default function ChatScreen() {
               }}
               onUserMenu={(user) => setActionMenu({ kind: 'user', item: user })}
               onAssistantMenu={(assistant) => setActionMenu({ kind: 'assistant', item: assistant })}
+              onFileLink={handleFileLink}
             />
           )}
           contentContainerStyle={styles.listContent}
@@ -359,6 +364,7 @@ interface ChatTurnRowProps {
   onSwitchBranch: (checkpointId: string) => void;
   onUserMenu: (item: ChatUserItem) => void;
   onAssistantMenu: (item: ChatAssistantItem) => void;
+  onFileLink: (path: string) => void;
 }
 
 function showActivityPanel(turn: ChatTurn): boolean {
@@ -376,6 +382,7 @@ function ChatTurnRow({
   onSwitchBranch,
   onUserMenu,
   onAssistantMenu,
+  onFileLink,
 }: ChatTurnRowProps): ReactElement {
   const user = turn.user;
   const showPanel = showActivityPanel(turn);
@@ -421,14 +428,20 @@ function ChatTurnRow({
       ) : null}
       {turn.final != null ? (
         <View style={[styles.bubbleRow, styles.bubbleRowLeft]} testID="chat-item-assistant">
-          <Pressable
-            style={[styles.bubble, styles.assistantBubble]}
-            onLongPress={isLastAssistant && !menuDisabled ? () => onAssistantMenu(turn.final!) : undefined}
-            delayLongPress={400}
-            testID="chat-item-assistant-bubble"
-          >
-            <Markdown>{turn.final.text}</Markdown>
-          </Pressable>
+          {Platform.OS === 'web' ? (
+            <View style={[styles.bubble, styles.assistantBubble]} testID="chat-item-assistant-bubble">
+              <Markdown onFileLink={onFileLink}>{turn.final.text}</Markdown>
+            </View>
+          ) : (
+            <Pressable
+              style={[styles.bubble, styles.assistantBubble]}
+              onLongPress={isLastAssistant && !menuDisabled ? () => onAssistantMenu(turn.final!) : undefined}
+              delayLongPress={400}
+              testID="chat-item-assistant-bubble"
+            >
+              <Markdown onFileLink={onFileLink}>{turn.final.text}</Markdown>
+            </Pressable>
+          )}
           {isLastAssistant ? (
             <MessageMenuAffordance
               testID="chat-item-assistant-menu"

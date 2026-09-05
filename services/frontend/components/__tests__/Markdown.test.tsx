@@ -90,6 +90,62 @@ describe('Markdown', () => {
     openURL.mockRestore();
   });
 
+  it('keeps a file: link tappable when it sits mid-sentence', () => {
+    const onFileLink = jest.fn();
+    const renderer = renderMarkdown(
+      'I saved it at [notes/link-test.md](file:notes/link-test.md).',
+      onFileLink,
+    );
+    const link = renderer.root
+      .findAllByProps({ testID: 'file-link' })
+      .find((node) => typeof (node.props as { onPress?: unknown }).onPress === 'function');
+    expect(link).toBeTruthy();
+    act(() => {
+      (link?.props as { onPress: () => void }).onPress();
+    });
+    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+  });
+
+  it('unwraps a file: link the model put inside a code span', () => {
+    const onFileLink = jest.fn();
+    const renderer = renderMarkdown(
+      'Saved at `[link-test.md](file:notes/link-test.md)`.',
+      onFileLink,
+    );
+    const link = renderer.root
+      .findAllByProps({ testID: 'file-link' })
+      .find((node) => typeof (node.props as { onPress?: unknown }).onPress === 'function');
+    expect(link).toBeTruthy();
+    act(() => {
+      (link?.props as { onPress: () => void }).onPress();
+    });
+    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+  });
+
+  it('treats a bare workspace-relative href as a file link', () => {
+    const onFileLink = jest.fn();
+    const renderer = renderMarkdown('[link-test.md](notes/link-test.md)', onFileLink);
+    const link = renderer.root
+      .findAllByProps({ testID: 'file-link' })
+      .find((node) => typeof (node.props as { onPress?: unknown }).onPress === 'function');
+    act(() => {
+      (link?.props as { onPress: () => void }).onPress();
+    });
+    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+  });
+
+  it('treats file:relative/path (no slashes after the scheme) as a file link', () => {
+    const onFileLink = jest.fn();
+    const renderer = renderMarkdown('[link-test.md](file:notes/link-test.md)', onFileLink);
+    const link = renderer.root
+      .findAllByProps({ testID: 'file-link' })
+      .find((node) => typeof (node.props as { onPress?: unknown }).onPress === 'function');
+    act(() => {
+      (link?.props as { onPress: () => void }).onPress();
+    });
+    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+  });
+
   it('routes file: links to onFileLink and does not call Linking.openURL', () => {
     const onFileLink = jest.fn();
     const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
@@ -100,7 +156,8 @@ describe('Markdown', () => {
     act(() => {
       (pressable.props as { onPress: () => void }).onPress();
     });
-    expect(onFileLink).toHaveBeenCalledWith('file:///tmp/notes.txt');
+    expect(onFileLink).toHaveBeenCalledWith('tmp/notes.txt');
+    expect(renderer.root.findByProps({ testID: 'file-link' })).toBeTruthy();
     expect(openURL).not.toHaveBeenCalled();
     openURL.mockRestore();
   });
