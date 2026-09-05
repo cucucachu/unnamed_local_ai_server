@@ -38,6 +38,9 @@
 // M8-04: a fresh three-turn thread, edit turn 2, reload, assert only
 // turns 1 + edited 2 remain (`GET /api/threads/{id}/messages` agrees),
 // then Regenerate the last answer and assert history length is unchanged.
+//
+// M9-01: after that, the same thread asks for a markdown table + python
+// fence and asserts a real `<table>` and `<pre>`/code node in the bubble.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
@@ -90,6 +93,11 @@ const EDIT_TURN_1 = 'Say exactly: ALPHA';
 const EDIT_TURN_2 = 'Say exactly: BRAVO';
 const EDIT_TURN_3 = 'Say exactly: CHARLIE';
 const EDIT_TURN_2_EDITED = 'Say exactly: BRAVO-EDITED';
+// M9-01: explicit "reply with" phrasing so the model emits markdown rather
+// than calling a mutating tool (HITL is on by default; this prompt should
+// not trip write_file / execute_code).
+const MARKDOWN_MESSAGE =
+  'Reply with a markdown table of 3 planets and a python code block printing hello';
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
@@ -420,6 +428,11 @@ async function main() {
     }
     console.log(`Step 7 OK — expanded search card's first result opens an https:// link (${popupUrl})`);
 
+    // The search turn's assistant reply can still be streaming after the
+    // result card is asserted — wait for Send to come back so step 8
+    // doesn't click a missing composer button.
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+
     // --- Step 8: Stop a running turn (M8-01) ----------------------------
     // Send a message that streams slowly, click Stop (testID="chat-stop")
     // within ~2s (well before the reply could finish), assert the composer
@@ -648,8 +661,27 @@ async function main() {
     }
     console.log('Step 12 OK — Regenerate produced a new answer; history length unchanged');
 
+    // --- Step 13: finished assistant bubble renders markdown (M9-01) ----
+    // Stay on the edit thread — composer is already idle after Regenerate,
+    // and a second "New chat" hop from this screen is flaky (the list
+    // header button is not always mounted after a reload).
+    const markdownPrior = await page.locator('[data-testid="chat-item-assistant"]').count();
+    const markdownReply = await sendMessageAndAwaitReply(page, MARKDOWN_MESSAGE, markdownPrior);
+    const markdownBubble = page.locator('[data-testid="chat-item-assistant-bubble"]').last();
+    await markdownBubble.waitFor({ state: 'visible', timeout: 15_000 });
+    const tableCount = await markdownBubble.locator('table').count();
+    const preCount = await markdownBubble.locator('pre').count();
+    const codeCount = await markdownBubble.locator('code').count();
+    if (tableCount < 1) {
+      throw new Error(`Step 13: expected a <table> in the assistant bubble; reply was: ${markdownReply}`);
+    }
+    if (preCount < 1 && codeCount < 1) {
+      throw new Error(`Step 13: expected a <pre>/code block in the assistant bubble; reply was: ${markdownReply}`);
+    }
+    console.log(`Step 13 OK — assistant bubble has <table> (${tableCount}) and <pre>/code (${preCount}/${codeCount})`);
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
