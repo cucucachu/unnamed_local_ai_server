@@ -58,6 +58,12 @@ async def _no_hitl_settings_store() -> InMemorySettingsStore:
     return store
 
 
+async def _thinking_settings_store(*, thinking_enabled: bool) -> InMemorySettingsStore:
+    store = InMemorySettingsStore()
+    await store.update_document({"hitl_enabled": False, "thinking_enabled": thinking_enabled})
+    return store
+
+
 def _drain_turn(ws) -> list[dict]:
     """Receive frames until (and including) `turn_end` or `error`."""
     frames = []
@@ -92,6 +98,80 @@ async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
     assert len(token_frames) >= 2
     assert all(f["type"] == "token" for f in token_frames)
     assert "".join(f["content"] for f in token_frames) == "hello world"
+
+
+async def test_reasoning_frames_precede_tokens_when_thinking_on(
+    fake_model: FakeModel, tmp_path
+) -> None:
+    """M8-07: scripted reasoning deltas become `reasoning` frames, then tokens."""
+    fake_model.queue(
+        TextTurn(
+            "hello world",
+            chunk_size=5,
+            reasoning_content="The user said hi. I'll greet them.",
+            reasoning_chunk_size=6,
+        )
+    )
+
+    with _make_client(
+        fake_model, tmp_path, settings_store=await _thinking_settings_store(thinking_enabled=True)
+    ) as client, client.websocket_connect("/ws/chat/reasoning-on") as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        frames = _drain_turn(ws)
+
+    assert frames[0] == {"type": "turn_start"}
+    _assert_turn_end(frames[-1], "completed")
+
+    mid = frames[1:-1]
+    types = [f["type"] for f in mid]
+    assert "reasoning" in types
+    assert "token" in types
+    assert types.index("reasoning") < types.index("token")
+    assert all(t in ("reasoning", "token") for t in types)
+
+    last_reasoning = max(i for i, t in enumerate(types) if t == "reasoning")
+    first_token = types.index("token")
+    assert last_reasoning < first_token
+
+    assert "".join(f["content"] for f in mid if f["type"] == "reasoning") == (
+        "The user said hi. I'll greet them."
+    )
+    assert "".join(f["content"] for f in mid if f["type"] == "token") == "hello world"
+
+    assert fake_model.requests
+    last_body = fake_model.requests[-1]
+    kwargs = last_body.get("chat_template_kwargs") or {}
+    assert kwargs.get("enable_thinking") is True
+
+
+async def test_no_reasoning_frames_when_thinking_off(fake_model: FakeModel, tmp_path) -> None:
+    """M8-07: thinking off binds enable_thinking=false; no reasoning frames."""
+    fake_model.queue(
+        TextTurn(
+            "hello world",
+            chunk_size=5,
+            reasoning_content="This thought must not appear.",
+            reasoning_chunk_size=6,
+        )
+    )
+
+    with _make_client(
+        fake_model, tmp_path, settings_store=await _thinking_settings_store(thinking_enabled=False)
+    ) as client, client.websocket_connect("/ws/chat/reasoning-off") as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        frames = _drain_turn(ws)
+
+    assert frames[0] == {"type": "turn_start"}
+    _assert_turn_end(frames[-1], "completed")
+    assert all(f["type"] != "reasoning" for f in frames)
+
+    token_frames = [f for f in frames[1:-1] if f["type"] == "token"]
+    assert "".join(f["content"] for f in token_frames) == "hello world"
+
+    assert fake_model.requests
+    last_body = fake_model.requests[-1]
+    kwargs = last_body.get("chat_template_kwargs") or {}
+    assert kwargs.get("enable_thinking") is False
 
 
 async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:

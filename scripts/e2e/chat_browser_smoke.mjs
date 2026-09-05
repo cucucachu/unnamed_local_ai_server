@@ -41,6 +41,10 @@
 //
 // M9-01: after that, the same thread asks for a markdown table + python
 // fence and asserts a real `<table>` and `<pre>`/code node in the bubble.
+//
+// M8-07: with `thinking_enabled` on, a non-trivial prompt shows the
+// "Thinking…" status and the expanded panel contains reasoning text; with
+// it off, no reasoning appears and the answer still completes.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -104,6 +108,11 @@ const MARKDOWN_MESSAGE =
 const ACTIVITY_PANEL_FILE = 'activity-panel-smoke.txt';
 const ACTIVITY_PANEL_MESSAGE =
   'Use read_file to read activity-panel-smoke.txt, then say exactly: READ-OK';
+// M8-07: a non-trivial prompt that reliably produces thought tokens when
+// thinking_enabled is on (Gemma 4 + --reasoning-format deepseek).
+const THINKING_ON_MESSAGE =
+  'What is 17 times 23? Work through the multiplication carefully, then say only the final number.';
+const THINKING_OFF_MESSAGE = 'Say exactly: PONG-NO-THINK';
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
  * docstring) — collapse whitespace runs to single spaces, then truncate to
@@ -758,8 +767,73 @@ async function main() {
     const hydratedWorked = await waitForWorkedFor(page, 20_000);
     console.log(`Step 14 OK — reload shows the same header from history (${hydratedWorked})`);
 
+    // --- Step 15: reasoning stream + thinking toggle (M8-07) ------------
+    // Stay on the edit thread (same composer-already-idle reason as step 13).
+    // HITL stays off. thinking_enabled defaults false; flip it for this step.
+    settingsRequest('PUT', { thinking_enabled: true, hitl_enabled: false });
+    const thinkingPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
+    await input.fill(THINKING_ON_MESSAGE);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const thinkingStatus = page.locator('[data-testid="turn-activity-status"]');
+    const thinkingDeadline = Date.now() + TIMEOUT_MS;
+    let sawThinkingStatus = false;
+    while (Date.now() < thinkingDeadline) {
+      const count = await thinkingStatus.count();
+      if (count > 0) {
+        const text = ((await thinkingStatus.last().textContent()) ?? '').trim();
+        if (text === 'Thinking…') {
+          sawThinkingStatus = true;
+          break;
+        }
+      }
+      await page.waitForTimeout(200);
+    }
+    if (!sawThinkingStatus) {
+      throw new Error('Step 15: "Thinking…" status did not appear with thinking_enabled on');
+    }
+    await expandLastActivityPanel(page);
+    const reasoningLocator = page.locator('[data-testid="turn-activity-reasoning"]');
+    const reasoningDeadline = Date.now() + TIMEOUT_MS;
+    let reasoningText = '';
+    while (Date.now() < reasoningDeadline) {
+      if ((await reasoningLocator.count()) > 0) {
+        reasoningText = ((await reasoningLocator.last().textContent()) ?? '').trim();
+        if (reasoningText.length > 0) break;
+      }
+      await page.waitForTimeout(300);
+    }
+    if (!reasoningText) {
+      throw new Error('Step 15: expanded panel did not contain reasoning text with thinking_enabled on');
+    }
+    console.log(`Step 15 OK — Thinking… + reasoning text (${reasoningText.slice(0, 80)}…)`);
+
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    const thinkingAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
+    if (thinkingAssistants <= thinkingPriorAssistants) {
+      throw new Error('Step 15: thinking-on turn did not produce a finished assistant answer');
+    }
+
+    settingsRequest('PUT', { thinking_enabled: false, hitl_enabled: false });
+    const offPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
+    const offPriorReasoning = await page.locator('[data-testid="turn-activity-reasoning"]').count();
+    const offReply = await sendMessageAndAwaitReply(page, THINKING_OFF_MESSAGE, offPriorAssistants);
+    if (!offReply) {
+      throw new Error('Step 15: thinking-off turn did not complete with an answer');
+    }
+    // Expand any new finished panel so a leaked reasoning block would be visible.
+    const offHeaders = page.locator('[data-testid="turn-activity-header"]');
+    if ((await offHeaders.count()) > 0) {
+      await offHeaders.last().click();
+    }
+    const offReasoning = await page.locator('[data-testid="turn-activity-reasoning"]').count();
+    if (offReasoning > offPriorReasoning) {
+      throw new Error('Step 15: reasoning text appeared with thinking_enabled off');
+    }
+    console.log(`Step 15 OK — thinking off: no new reasoning; answer completed: ${offReply}`);
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);

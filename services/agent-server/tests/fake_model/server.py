@@ -50,15 +50,34 @@ def create_fake_model_app(fake: FakeModel) -> FastAPI:
         completion_id = new_completion_id()
         created = int(time.time())
         stream = bool(body.get("stream", False))
+        # M8-07: llama-server honors per-request
+        # `chat_template_kwargs.enable_thinking`. When the client sends
+        # `false`, suppress scripted `reasoning_content` so WS tests can
+        # prove thinking-off emits no `reasoning` frames. Omitted key
+        # (pre-M8-07 clients / the M8-06 prototype) keeps the old "emit
+        # whatever the turn scripted" behavior.
+        emit_reasoning = _enable_thinking(body)
 
         if stream:
             return StreamingResponse(
-                _stream_turn(fake, turn, completion_id, created),
+                _stream_turn(fake, turn, completion_id, created, emit_reasoning=emit_reasoning),
                 media_type="text/event-stream",
             )
-        return JSONResponse(_render_turn(fake, turn, completion_id, created))
+        return JSONResponse(_render_turn(fake, turn, completion_id, created, emit_reasoning=emit_reasoning))
 
     return app
+
+
+def _enable_thinking(body: dict) -> bool:
+    """Whether this request should emit scripted `reasoning_content`.
+
+    OpenAI-compat clients put `extra_body` keys on the request body itself,
+    so `chat_template_kwargs.enable_thinking` lands at the top level.
+    """
+    kwargs = body.get("chat_template_kwargs")
+    if isinstance(kwargs, dict) and "enable_thinking" in kwargs:
+        return bool(kwargs["enable_thinking"])
+    return True
 
 
 def _choice_chunk(
@@ -86,6 +105,8 @@ async def _stream_turn(
     turn: Turn,
     completion_id: str,
     created: int,
+    *,
+    emit_reasoning: bool = True,
 ) -> AsyncIterator[str]:
     model = fake.model_name
 
@@ -97,7 +118,7 @@ async def _stream_turn(
         # matching real llama-server `--reasoning-format deepseek` wire
         # order (confirmed via curl against the real model-runner — see
         # docs/TOOL_CALLING.md's M8-06 section).
-        if turn.reasoning_content:
+        if emit_reasoning and turn.reasoning_content:
             for piece in chunk_text(turn.reasoning_content, turn.reasoning_chunk_size):
                 if turn.chunk_delay_s:
                     await asyncio.sleep(turn.chunk_delay_s)
@@ -163,7 +184,14 @@ def _tool_call_stream_chunks(
     return chunks
 
 
-def _render_turn(fake: FakeModel, turn: Turn, completion_id: str, created: int) -> dict:
+def _render_turn(
+    fake: FakeModel,
+    turn: Turn,
+    completion_id: str,
+    created: int,
+    *,
+    emit_reasoning: bool = True,
+) -> dict:
     model = fake.model_name
     base = {
         "id": completion_id,
@@ -174,7 +202,7 @@ def _render_turn(fake: FakeModel, turn: Turn, completion_id: str, created: int) 
 
     if isinstance(turn, TextTurn):
         message = {"role": "assistant", "content": turn.text}
-        if turn.reasoning_content:
+        if emit_reasoning and turn.reasoning_content:
             # M8-06: matches real llama-server's non-streamed shape, where
             # `reasoning_content` is a sibling field on `message`, not
             # nested/prefixed onto `content`.

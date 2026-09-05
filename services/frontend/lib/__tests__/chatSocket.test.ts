@@ -47,6 +47,7 @@ function makeHandlers() {
   return {
     onTurnStart: jest.fn(),
     onToken: jest.fn(),
+    onReasoning: jest.fn(),
     onToolStart: jest.fn(),
     onToolEnd: jest.fn(),
     onTurnEnd: jest.fn(),
@@ -77,6 +78,15 @@ describe('openChatSocket — frame dispatch', () => {
     latestSocket().emit({ type: 'token', content: 'hello' });
 
     expect(handlers.onToken).toHaveBeenCalledWith({ type: 'token', content: 'hello' });
+  });
+
+  it('dispatches reasoning to onReasoning with content (M8-07)', () => {
+    const handlers = makeHandlers();
+    openChatSocket('thread-1', handlers, Ctor);
+
+    latestSocket().emit({ type: 'reasoning', content: 'let me think' });
+
+    expect(handlers.onReasoning).toHaveBeenCalledWith({ type: 'reasoning', content: 'let me think' });
   });
 
   it('dispatches tool_start with tool_call_id/name/category/args', () => {
