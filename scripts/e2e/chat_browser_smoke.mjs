@@ -45,6 +45,9 @@
 // M8-07: with `thinking_enabled` on, a non-trivial prompt shows the
 // "Thinking…" status and the expanded panel contains reasoning text; with
 // it off, no reasoning appears and the answer still completes.
+//
+// M8-05: a fresh three-turn thread, edit turn 2 in Branch mode, assert
+// `‹ 2/2 ›`, switch to 1/2 (original continuation), reload keeps it.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -113,6 +116,12 @@ const ACTIVITY_PANEL_MESSAGE =
 const THINKING_ON_MESSAGE =
   'What is 17 times 23? Work through the multiplication carefully, then say only the final number.';
 const THINKING_OFF_MESSAGE = 'Say exactly: PONG-NO-THINK';
+// M8-05: fresh three-turn thread so fork/switch isn't fighting the
+// truncated edit thread from step 12.
+const FORK_TURN_1 = 'Say exactly: DELTA';
+const FORK_TURN_2 = 'Say exactly: ECHO';
+const FORK_TURN_3 = 'Say exactly: FOXTROT';
+const FORK_TURN_2_EDITED = 'Say exactly: ECHO-FORKED';
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
  * docstring) — collapse whitespace runs to single spaces, then truncate to
@@ -330,6 +339,7 @@ async function main() {
   const startedAt = Date.now();
   let threadId;
   let editThreadId;
+  let forkThreadId;
   let savedSettings = null;
   const browser = await chromium.launch({ headless: true });
   try {
@@ -832,12 +842,93 @@ async function main() {
     }
     console.log(`Step 15 OK — thinking off: no new reasoning; answer completed: ${offReply}`);
 
+    // --- Step 16: fork edit + branch switch (M8-05) ---------------------
+    // Fresh thread so history is exactly three user/assistant turns.
+    // HITL stays off; "Say exactly:" avoids mutating tools.
+    // Go to the list via URL — clicking the Chat tab from a nested
+    // `/chat/[id]` screen is a no-op (already on the Chat tab), so the
+    // header "New chat" button never mounts (same flake step 13 avoided).
+    await page.goto(new URL('/chat', BASE_URL).href, { waitUntil: 'domcontentloaded' });
+    await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
+    await newChatButton.click();
+    await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
+    forkThreadId = new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+
+    await sendMessageAndAwaitReply(page, FORK_TURN_1, 0);
+    const forkAfter1 = await page.locator('[data-testid="chat-item-assistant"]').count();
+    await sendMessageAndAwaitReply(page, FORK_TURN_2, forkAfter1);
+    const forkAfter2 = await page.locator('[data-testid="chat-item-assistant"]').count();
+    await sendMessageAndAwaitReply(page, FORK_TURN_3, forkAfter2);
+    console.log('Step 16 OK — three-turn chat created for fork');
+
+    const forkUsers = page.locator('[data-testid="chat-item-user"]');
+    if ((await forkUsers.count()) < 3) {
+      throw new Error(`Step 16: expected 3 user bubbles before fork, got ${await forkUsers.count()}`);
+    }
+    await forkUsers.nth(1).locator('[data-testid="chat-item-user-menu"]').click();
+    await page.locator('[data-testid="chat-message-action-edit"]').click();
+    await page.locator('[data-testid="chat-edit-banner"]').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('[data-testid="chat-edit-mode-fork"]').click();
+    await input.fill(FORK_TURN_2_EDITED);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const forkEditDeadline = Date.now() + TIMEOUT_MS;
+    let sawForkSwitcher = false;
+    while (Date.now() < forkEditDeadline) {
+      const switcher = page.locator('[data-testid="chat-branch-switcher"]');
+      if ((await switcher.count()) > 0) {
+        const label = ((await page.locator('[data-testid="chat-branch-label"]').textContent()) ?? '').trim();
+        const whole = ((await switcher.textContent()) ?? '').replace(/\s+/g, ' ').trim();
+        if (label === '2/2' || /‹\s*2\/2\s*›/.test(whole)) {
+          sawForkSwitcher = true;
+          break;
+        }
+      }
+      await page.waitForTimeout(300);
+    }
+    if (!sawForkSwitcher) {
+      throw new Error('Step 16: ‹ 2/2 › did not appear after editing turn 2 in fork mode');
+    }
+    console.log('Step 16 OK — ‹ 2/2 › after fork edit');
+
+    await page.locator('[data-testid="chat-branch-prev"]').click();
+    const switchDeadline = Date.now() + 20_000;
+    let sawOriginal = false;
+    while (Date.now() < switchDeadline) {
+      const label = ((await page.locator('[data-testid="chat-branch-label"]').textContent()) ?? '').trim();
+      const hasOriginalTwo = (await page.getByText(FORK_TURN_2, { exact: true }).count()) > 0;
+      const hasThree = (await page.getByText(FORK_TURN_3, { exact: true }).count()) > 0;
+      if (label === '1/2' && hasOriginalTwo && hasThree) {
+        sawOriginal = true;
+        break;
+      }
+      await page.waitForTimeout(300);
+    }
+    if (!sawOriginal) {
+      throw new Error('Step 16: switching to 1/2 did not restore the original continuation');
+    }
+    console.log('Step 16 OK — ‹ 1/2 › shows original turn 2 + turn 3');
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForText(page, FORK_TURN_1, 20_000);
+    await waitForText(page, FORK_TURN_2, 20_000);
+    await waitForText(page, FORK_TURN_3, 20_000);
+    const reloadedLabel = ((await page.locator('[data-testid="chat-branch-label"]').textContent()) ?? '').trim();
+    if (reloadedLabel !== '1/2') {
+      throw new Error(`Step 16: reload lost the 1/2 selection (label=${reloadedLabel})`);
+    }
+    if ((await page.getByText(FORK_TURN_2_EDITED, { exact: true }).count()) > 0) {
+      throw new Error('Step 16: forked text visible after reload on branch 1/2');
+    }
+    console.log('Step 16 OK — reload kept ‹ 1/2 › and the original continuation');
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
     cleanupThreadBestEffort(editThreadId);
+    cleanupThreadBestEffort(forkThreadId);
     removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
     removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
     removeWorkspaceFileBestEffort(HITL_OFF_FILE);

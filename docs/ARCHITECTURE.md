@@ -697,9 +697,36 @@ workspace root returns `400` (see the path-traversal guard below).
   from the checkpointer's pending interrupt (no extra storage). The
   frontend calls this after history hydration on (re)connect so an
   approval card survives a reload. Unknown / never-run thread ids return
-  `{"pending_approval": null}` rather than 404.
+  `{"pending_approval": null}` rather than 404. Honors
+  `threads.active_checkpoint_id` when set (M8-05) so a pending interrupt
+  on a sibling branch is not shown.
+- `GET /api/threads/{id}/branches` (M8-05) → `200
+  [{"anchor_message_id": str, "branches": [{"checkpoint_id": str,
+  "preview": str, "created_at": iso8601|null}], "active_index": int},
+  ...]` — one entry per point on the **active lineage** that has more
+  than one child, computed from `aget_state_history` parent links.
+  `checkpoint_id` is that sibling's tip. `anchor_message_id` is the
+  first user message after the fork on the active branch (the bubble
+  that shows `‹ 1/2 ›`). Empty list when the thread has never forked.
+- `PUT /api/threads/{id}/active_branch` body `{"checkpoint_id": str}` →
+  `204`. Pins `threads.active_checkpoint_id` to that tip. `404` if the
+  id is not a tip of this thread (unknown, or it still has children).
 - `DELETE /api/threads/{id}` → `204` (deletes the row and the
   checkpointer state for that thread)
+
+`threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
+and the WS should read. Null means chronological latest. Every
+completed (or cancelled / awaiting-approval) turn stores the new tip
+here, because `aget_state` without a `checkpoint_id` returns the newest
+checkpoint by id — which may be a sibling the user is not looking at.
+`GET /api/threads/{id}/messages` therefore calls `aget_state` with
+`checkpoint_id=active_checkpoint_id` when set.
+
+**Exec sandbox is per thread, not per branch.** `code-exec-manager`
+sessions and the workspace bind-mount are keyed on `thread_id`. Forking
+the conversation does **not** branch files on disk — `execute_code` /
+`write_file` on one branch see the same files as every other branch of
+that thread.
 
 **Files**
 - `GET /api/files?path=<dir>` → `200 {"path": str, "entries": [{"name":
@@ -775,18 +802,30 @@ path (there is no running task — the graph is paused). It rejects every
 pending action with message `"The user cancelled."` and resumes the same
 way an all-reject `approval_response` would.
 
-`user_message.replace_from_message_id` + `mode` (M8-04) edit/resend a
-prior user message. Omitted `mode` falls back to
-`SettingsStore.edit_mode_default` (`"truncate"` | `"fork"`). `fork` is
-M8-05 — until then a replace that resolves to fork is `error` + close
-1008. `truncate` (under the per-thread lock, before the new turn):
-`aget_state`, locate the message with that id (must be a `HumanMessage`,
-else `error` + 1008; unknown id is the same), then one
-`aupdate_state` of `RemoveMessage` for every message from that index
-onward. The new `HumanMessage` then runs normally. Thread title is not
-re-derived. The client may also send `id` on `user_message`; when
-present it becomes the stored LangChain message id so a same-session
-edit can address the bubble it just appended.
+`user_message.replace_from_message_id` + `mode` (M8-04 / M8-05)
+edit/resend a prior user message. Omitted `mode` falls back to
+`SettingsStore.edit_mode_default` (`"truncate"` | `"fork"`). Both modes
+require the id to name a `HumanMessage` (`error` + close 1008
+otherwise, including unknown ids). Thread title is not re-derived. The
+client may also send `id` on `user_message`; when present it becomes
+the stored LangChain message id so a same-session edit can address the
+bubble it just appended.
+
+- `truncate` (under the per-thread lock, before the new turn):
+  `aget_state` at the active tip, then one `aupdate_state` of
+  `RemoveMessage` for every message from that index onward. The new
+  `HumanMessage` runs from the post-truncate checkpoint.
+- `fork` (M8-05): walk `aget_state_history` along the active lineage to
+  the **completed** checkpoint (`next` empty) whose `messages` end just
+  before the target `HumanMessage`, then run the new turn with that
+  `checkpoint_id` in `configurable` (LangGraph time-travel fork). The
+  old continuation stays as a sibling; the new tip becomes
+  `active_checkpoint_id`. Intermediate `__start__` snapshots are
+  skipped — starting there would replay the pending write that adds the
+  original user message.
+
+New turns and approval resumes also start from `active_checkpoint_id`
+when set, so a message typed on an old branch extends that branch.
 
 Server → client, in order within a turn:
 

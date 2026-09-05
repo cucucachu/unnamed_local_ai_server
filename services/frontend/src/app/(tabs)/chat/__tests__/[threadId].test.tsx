@@ -3,6 +3,7 @@ import { Linking } from 'react-native';
 import { act, create } from 'react-test-renderer';
 
 import { groupItemsIntoTurns } from '@/lib/chatTurns';
+import type { EditMode } from '@/lib/chatSocket';
 import type { ChatToolItem, ChatUserItem, UseChatResult } from '@/lib/useChat';
 
 // Per the ticket's own text ("one shallow render of the screen"): mock
@@ -25,6 +26,19 @@ jest.mock('@/lib/clipboard', () => ({
   copyToClipboard: (...args: unknown[]) => mockCopyToClipboard(...args),
 }));
 
+let mockEditModeDefault: EditMode = 'truncate';
+jest.mock('@/components/SettingsProvider', () => ({
+  useSettings: () => ({
+    settings: {
+      hitl_enabled: true,
+      thinking_enabled: false,
+      edit_mode_default: mockEditModeDefault,
+    },
+    loading: false,
+    updateSettings: jest.fn(),
+  }),
+}));
+
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import ChatScreen from '../[threadId]';
 
@@ -40,6 +54,8 @@ function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
     retryHydration: jest.fn(),
     pendingApproval: null,
     respondToApproval: jest.fn(),
+    branches: [],
+    switchBranch: jest.fn(),
     ...overrides,
     items,
     turns,
@@ -50,6 +66,7 @@ describe('ChatScreen ([threadId])', () => {
   beforeEach(() => {
     mockUseChat.mockReset();
     mockCopyToClipboard.mockClear();
+    mockEditModeDefault = 'truncate';
   });
 
   it('passes the route threadId through to useChat', () => {
@@ -920,6 +937,93 @@ describe('ChatScreen ([threadId])', () => {
       });
 
       expect(mockCopyToClipboard).toHaveBeenCalledWith('reply one');
+    });
+  });
+
+  describe('Branch switcher + edit mode (M8-05)', () => {
+    const userOne: ChatUserItem = { id: 'u-1', kind: 'user', text: 'turn one' };
+    const assistantOne = { id: 'a-1', kind: 'assistant' as const, text: 'reply one', streaming: false };
+    const userTwo: ChatUserItem = { id: 'u-2', kind: 'user', text: 'turn two forked' };
+    const assistantTwo = { id: 'a-2', kind: 'assistant' as const, text: 'forked reply', streaming: false };
+
+    const branchPoint = {
+      anchor_message_id: 'u-2',
+      active_index: 1,
+      branches: [
+        { checkpoint_id: 'tip-a', preview: 'turn two', created_at: '2026-01-01T00:00:00Z' },
+        { checkpoint_id: 'tip-b', preview: 'turn two forked', created_at: '2026-01-01T00:01:00Z' },
+      ],
+    };
+
+    it('shows ‹ 2/2 › on a branch-anchor user bubble and prev calls switchBranch', () => {
+      const switchBranch = jest.fn();
+      setUseChatResult({
+        items: [userOne, assistantOne, userTwo, assistantTwo],
+        branches: [branchPoint],
+        switchBranch,
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderer?.root.findByProps({ testID: 'chat-branch-switcher' })).toBeTruthy();
+      expect(renderer?.root.findByProps({ testID: 'chat-branch-label' }).props.children).toBe('2/2');
+
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-branch-prev' }).props as { onPress: () => void }).onPress();
+      });
+      expect(switchBranch).toHaveBeenCalledWith('tip-a');
+    });
+
+    it('does not show a switcher when there are no branch points', () => {
+      setUseChatResult({ items: [userOne, assistantOne] });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'chat-branch-switcher' })).toThrow();
+    });
+
+    it('edit banner offers Replace / Branch, preselected from edit_mode_default, and send uses the choice', () => {
+      mockEditModeDefault = 'fork';
+      const sendMessage = jest.fn();
+      setUseChatResult({ items: [userOne, assistantOne], sendMessage });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const userBubble = renderer!.root
+        .findAllByProps({ testID: 'chat-item-user-bubble' })
+        .find((node) => typeof (node.props as { onLongPress?: unknown }).onLongPress === 'function');
+      act(() => {
+        (userBubble?.props as { onLongPress: () => void }).onLongPress();
+      });
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-message-action-edit' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(renderedText(renderer!)).toContain('keeps the old continuation as a branch');
+      expect(renderer?.root.findByProps({ testID: 'chat-edit-mode-fork' })).toBeTruthy();
+      expect(renderer?.root.findByProps({ testID: 'chat-edit-mode-truncate' })).toBeTruthy();
+
+      const input = renderer?.root.findByProps({ placeholder: 'Message…' });
+      act(() => {
+        (input?.props as { onChangeText: (value: string) => void }).onChangeText('turn one forked');
+      });
+      act(() => {
+        (renderer!.root.findByProps({ accessibilityLabel: 'Send message' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith('turn one forked', {
+        replaceFromMessageId: 'u-1',
+        mode: 'fork',
+      });
     });
   });
 });

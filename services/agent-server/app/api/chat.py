@@ -49,9 +49,16 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.types import StateSnapshot
 from pydantic import BaseModel
 
-from app.api.chat_ws import get_pending_approval
+from app.api.chat_ws import (
+    active_checkpoint_id_for,
+    checkpoint_id_of,
+    get_pending_approval,
+    graph_config,
+    list_state_history,
+)
 from app.db.threads import ThreadRecord, ThreadStore
 from app.db.turn_stats import TurnStat, TurnStatsStore
 
@@ -80,6 +87,24 @@ class TurnOut(BaseModel):
 
     status: Literal["completed", "cancelled", "awaiting_approval"]
     duration_ms: int
+
+
+class BranchOut(BaseModel):
+    checkpoint_id: str
+    preview: str
+    created_at: str | None = None
+
+
+class BranchPointOut(BaseModel):
+    """One fork on the active lineage with more than one child (M8-05)."""
+
+    anchor_message_id: str
+    branches: list[BranchOut]
+    active_index: int
+
+
+class ActiveBranchBody(BaseModel):
+    checkpoint_id: str
 
 
 class MessageOut(BaseModel):
@@ -182,7 +207,7 @@ async def get_thread_messages(thread_id: str, request: Request) -> list[MessageO
         raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
 
     agent = request.app.state.agent
-    state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
+    state = await agent.aget_state(graph_config(thread_id, record.active_checkpoint_id))
     # See module docstring: `state.values` is `{}` (not `{"messages": []}`)
     # when the row exists but no checkpoint has been written yet.
     messages = state.values.get("messages", [])
@@ -221,9 +246,171 @@ async def get_thread_state(thread_id: str, request: Request) -> dict:
     unconditionally on every connect/reconnect, thread-existence
     already-checked-elsewhere included.
     """
+    store = _thread_store(request)
+    checkpoint_id = await active_checkpoint_id_for(store, thread_id)
     agent = request.app.state.agent
-    pending_approval = await get_pending_approval(agent, thread_id)
+    pending_approval = await get_pending_approval(agent, thread_id, checkpoint_id)
     return {"pending_approval": pending_approval}
+
+
+def _build_branch_points(
+    snapshots: list[StateSnapshot], active_checkpoint_id: str | None
+) -> list[BranchPointOut]:
+    """One entry per active-lineage node with more than one child checkpoint.
+
+    `branches[].checkpoint_id` is the tip of that child subtree (the active
+    tip when the child is on the active lineage, otherwise the newest tip
+    of the sibling). `anchor_message_id` is the first `HumanMessage` after
+    the fork point on the *active* lineage — the user bubble that shows
+    `‹ 1/2 ›`.
+    """
+    if not snapshots:
+        return []
+
+    by_id: dict[str, StateSnapshot] = {}
+    children: dict[str, list[str]] = {}
+    for snap in snapshots:
+        cid = checkpoint_id_of(snap)
+        if not cid:
+            continue
+        by_id[cid] = snap
+        parent_id = checkpoint_id_of(snap.parent_config) if snap.parent_config else None
+        if parent_id:
+            children.setdefault(parent_id, []).append(cid)
+
+    if active_checkpoint_id and active_checkpoint_id in by_id:
+        active_tip = active_checkpoint_id
+    else:
+        active_tip = next((cid for s in snapshots if (cid := checkpoint_id_of(s))), None)
+    if active_tip is None:
+        return []
+
+    lineage: list[str] = []
+    current: str | None = active_tip
+    seen: set[str] = set()
+    while current and current not in seen and current in by_id:
+        seen.add(current)
+        lineage.append(current)
+        parent_cfg = by_id[current].parent_config
+        current = checkpoint_id_of(parent_cfg) if parent_cfg else None
+    lineage_set = set(lineage)
+
+    def tip_of_subtree(start: str) -> str:
+        node = start
+        for _ in range(10_000):
+            kids = children.get(node, [])
+            if not kids:
+                return node
+            on_active = [k for k in kids if k in lineage_set]
+            if on_active:
+                node = on_active[0]
+                continue
+            node = max(kids, key=lambda k: (by_id[k].created_at or "", k))
+        return node
+
+    points: list[BranchPointOut] = []
+    for parent_id in lineage:
+        kids = children.get(parent_id, [])
+        if len(kids) <= 1:
+            continue
+        parent_msg_ids = {
+            getattr(m, "id", None) for m in by_id[parent_id].values.get("messages", [])
+        }
+        branches: list[BranchOut] = []
+        for child_id in kids:
+            tip_id = tip_of_subtree(child_id)
+            tip = by_id[tip_id]
+            first_new_human = next(
+                (
+                    m
+                    for m in tip.values.get("messages", [])
+                    if isinstance(m, HumanMessage) and getattr(m, "id", None) not in parent_msg_ids
+                ),
+                None,
+            )
+            preview = str(first_new_human.text) if first_new_human is not None else ""
+            branches.append(
+                BranchOut(
+                    checkpoint_id=tip_id,
+                    preview=preview,
+                    created_at=by_id[child_id].created_at,
+                )
+            )
+        branches.sort(key=lambda b: (b.created_at or "", b.checkpoint_id))
+
+        anchor = next(
+            (
+                m
+                for m in by_id[active_tip].values.get("messages", [])
+                if isinstance(m, HumanMessage) and getattr(m, "id", None) not in parent_msg_ids
+            ),
+            None,
+        )
+        if anchor is None or not getattr(anchor, "id", None):
+            continue
+        active_index = next(
+            (i for i, b in enumerate(branches) if b.checkpoint_id == active_tip), 0
+        )
+        points.append(
+            BranchPointOut(
+                anchor_message_id=anchor.id,
+                branches=branches,
+                active_index=active_index,
+            )
+        )
+
+    points.reverse()
+    return points
+
+
+@router.get("/threads/{thread_id}/branches", response_model=list[BranchPointOut])
+async def get_thread_branches(thread_id: str, request: Request) -> list[BranchPointOut]:
+    """`GET /api/threads/{id}/branches` (M8-05).
+
+    One entry per point on the active lineage that has more than one child
+    branch, computed from `aget_state_history` parent links.
+    """
+    store = _thread_store(request)
+    record = await store.get(thread_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
+
+    agent = request.app.state.agent
+    snapshots = await list_state_history(agent, thread_id)
+    return _build_branch_points(snapshots, record.active_checkpoint_id)
+
+
+@router.put("/threads/{thread_id}/active_branch", status_code=204)
+async def set_active_branch(thread_id: str, request: Request, body: ActiveBranchBody) -> None:
+    """`PUT /api/threads/{id}/active_branch` `{checkpoint_id}` (M8-05).
+
+    Sets the thread's active tip. 404 if `checkpoint_id` is not a tip of
+    this thread (unknown id, or it has children).
+    """
+    store = _thread_store(request)
+    record = await store.get(thread_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
+
+    agent = request.app.state.agent
+    snapshots = await list_state_history(agent, thread_id)
+    children: dict[str, list[str]] = {}
+    known: set[str] = set()
+    for snap in snapshots:
+        cid = checkpoint_id_of(snap)
+        if not cid:
+            continue
+        known.add(cid)
+        parent_id = checkpoint_id_of(snap.parent_config) if snap.parent_config else None
+        if parent_id:
+            children.setdefault(parent_id, []).append(cid)
+
+    if body.checkpoint_id not in known or children.get(body.checkpoint_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"checkpoint '{body.checkpoint_id}' is not a tip of this thread",
+        )
+    await store.set_active_checkpoint_id(thread_id, body.checkpoint_id)
 
 
 @router.delete("/threads/{thread_id}", status_code=204)

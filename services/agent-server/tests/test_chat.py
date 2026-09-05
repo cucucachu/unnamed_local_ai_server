@@ -230,3 +230,53 @@ async def test_get_messages_attaches_turn_metadata_on_final_assistant(
     assert [m["role"] for m in messages] == ["user", "assistant"]
     assert messages[0]["turn"] is None
     assert messages[1]["turn"] == {"status": "completed", "duration_ms": 1234}
+
+
+async def test_branches_empty_without_fork_and_put_rejects_non_tip(
+    rest_app: FastAPI, rest_client: AsyncClient, fake_model: FakeModel
+) -> None:
+    """M8-05: no branch points on a linear thread; PUT 404s a parent checkpoint."""
+    from app.api.chat_ws import checkpoint_id_of, list_state_history
+
+    created = (await rest_client.post("/api/threads", json={})).json()
+    thread_id = created["id"]
+
+    fake_model.queue(TextTurn("one"), TextTurn("two"))
+    await rest_app.state.agent.ainvoke(
+        {"messages": [{"role": "user", "content": "turn one"}]},
+        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+    )
+    await rest_app.state.agent.ainvoke(
+        {"messages": [{"role": "user", "content": "turn two"}]},
+        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+    )
+
+    empty = await rest_client.get(f"/api/threads/{thread_id}/branches")
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    missing_thread = await rest_client.get(f"/api/threads/{_UNKNOWN_THREAD_ID}/branches")
+    assert missing_thread.status_code == 404
+
+    snapshots = await list_state_history(rest_app.state.agent, thread_id)
+    children: dict[str, list[str]] = {}
+    known: list[str] = []
+    for snap in snapshots:
+        cid = checkpoint_id_of(snap)
+        if not cid:
+            continue
+        known.append(cid)
+        parent_id = checkpoint_id_of(snap.parent_config) if snap.parent_config else None
+        if parent_id:
+            children.setdefault(parent_id, []).append(cid)
+    non_tip = next(cid for cid in known if children.get(cid))
+    rejected = await rest_client.put(
+        f"/api/threads/{thread_id}/active_branch", json={"checkpoint_id": non_tip}
+    )
+    assert rejected.status_code == 404
+
+    tip = next(cid for cid in known if not children.get(cid))
+    accepted = await rest_client.put(
+        f"/api/threads/{thread_id}/active_branch", json={"checkpoint_id": tip}
+    )
+    assert accepted.status_code == 204

@@ -620,35 +620,171 @@ async def test_truncate_non_user_id(fake_model: FakeModel, tmp_path) -> None:
         assert exc_info.value.code == 1008
 
 
-async def test_fork_mode_rejected_until_m8_05(fake_model: FakeModel, tmp_path) -> None:
-    """M8-04: mode=fork (explicit, or via edit_mode_default) is error + 1008."""
+def _user_contents(messages: list[dict]) -> list[str]:
+    return [m["content"] for m in messages if m["role"] == "user"]
+
+
+async def test_fork_produces_two_tips_and_switch_changes_history(
+    fake_model: FakeModel, tmp_path
+) -> None:
+    """M8-05: fork keeps the old continuation; branches lists both tips;
+    switching history + a new turn on the old branch extends that branch."""
+    fake_model.queue(TextTurn("reply one"), TextTurn("reply two"), TextTurn("reply three"))
+    thread_store = InMemoryThreadStore()
+    thread_id = "fork-two-tips"
+
+    with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "turn one"})
+        _drain_turn(ws)
+        ws.send_json({"type": "user_message", "content": "turn two"})
+        _drain_turn(ws)
+        ws.send_json({"type": "user_message", "content": "turn three"})
+        _drain_turn(ws)
+
+        before = client.get(f"/api/threads/{thread_id}/messages").json()
+        assert _user_contents(before) == ["turn one", "turn two", "turn three"]
+        turn_two_id = before[2]["id"]
+        assert before[2]["role"] == "user"
+
+        fake_model.queue(TextTurn("forked reply"))
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "turn two forked",
+                "replace_from_message_id": turn_two_id,
+                "mode": "fork",
+            }
+        )
+        frames = _drain_turn(ws)
+        assert frames[0] == {"type": "turn_start"}
+        _assert_turn_end(frames[-1], "completed")
+        assert "".join(f["content"] for f in frames if f["type"] == "token") == "forked reply"
+
+        forked = client.get(f"/api/threads/{thread_id}/messages").json()
+        assert _user_contents(forked) == ["turn one", "turn two forked"]
+        assert [m["content"] for m in forked if m["role"] == "assistant"] == [
+            "reply one",
+            "forked reply",
+        ]
+
+        branches = client.get(f"/api/threads/{thread_id}/branches").json()
+        assert len(branches) == 1
+        point = branches[0]
+        assert point["anchor_message_id"] == forked[2]["id"]
+        assert len(point["branches"]) == 2
+        assert point["active_index"] in (0, 1)
+        active_tip = point["branches"][point["active_index"]]["checkpoint_id"]
+        original_tip = next(
+            b["checkpoint_id"] for b in point["branches"] if b["checkpoint_id"] != active_tip
+        )
+        assert {b["preview"] for b in point["branches"]} == {"turn two", "turn two forked"}
+
+        put = client.put(
+            f"/api/threads/{thread_id}/active_branch", json={"checkpoint_id": original_tip}
+        )
+        assert put.status_code == 204
+
+        original = client.get(f"/api/threads/{thread_id}/messages").json()
+        assert _user_contents(original) == ["turn one", "turn two", "turn three"]
+        assert [m["content"] for m in original if m["role"] == "assistant"] == [
+            "reply one",
+            "reply two",
+            "reply three",
+        ]
+
+        switched = client.get(f"/api/threads/{thread_id}/branches").json()
+        assert switched[0]["active_index"] != point["active_index"]
+        assert switched[0]["anchor_message_id"] == turn_two_id
+
+        fake_model.queue(TextTurn("reply four"))
+        ws.send_json({"type": "user_message", "content": "turn four"})
+        _drain_turn(ws)
+
+        extended = client.get(f"/api/threads/{thread_id}/messages").json()
+        assert _user_contents(extended) == ["turn one", "turn two", "turn three", "turn four"]
+        assert [m["content"] for m in extended if m["role"] == "assistant"][-1] == "reply four"
+
+        after_extend = client.get(f"/api/threads/{thread_id}/branches").json()
+        assert len(after_extend) == 1
+        assert len(after_extend[0]["branches"]) == 2
+        new_active = after_extend[0]["branches"][after_extend[0]["active_index"]]["checkpoint_id"]
+        assert new_active != original_tip
+        sibling = next(
+            b["checkpoint_id"]
+            for b in after_extend[0]["branches"]
+            if b["checkpoint_id"] != new_active
+        )
+
+        assert (
+            client.put(
+                f"/api/threads/{thread_id}/active_branch", json={"checkpoint_id": sibling}
+            ).status_code
+            == 204
+        )
+        back_on_fork = client.get(f"/api/threads/{thread_id}/messages").json()
+        assert _user_contents(back_on_fork) == ["turn one", "turn two forked"]
+        assert "turn four" not in _user_contents(back_on_fork)
+
+        record = await thread_store.get(thread_id)
+        assert record is not None
+        assert record.active_checkpoint_id == sibling
+
+
+async def test_fork_unknown_and_non_user_id(fake_model: FakeModel, tmp_path) -> None:
+    """M8-05: fork uses the same 1008 errors as truncate for bad ids."""
     fake_model.queue(TextTurn("hello"))
-    thread_id = "truncate-fork-rejected"
+    thread_id = "fork-bad-id"
 
     with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
         _drain_turn(ws)
-        user_id = next(
-            m["id"] for m in client.get(f"/api/threads/{thread_id}/messages").json() if m["role"] == "user"
-        )
+        messages = client.get(f"/api/threads/{thread_id}/messages").json()
+        assistant = next(m for m in messages if m["role"] == "assistant")
 
         ws.send_json(
             {
                 "type": "user_message",
-                "content": "forked",
-                "replace_from_message_id": user_id,
+                "content": "nope",
+                "replace_from_message_id": assistant["id"],
                 "mode": "fork",
             }
         )
         frame = ws.receive_json()
         assert frame["type"] == "error"
-        assert "fork" in frame["message"]
-
+        assert "user message" in frame["message"]
         with pytest.raises(WebSocketDisconnect) as exc_info:
             ws.receive_json()
         assert exc_info.value.code == 1008
+
+
+async def test_put_active_branch_404_if_not_a_tip(fake_model: FakeModel, tmp_path) -> None:
+    """M8-05: PUT /active_branch 404s for an unknown checkpoint or thread."""
+    fake_model.queue(TextTurn("hello"))
+    thread_id = "fork-put-404"
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_turn(ws)
+
+        missing = client.put(
+            f"/api/threads/{thread_id}/active_branch", json={"checkpoint_id": "not-a-checkpoint"}
+        )
+        assert missing.status_code == 404
+
+        unknown_thread = client.put(
+            "/api/threads/00000000-0000-0000-0000-000000000000/active_branch",
+            json={"checkpoint_id": "anything"},
+        )
+        assert unknown_thread.status_code == 404
+
+        empty = client.get(f"/api/threads/{thread_id}/branches").json()
+        assert empty == []
 
 
 async def test_user_message_id_is_stored_langchain_id(fake_model: FakeModel, tmp_path) -> None:
