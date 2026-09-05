@@ -140,7 +140,7 @@ sequenceDiagram
     P->>A: proxy upgrade
     A->>M: /v1/chat/completions (stream)
     M-->>A: tool_call: read_file("notes.md")
-    A->>A: FilesystemBackend reads /data/workspace/notes.md directly (no network hop)
+    A->>A: FilesystemBackend reads /data/workspace/notes.md directly (no network hop; /workspace/notes.md is the same file)
     A->>M: continue with tool result
     M-->>A: tool_call: execute_code("python resize.py photo.jpg")
     A->>E: POST /sessions/{id}/ensure
@@ -162,6 +162,13 @@ trips through `model-runner` and `code-exec-manager`) matches the real
 flow, and the `code-exec-manager` API calls (`POST /sessions/{id}/ensure`,
 `POST /sessions/{id}/execute`) match the `code-exec-manager` API contract
 in "Contracts" below.
+
+File tools (`read_file`, `write_file`, …) are a virtual filesystem rooted
+at agent-server's `/data/workspace`. The exec sandbox bind-mounts the same
+host directory at `/workspace`. `WorkspaceFilesystemBackend` treats
+`/workspace/...` as an alias of `/...` so a shell write to
+`/workspace/notes.md` and a later `read_file("/workspace/notes.md")` hit
+the same file. Traversal (`..`) is still blocked.
 
 ### Media file playback flow
 

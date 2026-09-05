@@ -13,8 +13,8 @@ what they contain.
 For anything beyond reading/writing/searching files — running scripts, converting or
 batch-processing media, installing nothing — use execute_code. Write scripts into the
 workspace with your file tools first when they are worth keeping; use one-liners otherwise.
-File tool paths never start with /workspace — that prefix is only for execute_code's shell
-commands, which see this same directory as /workspace.
+File tools and execute_code share one tree: /notes.md and /workspace/notes.md are
+the same file. In the shell (execute_code) that tree is mounted at /workspace.
 For factual questions about the outside world — current events, real people, products,
 documentation, anything you aren't already certain of — use web_search before answering,
 then use web_fetch on the top result(s) before citing specifics; a search snippet alone is

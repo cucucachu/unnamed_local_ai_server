@@ -58,7 +58,10 @@ async def test_agent_file_tool_roundtrip(
     # requires a leading `/`) — so `/notes.txt` resolves to `<root_dir>/notes.txt`
     # on real disk, not a real filesystem-root path.
     fake_model.queue(
-        ToolCallTurn(name="write_file", args={"file_path": "/notes.txt", "content": "note body"}),
+        ToolCallTurn(
+            name="write_file",
+            args={"file_path": "/workspace/notes.txt", "content": "note body"},
+        ),
         TextTurn("done"),
     )
 

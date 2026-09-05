@@ -84,7 +84,7 @@ def make_execute_code_tool(settings: Settings):
         """Run a shell command in a sandboxed Linux container.
 
         The container has NO network access. The user's workspace is mounted read-write at
-        /workspace (the same files your file tools see; your file-tool root == /workspace).
+        /workspace — the same tree file tools expose as / and as /workspace.
         Installed: Python 3 with pandas/numpy/pillow/matplotlib/openpyxl/pypdf, Node.js, git,
         ffmpeg, imagemagick, pandoc, ripgrep, jq. You cannot install packages. State in /tmp
         and $HOME is ephemeral; only /workspace persists. Long jobs: raise timeout_seconds

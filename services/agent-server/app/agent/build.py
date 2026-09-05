@@ -68,7 +68,6 @@ from __future__ import annotations
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolCall
@@ -78,6 +77,7 @@ from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
+from app.agent.workspace_backend import WorkspaceFilesystemBackend
 from app.core.config import Settings
 
 # Kept in sync with `app/api/chat_ws.py`'s `_TOOL_CATEGORY_BY_NAME` mapping —
@@ -132,7 +132,9 @@ def _interrupt_on_config() -> InterruptOnConfig:
 def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
     return create_deep_agent(
         model=build_model(settings),
-        backend=FilesystemBackend(root_dir=settings.workspace_root, virtual_mode=True),
+        backend=WorkspaceFilesystemBackend(
+            root_dir=settings.workspace_root, virtual_mode=True
+        ),
         system_prompt=SYSTEM_PROMPT,
         tools=[
             make_execute_code_tool(settings),
