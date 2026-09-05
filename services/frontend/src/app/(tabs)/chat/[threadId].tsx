@@ -6,6 +6,7 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   FlatList,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -20,16 +21,21 @@ import {
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import { useChat, type ChatItem, type ChatToolItem } from '@/lib/useChat';
+import {
+  hostnameFromUrl,
+  parseFetchResult,
+  parseSearchResults,
+  type ParsedFetchResult,
+  type ParsedSearchResults,
+} from '@/lib/webResult';
 
 const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyphMap> = {
   file: 'document-text-outline',
   exec: 'terminal-outline',
   plan: 'list-outline',
-  // M7-05 adds the `web` category (web_search/web_fetch); a dedicated icon is
-  // the minimum needed to keep this `Record`'s keys exhaustive over the
-  // now-5-member `ToolCategory` union — richer `web` tool-card rendering
-  // (parsing `web_search`/`web_fetch`'s specific result text, like
-  // `execParsed`/`chip` do for `exec` above) is M7-06's job, out of scope here.
+  // Default icon for the `web` category — overridden to `search-outline`
+  // specifically for `web_search` (see `toolIconName` below); `web_fetch`
+  // keeps this `globe-outline` default.
   web: 'globe-outline',
   other: 'construct-outline',
 };
@@ -274,26 +280,201 @@ function ExecToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedEx
   );
 }
 
+/** Chip precedence mirrors `execChipInfo`'s own doc: `null` means "nothing
+ * special to show here, fall back to the generic checkmark/x icon". */
+function webSearchChipInfo(parsed: ParsedSearchResults): ExecChipInfo | null {
+  if (parsed.isError) return { text: 'error', color: theme.danger };
+  return { text: `${parsed.resultCount} result${parsed.resultCount === 1 ? '' : 's'}`, color: theme.textMuted };
+}
+
+/** Unlike `web_search`, a successful `web_fetch` gets no chip at all — the
+ * page title is already folded into the collapsed header text itself (see
+ * `webFetchHeaderText`), so a chip here would be redundant. Only the error
+ * case needs a chip (there's nothing else in the header to signal it). */
+function webFetchChipInfo(parsed: ParsedFetchResult): ExecChipInfo | null {
+  return parsed.isError ? { text: 'error', color: theme.danger } : null;
+}
+
+/** Collapsed-header text for a `web_search` card: `args.query` (defensive
+ * fallback to `item.name`, same reasoning as `firstLine`'s `command`
+ * fallback — `args` isn't guaranteed to have the expected shape at the
+ * type level even though the server always sends it). */
+function webSearchHeaderText(item: ChatToolItem): string {
+  return typeof item.args.query === 'string' ? item.args.query : item.name;
+}
+
+/** Collapsed-header text for a `web_fetch` card: `args.url`'s hostname,
+ * plus (once a non-error result has arrived) the fetched page's title —
+ * spec: "hostname of args.url + page title ... once done". While running
+ * or on error, just the hostname (the error itself surfaces via
+ * `webFetchChipInfo`'s chip, not duplicated into this text). */
+function webFetchHeaderText(item: ChatToolItem, parsed: ParsedFetchResult | null): string {
+  const hostname = typeof item.args.url === 'string' ? hostnameFromUrl(item.args.url) : item.name;
+  if (parsed === null || parsed.isError || parsed.title === null || parsed.title.length === 0) return hostname;
+  return `${hostname} — ${parsed.title}`;
+}
+
+const WEB_FETCH_TRUNCATED_MARKER = '[content truncated]';
+
+/** Expanded detail for a `web_search` card — spec: "each result as title
+ * (tappable, opens the URL externally — `Linking.openURL`; web: new tab) +
+ * hostname + snippet." `Linking.openURL(url)` (single-arg call) is exactly
+ * what gets the "web: new tab" behavior for free: `react-native-web`'s
+ * `Linking.openURL` defaults its `target` param to `'_blank'` only when
+ * called with exactly one argument (see its own source) — passing a second
+ * arg explicitly would defeat that default, so this deliberately never
+ * does. On native, `Linking.openURL` already opens externally regardless
+ * of arg count. */
+function WebSearchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedSearchResults | null }): ReactElement {
+  if (parsed === null) {
+    // Still running — nothing to show yet beyond the query already visible
+    // in the collapsed header, so just echo it here too rather than an
+    // empty-looking expanded panel.
+    return (
+      <View style={styles.toolDetail}>
+        <Text style={styles.toolDetailText}>{webSearchHeaderText(item)}</Text>
+      </View>
+    );
+  }
+
+  if (parsed.isError) {
+    return (
+      <View style={styles.toolDetail}>
+        <Text style={styles.toolDetailText}>{parsed.errorMessage ?? 'Search failed.'}</Text>
+      </View>
+    );
+  }
+
+  if (parsed.results.length === 0) {
+    return (
+      <View style={styles.toolDetail}>
+        <Text style={styles.toolDetailText}>No results found.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.toolDetail}>
+      {parsed.results.map((result, index) => (
+        <View key={`${index}-${result.url}`} style={[styles.searchResultRow, index === 0 && styles.searchResultRowFirst]}>
+          <Pressable onPress={() => Linking.openURL(result.url)} accessibilityRole="link" accessibilityLabel={result.title}>
+            <Text style={styles.searchResultTitle} numberOfLines={2} ellipsizeMode="tail">
+              {result.title}
+            </Text>
+          </Pressable>
+          <Text style={styles.searchResultHostname} numberOfLines={1} ellipsizeMode="tail">
+            {hostnameFromUrl(result.url)}
+          </Text>
+          {result.snippet.length > 0 ? (
+            <Text style={styles.searchResultSnippet} numberOfLines={3} ellipsizeMode="tail">
+              {result.snippet}
+            </Text>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Expanded detail for a `web_fetch` card — spec: "full final URL
+ * (tappable) + the extracted text in a scrollable block (max height ~40%
+ * of screen, reuse the exec card's block style)." Reuses
+ * `styles.execOutputScroll`/`getExecOutputMaxHeight` verbatim, per spec. */
+function WebFetchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedFetchResult | null }): ReactElement {
+  const argsUrl = typeof item.args.url === 'string' ? item.args.url : '';
+
+  if (parsed === null) {
+    // Still running.
+    return (
+      <View style={styles.toolDetail}>
+        <Text style={styles.toolDetailText}>{argsUrl}</Text>
+      </View>
+    );
+  }
+
+  if (parsed.isError) {
+    return (
+      <View style={styles.toolDetail}>
+        {argsUrl.length > 0 ? (
+          <Pressable onPress={() => Linking.openURL(argsUrl)} accessibilityRole="link">
+            <Text style={[styles.toolDetailText, styles.fetchUrlLink]} numberOfLines={1} ellipsizeMode="tail">
+              {argsUrl}
+            </Text>
+          </Pressable>
+        ) : null}
+        <Text style={styles.toolDetailText}>{parsed.errorMessage ?? 'Fetch failed.'}</Text>
+      </View>
+    );
+  }
+
+  // `parsed.url` (the `URL:` line, i.e. the real final/redirected URL) is
+  // preferred over the request's own `args.url` per spec ("full final
+  // URL") — `parsed.url` can only be `null` here if the preview was cut
+  // before that line ever fully arrived (see `parseFetchResult`'s doc),
+  // in which case falling back to the requested url is still the most
+  // useful tappable link available.
+  const finalUrl = parsed.url ?? argsUrl;
+
+  return (
+    <View style={styles.toolDetail}>
+      {finalUrl.length > 0 ? (
+        <Pressable onPress={() => Linking.openURL(finalUrl)} accessibilityRole="link">
+          <Text style={[styles.toolDetailText, styles.fetchUrlLink]} numberOfLines={1} ellipsizeMode="tail">
+            {finalUrl}
+          </Text>
+        </Pressable>
+      ) : null}
+      <ScrollView style={[styles.execOutputScroll, { maxHeight: getExecOutputMaxHeight() }]}>
+        <Text style={styles.toolDetailText}>{parsed.text}</Text>
+        {parsed.truncatedByTool ? <Text style={styles.execTruncatedText}>{WEB_FETCH_TRUNCATED_MARKER}</Text> : null}
+      </ScrollView>
+    </View>
+  );
+}
+
 function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const isExec = item.category === 'exec';
+  const isWebSearch = item.category === 'web' && item.name === 'web_search';
+  const isWebFetch = item.category === 'web' && item.name === 'web_fetch';
+
   const execParsed = isExec && item.resultPreview !== undefined ? parseExecResult(item.resultPreview) : null;
-  const chip = execParsed !== null ? execChipInfo(execParsed) : null;
+  const searchParsed = isWebSearch && item.resultPreview !== undefined ? parseSearchResults(item.resultPreview) : null;
+  const fetchParsed = isWebFetch && item.resultPreview !== undefined ? parseFetchResult(item.resultPreview) : null;
+
+  const chip =
+    execParsed !== null
+      ? execChipInfo(execParsed)
+      : searchParsed !== null
+        ? webSearchChipInfo(searchParsed)
+        : fetchParsed !== null
+          ? webFetchChipInfo(fetchParsed)
+          : null;
+
+  const headerIcon: keyof typeof Ionicons.glyphMap = isWebSearch ? 'search-outline' : CATEGORY_ICON[item.category];
 
   return (
     <View style={styles.toolCard} testID="chat-item-tool">
       <Pressable style={styles.toolHeader} onPress={() => setExpanded((prev) => !prev)} testID="chat-item-tool-header">
-        <Ionicons name={CATEGORY_ICON[item.category]} size={16} color={theme.textMuted} />
+        <Ionicons name={headerIcon} size={16} color={theme.textMuted} />
         {isExec ? (
           <Text style={styles.toolName} numberOfLines={1} ellipsizeMode="tail">
             {firstLine(item.args.command)}
+          </Text>
+        ) : isWebSearch ? (
+          <Text style={styles.toolName} numberOfLines={1} ellipsizeMode="tail">
+            {webSearchHeaderText(item)}
+          </Text>
+        ) : isWebFetch ? (
+          <Text style={styles.toolName} numberOfLines={1} ellipsizeMode="tail">
+            {webFetchHeaderText(item, fetchParsed)}
           </Text>
         ) : (
           <Text style={styles.toolName}>{item.name}</Text>
         )}
         {item.status === 'running' ? (
           <ActivityIndicator size="small" color={theme.accent} style={styles.toolStatusIcon} />
-        ) : isExec && chip !== null ? (
+        ) : chip !== null ? (
           <View style={[styles.execChip, { borderColor: chip.color }]}>
             <Text style={[styles.execChipText, { color: chip.color }]}>{chip.text}</Text>
           </View>
@@ -315,6 +496,10 @@ function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
       {expanded ? (
         isExec ? (
           <ExecToolDetail item={item} parsed={execParsed} />
+        ) : isWebSearch ? (
+          <WebSearchToolDetail item={item} parsed={searchParsed} />
+        ) : isWebFetch ? (
+          <WebFetchToolDetail item={item} parsed={fetchParsed} />
         ) : (
           <View style={styles.toolDetail}>
             <Text style={styles.toolDetailText}>{JSON.stringify(item.args, null, 2)}</Text>
@@ -479,6 +664,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontStyle: 'italic',
     marginTop: 2,
+  },
+  searchResultRow: {
+    gap: 2,
+    paddingVertical: 4,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+  },
+  searchResultRowFirst: {
+    borderTopWidth: 0,
+    paddingTop: 0,
+  },
+  searchResultTitle: {
+    color: theme.accent,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  searchResultHostname: {
+    color: theme.textMuted,
+    fontSize: 11,
+  },
+  searchResultSnippet: {
+    color: theme.text,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  fetchUrlLink: {
+    color: theme.accent,
   },
   composer: {
     flexDirection: 'row',
