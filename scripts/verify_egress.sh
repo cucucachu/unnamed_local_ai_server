@@ -27,6 +27,25 @@
 #      egress-proxy joining `homeai-net` doesn't leak a route to anyone
 #      else on `homeai-internal`).
 #
+# Both the uppercase (HTTP_PROXY/HTTPS_PROXY) and lowercase
+# (http_proxy/https_proxy) forms of the proxy env vars are set on the
+# runner container — not redundant. curl (like several other HTTP clients)
+# deliberately ignores the uppercase HTTP_PROXY specifically for plain
+# `http://` requests, as a mitigation for the "httpoxy" CGI vulnerability
+# class (CVE-2016-5385) where a remote client could inject a `Proxy:`
+# header that a CGI gateway turns into `HTTP_PROXY` in the environment.
+# HTTPS_PROXY is unaffected (that vulnerability is HTTP-header-specific,
+# and HTTPS requests go through a CONNECT tunnel regardless), which is why
+# checks 1/2/5 (all `https://`) passed with only the uppercase var set
+# while checks 3/4 (both `http://`) silently bypassed the proxy entirely —
+# curl connected directly to the target instead of denying via the addon,
+# so 192.168.1.1 (check 3) timed out with no proxy involved (curl's own
+# `000` fallback) and agent-server:8000 (check 4, reachable directly since
+# the runner and agent-server share `homeai-internal`) returned its real
+# 200. Confirmed by hand with `docker run curlimages/curl ... http_proxy=...`
+# (lowercase) against both targets: both return 403 once the proxy is
+# actually in the path. `policy.py` itself was never the problem.
+#
 # All 6 checks run from a throwaway `curlimages/curl` container (checks 1-5)
 # joined to `homeai-internal` (the same network `agent-server` itself will
 # eventually reach `egress-proxy` from, once M7-03/M7-04 wire that up) with
@@ -124,6 +143,8 @@ start_runner() {
     -v "${VOLUME_NAME}:/ca:ro" \
     -e "HTTPS_PROXY=http://egress-proxy:8080" \
     -e "HTTP_PROXY=http://egress-proxy:8080" \
+    -e "https_proxy=http://egress-proxy:8080" \
+    -e "http_proxy=http://egress-proxy:8080" \
     "$RUNNER_IMAGE" infinity >/dev/null
   RUNNER_STARTED=1
   local tries=0
