@@ -80,3 +80,7 @@ agent run.
 ## M8
 
 - [ ] (M8-03) From a phone: approval card is usable one-handed; leaving the chat and returning while an approval is pending shows the card again.
+
+## M9
+
+- [ ] (M9-01) Expo Go (Android/iOS): prompt "Reply with a markdown table of 3 planets and a python code block printing hello" — the same reply renders with monospace code and a scrollable table at phone width.

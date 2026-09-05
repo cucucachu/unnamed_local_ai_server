@@ -1,0 +1,9 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Markdown snapshots the fenced code block style 1`] = `
+{
+  "backgroundColor": "#0e1116",
+  "borderRadius": 6,
+  "marginVertical": 4,
+}
+`;

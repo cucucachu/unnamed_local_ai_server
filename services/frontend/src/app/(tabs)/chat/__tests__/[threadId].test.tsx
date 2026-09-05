@@ -19,6 +19,11 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ threadId: 'thread-123' }),
 }));
 
+const mockCopyToClipboard = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/lib/clipboard', () => ({
+  copyToClipboard: (...args: unknown[]) => mockCopyToClipboard(...args),
+}));
+
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import ChatScreen from '../[threadId]';
 
@@ -40,6 +45,7 @@ function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
 describe('ChatScreen ([threadId])', () => {
   beforeEach(() => {
     mockUseChat.mockReset();
+    mockCopyToClipboard.mockClear();
   });
 
   it('passes the route threadId through to useChat', () => {
@@ -492,6 +498,30 @@ describe('ChatScreen ([threadId])', () => {
 
       expect(() => renderer?.root.findByProps({ testID: 'chat-item-stopped-caption' })).toThrow();
     });
+
+    it('renders finished assistant text as markdown and keeps streaming text plain', () => {
+      setUseChatResult({
+        items: [{ id: 'a-stream', kind: 'assistant', text: '# Still streaming', streaming: true }],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderedText(renderer!)).toContain('# Still streaming');
+      expect(() => renderer?.root.findByProps({ testID: 'markdown' })).toThrow();
+
+      setUseChatResult({
+        items: [{ id: 'a-done', kind: 'assistant', text: '# Finished heading', streaming: false }],
+      });
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderer?.root.findByProps({ testID: 'markdown' })).toBeTruthy();
+      expect(renderedText(renderer!)).toContain('Finished heading');
+    });
   });
 
   describe('ApprovalCard (M8-03)', () => {
@@ -719,6 +749,7 @@ describe('ChatScreen ([threadId])', () => {
       });
 
       expect(renderer?.root.findByProps({ testID: 'chat-message-menu' })).toBeTruthy();
+      expect(renderer?.root.findByProps({ testID: 'chat-message-action-copy' })).toBeTruthy();
       expect(renderer?.root.findByProps({ testID: 'chat-message-action-edit' })).toBeTruthy();
       expect(renderer?.root.findByProps({ testID: 'chat-message-action-resend' })).toBeTruthy();
 
@@ -805,6 +836,27 @@ describe('ChatScreen ([threadId])', () => {
       });
 
       expect(sendMessage).toHaveBeenCalledWith('turn two', { replaceFromMessageId: 'u-2', mode: 'truncate' });
+    });
+
+    it('Copy on the assistant menu copies the message text', () => {
+      setUseChatResult({ items: [userOne, assistantOne] });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const assistantBubbles = renderer!.root
+        .findAllByProps({ testID: 'chat-item-assistant-bubble' })
+        .filter((node) => typeof (node.props as { onLongPress?: unknown }).onLongPress === 'function');
+      act(() => {
+        (assistantBubbles[0].props as { onLongPress: () => void }).onLongPress();
+      });
+      act(() => {
+        (renderer!.root.findByProps({ testID: 'chat-message-action-copy' }).props as { onPress: () => void }).onPress();
+      });
+
+      expect(mockCopyToClipboard).toHaveBeenCalledWith('reply one');
     });
   });
 });

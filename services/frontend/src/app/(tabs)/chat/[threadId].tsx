@@ -19,6 +19,8 @@ import {
   type TextInputKeyPressEventData,
 } from 'react-native';
 
+import { Markdown } from '@/components/Markdown';
+import { copyToClipboard } from '@/lib/clipboard';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision } from '@/lib/chatSocket';
@@ -286,6 +288,10 @@ export default function ChatScreen() {
           onEdit={handleEdit}
           onResend={handleResend}
           onRegenerate={handleRegenerate}
+          onCopy={(text) => {
+            void copyToClipboard(text);
+            setActionMenu(null);
+          }}
         />
       </View>
     </KeyboardAvoidingView>
@@ -345,10 +351,14 @@ function ChatItemRow({
             delayLongPress={400}
             testID="chat-item-assistant-bubble"
           >
-            <Text style={styles.bubbleText}>
-              {item.text}
-              {item.streaming ? STREAMING_CURSOR : ''}
-            </Text>
+            {item.streaming ? (
+              <Text style={styles.bubbleText}>
+                {item.text}
+                {STREAMING_CURSOR}
+              </Text>
+            ) : (
+              <Markdown>{item.text}</Markdown>
+            )}
             {item.stopped ? (
               <Text style={styles.stoppedCaption} testID="chat-item-stopped-caption">
                 Stopped
@@ -647,6 +657,7 @@ interface MessageActionSheetProps {
   onEdit: (item: ChatUserItem) => void;
   onResend: (item: ChatUserItem) => void;
   onRegenerate: (item: ChatAssistantItem) => void;
+  onCopy: (text: string) => void;
 }
 
 /** Bottom sheet matching `FileActionSheet`'s custom-Modal convention. */
@@ -656,16 +667,26 @@ function MessageActionSheet({
   onEdit,
   onResend,
   onRegenerate,
+  onCopy,
 }: MessageActionSheetProps): ReactElement | null {
   if (menu === null) return null;
+
+  const copyAction = {
+    key: 'copy',
+    label: 'Copy',
+    icon: 'copy-outline' as const,
+    run: () => onCopy(menu.item.text),
+  };
 
   const actions =
     menu.kind === 'user'
       ? [
+          copyAction,
           { key: 'edit', label: 'Edit', icon: 'create-outline' as const, run: () => onEdit(menu.item) },
           { key: 'resend', label: 'Resend', icon: 'refresh-outline' as const, run: () => onResend(menu.item) },
         ]
       : [
+          copyAction,
           {
             key: 'regenerate',
             label: 'Regenerate',
