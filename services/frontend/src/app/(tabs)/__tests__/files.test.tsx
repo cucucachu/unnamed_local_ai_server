@@ -1,17 +1,24 @@
 import { createElement } from 'react';
+import { Text as RNText } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import type { FileEntry } from '@/lib/files';
 
-// Same mocking shape as `chat/__tests__/index.test.tsx` — `useRouter` +
-// `useFocusEffect` are the only `expo-router` exports this screen touches.
+// Same mocking shape as `chat/__tests__/index.test.tsx` — plus
+// `useLocalSearchParams` / `setParams` for M9-03 `?path=` sync.
 const mockPush = jest.fn();
+const mockSetParams = jest.fn();
+let mockSearchParams: { path?: string } = {};
 jest.mock('expo-router', () => {
   const ReactActual = jest.requireActual('react');
   return {
-    useRouter: () => ({ push: mockPush }),
+    useRouter: () => ({ push: mockPush, setParams: mockSetParams }),
+    useLocalSearchParams: () => mockSearchParams,
     useFocusEffect: (callback: () => void | (() => void)) => {
-      ReactActual.useEffect(() => callback(), []);
+      ReactActual.useEffect(() => {
+        const cleanup = callback();
+        return typeof cleanup === 'function' ? cleanup : undefined;
+      }, [callback]);
     },
   };
 });
@@ -35,6 +42,22 @@ const TEXT_FILE: FileEntry = {
   mtime: '2026-08-30T10:00:00.000Z',
   mime: 'text/plain',
 };
+const NOTES_DIR: FileEntry = {
+  name: 'notes',
+  path: 'notes',
+  type: 'dir',
+  size: 0,
+  mtime: '2026-08-30T10:00:00.000Z',
+  mime: null,
+};
+const LINK_TEST_FILE: FileEntry = {
+  name: 'link-test.md',
+  path: 'notes/link-test.md',
+  type: 'file',
+  size: 12,
+  mtime: '2026-08-30T10:00:00.000Z',
+  mime: 'text/markdown',
+};
 
 /** Mocks `GET /api/files` (the only call this screen's initial render
  * makes) — same "route `global.fetch` by method" shape as
@@ -48,6 +71,37 @@ function mockFilesApi(entries: FileEntry[]): void {
     json: async () => ({ path: '', entries }),
   }));
   global.fetch = fetchMock as unknown as typeof fetch;
+}
+
+function mockFilesApiByPath(listings: Record<string, FileEntry[] | 'missing'>): void {
+  const fetchMock = jest.fn(async (input: RequestInfo) => {
+    const url = typeof input === 'string' ? input : String(input);
+    const query = new URL(url, 'http://localhost').searchParams.get('path') ?? '';
+    const listing = Object.prototype.hasOwnProperty.call(listings, query) ? listings[query] : 'missing';
+    if (listing === 'missing') {
+      return {
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: async () => ({ detail: `directory '${query}' not found` }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ path: query, entries: listing }),
+    };
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+}
+
+function toastText(renderer: ReactTestRenderer): string {
+  const toast = renderer.root.findByProps({ testID: 'files-toast' });
+  return toast
+    .findAllByType(RNText)
+    .map((node) => String(node.props.children ?? ''))
+    .join('');
 }
 
 async function flush(): Promise<void> {
@@ -82,6 +136,8 @@ function findRow(renderer: ReactTestRenderer, name: string) {
 
 beforeEach(() => {
   mockPush.mockReset();
+  mockSetParams.mockReset();
+  mockSearchParams = {};
 });
 
 afterEach(() => {
@@ -171,5 +227,90 @@ describe('FilesScreen — tap routing (M5-02)', () => {
     });
 
     expect(renderer.root.findAllByProps({ testID: 'file-action-play' })).toHaveLength(0);
+  });
+});
+
+describe('FilesScreen — ?path= deep link (M9-03)', () => {
+  it('opens a directory path param and lists its entries', async () => {
+    mockSearchParams = { path: 'notes' };
+    mockFilesApiByPath({
+      notes: [LINK_TEST_FILE],
+      '': [NOTES_DIR],
+    });
+
+    const renderer = await renderScreen();
+
+    expect(findRow(renderer, LINK_TEST_FILE.name)).toBeTruthy();
+    expect(renderer.root.findAllByProps({ testID: 'file-entry-highlighted' })).toHaveLength(0);
+  });
+
+  it('opens a file path param at its parent and highlights the entry', async () => {
+    mockSearchParams = { path: 'notes/link-test.md' };
+    mockFilesApiByPath({
+      'notes/link-test.md': 'missing',
+      notes: [LINK_TEST_FILE],
+      '': [NOTES_DIR],
+    });
+
+    const renderer = await renderScreen();
+
+    const highlighted = renderer.root
+      .findAllByProps({ testID: 'file-entry-highlighted' })
+      .find((node) => typeof node.props.onPress === 'function');
+    expect(highlighted?.props.accessibilityLabel).toBe(LINK_TEST_FILE.name);
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-open the media player when deep-linking to a media file', async () => {
+    mockSearchParams = { path: VIDEO_FILE.path };
+    mockFilesApiByPath({
+      [VIDEO_FILE.path]: 'missing',
+      '': [VIDEO_FILE],
+    });
+
+    const renderer = await renderScreen();
+
+    const highlighted = renderer.root
+      .findAllByProps({ testID: 'file-entry-highlighted' })
+      .find((node) => typeof node.props.onPress === 'function');
+    expect(highlighted?.props.accessibilityLabel).toBe(VIDEO_FILE.name);
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('stays on the current listing and toasts when the path is missing', async () => {
+    mockFilesApiByPath({
+      '': [NOTES_DIR, TEXT_FILE],
+      notes: [LINK_TEST_FILE],
+    });
+
+    const renderer = await renderScreen();
+    expect(findRow(renderer, NOTES_DIR.name)).toBeTruthy();
+
+    mockSearchParams = { path: 'nope/missing.txt' };
+    await act(async () => {
+      renderer.update(createElement(FilesScreen));
+    });
+    await flush();
+    await flush();
+
+    expect(toastText(renderer)).toBe('File not found: nope/missing.txt');
+    expect(findRow(renderer, NOTES_DIR.name)).toBeTruthy();
+    expect(findRow(renderer, TEXT_FILE.name)).toBeTruthy();
+  });
+
+  it('syncs a directory tap to the URL via setParams', async () => {
+    mockFilesApiByPath({
+      '': [NOTES_DIR, TEXT_FILE],
+      notes: [LINK_TEST_FILE],
+    });
+
+    const renderer = await renderScreen();
+    const row = findRow(renderer, NOTES_DIR.name);
+
+    await act(async () => {
+      row.props.onPress();
+    });
+
+    expect(mockSetParams).toHaveBeenCalledWith({ path: NOTES_DIR.path });
   });
 });

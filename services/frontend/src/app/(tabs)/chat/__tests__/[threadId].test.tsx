@@ -14,11 +14,12 @@ jest.mock('@/lib/useChat', () => ({
   useChat: (...args: unknown[]) => mockUseChat(...args),
 }));
 
-// `useLocalSearchParams` needs a route param to hand back — mocked
-// separately from `expo-router`'s other exports since this screen (unlike
-// `chat/index.tsx`) doesn't need `useRouter`/`useFocusEffect`/`Stack`.
+// `useLocalSearchParams` needs a route param to hand back. `useRouter`
+// is mocked for M9-03's `file:` → Files-tab push.
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ threadId: 'thread-123' }),
+  useRouter: () => ({ push: mockPush }),
 }));
 
 const mockCopyToClipboard = jest.fn().mockResolvedValue(undefined);
@@ -66,6 +67,7 @@ describe('ChatScreen ([threadId])', () => {
   beforeEach(() => {
     mockUseChat.mockReset();
     mockCopyToClipboard.mockClear();
+    mockPush.mockReset();
     mockEditModeDefault = 'truncate';
   });
 
@@ -565,6 +567,36 @@ describe('ChatScreen ([threadId])', () => {
 
       expect(renderer?.root.findByProps({ testID: 'markdown' })).toBeTruthy();
       expect(renderedText(renderer!)).toContain('Finished heading');
+    });
+
+    it('routes markdown file: links to the Files tab with a path param (M9-03)', () => {
+      setUseChatResult({
+        items: [
+          {
+            id: 'a-done',
+            kind: 'assistant',
+            text: 'Saved as [x.md](file:/workspace/notes/x.md)',
+            streaming: false,
+          },
+        ],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const link = renderer?.root
+        .findAllByProps({ testID: 'file-link' })
+        .find((node) => typeof (node.props as { onPress?: unknown }).onPress === 'function');
+      act(() => {
+        (link?.props as { onPress: () => void }).onPress();
+      });
+
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: '/files',
+        params: { path: 'notes/x.md' },
+      });
     });
 
     it('expanded panel shows reasoning as dimmed italic text (M8-07)', () => {

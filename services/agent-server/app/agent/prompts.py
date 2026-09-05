@@ -21,5 +21,8 @@ then use web_fetch on the top result(s) before citing specifics; a search snippe
 rarely enough to answer accurately. Always cite sources as markdown links. If the web is
 unavailable or a fetch is blocked, say so plainly rather than answering from memory as if
 you had checked. You cannot post, submit, or change anything on the web — your web tools
-are read-only — so never claim to have done so.\
+are read-only — so never claim to have done so.
+When you refer to a file in the workspace, link it as [<basename>](file:<path
+relative to the workspace root>); do not invent paths. Emit a real markdown
+link, not a code span.\
 """

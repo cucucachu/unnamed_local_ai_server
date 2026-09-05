@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useEffect, useRef } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { formatFileSize, iconNameFor } from '@/lib/fileDisplay';
@@ -17,6 +18,9 @@ export interface FileListProps {
    * action sheet on the main files screen. Omitted by the destination
    * picker, which has no per-entry action sheet of its own. */
   onEntryLongPress?: (entry: FileEntry) => void;
+  /** Workspace-relative path of the row to highlight and scroll into view
+   * (M9-03 file deep link). */
+  highlightedPath?: string | null;
 }
 
 /**
@@ -32,14 +36,49 @@ export interface FileListProps {
  * dirs-first, case-insensitive by name (§5's `list_files`); this component
  * never re-sorts.
  */
-export function FileList({ entries, onPressEntry, dirsOnly = false, onEntryLongPress }: FileListProps) {
+const ROW_HEIGHT = 56;
+
+export function FileList({
+  entries,
+  onPressEntry,
+  dirsOnly = false,
+  onEntryLongPress,
+  highlightedPath = null,
+}: FileListProps) {
+  const listRef = useRef<FlatList<FileEntry>>(null);
   const visibleEntries = dirsOnly ? entries.filter((entry) => entry.type === 'dir') : entries;
+
+  useEffect(() => {
+    if (!highlightedPath) return;
+    const list = dirsOnly ? entries.filter((entry) => entry.type === 'dir') : entries;
+    const index = list.findIndex((entry) => entry.path === highlightedPath);
+    if (index < 0) return;
+    try {
+      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.35 });
+    } catch {
+      // layout not ready — onScrollToIndexFailed retries below
+    }
+  }, [highlightedPath, entries, dirsOnly]);
 
   return (
     <FlatList
+      ref={listRef}
       data={visibleEntries}
       keyExtractor={(entry) => entry.path}
-      renderItem={({ item }) => <FileRow entry={item} onPress={onPressEntry} onLongPress={onEntryLongPress} />}
+      renderItem={({ item }) => (
+        <FileRow
+          entry={item}
+          onPress={onPressEntry}
+          onLongPress={onEntryLongPress}
+          highlighted={item.path === highlightedPath}
+        />
+      )}
+      getItemLayout={(_data, index) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index })}
+      onScrollToIndexFailed={({ index }) => {
+        setTimeout(() => {
+          listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.35 });
+        }, 80);
+      }}
       contentContainerStyle={styles.listContent}
       testID="file-list"
     />
@@ -50,10 +89,12 @@ function FileRow({
   entry,
   onPress,
   onLongPress,
+  highlighted,
 }: {
   entry: FileEntry;
   onPress: (entry: FileEntry) => void;
   onLongPress?: (entry: FileEntry) => void;
+  highlighted: boolean;
 }) {
   const iconName = iconNameFor(entry);
   const subtitle = entry.type === 'file' ? `${formatFileSize(entry.size)} · ${relativeTime(entry.mtime)}` : null;
@@ -80,12 +121,12 @@ function FileRow({
 
   return (
     <Pressable
-      style={styles.row}
+      style={[styles.row, highlighted && styles.rowHighlighted]}
       onPress={() => onPress(entry)}
       onLongPress={onLongPress ? () => onLongPress(entry) : undefined}
       accessibilityRole="button"
       accessibilityLabel={entry.name}
-      testID="file-row"
+      testID={highlighted ? 'file-entry-highlighted' : 'file-row'}
       {...webContextMenuProps}
     >
       <Ionicons
@@ -117,6 +158,11 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.border,
     backgroundColor: theme.bg,
     gap: 12,
+  },
+  rowHighlighted: {
+    backgroundColor: theme.surface,
+    borderLeftWidth: 3,
+    borderLeftColor: theme.accent,
   },
   icon: {
     width: 22,

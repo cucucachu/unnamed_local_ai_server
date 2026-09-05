@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { DestinationPickerModal } from '@/components/DestinationPickerModal';
@@ -25,6 +25,46 @@ import { mediaKind } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 type LoadState = 'loading' | 'error' | 'done';
+
+const HIGHLIGHT_MS = 2000;
+
+function firstSearchParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
+
+type ResolvedTarget =
+  | { kind: 'dir'; dir: string }
+  | { kind: 'file'; dir: string; filePath: string }
+  | { kind: 'missing' };
+
+/** Directory vs file vs missing for a `?path=` deep link (M9-03).
+ * `GET /api/files` 404s on a file path, so a miss falls through to listing
+ * the parent and looking for the basename as a file entry. */
+async function resolveWorkspaceTarget(requested: string): Promise<ResolvedTarget> {
+  const path = requested.replace(/^\/+|\/+$/g, '');
+  if (!path) return { kind: 'dir', dir: '' };
+
+  try {
+    await listFiles(path);
+    return { kind: 'dir', dir: path };
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 404) {
+      return { kind: 'missing' };
+    }
+  }
+
+  try {
+    const listing = await listFiles(parentPath(path));
+    const entry = listing.entries.find((item) => item.path === path);
+    if (entry?.type === 'file') {
+      return { kind: 'file', dir: parentPath(path), filePath: entry.path };
+    }
+    return { kind: 'missing' };
+  } catch {
+    return { kind: 'missing' };
+  }
+}
 
 /** One breadcrumb segment — `path` is the full workspace-relative path this
  * segment navigates to when tapped (`""` for the root "Home" segment). */
@@ -82,8 +122,9 @@ type PendingAction =
 
 /**
  * M3-05 files screen — single flat route (`src/app/(tabs)/files.tsx`, not a
- * nested stack like `chat/`) with breadcrumb-driven internal path state per
- * the ticket, replacing the M3-05-placeholder that lived here before.
+ * nested stack like `chat/`). M9-03 keeps the browse path in the URL
+ * (`?path=`, also `homeai://files?path=...`) via `useLocalSearchParams` +
+ * `router.setParams`, so back/refresh and chat `file:` deep links work.
  *
  * Mirrors `chat/index.tsx`'s established list-screen conventions: dark
  * theme via `lib/theme.ts`, `useFocusEffect`-driven fetch (also re-fires on
@@ -96,13 +137,24 @@ type PendingAction =
  */
 export default function FilesScreen() {
   const router = useRouter();
-  const [path, setPath] = useState('');
+  const { path: pathParam } = useLocalSearchParams<{ path?: string | string[] }>();
+  const requestedPath = firstSearchParam(pathParam);
+  const [dirPath, setDirPath] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loadState, setLoadState] = useState<LoadState>('loading');
+  const [highlightedPath, setHighlightedPath] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [actionSheetEntry, setActionSheetEntry] = useState<FileEntry | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const lastGoodDirRef = useRef('');
   const { message: toast, showToast } = useToast();
+
+  const setBrowsePath = useCallback(
+    (next: string) => {
+      router.setParams({ path: next });
+    },
+    [router],
+  );
 
   const load = useCallback((targetPath: string) => {
     setLoadState('loading');
@@ -114,23 +166,40 @@ export default function FilesScreen() {
       .catch(() => setLoadState('error'));
   }, []);
 
-  // Same `useFocusEffect` pattern as `ThreadListScreen` (M3-04), but with
-  // `path` in the memoized callback's deps: `@react-navigation/native`'s
-  // `useFocusEffect` re-subscribes (and immediately re-invokes if already
-  // focused) whenever the EFFECT CALLBACK ITSELF changes identity, not just
-  // on actual focus/blur transitions — confirmed by reading its source
-  // (`useEffect(() => {...; if (navigation.isFocused()) callback(); ...},
-  // [navigation, effect])` in `@react-navigation/native`). That means this
-  // one hook covers BOTH "refetch when the tab regains focus" AND "refetch
-  // when the breadcrumb/a directory tap changes `path`" — no separate plain
-  // `useEffect(() => load(path), [path])` is needed alongside it.
+  // Same `useFocusEffect` pattern as `ThreadListScreen` (M3-04): the hook
+  // re-invokes whenever this callback's identity changes, so it covers
+  // both tab-refocus and `?path=` changes (breadcrumb / dir tap /
+  // `file:` deep link). A missing path stays on `lastGoodDirRef` and
+  // toasts rather than wiping the current listing.
   useFocusEffect(
     useCallback(() => {
-      load(path);
-    }, [path, load]),
+      let cancelled = false;
+      void (async () => {
+        const resolved = await resolveWorkspaceTarget(requestedPath);
+        if (cancelled) return;
+        if (resolved.kind === 'missing') {
+          showToast(`File not found: ${requestedPath}`);
+          load(lastGoodDirRef.current);
+          return;
+        }
+        lastGoodDirRef.current = resolved.dir;
+        setDirPath(resolved.dir);
+        setHighlightedPath(resolved.kind === 'file' ? resolved.filePath : null);
+        load(resolved.dir);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [requestedPath, load, showToast]),
   );
 
-  const refresh = useCallback(() => load(path), [load, path]);
+  useEffect(() => {
+    if (highlightedPath === null) return;
+    const timer = setTimeout(() => setHighlightedPath(null), HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [highlightedPath]);
+
+  const refresh = useCallback(() => load(dirPath), [load, dirPath]);
 
   // Shared by both the direct-tap route below and `FileActionSheet`'s
   // "Play" action, so there's exactly one place that knows the media
@@ -147,7 +216,7 @@ export default function FilesScreen() {
   const handlePressEntry = useCallback(
     (entry: FileEntry) => {
       if (entry.type === 'dir') {
-        setPath(entry.path);
+        setBrowsePath(entry.path);
       } else if (mediaKind(entry.name) !== null) {
         // M5-02: a recognized video/audio file opens the player directly
         // instead of the action sheet — "Play" is still available there
@@ -158,7 +227,7 @@ export default function FilesScreen() {
         setActionSheetEntry(entry);
       }
     },
-    [openMedia],
+    [openMedia, setBrowsePath],
   );
 
   // Long-press (native) / right-click (web) opens the SAME action sheet for
@@ -175,7 +244,7 @@ export default function FilesScreen() {
     if (uploading) return;
     setUploading(true);
     try {
-      const result = await pickAndUpload(path);
+      const result = await pickAndUpload(dirPath);
       if (result === null) return; // user cancelled the picker
       refresh();
     } catch (error) {
@@ -189,19 +258,19 @@ export default function FilesScreen() {
     } finally {
       setUploading(false);
     }
-  }, [path, refresh, showToast, uploading]);
+  }, [dirPath, refresh, showToast, uploading]);
 
   const handleMkdirSubmit = useCallback(
     async (name: string) => {
       setPendingAction(null);
       try {
-        await mkdir(joinPath(path, name));
+        await mkdir(joinPath(dirPath, name));
         refresh();
       } catch (error) {
         showToast(errorDetail(error, 'Failed to create folder'));
       }
     },
-    [path, refresh, showToast],
+    [dirPath, refresh, showToast],
   );
 
   const handleRenameSubmit = useCallback(
@@ -256,7 +325,7 @@ export default function FilesScreen() {
     [refresh, showToast],
   );
 
-  const crumbs = breadcrumbsFor(path);
+  const crumbs = breadcrumbsFor(dirPath);
 
   return (
     <View style={styles.container}>
@@ -270,7 +339,7 @@ export default function FilesScreen() {
           {crumbs.map((crumb, index) => (
             <View key={crumb.path} style={styles.breadcrumbItem}>
               <Pressable
-                onPress={() => setPath(crumb.path)}
+                onPress={() => setBrowsePath(crumb.path)}
                 accessibilityRole="button"
                 accessibilityLabel={crumb.label}
                 testID="breadcrumb-segment"
@@ -308,7 +377,12 @@ export default function FilesScreen() {
           <Text style={styles.emptyText}>This folder is empty</Text>
         </View>
       ) : (
-        <FileList entries={entries} onPressEntry={handlePressEntry} onEntryLongPress={handleEntryLongPress} />
+        <FileList
+          entries={entries}
+          onPressEntry={handlePressEntry}
+          onEntryLongPress={handleEntryLongPress}
+          highlightedPath={highlightedPath}
+        />
       )}
 
       <View style={styles.actionBar}>
@@ -369,7 +443,7 @@ export default function FilesScreen() {
       {pendingAction?.kind === 'move' || pendingAction?.kind === 'copy' ? (
         <DestinationPickerModal
           key={`${pendingAction.kind}-${pendingAction.entry.path}`}
-          initialPath={path}
+          initialPath={dirPath}
           onSelect={(destinationDir) => handleDestinationSelected(pendingAction.entry, pendingAction.kind, destinationDir)}
           onCancel={() => setPendingAction(null)}
         />

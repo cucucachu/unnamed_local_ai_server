@@ -68,7 +68,25 @@ describe('FileList', () => {
     expect(rendered).toContain('1.5 KB');
   });
 
-  it('calls onPressEntry with the tapped entry', () => {
+    it('marks the highlighted entry with file-entry-highlighted (M9-03)', () => {
+      const renderer = render(
+        createElement(FileList, {
+          entries: [DIR_A, FILE_A],
+          onPressEntry: jest.fn(),
+          highlightedPath: FILE_A.path,
+        }),
+      );
+
+      const highlighted = renderer.root
+        .findAllByProps({ testID: 'file-entry-highlighted' })
+        .find((node) => typeof node.props.onPress === 'function');
+      expect(highlighted?.props.accessibilityLabel).toBe(FILE_A.name);
+      expect(
+        renderer.root.findAllByProps({ testID: 'file-row' }).some((node) => typeof node.props.onPress === 'function'),
+      ).toBe(true);
+    });
+
+    it('calls onPressEntry with the tapped entry', () => {
     const onPressEntry = jest.fn();
     const renderer = render(createElement(FileList, { entries: [DIR_A, FILE_A], onPressEntry }));
 

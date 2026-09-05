@@ -1,13 +1,14 @@
-import { createElement, useCallback, type ComponentProps, type ReactElement, type ReactNode } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { createElement, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import { Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MarkdownDisplay, { MarkdownIt, type ASTNode } from '@ronradtke/react-native-markdown-display';
 
+import { normalizeFileLink, workspacePathFromHref } from '@/lib/fileLink';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 
 export interface MarkdownProps {
   children: string;
-  /** Wired in M9-03 — `file:` links call this instead of `Linking.openURL`. */
-  onFileLink?: (url: string) => void;
+  /** Workspace-relative path from a `file:` link (already normalized). */
+  onFileLink?: (path: string) => void;
 }
 
 /** `markdown-it` does not treat `- [ ]` / `- [x]` as task items. Rewrite the
@@ -108,23 +109,73 @@ function isFileUrl(url: string): boolean {
 
 /**
  * Themed markdown renderer for finished assistant bubbles (M9-01).
- * Images render as alt text; `file:` links go to `onFileLink` (no-op until M9-03).
+ * Images render as alt text; `file:` links call `onFileLink` with a
+ * workspace-relative path (M9-03).
  */
-export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement {
-  const onLinkPress = useCallback(
-    (url: string): boolean => {
-      if (isFileUrl(url)) {
-        onFileLink?.(url);
-        return false;
-      }
-      // `true` lets the library open via single-arg `Linking.openURL`
-      // (web: new tab — see `WebSearchToolDetail`'s note on that default).
-      return true;
-    },
-    [onFileLink],
-  );
+/** Unwrap `` `[label](file:path)` `` so a code-spanned file link still
+ * renders as a tappable `file:` link (the model often copies the prompt
+ * example including its backticks). */
+export function unwrapFileLinkCodeSpans(source: string): string {
+  return source.replace(/`(\[[^\]]+\]\(file:[^)]+\))`/g, '$1');
+}
 
+export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement {
   const rules = {
+    // Default `textgroup` is a `<Text>` wrapper; Pressable `file:` links
+    // nested inside it are flattened away on web (no `data-testid`).
+    textgroup: (node: ASTNode, children: ReactNode[]) => (
+      <View key={node.key} style={styles.textGroup}>
+        {children}
+      </View>
+    ),
+    link: (node: ASTNode, children: ReactNode[]) => {
+      const href = typeof node.attributes?.href === 'string' ? node.attributes.href : '';
+      const filePath = workspacePathFromHref(href);
+      const open = () => {
+        if (filePath !== null) {
+          onFileLink?.(filePath);
+          return;
+        }
+        if (href) void Linking.openURL(href);
+      };
+      // Real `<a>` on web so Playwright can find `data-testid="file-link"`.
+      // RN `Text`/`Pressable` wrappers get flattened and lose the test id.
+      if (Platform.OS === 'web') {
+        return createElement(
+          'a',
+          {
+            key: node.key,
+            href: filePath !== null ? `#file:${filePath}` : href,
+            'data-testid': filePath !== null ? 'file-link' : undefined,
+            'data-file-path': filePath ?? undefined,
+            style: {
+              color: theme.accent,
+              textDecoration: 'underline',
+              cursor: 'pointer',
+            },
+            onClick: (event: { preventDefault?: () => void }) => {
+              event.preventDefault?.();
+              open();
+            },
+          },
+          children,
+        );
+      }
+      return (
+        <Text
+          key={node.key}
+          selectable
+          style={markdownStyles.link}
+          accessibilityRole="link"
+          accessibilityLabel={filePath ?? href}
+          testID={filePath !== null ? 'file-link' : undefined}
+          {...(filePath !== null ? { dataSet: { filePath } } : {})}
+          onPress={open}
+        >
+          {children}
+        </Text>
+      );
+    },
     image: (node: ASTNode) => {
       const alt =
         typeof node.attributes?.alt === 'string' && node.attributes.alt.length > 0
@@ -231,14 +282,21 @@ export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement 
         style={markdownStyles}
         mergeStyle
         rules={rules}
-        onLinkPress={onLinkPress}
+        onLinkPress={(url: string) => {
+          const path = workspacePathFromHref(url);
+          if (path !== null) {
+            onFileLink?.(path);
+            return false;
+          }
+          return true;
+        }}
         {...{
           textcomponent: SelectableText,
           allowedImageHandlers: [] as string[],
           defaultImageHandler: null,
         }}
       >
-        {children}
+        {unwrapFileLinkCodeSpans(children)}
       </MarkdownDisplay>
     </View>
   );
@@ -422,5 +480,10 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontSize: 13,
     fontStyle: 'italic',
+  },
+  textGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
   },
 });
