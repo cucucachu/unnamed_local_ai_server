@@ -93,6 +93,17 @@ async def _stream_turn(
         yield _sse(
             _choice_chunk(completion_id, created, model, {"role": "assistant", "content": ""}, None)
         )
+        # M8-06: reasoning_content deltas stream *before* content deltas,
+        # matching real llama-server `--reasoning-format deepseek` wire
+        # order (confirmed via curl against the real model-runner — see
+        # docs/TOOL_CALLING.md's M8-06 section).
+        if turn.reasoning_content:
+            for piece in chunk_text(turn.reasoning_content, turn.reasoning_chunk_size):
+                if turn.chunk_delay_s:
+                    await asyncio.sleep(turn.chunk_delay_s)
+                yield _sse(
+                    _choice_chunk(completion_id, created, model, {"reasoning_content": piece}, None)
+                )
         for piece in chunk_text(turn.text, turn.chunk_size):
             if turn.chunk_delay_s:
                 await asyncio.sleep(turn.chunk_delay_s)
@@ -163,6 +174,11 @@ def _render_turn(fake: FakeModel, turn: Turn, completion_id: str, created: int) 
 
     if isinstance(turn, TextTurn):
         message = {"role": "assistant", "content": turn.text}
+        if turn.reasoning_content:
+            # M8-06: matches real llama-server's non-streamed shape, where
+            # `reasoning_content` is a sibling field on `message`, not
+            # nested/prefixed onto `content`.
+            message["reasoning_content"] = turn.reasoning_content
         finish_reason = "stop"
     elif isinstance(turn, ToolCallTurn):
         message = {
