@@ -7,6 +7,10 @@
 #   gate_m2.sh -> persistence_smoke.sh -> gate_m3.sh -> exec_crossview_smoke.sh
 #   -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> chat_browser_smoke.sh
+#   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
+#      gate_m7.sh to scripts/e2e/gate_full.sh" - the first milestone gate
+#      script appended to this chain since M6-03 first wrote it; future
+#      milestone gates append the same way)
 #
 # Every one of these is already a self-contained script that exits non-zero
 # on its own failure and does its own health-waiting/cleanup (several also
@@ -129,6 +133,12 @@ main() {
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "chat_browser_smoke.sh"   bash "${SCRIPT_DIR}/chat_browser_smoke.sh"
+  # M7-07: gate_m7.sh already re-runs verify_network.sh/verify_isolation.sh
+  # itself as part of its own chain (see that script's own header comment)
+  # - left in place deliberately, same "self-contained scripts fighting
+  # each other is fine, they're idempotent" reasoning M6-03 already applied
+  # to every other step above.
+  run_step "gate_m7.sh"              bash "${SCRIPT_DIR}/gate_m7.sh"
 
   print_summary
 
