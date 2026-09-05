@@ -43,7 +43,7 @@ pytestmark = [
 
 
 async def test_persistence_survives_saver_teardown(fake_model: FakeModel, tmp_path) -> None:
-    settings = fake_model.settings(workspace_root=str(tmp_path))
+    settings = fake_model.settings(files_root=str(tmp_path))
     # Unique per run so repeated test runs against a persistent Postgres
     # (e.g. the real compose volume) don't accumulate cross-run history.
     thread_id = f"pg-integration-{uuid.uuid4()}"

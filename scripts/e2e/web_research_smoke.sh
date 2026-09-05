@@ -41,7 +41,7 @@
 #   scripts/e2e/web_research_smoke.sh
 #
 # Exits non-zero (and prints the failing check) if either check fails.
-# Safe to re-run - makes no persistent changes to the stack or workspace.
+# Safe to re-run - makes no persistent changes to the stack or files dir.
 
 set -euo pipefail
 

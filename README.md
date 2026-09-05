@@ -62,7 +62,7 @@ In short: a private, always-on "computer-use" assistant for your home network, w
 Native Linux host + Docker Compose, five services behind one reverse
 proxy: **caddy** (LAN entry point + static Expo web build), **agent-server**
 (FastAPI + `deepagents`, direct persistent filesystem access via a
-bind-mounted workspace), **model-runner** (`llama.cpp` Vulkan build serving
+bind-mounted files directory), **model-runner** (`llama.cpp` Vulkan build serving
 Gemma 4 on the iGPU), **code-exec-manager** (the sole `docker.sock` holder,
 spinning up locked-down, session-scoped containers for the agent's
 `execute_code` tool), and **postgres** (thread/checkpoint state). Code
@@ -101,7 +101,7 @@ unnamed_local_ai/
       app/main.py              # FastAPI: /sessions, /sessions/{id}/execute, reaper task
       exec-image/Dockerfile     # pre-baked toolbox image used for exec containers themselves
     agent-server/
-      Dockerfile               # app code baked in at /app; workspace mounted separately at /data/workspace
+      Dockerfile               # app code baked in at /app; files directory mounted separately at /data/files
       pyproject.toml
       app/
         main.py
@@ -145,7 +145,7 @@ Delivery is organized into seven milestones, each ending in a **gate** — a scr
 |---|---|---|
 | M0 — Foundations | Repo + compose skeleton + host scripts + reverse proxy | Stack boots, placeholder page served |
 | M1 — Model runner | Real local GPU inference, tool-calling verdict | `/v1/chat/completions` streams on GPU |
-| M2 — Agentic chat | Chat with a deepagents agent (file tools live) from a browser | Browser chat writes a real workspace file |
+| M2 — Agentic chat | Chat with a deepagents agent (file tools live) from a browser | Browser chat writes a real file to the files directory |
 | M3 — Persistence + files | Threads survive restarts; full file manager UI | Restart-persistence + files round-trip |
 | M4 — Code execution | Sandboxed `execute_code` with hard isolation | Agent runs a script on real files; isolation suite green |
 | M5 — Media | Video/audio playback with seek from the files UI | Phone-browser seek/scrub |
@@ -183,7 +183,7 @@ cp .env.example .env   # fill in POSTGRES_PASSWORD, RENDER_GID/VIDEO_GID, LAN_SU
 ./services/model-runner/fetch-model.sh   # downloads the default GGUF quant (~14.6 GB) into services/model-runner/models/
 
 # One-time host prep (idempotent, safe to re-run) — see infra/host/setup-gpu-drivers.md first
-sudo infra/host/setup-workspace.sh
+sudo infra/host/setup-files.sh
 sudo infra/host/setup-avahi.sh
 sudo infra/host/setup-ufw.sh
 
@@ -199,17 +199,17 @@ Everything runs directly on the target Linux host (native, no cloud) — real `d
 
 ## Backups
 
-**What's covered**: the workspace directory (`WORKSPACE_DIR` — every file the agent/you create, upload, or edit) and the Postgres database (thread/message history). Together these are the only genuinely irreplaceable state this stack holds.
+**What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit) and the Postgres database (thread/message history). Together these are the only genuinely irreplaceable state this stack holds.
 
-**What's not covered**: model weights (`services/model-runner/models/*.gguf` — multi-GB, re-downloadable any time via `./services/model-runner/fetch-model.sh`, not user data) and `.env` (holds `POSTGRES_PASSWORD` — a secret, deliberately not swept into a backup dir; back it up yourself, out of band, if you want to). v1 backup is a full local mirror only — no off-site/cloud copy, no encryption, no incremental snapshots (see `infra/host/backup-workspace.sh`'s docstring and M6-03's ticket for the explicit out-of-scope list).
+**What's not covered**: model weights (`services/model-runner/models/*.gguf` — multi-GB, re-downloadable any time via `./services/model-runner/fetch-model.sh`, not user data) and `.env` (holds `POSTGRES_PASSWORD` — a secret, deliberately not swept into a backup dir; back it up yourself, out of band, if you want to). v1 backup is a full local mirror only — no off-site/cloud copy, no encryption, no incremental snapshots (see `infra/host/backup-files.sh`'s docstring and M6-03's ticket for the explicit out-of-scope list).
 
 **Manual run**:
 
 ```bash
-sudo infra/host/backup-workspace.sh
+sudo infra/host/backup-files.sh
 ```
 
-Mirrors `WORKSPACE_DIR` into `$BACKUP_DIR/workspace` (`rsync -a --delete` — exact mirror, not additive) and, if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` (keeps the last 14 by count; skipped with a warning, not an error, if the stack is down). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
+Mirrors `FILES_DIR` into `$BACKUP_DIR/files` (`rsync -a --delete` — exact mirror, not additive) and, if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` (keeps the last 14 by count; skipped with a warning, not an error, if the stack is down). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
 
 **Automatic daily backups** (03:00, via a systemd timer):
 
@@ -222,9 +222,9 @@ systemctl list-timers homeai-backup.timer            # check it's scheduled
 **Restoring**:
 
 ```bash
-# Workspace: rsync back (stop the stack first so nothing's writing to it mid-restore)
+# Files: rsync back (stop the stack first so nothing's writing to it mid-restore)
 docker compose down
-sudo rsync -a --delete "$BACKUP_DIR/workspace/" "$WORKSPACE_DIR/"
+sudo rsync -a --delete "$BACKUP_DIR/files/" "$FILES_DIR/"
 docker compose up -d
 
 # Postgres: gunzip the dump into a fresh/scratch database via psql

@@ -31,7 +31,7 @@
 // M8-03: after the existing steps (which need HITL *off* so `execute_code`
 // in step 6 still runs without an approval card), this script toggles
 // `hitl_enabled` via `PUT /api/settings` and drives the three Playwright
-// scenarios from that ticket: Approve writes `${WORKSPACE_DIR}/hello.txt`,
+// scenarios from that ticket: Approve writes `${FILES_DIR}/hello.txt`,
 // Reject leaves the reject-target file absent, HITL-off writes with no
 // approval card. Original settings are restored in `finally`.
 //
@@ -69,7 +69,7 @@ const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE =
   process.env.CHAT_SMOKE_API_BASE ?? new URL('/api', BASE_URL).href.replace(/\/$/, '');
 const CA_PATH = process.env.CHAT_SMOKE_CA ?? '';
-const WORKSPACE_DIR = process.env.WORKSPACE_DIR ?? '';
+const FILES_DIR = process.env.FILES_DIR ?? '';
 const TIMEOUT_MS = 120_000;
 
 /** Import Caddy's local CA into a throwaway NSS db so Chromium trusts
@@ -146,7 +146,7 @@ const EDIT_TURN_2_EDITED = 'Say exactly: BRAVO-EDITED';
 const MARKDOWN_MESSAGE =
   'Reply with a markdown table of 3 planets and a python code block printing hello';
 // M9-02: read_file is not a mutating tool (HITL-safe). The file is written
-// into WORKSPACE_DIR just before the step so the model has something real
+// into FILES_DIR just before the step so the model has something real
 // to open.
 const ACTIVITY_PANEL_FILE = 'activity-panel-smoke.txt';
 const ACTIVITY_PANEL_MESSAGE =
@@ -354,16 +354,16 @@ with urlopen(req, timeout=15) as resp:
   return JSON.parse(raw);
 }
 
-function workspaceFilePath(name) {
-  if (!WORKSPACE_DIR) {
-    throw new Error('WORKSPACE_DIR is not set (chat_browser_smoke.sh exports it from .env)');
+function filesDirFilePath(name) {
+  if (!FILES_DIR) {
+    throw new Error('FILES_DIR is not set (chat_browser_smoke.sh exports it from .env)');
   }
-  return path.join(WORKSPACE_DIR, name);
+  return path.join(FILES_DIR, name);
 }
 
-function removeWorkspaceFileBestEffort(name) {
+function removeFilesDirFileBestEffort(name) {
   try {
-    rmSync(workspaceFilePath(name), { force: true });
+    rmSync(filesDirFilePath(name), { force: true });
   } catch {
     // best-effort
   }
@@ -754,7 +754,7 @@ async function main() {
 
     // --- Step 9: HITL approve (M8-03) -----------------------------------
     settingsRequest('PUT', { hitl_enabled: true });
-    removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
+    removeFilesDirFileBestEffort(HITL_APPROVE_FILE);
 
     const approvePriorTools = await toolCardLocator.count();
     await sendAndAwaitApprovalCard(page, HITL_APPROVE_MESSAGE);
@@ -769,17 +769,17 @@ async function main() {
       throw new Error('Step 9: approved write_file rendered a rejected chip');
     }
     const approveFileDeadline = Date.now() + TIMEOUT_MS;
-    while (Date.now() < approveFileDeadline && !existsSync(workspaceFilePath(HITL_APPROVE_FILE))) {
+    while (Date.now() < approveFileDeadline && !existsSync(filesDirFilePath(HITL_APPROVE_FILE))) {
       await page.waitForTimeout(300);
     }
-    if (!existsSync(workspaceFilePath(HITL_APPROVE_FILE))) {
-      throw new Error(`Step 9: ${workspaceFilePath(HITL_APPROVE_FILE)} does not exist after Approve`);
+    if (!existsSync(filesDirFilePath(HITL_APPROVE_FILE))) {
+      throw new Error(`Step 9: ${filesDirFilePath(HITL_APPROVE_FILE)} does not exist after Approve`);
     }
-    console.log(`Step 9 OK — Approve wrote ${workspaceFilePath(HITL_APPROVE_FILE)}`);
+    console.log(`Step 9 OK — Approve wrote ${filesDirFilePath(HITL_APPROVE_FILE)}`);
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
 
     // --- Step 10: HITL reject (M8-03) -----------------------------------
-    removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
+    removeFilesDirFileBestEffort(HITL_REJECT_FILE);
     const rejectPriorAssistantCount = await assistantBubbleLocator.count();
     await sendAndAwaitApprovalCard(page, HITL_REJECT_MESSAGE);
     console.log('Step 10 OK — approval card appeared (reject scenario)');
@@ -789,8 +789,8 @@ async function main() {
     await expandLastActivityPanel(page);
     const rejectedChip = page.locator('[data-testid="chat-item-tool-rejected-chip"]');
     await rejectedChip.first().waitFor({ state: 'visible', timeout: TIMEOUT_MS });
-    if (existsSync(workspaceFilePath(HITL_REJECT_FILE))) {
-      throw new Error(`Step 10: ${workspaceFilePath(HITL_REJECT_FILE)} exists after Reject`);
+    if (existsSync(filesDirFilePath(HITL_REJECT_FILE))) {
+      throw new Error(`Step 10: ${filesDirFilePath(HITL_REJECT_FILE)} exists after Reject`);
     }
     const rejectDeadline = Date.now() + TIMEOUT_MS;
     let rejectAck = '';
@@ -809,15 +809,15 @@ async function main() {
     if (!rejectAck) {
       throw new Error('Step 10: assistant did not acknowledge the rejected write');
     }
-    if (existsSync(workspaceFilePath(HITL_REJECT_FILE))) {
-      throw new Error(`Step 10: ${workspaceFilePath(HITL_REJECT_FILE)} appeared after the assistant replied`);
+    if (existsSync(filesDirFilePath(HITL_REJECT_FILE))) {
+      throw new Error(`Step 10: ${filesDirFilePath(HITL_REJECT_FILE)} appeared after the assistant replied`);
     }
     console.log(`Step 10 OK — Reject left file absent; assistant: ${rejectAck}`);
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
 
     // --- Step 11: HITL off — no approval card (M8-03) -------------------
     settingsRequest('PUT', { hitl_enabled: false });
-    removeWorkspaceFileBestEffort(HITL_OFF_FILE);
+    removeFilesDirFileBestEffort(HITL_OFF_FILE);
     const offPriorTools = await toolCardLocator.count();
     await input.fill(HITL_OFF_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -843,11 +843,11 @@ async function main() {
     const offCard = toolCardLocator.nth(offPriorTools);
     await waitForAnyText(offCard, [/write_file/], TIMEOUT_MS);
     const offFileDeadline = Date.now() + 30_000;
-    while (Date.now() < offFileDeadline && !existsSync(workspaceFilePath(HITL_OFF_FILE))) {
+    while (Date.now() < offFileDeadline && !existsSync(filesDirFilePath(HITL_OFF_FILE))) {
       await page.waitForTimeout(300);
     }
-    if (!existsSync(workspaceFilePath(HITL_OFF_FILE))) {
-      throw new Error(`Step 11: ${workspaceFilePath(HITL_OFF_FILE)} does not exist with HITL off`);
+    if (!existsSync(filesDirFilePath(HITL_OFF_FILE))) {
+      throw new Error(`Step 11: ${filesDirFilePath(HITL_OFF_FILE)} does not exist with HITL off`);
     }
     console.log('Step 11 OK — HITL off wrote the file with no approval card');
 
@@ -970,7 +970,7 @@ async function main() {
 
     // --- Step 14: turn activity panel (M9-02) ---------------------------
     // HITL is still off from step 11; read_file is not mutating anyway.
-    writeFileSync(workspaceFilePath(ACTIVITY_PANEL_FILE), 'activity-panel smoke marker\n', 'utf8');
+    writeFileSync(filesDirFilePath(ACTIVITY_PANEL_FILE), 'activity-panel smoke marker\n', 'utf8');
     const activityPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     await input.fill(ACTIVITY_PANEL_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -1224,7 +1224,7 @@ async function main() {
     // write shows an approval card (same Approve pattern as step 9).
     settingsRequest('PUT', { hitl_enabled: true, thinking_enabled: false });
     try {
-      rmSync(workspaceFilePath(FILE_LINK_REL), { force: true });
+      rmSync(filesDirFilePath(FILE_LINK_REL), { force: true });
     } catch {
       // best-effort
     }
@@ -1246,11 +1246,11 @@ async function main() {
 
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
     const fileDeadline = Date.now() + TIMEOUT_MS;
-    while (Date.now() < fileDeadline && !existsSync(workspaceFilePath(FILE_LINK_REL))) {
+    while (Date.now() < fileDeadline && !existsSync(filesDirFilePath(FILE_LINK_REL))) {
       await page.waitForTimeout(300);
     }
-    if (!existsSync(workspaceFilePath(FILE_LINK_REL))) {
-      throw new Error(`Step 17: ${workspaceFilePath(FILE_LINK_REL)} was not created after Approve`);
+    if (!existsSync(filesDirFilePath(FILE_LINK_REL))) {
+      throw new Error(`Step 17: ${filesDirFilePath(FILE_LINK_REL)} was not created after Approve`);
     }
 
     const fileLinkLocator = page.locator('[data-testid="file-link"]');
@@ -1292,8 +1292,8 @@ async function main() {
     if (highlightedLabel && highlightedLabel !== 'link-test.md') {
       throw new Error(`Step 17: highlighted entry was "${highlightedLabel}", expected link-test.md`);
     }
-    if (!existsSync(workspaceFilePath(FILE_LINK_REL))) {
-      throw new Error(`Step 17: ${workspaceFilePath(FILE_LINK_REL)} does not exist after the approved write`);
+    if (!existsSync(filesDirFilePath(FILE_LINK_REL))) {
+      throw new Error(`Step 17: ${filesDirFilePath(FILE_LINK_REL)} does not exist after the approved write`);
     }
     console.log(`Step 17 OK — clicked file: link, opened /files?path=${FILE_LINK_REL}, entry highlighted`);
 
@@ -1309,13 +1309,13 @@ async function main() {
     cleanupThreadBestEffort(threadId);
     cleanupThreadBestEffort(editThreadId);
     cleanupThreadBestEffort(forkThreadId);
-    removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
-    removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
-    removeWorkspaceFileBestEffort(HITL_OFF_FILE);
-    removeWorkspaceFileBestEffort(ACTIVITY_PANEL_FILE);
-    removeWorkspaceFileBestEffort(FILE_LINK_REL);
+    removeFilesDirFileBestEffort(HITL_APPROVE_FILE);
+    removeFilesDirFileBestEffort(HITL_REJECT_FILE);
+    removeFilesDirFileBestEffort(HITL_OFF_FILE);
+    removeFilesDirFileBestEffort(ACTIVITY_PANEL_FILE);
+    removeFilesDirFileBestEffort(FILE_LINK_REL);
     try {
-      rmdirSync(workspaceFilePath('notes'));
+      rmdirSync(filesDirFilePath('notes'));
     } catch {
       // best-effort — leave notes/ alone if it already had other files
     }

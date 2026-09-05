@@ -1,5 +1,5 @@
 [Unit]
-Description=Home AI Agent - daily workspace + Postgres backup timer
+Description=Home AI Agent - daily files + Postgres backup timer
 
 [Timer]
 OnCalendar=*-*-* 03:00:00

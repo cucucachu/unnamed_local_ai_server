@@ -33,7 +33,7 @@ export function mediaKind(name: string): MediaKind | null {
   return null;
 }
 
-/** Streaming URL for a workspace-relative `path`, hitting M5-01's
+/** Streaming URL for a root-relative `path`, hitting M5-01's
  * `GET /api/media/stream?path=<...>` (Range-request byte streaming — see
  * `services/agent-server/app/api/media.py`). `encodeURIComponent` on the
  * whole path (not just its `/`-separated segments) matches `lib/files.ts`'s

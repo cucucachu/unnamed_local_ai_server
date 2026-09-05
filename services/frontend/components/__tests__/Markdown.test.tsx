@@ -26,7 +26,7 @@ print("hello")
 
 ![diagram of mars](https://example.com/mars.png)
 
-See the [workspace file](file:///tmp/notes.txt).
+See the [notes file](file:///tmp/notes.txt).
 `;
 
 function renderMarkdown(source: string = FIXTURE, onFileLink?: (url: string) => void): ReactTestRenderer {
@@ -122,7 +122,7 @@ describe('Markdown', () => {
     expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
   });
 
-  it('treats a bare workspace-relative href as a file link', () => {
+  it('treats a bare root-relative href as a file link', () => {
     const onFileLink = jest.fn();
     const renderer = renderMarkdown('[link-test.md](notes/link-test.md)', onFileLink);
     const link = renderer.root

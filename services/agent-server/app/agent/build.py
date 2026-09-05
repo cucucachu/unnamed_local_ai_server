@@ -12,7 +12,7 @@ name (confirmed via `inspect.signature(FilesystemBackend.__init__)`), which is
 the real path-traversal guard: with `virtual_mode=True`, all paths are treated
 as virtual paths anchored to `root_dir`, `..`/`~` traversal is blocked, and
 every resolved path is verified to stay within `root_dir`. This is mandatory
-for a workspace-rooted agent and is not skipped or swapped for another mode.
+for a files-root-rooted agent and is not skipped or swapped for another mode.
 
 ## M8-03 `interrupt_on` (human-in-the-loop approvals)
 
@@ -132,7 +132,7 @@ def _interrupt_on_config() -> InterruptOnConfig:
 def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
     return create_deep_agent(
         model=build_model(settings),
-        backend=FilesystemBackend(root_dir=settings.workspace_root, virtual_mode=True),
+        backend=FilesystemBackend(root_dir=settings.files_root, virtual_mode=True),
         system_prompt=SYSTEM_PROMPT,
         tools=[
             make_execute_code_tool(settings),

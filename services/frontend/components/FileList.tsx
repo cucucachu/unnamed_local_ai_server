@@ -18,7 +18,7 @@ export interface FileListProps {
    * action sheet on the main files screen. Omitted by the destination
    * picker, which has no per-entry action sheet of its own. */
   onEntryLongPress?: (entry: FileEntry) => void;
-  /** Workspace-relative path of the row to highlight and scroll into view
+  /** Root-relative path of the row to highlight and scroll into view
    * (M9-03 file deep link). */
   highlightedPath?: string | null;
 }

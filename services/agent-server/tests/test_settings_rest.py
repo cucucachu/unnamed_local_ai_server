@@ -31,7 +31,7 @@ def settings_settings() -> Settings:
         model_name="test-model",
         exec_manager_url="http://code-exec-manager:8090",
         exec_default_timeout_s=1,
-        workspace_root="/data/workspace",
+        files_root="/data/files",
         postgres_password="test",
         _env_file=None,
     )

@@ -2,12 +2,12 @@ import { createElement, type ComponentProps, type ReactElement, type ReactNode }
 import { Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MarkdownDisplay, { MarkdownIt, type ASTNode } from '@ronradtke/react-native-markdown-display';
 
-import { normalizeFileLink, workspacePathFromHref } from '@/lib/fileLink';
+import { filePathFromHref, normalizeFileLink } from '@/lib/fileLink';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 
 export interface MarkdownProps {
   children: string;
-  /** Workspace-relative path from a `file:` link (already normalized). */
+  /** File-tool-root-relative path from a `file:` link (already normalized). */
   onFileLink?: (path: string) => void;
 }
 
@@ -110,7 +110,7 @@ function isFileUrl(url: string): boolean {
 /**
  * Themed markdown renderer for finished assistant bubbles (M9-01).
  * Images render as alt text; `file:` links call `onFileLink` with a
- * workspace-relative path (M9-03).
+ * file-tool-root-relative path (M9-03).
  */
 /** Unwrap `` `[label](file:path)` `` so a code-spanned file link still
  * renders as a tappable `file:` link (the model often copies the prompt
@@ -130,7 +130,7 @@ export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement 
     ),
     link: (node: ASTNode, children: ReactNode[]) => {
       const href = typeof node.attributes?.href === 'string' ? node.attributes.href : '';
-      const filePath = workspacePathFromHref(href);
+      const filePath = filePathFromHref(href);
       const open = () => {
         if (filePath !== null) {
           onFileLink?.(filePath);
@@ -283,7 +283,7 @@ export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement 
         mergeStyle
         rules={rules}
         onLinkPress={(url: string) => {
-          const path = workspacePathFromHref(url);
+          const path = filePathFromHref(url);
           if (path !== null) {
             onFileLink?.(path);
             return false;

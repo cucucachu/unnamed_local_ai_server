@@ -2,7 +2,7 @@
 # M5-02 full-stack media-player smoke test.
 #
 # Seeds a small synthetic video (`media-browser-smoke-test-video.mp4`, via
-# `ffmpeg` — see `seed_test_video` below) directly into the WORKSPACE_DIR
+# `ffmpeg` — see `seed_test_video` below) directly into the FILES_DIR
 # host directory,
 # opens a real headless browser against the live stack, navigates to the
 # Files tab, taps the seeded file (asserting M5-02's tap-routing opens the
@@ -28,7 +28,7 @@
 #   MEDIA_SMOKE_BASE_URL=http://homeai.local/ scripts/e2e/media_browser_smoke.sh
 #
 # M6-03: video filename prefixed with this script's own name (was the bare
-# generic "test-video.mp4") - written straight to the workspace ROOT, not a
+# generic "test-video.mp4") - written straight to the files ROOT, not a
 # script-unique subfolder (unlike files_browser_smoke.mjs's own
 # RUN_SUFFIX-scoped folders), so a bare generic name was a genuine
 # collision surface with any other script/real-user file of the same name.
@@ -41,15 +41,15 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VIDEO_FILE_NAME="media-browser-smoke-test-video.mp4"
 
 # Same ".env, one KEY=value, not the whole file" extraction as
-# `exec_crossview_smoke.sh` — this script only needs WORKSPACE_DIR, and the
+# `exec_crossview_smoke.sh` — this script only needs FILES_DIR, and the
 # rest of `.env` isn't guaranteed to be shell-safe to `source`.
 ENV_FILE="${REPO_ROOT}/.env"
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' "$ENV_FILE" | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[media-browser-smoke] ERROR: WORKSPACE_DIR not set in ${ENV_FILE}" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' "$ENV_FILE" | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[media-browser-smoke] ERROR: FILES_DIR not set in ${ENV_FILE}" >&2
   exit 1
 fi
-VIDEO_HOST_PATH="${WORKSPACE_DIR}/${VIDEO_FILE_NAME}"
+VIDEO_HOST_PATH="${FILES_DIR}/${VIDEO_FILE_NAME}"
 
 log() {
   echo "[media-browser-smoke] $(date '+%H:%M:%S') $*"
@@ -59,13 +59,13 @@ log() {
 # test pattern, `yuv420p` for broad player/codec compatibility. Run inside
 # `homeai-exec-toolbox` (which already has `ffmpeg` baked in, per
 # `services/code-exec-manager/exec-image/Dockerfile`) rather than requiring
-# it on the host directly, bind-mounting WORKSPACE_DIR at `/w` so the
-# output lands exactly where `agent-server`'s own workspace mount expects
-# it (`docker-compose.yml`: `${WORKSPACE_DIR}:/data/workspace`).
+# it on the host directly, bind-mounting FILES_DIR at `/w` so the
+# output lands exactly where `agent-server`'s own files-directory mount expects
+# it (`docker-compose.yml`: `${FILES_DIR}:/data/files`).
 seed_test_video() {
   log "Seeding ${VIDEO_HOST_PATH} via ffmpeg (homeai-exec-toolbox)..."
   rm -f "$VIDEO_HOST_PATH"
-  docker run --rm -v "${WORKSPACE_DIR}:/w" homeai-exec-toolbox:latest \
+  docker run --rm -v "${FILES_DIR}:/w" homeai-exec-toolbox:latest \
     ffmpeg -y -f lavfi -i "testsrc=duration=10:size=640x360:rate=30" -pix_fmt yuv420p "/w/${VIDEO_FILE_NAME}"
   if [ ! -f "$VIDEO_HOST_PATH" ]; then
     log "ERROR: ${VIDEO_HOST_PATH} was not created"
@@ -76,7 +76,7 @@ seed_test_video() {
 
 cleanup() {
   # Always runs (success or failure) so this script is safely re-runnable
-  # and never leaves the seeded file behind in the real workspace.
+  # and never leaves the seeded file behind in the real files directory.
   rm -f "$VIDEO_HOST_PATH" 2>/dev/null || true
 }
 trap cleanup EXIT

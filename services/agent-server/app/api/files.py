@@ -1,8 +1,8 @@
-"""REST file management over the shared workspace directory — `/api/files*`.
+"""REST file management over the shared files directory — `/api/files*`.
 
 Contract fixed by docs/ARCHITECTURE.md's "Contracts" section ("Files") — do
 not deviate from the shapes below. The path-traversal guard
-(`app.core.paths.resolve_workspace_path`) is applied to EVERY `path`/
+(`app.core.paths.resolve_files_path`) is applied to EVERY `path`/
 `src`/`dst` parameter before touching the filesystem; this is a SEPARATE,
 human-facing API over the same real host directory the agent's own
 `deepagents.backends.FilesystemBackend` (`app/agent/build.py`) already reads/
@@ -57,7 +57,7 @@ ticket's final report for the full transcript):
   self-nesting case.
 - `path: str = Form(...)` (i.e. a REQUIRED form field) treats an explicitly
   sent, present-but-EMPTY-string value (`data={"path": ""}` — exactly what a
-  client uploading to the workspace root must send, since `""` means root
+  client uploading to the files root must send, since `""` means root
   per §5/§8) as if the field were absent entirely: FastAPI 0.141.1 /
   pydantic 2.13.5 raise `422 {"detail": [{"type": "missing", "loc": ["body",
   "path"], ...}]}` — confirmed directly with a minimal scratch endpoint
@@ -79,7 +79,7 @@ ticket's final report for the full transcript):
   through any symlink it contains. This is deliberately conservative:
   reading a directory listing can never be tricked into following a
   symlink to something outside (or expensive/circular within) the
-  workspace.
+  files root.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.core.paths import resolve_workspace_path
+from app.core.paths import resolve_files_path
 
 router = APIRouter()
 
@@ -131,12 +131,12 @@ class MoveCopyBody(BaseModel):
     dst: str
 
 
-def _workspace_root(request: Request) -> Path:
-    return Path(request.app.state.settings.workspace_root)
+def _files_root(request: Request) -> Path:
+    return Path(request.app.state.settings.files_root)
 
 
 def _rel_posix(root: Path, p: Path) -> str:
-    """`p`'s workspace-relative POSIX path — `""` when `p` is `root` itself."""
+    """`p`'s files-root-relative POSIX path — `""` when `p` is `root` itself."""
     if p == root:
         return ""
     return p.relative_to(root).as_posix()
@@ -161,8 +161,8 @@ def _entry_out(root: Path, parent: Path, entry: Path) -> FileEntryOut:
 
 @router.get("/files", response_model=FileListOut)
 async def list_files(request: Request, path: str = "") -> FileListOut:
-    root = _workspace_root(request)
-    target = resolve_workspace_path(root, path)
+    root = _files_root(request)
+    target = resolve_files_path(root, path)
     if not target.is_dir():
         raise HTTPException(status_code=404, detail=f"directory '{path}' not found")
 
@@ -177,8 +177,8 @@ async def upload_files(
     path: str = Form(""),
     file: list[UploadFile] = File(...),  # noqa: B008 - required FastAPI dependency-injection idiom
 ) -> UploadOut:
-    root = _workspace_root(request)
-    target_dir = resolve_workspace_path(root, path)
+    root = _files_root(request)
+    target_dir = resolve_files_path(root, path)
     if not target_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"directory '{path}' not found")
 
@@ -195,7 +195,7 @@ async def upload_files(
         if not filename or filename in (".", ".."):
             raise HTTPException(status_code=400, detail="invalid upload filename")
         dest_rel = f"{rel_dir}/{filename}" if rel_dir else filename
-        dest = resolve_workspace_path(root, dest_rel)
+        dest = resolve_files_path(root, dest_rel)
 
         # Streamed in fixed 1 MiB chunks, no full-file buffering — see
         # module docstring for why this loop (unlike mkdir/move/copy/delete)
@@ -210,8 +210,8 @@ async def upload_files(
 
 @router.get("/files/download")
 async def download_file(request: Request, path: str) -> FileResponse:
-    root = _workspace_root(request)
-    target = resolve_workspace_path(root, path)
+    root = _files_root(request)
+    target = resolve_files_path(root, path)
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"file '{path}' not found")
     return FileResponse(target, filename=target.name)
@@ -219,8 +219,8 @@ async def download_file(request: Request, path: str) -> FileResponse:
 
 @router.post("/files/mkdir", status_code=201)
 async def mkdir(request: Request, body: MkdirBody) -> dict[str, str]:
-    root = _workspace_root(request)
-    target = resolve_workspace_path(root, body.path)
+    root = _files_root(request)
+    target = resolve_files_path(root, body.path)
 
     def _mkdir() -> None:
         target.mkdir(parents=True, exist_ok=True)
@@ -248,9 +248,9 @@ def _check_move_copy_preconditions(root: Path, src: Path, dst: Path, src_label: 
 
 @router.post("/files/move")
 async def move_path(request: Request, body: MoveCopyBody) -> dict[str, str]:
-    root = _workspace_root(request)
-    src = resolve_workspace_path(root, body.src)
-    dst = resolve_workspace_path(root, body.dst)
+    root = _files_root(request)
+    src = resolve_files_path(root, body.src)
+    dst = resolve_files_path(root, body.dst)
     _check_move_copy_preconditions(root, src, dst, body.src, body.dst)
 
     def _move() -> None:
@@ -269,9 +269,9 @@ async def move_path(request: Request, body: MoveCopyBody) -> dict[str, str]:
 
 @router.post("/files/copy")
 async def copy_path(request: Request, body: MoveCopyBody) -> dict[str, str]:
-    root = _workspace_root(request)
-    src = resolve_workspace_path(root, body.src)
-    dst = resolve_workspace_path(root, body.dst)
+    root = _files_root(request)
+    src = resolve_files_path(root, body.src)
+    dst = resolve_files_path(root, body.dst)
     _check_move_copy_preconditions(root, src, dst, body.src, body.dst)
 
     def _copy() -> None:
@@ -286,11 +286,11 @@ async def copy_path(request: Request, body: MoveCopyBody) -> dict[str, str]:
 
 @router.delete("/files", status_code=204)
 async def delete_path(request: Request, path: str) -> None:
-    root = _workspace_root(request)
-    target = resolve_workspace_path(root, path)
+    root = _files_root(request)
+    target = resolve_files_path(root, path)
 
     if target == root:
-        raise HTTPException(status_code=400, detail="cannot delete the workspace root")
+        raise HTTPException(status_code=400, detail="cannot delete the files root")
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"path '{path}' not found")
 

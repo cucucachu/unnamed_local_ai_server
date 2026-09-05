@@ -50,16 +50,16 @@ EXPECTED_CONTENT="GATE-OK"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
 
-# WORKSPACE_DIR is the host path bind-mounted into agent-server at
-# /data/workspace (see docker-compose.yml + .env) - read it from the real
+# FILES_DIR is the host path bind-mounted into agent-server at
+# /data/files (see docker-compose.yml + .env) - read it from the real
 # .env rather than hardcoding, so this script tracks whatever the host is
 # actually configured with.
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[gate-m2] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[gate-m2] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-HOST_FILE_PATH="${WORKSPACE_DIR}/${FILE_NAME}"
+HOST_FILE_PATH="${FILES_DIR}/${FILE_NAME}"
 
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
@@ -171,7 +171,7 @@ step_chat_streams() {
 
 send_file_write_message() {
   WS_SMOKE_THREAD_ID="$THREAD_ID" \
-  WS_SMOKE_PROMPT="Create a file named ${FILE_NAME} in the workspace root containing exactly the text ${EXPECTED_CONTENT}. Use your file tools." \
+  WS_SMOKE_PROMPT="Create a file named ${FILE_NAME} at the files root containing exactly the text ${EXPECTED_CONTENT}. Use your file tools." \
     uvx --from websockets python "$SCRIPT_DIR/../ws_smoke.py"
 }
 

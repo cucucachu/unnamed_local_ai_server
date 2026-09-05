@@ -10,7 +10,7 @@
 //
 //   node research_browser_smoke.mjs positive   -> the "research a question"
 //     happy path: one prompt, one turn, three tool calls (web_search,
-//     web_fetch, write_file), a real file lands on the host workspace.
+//     web_fetch, write_file), a real file lands on the host files directory.
 //   node research_browser_smoke.mjs negative   -> the "can't take actions
 //     online" guardrail: a prompt asking the agent to post a comment on a
 //     real GitHub issue must NOT succeed, and the final answer must say so.
@@ -32,12 +32,12 @@
 //      asks the agent to fetch a github.com URL, so matched via a
 //      "github.com" substring in the header text.
 //
-// Positive-scenario filesystem assertion reads `${WORKSPACE_DIR}/research/
+// Positive-scenario filesystem assertion reads `${FILES_DIR}/research/
 // llamacpp.md` directly off the host (passed through by `gate_m7.sh`, which
-// itself reads `WORKSPACE_DIR` from `.env` the same way every other
+// itself reads `FILES_DIR` from `.env` the same way every other
 // `scripts/e2e/*.sh` script in this repo does) — this script does NOT go
 // through any container exec for that check, since (per `docker-compose.yml`)
-// `WORKSPACE_DIR` is a plain host bind mount agent-server's `write_file`
+// `FILES_DIR` is a plain host bind mount agent-server's `write_file`
 // tool writes into directly.
 
 import { execFileSync } from 'node:child_process';
@@ -47,7 +47,7 @@ import { chromium } from 'playwright';
 
 const BASE_URL = process.env.RESEARCH_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE = process.env.RESEARCH_SMOKE_API_BASE ?? 'http://localhost/api';
-const WORKSPACE_DIR = process.env.WORKSPACE_DIR ?? '';
+const FILES_DIR = process.env.FILES_DIR ?? '';
 
 const TURN_TIMEOUT_MS = 240_000; // generous — a multi-tool-call turn (search -> fetch -> write), same order of magnitude as gate_m4.sh's WS_TURN_TIMEOUT_S=280s for its own multi-tool-call turn.
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
@@ -175,15 +175,15 @@ except Exception:
 }
 
 async function runPositiveScenario(browser) {
-  if (!WORKSPACE_DIR) {
-    throw new Error('WORKSPACE_DIR env var not set — gate_m7.sh must export it before invoking this script');
+  if (!FILES_DIR) {
+    throw new Error('FILES_DIR env var not set — gate_m7.sh must export it before invoking this script');
   }
 
   // Idempotency (this script may be run twice in a row, same as every
   // other e2e gate script in this repo): remove any leftover file from a
   // prior run before asking the agent to (re)create it, so a stale file
   // from a previous attempt can never masquerade as this run's own proof.
-  const filePath = path.join(WORKSPACE_DIR, EXPECTED_FILE_RELATIVE_PATH);
+  const filePath = path.join(FILES_DIR, EXPECTED_FILE_RELATIVE_PATH);
   try {
     rmSync(filePath, { force: true });
   } catch {

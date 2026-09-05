@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # single tool result shoves into the model's own context window).
     web_fetch_tool_max_chars: int = 30000
 
-    workspace_root: str = "/data/workspace"
+    files_root: str = "/data/files"
 
     postgres_user: str = "homeai"
     postgres_password: str = ""

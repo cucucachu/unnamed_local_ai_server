@@ -16,7 +16,7 @@ const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
  * M3-04 precedent of a tiny hand-rolled helper over pulling in a library
  * for something this small). One decimal place, dropped when it would just
  * be ".0" (`"1 MB"`, not `"1.0 MB"`); caps at TB rather than growing to PB/
- * EB — a self-hosted single-user workspace realistically never lists a
+ * EB — a self-hosted single-user setup realistically never lists a
  * file large enough for that boundary to matter. */
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '';

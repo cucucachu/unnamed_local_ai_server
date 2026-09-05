@@ -2,12 +2,12 @@
 // `media_browser_smoke.sh`, not run directly. That wrapper seeds
 // `media-browser-smoke-test-video.mp4` (M6-03: renamed from the bare
 // generic `test-video.mp4` to avoid a collision surface with other
-// scripts/real-user files at the workspace root) into the workspace (via
+// scripts/real-user files at the files root) into the files directory (via
 // `docker run` against the `homeai-exec-toolbox` image, since ffmpeg lives
 // there, not necessarily on this host — same tool M5-01 used for its own
 // live verification) BEFORE calling this script, and cleans it up after —
 // those steps live in the `.sh` wrapper (not here) because they need
-// `docker`/the workspace's real host path, neither of which this script
+// `docker`/the files directory's real host path, neither of which this script
 // has any other reason to reach for itself. See that file for the exact
 // `ffmpeg`/cleanup commands.
 //

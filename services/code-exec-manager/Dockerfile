@@ -12,9 +12,9 @@ WORKDIR /app
 # (Conventions & Contracts §2), which on this host is root/`docker`-group
 # owned - it runs as the image's default root user so that socket is always
 # readable/writable regardless of host group membership. It never touches
-# the workspace bind mount directly itself (only `dockerd`, on its behalf,
-# does - see `app/core/config.py`'s `workspace_host_dir` docstring), so
-# there's no workspace-ownership reason to drop privileges here either.
+# the files bind mount directly itself (only `dockerd`, on its behalf,
+# does - see `app/core/config.py`'s `files_host_dir` docstring), so
+# there's no files-ownership reason to drop privileges here either.
 ENV UV_CACHE_DIR=/tmp/uv-cache
 
 COPY pyproject.toml uv.lock ./

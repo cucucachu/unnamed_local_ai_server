@@ -9,7 +9,7 @@
 # From a running (or freshly brought-up) compose stack, this script:
 #   1. Brings up the full stack, waits for model-runner + agent-server API
 #      health (same polling helpers as `gate_m2.sh`/`gate_m3.sh`).
-#   2. Seeds `${WORKSPACE_DIR}/gate-m4/photos/` with 5 dummy files
+#   2. Seeds `${FILES_DIR}/gate-m4/photos/` with 5 dummy files
 #      `img_001.txt` .. `img_005.txt` (content = their index).
 #   3. Over a single WS turn (`scripts/ws_smoke.py`, same client every gate
 #      script shells out to), asks the agent to write a Python script in
@@ -17,7 +17,7 @@
 #      it with `execute_code`, and confirm the result - one retry on
 #      failure (LLM nondeterminism allowance, 2 strikes total - same policy
 #      as every other `scripts/e2e/gate_*.sh`/`exec_crossview_smoke.sh`
-#      script in this repo). On retry, the seeded workspace is reset back
+#      script in this repo). On retry, the seeded files dir is reset back
 #      to the pristine `img_001..005.txt` state first, since the prompt's
 #      own premise ("there are files named img_XXX.txt") would otherwise be
 #      false against a partially-renamed leftover from attempt 1.
@@ -42,7 +42,7 @@
 #      (both already implemented, self-contained) as subprocesses and
 #      asserts BOTH exit 0.
 #   8. Cleans up (EXIT trap): removes the seeded/created `gate-m4/`
-#      directory from the host workspace, deletes the thread via REST - so
+#      directory from the host files dir, deletes the thread via REST - so
 #      re-running this script is safe (Tier A requires two green runs in a
 #      row).
 #
@@ -81,9 +81,9 @@ API_HEALTH_TIMEOUT_S=120
 # deliberately does NOT spell out exact tool paths (unlike
 # `exec_crossview_smoke.sh`'s own prompts, which hand the model the exact
 # virtual path to avoid needing this reasoning at all) - so the model has
-# to work out, on its own, that `write_file`'s virtual root is ALREADY
-# `/workspace` (no `/workspace/` prefix) while `execute_code`'s shell *does*
-# need the `/workspace/` prefix. Real transcripts on this host show the
+# to work out, on its own, that `write_file`'s virtual root is bare `/`
+# (no `/files/` prefix) while `execute_code`'s shell *does* need the
+# `/files/` prefix for the identical directory. Real transcripts on this host show the
 # model reliably self-corrects via `ls`/`find` exploration, but that can
 # take 8-12+ sequential tool-call round trips (each its own LLM generation
 # pass on this hardware) before it converges - a 160-170s turn timeout
@@ -105,12 +105,12 @@ WS_TURN_TIMEOUT_S=280
 HOST_ASSERT_TOTAL_BUDGET_S=300
 MIN_HOST_POLL_TIMEOUT_S=20
 
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[gate-m4] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[gate-m4] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-GATE_M4_DIR="${WORKSPACE_DIR}/gate-m4"
+GATE_M4_DIR="${FILES_DIR}/gate-m4"
 PHOTOS_DIR="${GATE_M4_DIR}/photos"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
@@ -220,9 +220,9 @@ run_ws_turn() {
     timeout "$WS_TURN_TIMEOUT_S" uvx --from websockets python3 "$SCRIPT_DIR/../ws_smoke.py" >"$2" 2>&1 || true
 }
 
-# ---- workspace seeding -------------------------------------------------------
+# ---- files seeding -------------------------------------------------------
 
-seed_workspace() {
+seed_files() {
   rm -rf "$GATE_M4_DIR"
   mkdir -p "$PHOTOS_DIR"
   local i padded
@@ -295,9 +295,9 @@ step_stack_up_and_healthy() {
   wait_for_full_stack_healthy
 }
 
-step_seed_workspace() {
+step_seed_files() {
   log "Step 2/6: seeding ${PHOTOS_DIR} with img_001..005.txt..."
-  seed_workspace
+  seed_files
   log "OK: seeded 5 dummy files under ${PHOTOS_DIR}"
 }
 
@@ -321,7 +321,7 @@ step_agent_writes_and_runs_script() {
 
   log "WARN: host filesystem state not correct within budget on attempt 1 - retrying once (LLM nondeterminism allowance, same policy as gate_m2.sh/gate_m3.sh)"
   log "Resetting ${GATE_M4_DIR} back to the pristine seeded state before retrying..."
-  seed_workspace
+  seed_files
 
   start="$(date +%s)"
   WS_LOG_FILE="/tmp/gate-m4-turn-attempt-2.log"
@@ -401,16 +401,16 @@ cleanup() {
   fi
   rm -rf "$GATE_M4_DIR" 2>/dev/null || true
 
-  # Defensive: a failed attempt can leave a STRAY "${WORKSPACE_DIR}/workspace/"
+  # Defensive: a failed attempt can leave a STRAY "${FILES_DIR}/files/"
   # directory behind - the model occasionally calls `write_file` with a
-  # redundant "/workspace/"-prefixed path (virtual_mode's file-tool root is
-  # ALREADY the workspace root, so that prefix creates a real nested
-  # "workspace" subdirectory instead of writing where intended - see
-  # `step_agent_writes_and_runs_script`'s header comment). Only removed when
-  # its content matches that EXACT known artifact shape (a lone "gate-m4"
-  # entry) - never unconditionally, so a real unrelated user directory
-  # literally named "workspace" is never touched.
-  local stray_dir="${WORKSPACE_DIR}/workspace" stray_entries
+  # redundant "/files/"-prefixed path (virtual_mode's file-tool root is
+  # bare `/`, not `/files` - that prefix is execute_code-only - so using it
+  # in a write_file call creates a real nested "files" subdirectory instead
+  # of writing where intended - see `step_agent_writes_and_runs_script`'s
+  # header comment). Only removed when its content matches that EXACT known
+  # artifact shape (a lone "gate-m4" entry) - never unconditionally, so a
+  # real unrelated user directory literally named "files" is never touched.
+  local stray_dir="${FILES_DIR}/files" stray_entries
   if [ -d "$stray_dir" ]; then
     stray_entries="$(find "$stray_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)"
     if [ "$stray_entries" = "gate-m4" ]; then
@@ -442,7 +442,7 @@ main() {
   log "Turning hitl_enabled off so mutating tools are not interrupted..."
   SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
   log "OK: hitl_enabled=false (was ${SAVED_HITL})"
-  step_seed_workspace
+  step_seed_files
   step_agent_writes_and_runs_script
   step_ws_frame_categories
   step_verify_isolation

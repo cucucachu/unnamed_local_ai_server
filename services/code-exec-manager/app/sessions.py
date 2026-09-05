@@ -91,7 +91,7 @@ def build_run_kwargs(session_id: str, settings: Settings) -> dict[str, Any]:
         "nano_cpus": 4_000_000_000,
         "user": f"{settings.homeai_uid}:{settings.homeai_gid}",
         "pids_limit": 512,
-        "volumes": {settings.workspace_host_dir: {"bind": "/workspace", "mode": "rw"}},
+        "volumes": {settings.files_host_dir: {"bind": "/files", "mode": "rw"}},
         "labels": {"homeai.exec": "1", "homeai.session": session_id},
     }
 

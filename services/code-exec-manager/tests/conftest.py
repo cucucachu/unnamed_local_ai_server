@@ -13,7 +13,7 @@ from tests.fake_docker import FakeDockerClient
 @pytest.fixture
 def test_settings(tmp_path) -> Settings:
     return Settings(
-        workspace_host_dir=str(tmp_path),
+        files_host_dir=str(tmp_path),
         homeai_uid=1000,
         homeai_gid=1000,
         exec_idle_minutes=30,

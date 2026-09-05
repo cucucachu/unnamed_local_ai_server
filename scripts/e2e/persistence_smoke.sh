@@ -59,12 +59,12 @@ RESTART_GRACE_S=5
 # Real-model write_file + interrupt; one retry on LLM nondeterminism.
 HITL_WS_TIMEOUT_S=180
 
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[persistence-smoke] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[persistence-smoke] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-HITL_HOST_FILE="${WORKSPACE_DIR}/${HITL_FILE_NAME}"
+HITL_HOST_FILE="${FILES_DIR}/${HITL_FILE_NAME}"
 
 # Empty until we successfully GET /api/settings — cleanup restores only then.
 SAVED_HITL=""

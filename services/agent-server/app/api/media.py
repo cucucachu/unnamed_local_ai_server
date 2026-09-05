@@ -1,11 +1,11 @@
 """Range-request media streaming — `GET`/`HEAD /api/media/stream`.
 
-Direct HTTP byte streaming from the workspace for `<video>`/`<audio>`/Expo
+Direct HTTP byte streaming from the files root for `<video>`/`<audio>`/Expo
 players (README.md: "Media streaming is direct HTTP Range") — no media
 server, no transcoding. Correct `Range` semantics (RFC 9110 §14) matter
 because browser seek/scrub depends on them.
 
-The traversal guard is the SAME `app.core.paths.resolve_workspace_path`
+The traversal guard is the SAME `app.core.paths.resolve_files_path`
 already used by `app/api/files.py` (see that module's docstring: "will be
 reused as-is by the media API in M5-01") — imported here, not reimplemented.
 
@@ -53,7 +53,7 @@ import anyio.to_thread
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.core.paths import resolve_workspace_path
+from app.core.paths import resolve_files_path
 
 router = APIRouter()
 
@@ -65,8 +65,8 @@ _CHUNK_SIZE = 1024 * 1024  # 1 MiB, per the ticket's exact spec.
 _RANGE_RE = re.compile(r"(\d*)-(\d*)")
 
 
-def _workspace_root(request: Request) -> Path:
-    return Path(request.app.state.settings.workspace_root)
+def _files_root(request: Request) -> Path:
+    return Path(request.app.state.settings.files_root)
 
 
 def _parse_range(range_header: str | None, size: int) -> tuple[int, int] | str | None:
@@ -156,8 +156,8 @@ async def _iter_range(path: Path, start: int, length: int) -> AsyncIterator[byte
 
 
 async def _stream(request: Request, path: str, *, head: bool) -> StreamingResponse:
-    root = _workspace_root(request)
-    target = resolve_workspace_path(root, path)
+    root = _files_root(request)
+    target = resolve_files_path(root, path)
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"file '{path}' not found")
 

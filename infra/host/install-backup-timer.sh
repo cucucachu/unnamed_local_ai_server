@@ -6,7 +6,7 @@
 # service's ExecStart (so it works regardless of where the repo is cloned).
 # Idempotent: safe to re-run (regenerates the service unit every time, in
 # case the repo moved; the timer unit is static). Runs
-# infra/host/backup-workspace.sh as root once a day at 03:00 (see that
+# infra/host/backup-files.sh as root once a day at 03:00 (see that
 # script's own header for why root is required).
 #
 # Usage: sudo infra/host/install-backup-timer.sh              # install + enable

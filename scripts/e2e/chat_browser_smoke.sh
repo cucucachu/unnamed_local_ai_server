@@ -48,14 +48,14 @@ npx playwright install chromium
 
 repo_root="$(cd "$script_dir/../.." && pwd)"
 if [ -f "$repo_root/.env" ]; then
-  WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
-  export WORKSPACE_DIR
+  FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
+  export FILES_DIR
   if [ -z "${BACKUP_DIR:-}" ]; then
     BACKUP_DIR="$(sed -n 's/^BACKUP_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
   fi
 fi
-if [ -z "${WORKSPACE_DIR:-}" ]; then
-  echo "ERROR: WORKSPACE_DIR is not set (needed for M8-03 hello.txt assertions)" >&2
+if [ -z "${FILES_DIR:-}" ]; then
+  echo "ERROR: FILES_DIR is not set (needed for M8-03 hello.txt assertions)" >&2
   exit 1
 fi
 
@@ -81,7 +81,7 @@ if [[ "${base_url}" == https://* ]]; then
 fi
 
 echo "==> Running the smoke test against ${base_url}..."
-echo "    WORKSPACE_DIR=${WORKSPACE_DIR}"
+echo "    FILES_DIR=${FILES_DIR}"
 if [ -n "${CHAT_SMOKE_CA:-}" ]; then
   echo "    CHAT_SMOKE_CA=${CHAT_SMOKE_CA}"
 fi

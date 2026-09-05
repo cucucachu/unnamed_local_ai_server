@@ -17,7 +17,7 @@
 # `security_opt=["no-new-privileges"]`, `read_only=True`, tmpfs `/tmp` +
 # `/home/homeai`, `mem_limit="4g"`, `nano_cpus=4_000_000_000`,
 # `user="1000:1000"`, `pids_limit=512`, single rw bind mount
-# `WORKSPACE_DIR -> /workspace`.
+# `FILES_DIR -> /files`.
 #
 # ---- The "no published port" problem -------------------------------------
 #
@@ -85,7 +85,7 @@
 # (rw,...)`, and would otherwise produce false positives against the
 # ticket's "exactly one" expectation). What's left after that filter is
 # real block/bind mounts; among those, exactly one should have the `rw`
-# option, and its target should be `/workspace` (everything else — `/tmp`,
+# option, and its target should be `/files` (everything else — `/tmp`,
 # `/home/homeai` — is `tmpfs`, already excluded; `/etc/resolv.conf`,
 # `/etc/hostname`, `/etc/hosts` are real `ro` bind mounts from the same host
 # block device, also excluded by the `rw` filter).
@@ -406,8 +406,8 @@ if len(candidates) != 1:
     print(f"expected exactly 1 non-tmpfs/pseudo rw mount, found {len(candidates)}: {candidates!r}")
     sys.exit(1)
 target, fstype, opts = candidates[0]
-if target != "/workspace":
-    print(f"the sole writable non-tmpfs mount is {target!r} (type {fstype}), expected '/workspace'")
+if target != "/files":
+    print(f"the sole writable non-tmpfs mount is {target!r} (type {fstype}), expected '/files'")
     sys.exit(1)
 EOF
 )"
@@ -415,7 +415,7 @@ EOF
 VALIDATOR_16="$(cat <<'EOF'
 import json, sys
 data = json.loads(sys.argv[1])[0]
-workspace_dir = sys.argv[2]
+files_dir = sys.argv[2]
 hc = data.get("HostConfig", {})
 errors = []
 if hc.get("NetworkMode") != "none":
@@ -429,8 +429,8 @@ if hc.get("Privileged") is not False:
 binds = [m for m in data.get("Mounts", []) if m.get("Type") == "bind"]
 if len(binds) != 1:
     errors.append(f"expected exactly 1 bind mount, found {len(binds)}: {binds!r}")
-elif binds[0].get("Source") != workspace_dir:
-    errors.append(f"bind mount Source={binds[0].get('Source')!r}, expected {workspace_dir!r}")
+elif binds[0].get("Source") != files_dir:
+    errors.append(f"bind mount Source={binds[0].get('Source')!r}, expected {files_dir!r}")
 if errors:
     print("; ".join(errors))
     sys.exit(1)
@@ -451,13 +451,13 @@ print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
   fi
   log "OK: using compose network '${NETWORK_NAME}'"
 
-  WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+  FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
   HOMEAI_UID="$(sed -n 's/^HOMEAI_UID=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-  if [ -z "$WORKSPACE_DIR" ] || [ -z "$HOMEAI_UID" ]; then
-    log "ERROR: WORKSPACE_DIR/HOMEAI_UID not set in .env"
+  if [ -z "$FILES_DIR" ] || [ -z "$HOMEAI_UID" ]; then
+    log "ERROR: FILES_DIR/HOMEAI_UID not set in .env"
     exit 1
   fi
-  log "OK: WORKSPACE_DIR=${WORKSPACE_DIR} HOMEAI_UID=${HOMEAI_UID}"
+  log "OK: FILES_DIR=${FILES_DIR} HOMEAI_UID=${HOMEAI_UID}"
 
   HOST_LAN_IP="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
   if [ -z "$HOST_LAN_IP" ]; then
@@ -594,8 +594,8 @@ check_8() {
 }
 
 check_9() {
-  check_generic 9 "/workspace is writable (rw bind mount)" \
-    'touch /workspace/isolation-ok && rm /workspace/isolation-ok' "$VALIDATOR_ZERO_EXIT" 10
+  check_generic 9 "/files is writable (rw bind mount)" \
+    'touch /files/isolation-ok && rm /files/isolation-ok' "$VALIDATOR_ZERO_EXIT" 10
 }
 
 check_10() {
@@ -642,7 +642,7 @@ check_13() {
 }
 
 check_14() {
-  check_generic 14 "exactly one non-tmpfs rw mount, targeting /workspace" \
+  check_generic 14 "exactly one non-tmpfs rw mount, targeting /files" \
     'mount' "$VALIDATOR_14" 10
 }
 
@@ -665,7 +665,7 @@ check_16() {
     fail 16 "docker inspect hardening assertions on ${EXEC_CONTAINER_NAME}" "docker inspect failed: ${inspect_json}"
     return
   fi
-  if out="$(python3 -c "$VALIDATOR_16" "$inspect_json" "$WORKSPACE_DIR" 2>&1)"; then
+  if out="$(python3 -c "$VALIDATOR_16" "$inspect_json" "$FILES_DIR" 2>&1)"; then
     rc=0
   else
     rc=$?

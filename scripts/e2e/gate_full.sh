@@ -72,9 +72,9 @@ log() {
 # .env) — resolved and sanity-checked once up front so a missing/misconfigured
 # .env fails fast with one clear message instead of 10 confusing sub-script
 # errors.
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[gate-full] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[gate-full] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
 

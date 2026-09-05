@@ -1,17 +1,17 @@
-"""Workspace path traversal guard — Conventions & Contracts (#34) §8.
+"""Files-root path traversal guard — Conventions & Contracts (#34) §8.
 
-`resolve_workspace_path` is THE traversal guard shared by every path-taking
-endpoint in `app/api/files.py` (and, per the ticket, will be reused as-is by
-the media API in M5-01) — implement it exactly once, here, and never
-reimplement path-escape checking anywhere else.
+`resolve_files_path` is THE traversal guard shared by every path-taking
+endpoint in `app/api/files.py` (and, per the ticket, is reused as-is by
+the media API, `app/api/media.py`) — implement it exactly once, here, and
+never reimplement path-escape checking anywhere else.
 
 Deviation from the ticket's illustrative §8 snippet (behavior-preserving,
 only the root-injection shape differs): the snippet hardcodes
-`root = Path("/data/workspace").resolve()` inside the function. This takes
+`root = Path("/data/files").resolve()` inside the function. This takes
 `root` as a parameter instead so it's trivially unit-testable against an
 arbitrary `tmp_path` without monkeypatching a module-level constant or
 touching real env vars — callers (`app/api/files.py`'s route handlers) pass
-`Path(request.app.state.settings.workspace_root)`, mirroring how every other
+`Path(request.app.state.settings.files_root)`, mirroring how every other
 route in this codebase reaches config via `request.app.state` rather than a
 process-global. The comparison logic below (`p != root and root not in
 p.parents`) is copied verbatim from the reference implementation.
@@ -27,7 +27,7 @@ Introspection notes (real, not guessed — installed Python 3.12 stdlib):
   /tmp`) — confirmed by creating such a symlink and resolving a path through
   it, which came back as `/tmp/x.txt`. This is exactly what makes the
   reference implementation's `root not in p.parents` check sufficient to
-  catch the "symlink inside the workspace pointing outside it" guard-suite
+  catch the "symlink inside the files root pointing outside it" guard-suite
   case: no separate symlink-specific check is needed, `.resolve()` already
   did the work before the containment check even runs.
 - Joining an absolute path onto a `Path` with `/` discards the left operand
@@ -52,19 +52,19 @@ from pathlib import Path
 from fastapi import HTTPException
 
 
-def resolve_workspace_path(root: Path, rel: str) -> Path:
-    """Resolve `rel` (a workspace-relative POSIX path) against `root`.
+def resolve_files_path(root: Path, rel: str) -> Path:
+    """Resolve `rel` (a files-root-relative POSIX path) against `root`.
 
-    `rel == ""` resolves to `root` itself (workspace root). Raises
+    `rel == ""` resolves to `root` itself (the files root). Raises
     `HTTPException(400)` if `rel` contains a null byte, or if the resolved
     path is not `root` itself or a descendant of it (i.e. it escapes the
-    workspace via `..`, an absolute path, or a symlink).
+    files root via `..`, an absolute path, or a symlink).
     """
     if "\x00" in rel:
-        raise HTTPException(status_code=400, detail="path escapes workspace")
+        raise HTTPException(status_code=400, detail="path escapes files root")
 
     root = root.resolve()
     p = (root / rel).resolve()
     if p != root and root not in p.parents:
-        raise HTTPException(status_code=400, detail="path escapes workspace")
+        raise HTTPException(status_code=400, detail="path escapes files root")
     return p

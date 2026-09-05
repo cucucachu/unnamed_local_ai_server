@@ -18,7 +18,7 @@
 #   4. FULL restart: `docker compose down && docker compose up -d` - NOT
 #      just `docker compose restart agent-server` like `persistence_smoke.sh`
 #      - deliberately WITHOUT `-v`/`--volumes`, so the `pgdata` named volume
-#      (Postgres - threads + checkpoints, M3-01) and the `WORKSPACE_DIR` bind
+#      (Postgres - threads + checkpoints, M3-01) and the `FILES_DIR` bind
 #      mount (files, always host-backed) both survive; only the containers
 #      and the bridge network are torn down and recreated.
 #   5. After the restart: the thread is still listed via REST, its messages
@@ -32,7 +32,7 @@
 #
 # M6-03: cleanup now also removes the now-empty "reports/" dir this script
 # creates (the file-delete alone left an empty directory behind - confirmed
-# it was still sitting in the real workspace from earlier runs) via a plain
+# it was still sitting in the real files dir from earlier runs) via a plain
 # `rmdir`, which only succeeds on an empty directory - never touches a real
 # user "reports" dir that happens to have other content in it. Cleanup also
 # best-effort deletes any code-exec-manager session keyed by THREAD_ID:
@@ -74,12 +74,12 @@ FILE_WRITE_TIMEOUT_S=90
 WS_TURN_TIMEOUT_S=90
 RESTART_GRACE_S=5
 
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[gate-m3] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[gate-m3] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-HOST_FILE_PATH="${WORKSPACE_DIR}/${FILE_PATH}"
+HOST_FILE_PATH="${FILES_DIR}/${FILE_PATH}"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
 
@@ -162,7 +162,7 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: workspace-relative file path. $2: local destination path. Prints the
+# $1: root-relative file path. $2: local destination path. Prints the
 # status code on line 1; writes the raw response body bytes to $2.
 download_file() {
   local remote_path="$1" local_dst="$2"
@@ -442,7 +442,7 @@ cleanup() {
     bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
-  rmdir "${WORKSPACE_DIR}/${FILE_DIR}" 2>/dev/null || true
+  rmdir "${FILES_DIR}/${FILE_DIR}" 2>/dev/null || true
   if [ -n "${THREAD_ID:-}" ]; then
     rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
     # Best-effort: the LLM may have used execute_code (not just file tools)
