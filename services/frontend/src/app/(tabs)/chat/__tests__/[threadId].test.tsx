@@ -31,6 +31,8 @@ function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
     connectionState: 'open',
     hydrationState: 'done',
     retryHydration: jest.fn(),
+    pendingApproval: null,
+    respondToApproval: jest.fn(),
     ...overrides,
   });
 }
@@ -141,6 +143,17 @@ describe('ChatScreen ([threadId])', () => {
    * existing tests already favor explicit assertions over snapshots. */
   function renderedText(renderer: ReturnType<typeof create>): string {
     return JSON.stringify(renderer.toJSON());
+  }
+
+  /** `findAllByProps` matches both the host `View` instance and any
+   * composite ancestor that also carries the prop through, so a raw
+   * `.length` on a `testID`-tagged `View` over-counts by a fixed factor —
+   * filtering to `type === 'View'` (the host-level match only) gives the
+   * real number of rendered rows. */
+  function countHostMatches(renderer: ReturnType<typeof create>, testID: string): number {
+    return renderer.root
+      .findAllByProps({ testID })
+      .filter((instance) => (instance.type as unknown) === 'View').length;
   }
 
   function expandFirstToolCard(renderer: ReturnType<typeof create>): void {
@@ -478,6 +491,207 @@ describe('ChatScreen ([threadId])', () => {
       });
 
       expect(() => renderer?.root.findByProps({ testID: 'chat-item-stopped-caption' })).toThrow();
+    });
+  });
+
+  describe('ApprovalCard (M8-03)', () => {
+    const singleAction = {
+      toolCallId: 'call-1',
+      name: 'write_file',
+      category: 'file' as const,
+      args: { file_path: '/x.txt', content: 'hello world' },
+      description: 'Write file `/x.txt`',
+    };
+
+    it('is not rendered when pendingApproval is null', () => {
+      setUseChatResult({ pendingApproval: null });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(() => renderer?.root.findByProps({ testID: 'approval-card' })).toThrow();
+    });
+
+    it('renders one row per action, the command/args, and disables the composer', () => {
+      setUseChatResult({
+        pendingApproval: { interruptId: 'int-1', actions: [singleAction] },
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const card = renderer?.root.findByProps({ testID: 'approval-card' });
+      expect(card).toBeTruthy();
+      expect(countHostMatches(renderer!, 'approval-row')).toBe(1);
+      expect(renderedText(renderer!)).toContain('/x.txt');
+      expect(renderedText(renderer!)).toContain('hello world');
+
+      // No "Approve all" for a single action.
+      expect(() => renderer?.root.findByProps({ accessibilityLabel: 'Approve all' })).toThrow();
+
+      // Composer disabled while awaiting approval.
+      const input = renderer?.root.findByProps({ placeholder: 'Message…' });
+      expect(input?.props.editable).toBe(false);
+    });
+
+    it('shows "Approve all" when there is more than one pending action', () => {
+      setUseChatResult({
+        pendingApproval: {
+          interruptId: 'int-2',
+          actions: [
+            singleAction,
+            {
+              toolCallId: 'call-2',
+              name: 'execute_code',
+              category: 'exec' as const,
+              args: { command: 'rm -rf /tmp/x' },
+              description: 'Run command: `rm -rf /tmp/x`',
+            },
+          ],
+        },
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(countHostMatches(renderer!, 'approval-row')).toBe(2);
+      expect(renderer?.root.findByProps({ accessibilityLabel: 'Approve all' })).toBeTruthy();
+      expect(renderedText(renderer!)).toContain('rm -rf /tmp/x');
+    });
+
+    it('Approve/Reject buttons call respondToApproval with the right decision and disable after one response', () => {
+      const respondToApproval = jest.fn();
+      setUseChatResult({
+        pendingApproval: { interruptId: 'int-3', actions: [singleAction] },
+        respondToApproval,
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const approveButton = renderer?.root.findByProps({ accessibilityLabel: 'Approve write_file' });
+      act(() => {
+        (approveButton?.props as { onPress: () => void }).onPress();
+      });
+
+      expect(respondToApproval).toHaveBeenCalledWith([{ tool_call_id: 'call-1', decision: 'approve' }]);
+      expect((approveButton?.props as { disabled: boolean }).disabled).toBe(true);
+
+      const rejectButton = renderer?.root.findByProps({ accessibilityLabel: 'Reject write_file' });
+      expect((rejectButton?.props as { disabled: boolean }).disabled).toBe(true);
+
+      // A second tap (e.g. a fast double-tap race) must not send twice.
+      act(() => {
+        (approveButton?.props as { onPress: () => void }).onPress();
+      });
+      expect(respondToApproval).toHaveBeenCalledTimes(1);
+    });
+
+    it('per-row Approve/Reject on a multi-action card waits until every row has a decision', () => {
+      const respondToApproval = jest.fn();
+      setUseChatResult({
+        pendingApproval: {
+          interruptId: 'int-mixed',
+          actions: [
+            singleAction,
+            {
+              toolCallId: 'call-2',
+              name: 'delete',
+              category: 'file' as const,
+              args: { file_path: '/y.txt' },
+              description: 'Delete `/y.txt`',
+            },
+          ],
+        },
+        respondToApproval,
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const approveWrite = renderer?.root.findByProps({ accessibilityLabel: 'Approve write_file' });
+      act(() => {
+        (approveWrite?.props as { onPress: () => void }).onPress();
+      });
+      expect(respondToApproval).not.toHaveBeenCalled();
+
+      const rejectDelete = renderer?.root.findByProps({ accessibilityLabel: 'Reject delete' });
+      act(() => {
+        (rejectDelete?.props as { onPress: () => void }).onPress();
+      });
+      expect(respondToApproval).toHaveBeenCalledWith([
+        { tool_call_id: 'call-1', decision: 'approve' },
+        { tool_call_id: 'call-2', decision: 'reject' },
+      ]);
+    });
+
+    it('"Approve all" sends one approve decision per pending action', () => {
+      const respondToApproval = jest.fn();
+      setUseChatResult({
+        pendingApproval: {
+          interruptId: 'int-4',
+          actions: [
+            singleAction,
+            {
+              toolCallId: 'call-2',
+              name: 'delete',
+              category: 'file' as const,
+              args: { file_path: '/y.txt' },
+              description: 'Delete `/y.txt`',
+            },
+          ],
+        },
+        respondToApproval,
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const approveAllButton = renderer?.root.findByProps({ accessibilityLabel: 'Approve all' });
+      act(() => {
+        (approveAllButton?.props as { onPress: () => void }).onPress();
+      });
+
+      expect(respondToApproval).toHaveBeenCalledWith([
+        { tool_call_id: 'call-1', decision: 'approve' },
+        { tool_call_id: 'call-2', decision: 'approve' },
+      ]);
+    });
+
+    it('renders a "rejected" chip on a tool item with status "rejected"', () => {
+      setUseChatResult({
+        items: [
+          {
+            id: 't-rejected',
+            kind: 'tool',
+            toolCallId: 'call-1',
+            name: 'write_file',
+            category: 'file',
+            status: 'rejected',
+            args: { file_path: '/x.txt', content: 'y' },
+          },
+        ],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderer?.root.findByProps({ testID: 'chat-item-tool-rejected-chip' })).toBeTruthy();
+      expect(renderedText(renderer!)).toContain('rejected');
     });
   });
 });

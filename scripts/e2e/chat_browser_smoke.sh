@@ -42,5 +42,16 @@ fi
 echo "==> Ensuring the Chromium browser binary is installed..."
 npx playwright install chromium
 
+repo_root="$(cd "$script_dir/../.." && pwd)"
+if [ -f "$repo_root/.env" ]; then
+  WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
+  export WORKSPACE_DIR
+fi
+if [ -z "${WORKSPACE_DIR:-}" ]; then
+  echo "ERROR: WORKSPACE_DIR is not set (needed for M8-03 hello.txt assertions)" >&2
+  exit 1
+fi
+
 echo "==> Running the smoke test against ${CHAT_SMOKE_BASE_URL:-http://localhost/}..."
+echo "    WORKSPACE_DIR=${WORKSPACE_DIR}"
 node "$script_dir/chat_browser_smoke.mjs"

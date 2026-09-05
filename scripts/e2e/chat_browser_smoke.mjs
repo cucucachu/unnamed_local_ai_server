@@ -27,12 +27,22 @@
 // right after creating it and deletes both the thread and its exec session
 // in a `finally` block, so re-running this script (standalone or inside
 // `gate_full.sh`) doesn't accumulate cruft.
+//
+// M8-03: after the existing steps (which need HITL *off* so `execute_code`
+// in step 6 still runs without an approval card), this script toggles
+// `hitl_enabled` via `PUT /api/settings` and drives the three Playwright
+// scenarios from that ticket: Approve writes `${WORKSPACE_DIR}/hello.txt`,
+// Reject leaves the reject-target file absent, HITL-off writes with no
+// approval card. Original settings are restored in `finally`.
 
 import { execFileSync } from 'node:child_process';
+import { existsSync, rmSync } from 'node:fs';
+import path from 'node:path';
 import { chromium } from 'playwright';
 
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE = process.env.CHAT_SMOKE_API_BASE ?? 'http://localhost/api';
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR ?? '';
 const TIMEOUT_MS = 120_000;
 
 // Deliberately > 60 chars (and with a run of internal whitespace) so the
@@ -59,6 +69,16 @@ const WEB_SEARCH_MESSAGE = 'Use web_search to search for: llama.cpp github repos
 // within ~2s of sending and still be mid-stream when it does.
 const COUNT_SLOWLY_MESSAGE = 'Count slowly from 1 to 200, one number per line';
 const STOP_FOLLOW_UP_MESSAGE = 'Say exactly: PONG once more, after being stopped.';
+// M8-03: explicit tool-name phrasing (same convention as EXEC_MESSAGE /
+// WEB_SEARCH_MESSAGE) so the real model actually calls `write_file`
+// rather than describing the file. The ticket's prompt text is the
+// "Create <name> containing hi" clause.
+const HITL_APPROVE_MESSAGE = 'Create hello.txt containing hi. Use write_file.';
+const HITL_REJECT_MESSAGE = 'Create hello-reject.txt containing hi. Use write_file.';
+const HITL_OFF_MESSAGE = 'Create hello-off.txt containing hi. Use write_file.';
+const HITL_APPROVE_FILE = 'hello.txt';
+const HITL_REJECT_FILE = 'hello-reject.txt';
+const HITL_OFF_FILE = 'hello-off.txt';
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
@@ -151,6 +171,42 @@ async function waitForAnyText(container, patterns, timeoutMs) {
  * other `scripts/e2e/*.sh` script — code-exec-manager publishes no host
  * port (M4-03), so its session is reached by execing python3 directly
  * inside its own container against its own localhost:8090. */
+/** GET/PUT `/api/settings` via python3 urllib (this host has no `curl`). */
+function settingsRequest(method, body) {
+  const script = `
+import json, sys, urllib.request
+
+url, method, raw_body = sys.argv[1], sys.argv[2], sys.argv[3]
+req = urllib.request.Request(url, method=method)
+if raw_body:
+    req.data = raw_body.encode()
+    req.add_header('Content-Type', 'application/json')
+with urllib.request.urlopen(req, timeout=15) as resp:
+    sys.stdout.write(resp.read().decode())
+`;
+  const raw = execFileSync(
+    'python3',
+    ['-c', script, `${API_BASE}/settings`, method, body ? JSON.stringify(body) : ''],
+    { encoding: 'utf8' },
+  );
+  return JSON.parse(raw);
+}
+
+function workspaceFilePath(name) {
+  if (!WORKSPACE_DIR) {
+    throw new Error('WORKSPACE_DIR is not set (chat_browser_smoke.sh exports it from .env)');
+  }
+  return path.join(WORKSPACE_DIR, name);
+}
+
+function removeWorkspaceFileBestEffort(name) {
+  try {
+    rmSync(workspaceFilePath(name), { force: true });
+  } catch {
+    // best-effort
+  }
+}
+
 function cleanupThreadBestEffort(threadId) {
   if (!threadId) return;
   const deleteThreadScript = `
@@ -186,11 +242,29 @@ except Exception:
   }
 }
 
+async function sendAndAwaitApprovalCard(page, message, timeoutMs = TIMEOUT_MS) {
+  const input = page.getByPlaceholder('Message…');
+  await input.waitFor({ state: 'visible', timeout: 15_000 });
+  await input.fill(message);
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  const card = page.locator('[data-testid="approval-card"]');
+  await card.waitFor({ state: 'visible', timeout: timeoutMs });
+  return card;
+}
+
 async function main() {
   const startedAt = Date.now();
   let threadId;
+  let savedSettings = null;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Existing steps include `execute_code` (step 6), which HITL-on would
+    // pause behind an approval card. Force HITL off for those, then
+    // toggle it for the M8-03 scenarios below. Restore in `finally`.
+    savedSettings = settingsRequest('GET');
+    settingsRequest('PUT', { hitl_enabled: false });
+
     const page = await browser.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
@@ -355,11 +429,122 @@ async function main() {
     const stopFollowUpReply = await sendMessageAndAwaitReply(page, STOP_FOLLOW_UP_MESSAGE, postStopAssistantCount);
     console.log(`Step 8 OK — follow-up after Stop completed normally: ${stopFollowUpReply}`);
 
+    // --- Step 9: HITL approve (M8-03) -----------------------------------
+    settingsRequest('PUT', { hitl_enabled: true });
+    removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
+
+    const approvePriorTools = await toolCardLocator.count();
+    await sendAndAwaitApprovalCard(page, HITL_APPROVE_MESSAGE);
+    console.log('Step 9 OK — approval card appeared (HITL on, write_file)');
+
+    await page.getByRole('button', { name: 'Approve write_file' }).click();
+    await expectCountAbove(toolCardLocator, approvePriorTools, TIMEOUT_MS, 'approved write_file tool card');
+    const approveCard = toolCardLocator.nth(approvePriorTools);
+    if ((await approveCard.locator('[data-testid="chat-item-tool-rejected-chip"]').count()) > 0) {
+      throw new Error('Step 9: approved write_file rendered a rejected chip');
+    }
+    const approveFileDeadline = Date.now() + TIMEOUT_MS;
+    while (Date.now() < approveFileDeadline && !existsSync(workspaceFilePath(HITL_APPROVE_FILE))) {
+      await page.waitForTimeout(300);
+    }
+    if (!existsSync(workspaceFilePath(HITL_APPROVE_FILE))) {
+      throw new Error(`Step 9: ${workspaceFilePath(HITL_APPROVE_FILE)} does not exist after Approve`);
+    }
+    console.log(`Step 9 OK — Approve wrote ${workspaceFilePath(HITL_APPROVE_FILE)}`);
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+
+    // --- Step 10: HITL reject (M8-03) -----------------------------------
+    removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
+    const rejectPriorAssistantCount = await assistantBubbleLocator.count();
+    await sendAndAwaitApprovalCard(page, HITL_REJECT_MESSAGE);
+    console.log('Step 10 OK — approval card appeared (reject scenario)');
+
+    await page.getByRole('button', { name: 'Reject write_file' }).click();
+    const rejectedChip = page.locator('[data-testid="chat-item-tool-rejected-chip"]');
+    await rejectedChip.first().waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    if (existsSync(workspaceFilePath(HITL_REJECT_FILE))) {
+      throw new Error(`Step 10: ${workspaceFilePath(HITL_REJECT_FILE)} exists after Reject`);
+    }
+    const rejectDeadline = Date.now() + TIMEOUT_MS;
+    let rejectAck = '';
+    while (Date.now() < rejectDeadline) {
+      const count = await assistantBubbleLocator.count();
+      if (count > rejectPriorAssistantCount) {
+        const newest = assistantBubbleLocator.nth(count - 1);
+        const text = (await newest.textContent())?.trim() ?? '';
+        if (text.length > 0 && !text.includes(STREAMING_CURSOR)) {
+          rejectAck = text.replace(STREAMING_CURSOR, '').trim();
+          break;
+        }
+      }
+      await page.waitForTimeout(300);
+    }
+    if (!rejectAck) {
+      throw new Error('Step 10: assistant did not acknowledge the rejected write');
+    }
+    if (existsSync(workspaceFilePath(HITL_REJECT_FILE))) {
+      throw new Error(`Step 10: ${workspaceFilePath(HITL_REJECT_FILE)} appeared after the assistant replied`);
+    }
+    console.log(`Step 10 OK — Reject left file absent; assistant: ${rejectAck}`);
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+
+    // --- Step 11: HITL off — no approval card (M8-03) -------------------
+    settingsRequest('PUT', { hitl_enabled: false });
+    removeWorkspaceFileBestEffort(HITL_OFF_FILE);
+    const offPriorTools = await toolCardLocator.count();
+    await input.fill(HITL_OFF_MESSAGE);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const offDeadline = Date.now() + TIMEOUT_MS;
+    let sawApprovalCard = false;
+    let sawOffToolCard = false;
+    while (Date.now() < offDeadline) {
+      if ((await page.locator('[data-testid="approval-card"]').count()) > 0) {
+        sawApprovalCard = true;
+        break;
+      }
+      if ((await toolCardLocator.count()) > offPriorTools) {
+        sawOffToolCard = true;
+        break;
+      }
+      await page.waitForTimeout(300);
+    }
+    if (sawApprovalCard) {
+      throw new Error('Step 11: approval card appeared with HITL off');
+    }
+    if (!sawOffToolCard) {
+      throw new Error('Step 11: write_file tool card did not appear with HITL off');
+    }
+    const offCard = toolCardLocator.nth(offPriorTools);
+    await waitForAnyText(offCard, [/write_file/], TIMEOUT_MS);
+    const offFileDeadline = Date.now() + 30_000;
+    while (Date.now() < offFileDeadline && !existsSync(workspaceFilePath(HITL_OFF_FILE))) {
+      await page.waitForTimeout(300);
+    }
+    if (!existsSync(workspaceFilePath(HITL_OFF_FILE))) {
+      throw new Error(`Step 11: ${workspaceFilePath(HITL_OFF_FILE)} does not exist with HITL off`);
+    }
+    console.log('Step 11 OK — HITL off wrote the file with no approval card');
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up flow completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
+    removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
+    removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
+    removeWorkspaceFileBestEffort(HITL_OFF_FILE);
+    if (savedSettings !== null) {
+      try {
+        settingsRequest('PUT', {
+          hitl_enabled: savedSettings.hitl_enabled,
+          thinking_enabled: savedSettings.thinking_enabled,
+          edit_mode_default: savedSettings.edit_mode_default,
+        });
+      } catch {
+        // best-effort restore
+      }
+    }
   }
 }
 

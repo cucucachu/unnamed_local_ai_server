@@ -4,9 +4,13 @@ Wire format is fixed by docs/ARCHITECTURE.md's "Contracts" section (the
 WebSocket chat protocol) — do not deviate; the frontend is built against it
 exactly.
 
-Client -> server (two valid incoming frames):
+Client -> server (four valid incoming frames):
     {"type": "user_message", "content": "string"}
-    {"type": "cancel"}   # M8-01: only meaningful while a turn is in flight
+    {"type": "cancel"}   # M8-01: cancels a running turn; M8-03: while
+                          # awaiting approval, rejects all pending actions
+    {"type": "approval_response", "interrupt_id": "str",
+     "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
+     # M8-03: only valid while awaiting approval (see below)
 
 Server -> client (in order within a turn):
     {"type": "turn_start"}
@@ -15,18 +19,96 @@ Server -> client (in order within a turn):
      "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}
     {"type": "tool_end", "tool_call_id": "str", "name": "str",
      "status": "success"|"error", "result_preview": "str"}
-    {"type": "turn_end", "status": "completed"|"cancelled"}
+    {"type": "approval_request", "interrupt_id": "str",
+     "actions": [{"tool_call_id", "name", "category", "args", "description"}]}
+     # M8-03: emitted instead of a normal completion when the turn ends with
+     # one or more mutating tool calls paused for human approval; ALWAYS
+     # immediately followed by `turn_end {"status": "awaiting_approval"}`
+     # (no `turn_end {"status": "completed"}` for that turn).
+    {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval"}
     {"type": "error", "message": "str"}   # then close, code 1011
 
 Anything other than a well-formed `user_message` frame, received while idle
-(i.e. NOT mid-turn) -> `error` frame, then close code 1008 (policy
-violation) — this now excludes `{"type": "cancel"}`, which is a no-op
-outside a turn (see `chat_ws` below) rather than a close. Any frame
+(i.e. NOT mid-turn, NOT awaiting approval) -> `error` frame, then close code
+1008 (policy violation) — this excludes `{"type": "cancel"}`, which is a
+no-op outside a turn (see `chat_ws` below) rather than a close. Any frame
 received WHILE a turn is in flight is handled by `_watch_inbound` instead:
 `{"type": "cancel"}` cancels the turn (see M8-01 notes below); every other
 frame received mid-turn is ignored (looped past), matching v1's existing
 "a well-behaved client never sends another frame before turn_end/error"
-assumption for anything other than `cancel`.
+assumption for anything other than `cancel`. While AWAITING APPROVAL (i.e.
+the previous `turn_end` had `status: "awaiting_approval"`), the only two
+valid inbound frames are `approval_response` (matching the pending
+`interrupt_id`, with one decision per pending `tool_call_id`) and `cancel`
+(reject-all); anything else -> `error` frame + close 1008, same as an
+invalid frame while idle.
+
+## M8-03 human-in-the-loop approvals (`interrupt_on`)
+
+- `build_agent` (`app/agent/build.py`) installs `HumanInTheLoopMiddleware`
+  for the four mutating tools (`write_file`, `edit_file`, `delete`,
+  `execute_code`) via `interrupt_on=...`, gated per-turn by a `when`
+  predicate reading `config["configurable"]["hitl_enabled"]`. **Finding**
+  (see `build.py`'s module docstring for the full empirical writeup): the
+  direct `InterruptOnConfig.when` predicate mechanism works as-is with the
+  installed `deepagents==0.7.11`/`langchain==1.6.x` — no dual-compiled-graph
+  fallback was needed. This module is the ONLY thing that sets
+  `hitl_enabled` in `configurable` — read fresh from `SettingsStore` at the
+  start of every turn (`_current_hitl_enabled` below), so a mid-conversation
+  settings change takes effect on the very next turn.
+- After a turn's `astream_events` stream completes (fresh OR resumed —
+  see below), `_run_turn` checks `agent.aget_state(config).tasks[*].
+  interrupts` for a pending `Interrupt`. `HumanInTheLoopMiddleware.
+  after_model` always raises exactly one combined `Interrupt` per paused
+  `AIMessage` (`langgraph`'s own `interrupt()` call takes a single
+  `HITLRequest` covering every tool call needing review in that message,
+  confirmed by reading `langchain/agents/middleware/human_in_the_loop.py`),
+  so at most one `Interrupt` is ever pending at a time — never a list to
+  fan out over.
+- The raw `Interrupt.value` (a `HITLRequest`: `{"action_requests": [...],
+  "review_configs": [...]}`) does NOT carry a `tool_call_id` per action —
+  only `name`/`args`/`description`. `_pending_approval_from_state` (shared
+  with `GET /api/threads/{id}/state` in `app/api/chat.py`) recovers the
+  ids by re-reading the checkpointed state's last `AIMessage.tool_calls`
+  and zipping the subset whose `name` is one of the four mutating tools
+  (in original call order) against `action_requests` (built in that exact
+  same subset+order by `HumanInTheLoopMiddleware.after_model` — see
+  `build.py`'s `_hitl_enabled`, which returns the same bool for every
+  mutating tool call in a turn, so "which calls interrupted" is fully
+  determined by tool name membership alone, not by call-specific state).
+  This needs no extra persistent storage: everything is reconstructed from
+  the checkpointer's own state on every read.
+- Resuming: `{"type": "approval_response", ...}` (or a `cancel`,
+  reject-all) is turned into an ordered `decisions` list (one entry per
+  pending `tool_call_id`, in the SAME order `_pending_approval_from_state`
+  emitted them) and run via `agent.astream_events(Command(resume=
+  {"decisions": [...]}), config=..., version="v2")` — confirmed against
+  `HumanInTheLoopMiddleware._process_decision` that this is the exact
+  expected shape: `{"type": "approve"}` / `{"type": "reject", "message":
+  "..."}`. This resumed execution runs through the exact same `_run_turn`/
+  `_run_turn_or_interrupt` machinery as a fresh `user_message` turn — a
+  full `turn_start` ... (streaming) ... `turn_end` cycle on the same
+  per-thread lock — and can itself end in `"completed"`, `"cancelled"` (if
+  the client sends ANOTHER `cancel` while this resumed turn is actively
+  streaming — the normal M8-01 path, since the graph is running again, not
+  paused), or `"awaiting_approval"` again (a later mutating tool call in
+  the same resumed run).
+- `cancel` received while awaiting approval is NOT the M8-01
+  disconnect/cancel-a-running-task path — there is no running task; the
+  graph is paused on the interrupt. It's handled by resuming with an
+  all-`"reject"` decision list, message `"The user cancelled."`, exactly
+  like a rejected `approval_response` (same `Command(resume=...)` +
+  `_run_turn_or_interrupt` call), so the model still gets a normal
+  rejection `ToolMessage` and the conversation can continue.
+- `chat_ws`'s own receive loop tracks `pending_approval` (the dict
+  `_pending_approval_from_state` returned for the CURRENT thread's last
+  turn, or `None`) as local state for the lifetime of one WS connection —
+  purely a routing aid for "is the next inbound frame validated against
+  `user_message` rules or `approval_response` rules"; it is NOT the source
+  of truth. A reconnect re-derives it fresh from the checkpointer both
+  server-side (on WS accept, so `approval_response` on the new socket
+  works) and client-side (`GET /api/threads/{id}/state`, see
+  `app/api/chat.py`).
 
 ## M8-01 `cancel` frame notes
 
@@ -131,8 +213,11 @@ import json
 from typing import Any
 
 from fastapi import APIRouter
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
+
+from app.agent.build import MUTATING_TOOL_NAMES
 
 router = APIRouter()
 
@@ -231,6 +316,102 @@ def _validate_user_message(raw: object) -> str | None:
     return content
 
 
+def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
+    """Derive the `approval_request`/`GET .../state` payload from checkpointed state.
+
+    Returns `{"interrupt_id": str, "actions": [{"tool_call_id", "name",
+    "category", "args", "description"}]}` or `None` if there's no pending
+    interrupt. See the module docstring's M8-03 section for the full
+    tool_call_id-recovery reasoning: `HumanInTheLoopMiddleware.after_model`
+    raises exactly one `Interrupt` whose `value["action_requests"]` doesn't
+    carry a `tool_call_id`, so this zips it against the last `AIMessage`'s
+    tool calls filtered to `MUTATING_TOOL_NAMES` (same subset+order the
+    middleware itself used to build `action_requests`).
+    """
+    interrupts = [i for task in state.tasks for i in task.interrupts]
+    if not interrupts:
+        return None
+    interrupt = interrupts[0]
+    value = interrupt.value or {}
+    action_requests = value.get("action_requests") or []
+    if not action_requests:
+        return None
+
+    messages = state.values.get("messages", [])
+    last_ai_msg = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+    tool_call_ids = (
+        [tc["id"] for tc in last_ai_msg.tool_calls if tc["name"] in MUTATING_TOOL_NAMES]
+        if last_ai_msg is not None
+        else []
+    )
+
+    actions = []
+    for idx, action_request in enumerate(action_requests):
+        name = action_request.get("name", "")
+        tool_call_id = tool_call_ids[idx] if idx < len(tool_call_ids) else ""
+        actions.append(
+            {
+                "tool_call_id": tool_call_id,
+                "name": name,
+                "category": _category_for_tool(name),
+                "args": _truncated_args(action_request.get("args")),
+                "description": action_request.get("description", ""),
+            }
+        )
+    return {"interrupt_id": str(interrupt.id), "actions": actions}
+
+
+async def get_pending_approval(agent: Any, thread_id: str) -> dict | None:
+    """Public helper for `GET /api/threads/{id}/state` (`app/api/chat.py`).
+
+    Re-derives the pending approval purely from the checkpointer's own
+    state — no extra persistent storage needed (see module docstring).
+    """
+    state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
+    return _pending_approval_from_state(state)
+
+
+def _reject_all_decisions(pending_approval: dict, message: str) -> list[dict]:
+    return [{"type": "reject", "message": message} for _ in pending_approval["actions"]]
+
+
+def _decisions_from_approval_response(raw: object, pending_approval: dict) -> list[dict] | None:
+    """Validate an `approval_response` frame against the pending approval.
+
+    Returns the ordered `decisions` list (matching `pending_approval
+    ["actions"]`'s order, ready for `Command(resume={"decisions": ...})`)
+    or `None` if the frame is malformed, doesn't match the currently
+    pending `interrupt_id`, is missing a decision for any pending
+    `tool_call_id`, or contains an invalid `decision` value.
+    """
+    if not isinstance(raw, dict) or raw.get("type") != "approval_response":
+        return None
+    if raw.get("interrupt_id") != pending_approval["interrupt_id"]:
+        return None
+    decisions_in = raw.get("decisions")
+    if not isinstance(decisions_in, list):
+        return None
+    by_tool_call_id: dict[str, Any] = {}
+    for entry in decisions_in:
+        if not isinstance(entry, dict):
+            return None
+        tool_call_id = entry.get("tool_call_id")
+        if not isinstance(tool_call_id, str):
+            return None
+        by_tool_call_id[tool_call_id] = entry.get("decision")
+
+    ordered: list[dict] = []
+    for action in pending_approval["actions"]:
+        decision = by_tool_call_id.get(action["tool_call_id"])
+        if decision == "approve":
+            ordered.append({"type": "approve"})
+        elif decision == "reject":
+            ordered.append({"type": "reject", "message": "The user rejected this action."})
+        else:
+            return None
+    return ordered
+
+
 def _frame_for_event(event: dict) -> dict | None:
     """Map one `astream_events` event to an outgoing frame dict, or `None` to skip it."""
     kind = event.get("event")
@@ -281,19 +462,45 @@ def _frame_for_event(event: dict) -> dict | None:
     return None
 
 
-async def _run_turn(websocket: WebSocket, thread_id: str, content: str) -> None:
+async def _run_turn(
+    websocket: WebSocket, thread_id: str, run_input: Any, hitl_enabled: bool
+) -> tuple[str, dict | None]:
+    """Run one turn (fresh `user_message` OR a resumed `Command(resume=...)`).
+
+    `run_input` is either `{"messages": [HumanMessage(...)]}` (a fresh turn)
+    or a `langgraph.types.Command(resume={"decisions": [...]})` (M8-03:
+    resuming a paused approval, from either `approval_response` or a
+    reject-all `cancel`-while-awaiting-approval).
+
+    Returns `(status, pending_approval)`: `status` is `"completed"` or
+    `"awaiting_approval"` (see module docstring's M8-03 section for when
+    each fires); `pending_approval` is the dict `_pending_approval_from_state`
+    returned (only non-`None` when `status == "awaiting_approval"`).
+    """
     agent = websocket.app.state.agent
+    config = {"configurable": {"thread_id": thread_id, "hitl_enabled": hitl_enabled}}
 
     await websocket.send_json({"type": "turn_start"})
-    async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=content)]},
-        config={"configurable": {"thread_id": thread_id}},
-        version="v2",
-    ):
+    async for event in agent.astream_events(run_input, config=config, version="v2"):
         frame = _frame_for_event(event)
         if frame is not None:
             await websocket.send_json(frame)
+
+    state = await agent.aget_state(config)
+    pending_approval = _pending_approval_from_state(state)
+    if pending_approval is not None:
+        await websocket.send_json(
+            {
+                "type": "approval_request",
+                "interrupt_id": pending_approval["interrupt_id"],
+                "actions": pending_approval["actions"],
+            }
+        )
+        await websocket.send_json({"type": "turn_end", "status": "awaiting_approval"})
+        return "awaiting_approval", pending_approval
+
     await websocket.send_json({"type": "turn_end", "status": "completed"})
+    return "completed", None
 
 
 def _is_cancel_frame(raw: object) -> bool:
@@ -324,26 +531,30 @@ async def _watch_inbound(websocket: WebSocket) -> str:
             return "cancel"
 
 
-async def _run_turn_or_interrupt(websocket: WebSocket, thread_id: str, content: str) -> str:
-    """Run one turn, racing it against `_watch_inbound`.
+async def _run_turn_or_interrupt(
+    websocket: WebSocket, thread_id: str, run_input: Any, hitl_enabled: bool
+) -> tuple[str, dict | None]:
+    """Run one turn (see `_run_turn`), racing it against `_watch_inbound`.
 
-    Returns `"completed"` if the turn ran to completion, `"cancelled"` if a
-    `cancel` frame arrived mid-turn (a `turn_end {"status": "cancelled"}`
-    frame has already been sent and the connection is still open), or
-    `"disconnected"` if the client's socket closed mid-turn (the caller
-    should stop processing this connection; no frame is sent — the socket
-    is already gone). Propagates any exception the turn itself raised
-    (unhandled model/agent error).
+    Returns `(status, pending_approval)`. `status` is `"completed"` or
+    `"awaiting_approval"` if the turn ran to completion (see `_run_turn`),
+    `"cancelled"` if a `cancel` frame arrived while the turn was ACTIVELY
+    STREAMING (a `turn_end {"status": "cancelled"}` frame has already been
+    sent and the connection is still open — `pending_approval` is always
+    `None` in this case, since a cancelled-mid-stream turn can't also have
+    produced a pending interrupt), or `"disconnected"` if the client's
+    socket closed mid-turn (the caller should stop processing this
+    connection; no frame is sent — the socket is already gone). Propagates
+    any exception the turn itself raised (unhandled model/agent error).
     """
-    turn_task = asyncio.create_task(_run_turn(websocket, thread_id, content))
+    turn_task = asyncio.create_task(_run_turn(websocket, thread_id, run_input, hitl_enabled))
     watch_task = asyncio.create_task(_watch_inbound(websocket))
     try:
         done, _pending = await asyncio.wait(
             {turn_task, watch_task}, return_when=asyncio.FIRST_COMPLETED
         )
         if turn_task in done:
-            turn_task.result()  # re-raises if the turn itself raised
-            return "completed"
+            return turn_task.result()  # re-raises if the turn itself raised
 
         outcome = watch_task.result()  # "disconnect" or "cancel"
 
@@ -355,8 +566,8 @@ async def _run_turn_or_interrupt(websocket: WebSocket, thread_id: str, content: 
 
         if outcome == "cancel":
             await websocket.send_json({"type": "turn_end", "status": "cancelled"})
-            return "cancelled"
-        return "disconnected"
+            return "cancelled", None
+        return "disconnected", None
     finally:
         if not watch_task.done():
             watch_task.cancel()
@@ -371,12 +582,37 @@ async def _send_error_and_close(websocket: WebSocket, message: str, code: int) -
         await websocket.close(code=code)
 
 
+async def _current_hitl_enabled(websocket: WebSocket) -> bool:
+    """Fresh per-turn read of `SettingsStore.get_document().hitl_enabled` (M8-03).
+
+    Read at the START of every turn (fresh AND resumed) rather than cached
+    for the connection's lifetime, so a mid-conversation settings change
+    (`PUT /api/settings`) takes effect on the very next turn.
+    """
+    settings_store = websocket.app.state.settings_store
+    document = await settings_store.get_document()
+    return document.hitl_enabled
+
+
 @router.websocket("/ws/chat/{thread_id}")
 async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     await websocket.accept()
 
     thread_store = websocket.app.state.thread_store
     await thread_store.ensure_exists(thread_id)
+
+    # M8-03: local routing state for this connection only — `None` while
+    # idle/mid-turn, set to the dict `_run_turn` returned right after a
+    # `turn_end {"status": "awaiting_approval"}`. See module docstring's
+    # M8-03 section: this is NOT the source of truth (a reconnect re-derives
+    # it from the checkpointer via `GET /api/threads/{id}/state`). A fresh
+    # socket must still *accept* `approval_response`/`cancel` for an
+    # already-pending interrupt, so we hydrate this routing aid from the
+    # checkpointer on connect rather than starting at `None` and treating
+    # a legitimate resume as an invalid idle-frame (1008).
+    pending_approval: dict | None = await get_pending_approval(
+        websocket.app.state.agent, thread_id
+    )
 
     while True:
         try:
@@ -389,10 +625,48 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             )
             return
 
-        # M8-01: `cancel` received while idle (no turn in flight) is a no-op
-        # — ignored, not a validation error, not a close. Checked before
-        # `_validate_user_message` so it never falls through to the
-        # invalid-frame/1008 path below.
+        lock = _thread_locks.setdefault(thread_id, asyncio.Lock())
+
+        if pending_approval is not None:
+            # M8-03: while awaiting approval, only `approval_response`
+            # (matching the pending interrupt) or `cancel` (reject-all) are
+            # valid — anything else is an invalid frame -> error + close
+            # 1008, same treatment as an invalid frame while idle.
+            if _is_cancel_frame(raw):
+                decisions = _reject_all_decisions(pending_approval, "The user cancelled.")
+            else:
+                decisions = _decisions_from_approval_response(raw, pending_approval)
+                if decisions is None:
+                    await _send_error_and_close(
+                        websocket,
+                        "invalid frame: expected a matching approval_response "
+                        "or cancel while awaiting approval",
+                        code=1008,
+                    )
+                    return
+
+            hitl_enabled = await _current_hitl_enabled(websocket)
+            run_input = Command(resume={"decisions": decisions})
+            async with lock:
+                try:
+                    outcome, new_pending = await _run_turn_or_interrupt(
+                        websocket, thread_id, run_input, hitl_enabled
+                    )
+                except WebSocketDisconnect:
+                    return
+                except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
+                    await _send_error_and_close(websocket, str(exc), code=1011)
+                    return
+            if outcome == "disconnected":
+                return
+            pending_approval = new_pending
+            await thread_store.touch(thread_id)
+            continue
+
+        # M8-01: `cancel` received while idle (no turn in flight, no pending
+        # approval) is a no-op — ignored, not a validation error, not a
+        # close. Checked before `_validate_user_message` so it never falls
+        # through to the invalid-frame/1008 path below.
         if _is_cancel_frame(raw):
             continue
 
@@ -406,11 +680,13 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             return
 
         await thread_store.set_title_if_new(thread_id, _derive_title(content))
+        hitl_enabled = await _current_hitl_enabled(websocket)
 
-        lock = _thread_locks.setdefault(thread_id, asyncio.Lock())
         async with lock:
             try:
-                outcome = await _run_turn_or_interrupt(websocket, thread_id, content)
+                outcome, new_pending = await _run_turn_or_interrupt(
+                    websocket, thread_id, {"messages": [HumanMessage(content=content)]}, hitl_enabled
+                )
             except WebSocketDisconnect:
                 return
             except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
@@ -418,4 +694,5 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                 return
         if outcome == "disconnected":
             return
+        pending_approval = new_pending
         await thread_store.touch(thread_id)

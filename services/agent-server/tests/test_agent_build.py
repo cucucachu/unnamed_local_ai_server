@@ -62,9 +62,13 @@ async def test_agent_file_tool_roundtrip(
         TextTurn("done"),
     )
 
+    # `hitl_enabled: False` (M8-03): this test is about the tool roundtrip
+    # itself, not the approval flow (see `tests/test_chat_ws.py` for HITL
+    # coverage) — HITL defaults on, so it must be explicitly disabled here
+    # for the tool to execute directly like it always has.
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "write a note"}]},
-        config={"configurable": {"thread_id": "t2"}},
+        config={"configurable": {"thread_id": "t2", "hitl_enabled": False}},
     )
 
     assert result["messages"][-1].content == "done"

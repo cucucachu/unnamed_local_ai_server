@@ -51,6 +51,7 @@ from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel
 
+from app.api.chat_ws import get_pending_approval
 from app.db.threads import ThreadRecord, ThreadStore
 
 router = APIRouter()
@@ -159,6 +160,27 @@ async def get_thread_messages(thread_id: str, request: Request) -> list[MessageO
 
     normalized = (_normalize_message(m) for m in messages)
     return [m for m in normalized if m is not None]
+
+
+@router.get("/threads/{thread_id}/state")
+async def get_thread_state(thread_id: str, request: Request) -> dict:
+    """`GET /api/threads/{id}/state` -> `{"pending_approval": {...} | null}` (M8-03).
+
+    Same shape as the `approval_request` frame's payload minus the frame's
+    own `type` envelope. `useChat` (frontend) calls this once after history
+    hydration on (re)connect so a pending approval survives a page reload —
+    derived purely from the checkpointer's own interrupt state
+    (`app.api.chat_ws.get_pending_approval`), no extra persistent storage.
+
+    Deliberately does NOT 404 for an unknown `thread_id` (unlike `GET
+    .../messages`): a thread with no checkpoint yet trivially has no
+    pending approval, and this endpoint's only caller polls it
+    unconditionally on every connect/reconnect, thread-existence
+    already-checked-elsewhere included.
+    """
+    agent = request.app.state.agent
+    pending_approval = await get_pending_approval(agent, thread_id)
+    return {"pending_approval": pending_approval}
 
 
 @router.delete("/threads/{thread_id}", status_code=204)

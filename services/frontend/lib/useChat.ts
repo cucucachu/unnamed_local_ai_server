@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   openChatSocket,
+  type ApprovalDecision,
+  type ApprovalRequestFrame,
   type ChatConnectionState,
   type ChatSocket,
   type ErrorFrame,
@@ -12,7 +14,7 @@ import {
   type TurnEndFrame,
   type WebSocketCtor,
 } from './chatSocket';
-import { getThreadMessages, type ThreadMessage } from './threads';
+import { getThreadMessages, getThreadState, type ThreadMessage } from './threads';
 
 let nextItemId = 0;
 /** Monotonic id generator — good enough for a single-session client list key
@@ -51,9 +53,30 @@ export interface ChatToolItem {
   toolCallId: string;
   name: string;
   category: ToolCategory;
-  status: 'running' | ToolStatus;
+  /** `'rejected'` (M8-03): client-only status for an action a human
+   * rejected via the `ApprovalCard` — synthesized locally (see `useChat`'s
+   * `respondToApproval`) since a rejected tool call never actually runs,
+   * so no real `tool_start`/`tool_end` frame ever arrives for it. */
+  status: 'running' | ToolStatus | 'rejected';
   args: Record<string, unknown>;
   resultPreview?: string;
+}
+
+/** M8-03: one pending mutating tool call awaiting a human decision —
+ * `useChat`'s camelCase mirror of `chatSocket.ts`'s `PendingApprovalAction`
+ * (an `approval_request` frame's `actions[]` entry, or `GET
+ * /api/threads/{id}/state`'s `pending_approval.actions[]` entry). */
+export interface PendingApprovalAction {
+  toolCallId: string;
+  name: string;
+  category: ToolCategory;
+  args: Record<string, unknown>;
+  description: string;
+}
+
+export interface PendingApproval {
+  interruptId: string;
+  actions: PendingApprovalAction[];
 }
 
 /** Not in the ticket's literal `ChatItem` sketch — added to represent an
@@ -174,7 +197,9 @@ export interface UseChatResult {
   items: ChatItem[];
   sendMessage: (text: string) => void;
   /** M8-01: sends a `cancel` frame for the in-flight turn (a no-op
-   * server-side if `busy` is already `false`). */
+   * server-side if `busy` is already `false`). M8-03: while
+   * `pendingApproval` is set, this rejects every pending action instead
+   * (see `chat_ws.py`'s "cancel while awaiting approval" handling). */
   stopTurn: () => void;
   busy: boolean;
   connectionState: ChatConnectionState;
@@ -186,6 +211,21 @@ export interface UseChatResult {
    * "error banner with retry"). No-op while a hydration attempt is already
    * in flight. */
   retryHydration: () => void;
+  /** M8-03: the currently pending approval (from a live `approval_request`
+   * frame OR restored via `GET /api/threads/{id}/state` right after
+   * hydration on connect/reconnect), or `null` if none. Gate the
+   * `ApprovalCard`'s visibility and the composer's disabled state on this
+   * being non-`null`. */
+  pendingApproval: PendingApproval | null;
+  /** M8-03: sends one decision per pending action (order doesn't matter —
+   * matched to `pendingApproval.actions` by `toolCallId`; every pending
+   * `toolCallId` must have an entry, or this throws) and immediately
+   * clears `pendingApproval` + disables further responses for this
+   * approval (avoids a double-submit race from a fast double-tap). Any
+   * rejected action gets a synthesized `ChatToolItem` with `status:
+   * 'rejected'` right away, since no real `tool_start`/`tool_end` frame
+   * will ever arrive for it. */
+  respondToApproval: (decisions: ApprovalDecision[]) => void;
 }
 
 /**
@@ -215,11 +255,30 @@ export interface UseChatResult {
  * `retryHydration` on `UseChatResult`, and the socket effect's leading
  * `hydrationState !== 'done'` guard below).
  */
+/** M8-03: maps a wire `approval_request`/`GET .../state` action (snake_case)
+ * to `useChat`'s own camelCase `PendingApprovalAction`. */
+function toPendingApprovalAction(action: {
+  tool_call_id: string;
+  name: string;
+  category: ToolCategory;
+  args: Record<string, unknown>;
+  description: string;
+}): PendingApprovalAction {
+  return {
+    toolCallId: action.tool_call_id,
+    name: action.name,
+    category: action.category,
+    args: action.args,
+    description: action.description,
+  };
+}
+
 export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseChatResult {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [connectionState, setConnectionState] = useState<ChatConnectionState>('connecting');
   const [hydrationState, setHydrationState] = useState<HydrationState>('loading');
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   // Bumped by `retryHydration` to re-trigger the hydration effect below
   // without needing `threadId` itself to change.
   const [hydrationAttempt, setHydrationAttempt] = useState(0);
@@ -229,6 +288,10 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   // after a `tool_start`, or after a `turn_end`/`error`).
   const currentAssistantIdRef = useRef<string | null>(null);
   const socketRef = useRef<ChatSocket | null>(null);
+  // Mirrors `pendingApproval` for synchronous reads from `respondToApproval`
+  // (a plain state closure would risk acting on a stale value if called
+  // twice in the same tick — the ref is always current).
+  const pendingApprovalRef = useRef<PendingApproval | null>(null);
 
   // History hydration — runs before the socket-opening effect below ever
   // fires (that effect's own `hydrationState !== 'done'` guard is what
@@ -239,12 +302,36 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     let cancelled = false;
     setHydrationState('loading');
     setItems([]);
+    setPendingApproval(null);
+    pendingApprovalRef.current = null;
 
     getThreadMessages(threadId)
-      .then((messages) => {
+      .then(async (messages) => {
         if (cancelled) return;
         setItems(mapHistoryToItems(messages));
-        setHydrationState('done');
+
+        // M8-03: restore a pending approval left over from before a
+        // reconnect/reload. Best-effort relative to hydration itself (a
+        // failure here just means no approval card shows up until the next
+        // live `approval_request`, not a hydration failure) — but we DO
+        // await it before flipping to `'done'` so the composer/card don't
+        // flash the idle state for one frame, and so the socket opens
+        // with `pendingApproval` already populated.
+        try {
+          const state = await getThreadState(threadId);
+          if (cancelled) return;
+          if (state.pending_approval !== null) {
+            const restored: PendingApproval = {
+              interruptId: state.pending_approval.interrupt_id,
+              actions: state.pending_approval.actions.map(toPendingApprovalAction),
+            };
+            pendingApprovalRef.current = restored;
+            setPendingApproval(restored);
+          }
+        } catch {
+          // Best-effort restore only — see comment above.
+        }
+        if (!cancelled) setHydrationState('done');
       })
       .catch(() => {
         if (cancelled) return;
@@ -333,6 +420,14 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
             ),
           );
         },
+        onApprovalRequest: (frame: ApprovalRequestFrame) => {
+          const pending: PendingApproval = {
+            interruptId: frame.interrupt_id,
+            actions: frame.actions.map(toPendingApprovalAction),
+          };
+          pendingApprovalRef.current = pending;
+          setPendingApproval(pending);
+        },
         onTurnEnd: (frame: TurnEndFrame) => {
           const id = currentAssistantIdRef.current;
           currentAssistantIdRef.current = null;
@@ -386,5 +481,51 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     socketRef.current?.cancel();
   }, []);
 
-  return { items, sendMessage, stopTurn, busy, connectionState, hydrationState, retryHydration };
+  const respondToApproval = useCallback((decisions: ApprovalDecision[]) => {
+    const pending = pendingApprovalRef.current;
+    if (pending === null) return;
+
+    // Clear immediately (both the ref, read synchronously above, and the
+    // state that gates the `ApprovalCard`/composer) so a fast double-tap
+    // can't send a second `approval_response` for the same interrupt.
+    pendingApprovalRef.current = null;
+    setPendingApproval(null);
+    setBusy(true);
+
+    // Synthesize a `ChatToolItem` for every REJECTED action right away —
+    // a rejected tool call never actually runs, so no real
+    // `tool_start`/`tool_end` frame will ever arrive for it (see this
+    // hook's `PendingApprovalAction.status` doc). Approved actions get no
+    // synthesized item: the resumed turn's real `tool_start`/`tool_end`
+    // frames cover them exactly like any other tool call.
+    const decisionByToolCallId = new Map(decisions.map((d) => [d.tool_call_id, d.decision]));
+    const rejectedItems: ChatToolItem[] = pending.actions
+      .filter((action) => decisionByToolCallId.get(action.toolCallId) === 'reject')
+      .map((action) => ({
+        id: makeId('tool'),
+        kind: 'tool',
+        toolCallId: action.toolCallId,
+        name: action.name,
+        category: action.category,
+        status: 'rejected',
+        args: action.args,
+      }));
+    if (rejectedItems.length > 0) {
+      setItems((prev) => [...prev, ...rejectedItems]);
+    }
+
+    socketRef.current?.approvalResponse(pending.interruptId, decisions);
+  }, []);
+
+  return {
+    items,
+    sendMessage,
+    stopTurn,
+    busy,
+    connectionState,
+    hydrationState,
+    retryHydration,
+    pendingApproval,
+    respondToApproval,
+  };
 }

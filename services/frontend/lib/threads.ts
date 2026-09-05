@@ -29,6 +29,28 @@ export interface ThreadMessage {
   tool_calls: ToolCall[] | null;
 }
 
+/** M8-03: one pending mutating tool call awaiting a human decision — same
+ * shape as `lib/chatSocket.ts`'s `PendingApprovalAction` (the `approval_request`
+ * frame's own `actions[]` entries), duplicated here rather than imported so
+ * this module (a plain REST client) doesn't need to depend on the WS
+ * module for a shared type. */
+export interface PendingApprovalAction {
+  tool_call_id: string;
+  name: string;
+  category: 'file' | 'exec' | 'plan' | 'web' | 'other';
+  args: Record<string, unknown>;
+  description: string;
+}
+
+export interface PendingApproval {
+  interrupt_id: string;
+  actions: PendingApprovalAction[];
+}
+
+export interface ThreadState {
+  pending_approval: PendingApproval | null;
+}
+
 /** `POST /api/threads` — `title` omitted/`undefined` lets the server default
  * it to `"New chat"` (see `CreateThreadBody.title: str | None = None`). */
 export async function createThread(title?: string): Promise<Thread> {
@@ -47,6 +69,13 @@ export async function listThreads(): Promise<Thread[]> {
 /** `GET /api/threads/{id}/messages` — full checkpointed history, oldest first. */
 export async function getThreadMessages(threadId: string): Promise<ThreadMessage[]> {
   return apiFetch<ThreadMessage[]>(`/api/threads/${encodeURIComponent(threadId)}/messages`);
+}
+
+/** `GET /api/threads/{id}/state` (M8-03) — `{"pending_approval": {...} | null}`.
+ * `useChat` calls this once after history hydration on (re)connect so a
+ * pending approval (from before a page reload / reconnect) is restored. */
+export async function getThreadState(threadId: string): Promise<ThreadState> {
+  return apiFetch<ThreadState>(`/api/threads/${encodeURIComponent(threadId)}/state`);
 }
 
 /** `DELETE /api/threads/{id}` — `204 No Content`; `apiFetch`'s `response.json()` call throws on
