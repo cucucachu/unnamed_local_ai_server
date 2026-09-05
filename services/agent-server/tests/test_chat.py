@@ -188,3 +188,45 @@ async def test_get_messages_normalizes_tool_call_turn(
 
     # Every normalized message has a non-empty string id.
     assert all(isinstance(m["id"], str) and m["id"] for m in messages)
+
+    # ainvoke (not the WS path) does not write `turn_stats`, so no `turn`
+    # metadata is attached — the same shape older history rows keep.
+    assert all(m.get("turn") is None for m in messages)
+
+
+async def test_get_messages_attaches_turn_metadata_on_final_assistant(
+    rest_app: FastAPI, rest_client: AsyncClient, fake_model: FakeModel
+) -> None:
+    """M9-02: `MessageOut.turn` is hydrated from `turn_stats` onto the final
+    assistant row of a turn; other rows stay `turn: null`."""
+    from datetime import UTC, datetime
+
+    from app.db.turn_stats import TurnStat
+
+    created = (await rest_client.post("/api/threads", json={})).json()
+    thread_id = created["id"]
+
+    fake_model.queue(TextTurn("plain reply"))
+    await rest_app.state.agent.ainvoke(
+        {"messages": [{"role": "user", "content": "hi"}]},
+        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+    )
+
+    state = await rest_app.state.agent.aget_state({"configurable": {"thread_id": thread_id}})
+    last_ai = next(m for m in reversed(state.values["messages"]) if getattr(m, "type", None) == "ai")
+    await rest_app.state.turn_stats_store.upsert(
+        TurnStat(
+            thread_id=thread_id,
+            final_message_id=last_ai.id,
+            status="completed",
+            duration_ms=1234,
+            started_at=datetime.now(UTC),
+        )
+    )
+
+    response = await rest_client.get(f"/api/threads/{thread_id}/messages")
+    assert response.status_code == 200
+    messages = response.json()
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["turn"] is None
+    assert messages[1]["turn"] == {"status": "completed", "duration_ms": 1234}

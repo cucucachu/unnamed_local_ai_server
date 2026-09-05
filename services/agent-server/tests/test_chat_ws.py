@@ -68,6 +68,14 @@ def _drain_turn(ws) -> list[dict]:
             return frames
 
 
+def _assert_turn_end(frame: dict, status: str) -> None:
+    """`turn_end` gained `duration_ms` in M9-02 — assert shape, not exact elapsed."""
+    assert frame["type"] == "turn_end"
+    assert frame["status"] == status
+    assert isinstance(frame.get("duration_ms"), int)
+    assert frame["duration_ms"] >= 0
+
+
 async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
     fake_model.queue(TextTurn("hello world", chunk_size=5))
 
@@ -78,7 +86,7 @@ async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
 
     token_frames = frames[1:-1]
     assert len(token_frames) >= 2
@@ -102,7 +110,7 @@ async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
 
     types = [f["type"] for f in frames]
     tool_start_idx = types.index("tool_start")
@@ -157,7 +165,7 @@ async def test_execute_code_tool_turn(
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
 
     types = [f["type"] for f in frames]
     tool_start_idx = types.index("tool_start")
@@ -213,7 +221,7 @@ async def test_web_search_tool_turn(
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
 
     types = [f["type"] for f in frames]
     tool_start_idx = types.index("tool_start")
@@ -273,11 +281,11 @@ async def test_two_turns_same_socket(fake_model: FakeModel, tmp_path) -> None:
         second_frames = _drain_turn(ws)
 
     assert first_frames[0] == {"type": "turn_start"}
-    assert first_frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(first_frames[-1], "completed")
     assert "".join(f["content"] for f in first_frames if f["type"] == "token") == "first reply"
 
     assert second_frames[0] == {"type": "turn_start"}
-    assert second_frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(second_frames[-1], "completed")
     assert "".join(f["content"] for f in second_frames if f["type"] == "token") == "second reply"
 
     assert len(fake_model.requests) == 2
@@ -317,7 +325,7 @@ def test_concurrent_turns_serialized(fake_model: FakeModel, tmp_path) -> None:
 
     for frames in results.values():
         assert frames[0] == {"type": "turn_start"}
-        assert frames[-1] == {"type": "turn_end", "status": "completed"}
+        _assert_turn_end(frames[-1], "completed")
 
     # Both turns completed; the fake model saw exactly one request per turn.
     assert len(fake_model.requests) == 2
@@ -352,7 +360,7 @@ async def test_cancel_mid_turn(fake_model: FakeModel, tmp_path) -> None:
         ws.send_json({"type": "cancel"})
 
         frame = ws.receive_json()
-        assert frame == {"type": "turn_end", "status": "cancelled"}
+        _assert_turn_end(frame, "cancelled")
 
         # The per-thread lock was released (cancel doesn't hold it past this
         # turn) and the connection is still open: a normal follow-up turn on
@@ -362,7 +370,7 @@ async def test_cancel_mid_turn(fake_model: FakeModel, tmp_path) -> None:
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
     assert "".join(f["content"] for f in frames if f["type"] == "token") == "hello again"
 
 
@@ -384,7 +392,7 @@ async def test_cancel_outside_turn_is_noop(fake_model: FakeModel, tmp_path) -> N
         frames = _drain_turn(ws)
 
     assert frames[0] == {"type": "turn_start"}
-    assert frames[-1] == {"type": "turn_end", "status": "completed"}
+    _assert_turn_end(frames[-1], "completed")
     assert "".join(f["content"] for f in frames if f["type"] == "token") == "hello"
 
 
@@ -461,7 +469,7 @@ async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
         )
         frames = _drain_turn(ws)
         assert frames[0] == {"type": "turn_start"}
-        assert frames[-1] == {"type": "turn_end", "status": "completed"}
+        _assert_turn_end(frames[-1], "completed")
         assert "".join(f["content"] for f in frames if f["type"] == "token") == "edited reply"
 
         after = client.get(f"/api/threads/{thread_id}/messages").json()
@@ -578,3 +586,47 @@ async def test_user_message_id_is_stored_langchain_id(fake_model: FakeModel, tmp
 
     user = next(m for m in messages if m["role"] == "user")
     assert user["id"] == client_id
+
+
+async def test_turn_end_duration_ms_and_history_turn_metadata(fake_model: FakeModel, tmp_path) -> None:
+    """M9-02: `turn_end` carries `duration_ms`; GET .../messages attaches it
+    to the final assistant row of the turn."""
+    fake_model.queue(TextTurn("hello world"))
+    thread_id = "duration-thread"
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        f"/ws/chat/{thread_id}"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        frames = _drain_turn(ws)
+        messages = client.get(f"/api/threads/{thread_id}/messages").json()
+
+    _assert_turn_end(frames[-1], "completed")
+    duration_ms = frames[-1]["duration_ms"]
+
+    assistants = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistants) >= 1
+    final = assistants[-1]
+    assert final["content"] == "hello world"
+    assert final["turn"] == {"status": "completed", "duration_ms": duration_ms}
+
+    users = [m for m in messages if m["role"] == "user"]
+    assert users[0].get("turn") is None
+
+
+async def test_cancelled_turn_end_includes_duration_ms(fake_model: FakeModel, tmp_path) -> None:
+    """M9-02: cancelled `turn_end` also carries `duration_ms`."""
+    fake_model.queue(TextTurn("one two three four five six seven eight nine ten", chunk_size=4, chunk_delay_s=0.15))
+
+    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+        "/ws/chat/cancel-duration-thread"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "count slowly"})
+        assert ws.receive_json() == {"type": "turn_start"}
+        first_token = ws.receive_json()
+        assert first_token["type"] == "token"
+        ws.send_json({"type": "cancel"})
+        frame = ws.receive_json()
+
+    _assert_turn_end(frame, "cancelled")
+    assert frame["duration_ms"] >= 0

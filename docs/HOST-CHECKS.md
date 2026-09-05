@@ -84,3 +84,4 @@ agent run.
 ## M9
 
 - [ ] (M9-01) Expo Go (Android/iOS): prompt "Reply with a markdown table of 3 planets and a python code block printing hello" — the same reply renders with monospace code and a scrollable table at phone width.
+- [ ] (M9-02) Phone: the collapsed panel and header read cleanly; expanding on a long research turn scrolls sensibly.

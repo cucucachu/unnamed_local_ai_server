@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { Linking } from 'react-native';
 import { act, create } from 'react-test-renderer';
 
+import { groupItemsIntoTurns } from '@/lib/chatTurns';
 import type { ChatToolItem, ChatUserItem, UseChatResult } from '@/lib/useChat';
 
 // Per the ticket's own text ("one shallow render of the screen"): mock
@@ -28,8 +29,9 @@ jest.mock('@/lib/clipboard', () => ({
 import ChatScreen from '../[threadId]';
 
 function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
+  const items = overrides.items ?? [];
+  const turns = overrides.turns ?? groupItemsIntoTurns(items);
   mockUseChat.mockReturnValue({
-    items: [],
     sendMessage: jest.fn(),
     stopTurn: jest.fn(),
     busy: false,
@@ -39,6 +41,8 @@ function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
     pendingApproval: null,
     respondToApproval: jest.fn(),
     ...overrides,
+    items,
+    turns,
   });
 }
 
@@ -162,6 +166,13 @@ describe('ChatScreen ([threadId])', () => {
       .filter((instance) => (instance.type as unknown) === 'View').length;
   }
 
+  function expandActivityPanel(renderer: ReturnType<typeof create>): void {
+    const header = renderer.root.findByProps({ testID: 'turn-activity-header' });
+    act(() => {
+      (header.props as { onPress: () => void }).onPress();
+    });
+  }
+
   function expandFirstToolCard(renderer: ReturnType<typeof create>): void {
     const header = renderer.root.findByProps({ testID: 'chat-item-tool-header' });
     act(() => {
@@ -177,6 +188,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       const text = renderedText(renderer!);
       expect(text).toContain('echo HELLO-UI');
@@ -198,6 +210,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('exit 0');
 
@@ -219,6 +232,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('exit 1');
     });
@@ -237,6 +251,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('timed out');
     });
@@ -276,6 +291,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       const text = renderedText(renderer!);
       expect(text).toContain('llama.cpp');
@@ -302,6 +318,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('2 results');
 
@@ -332,6 +349,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('0 results');
 
@@ -353,6 +371,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('error');
 
@@ -371,6 +390,7 @@ describe('ChatScreen ([threadId])', () => {
       });
 
       expect(renderedText(renderer!)).toContain('example.com');
+      expandActivityPanel(renderer!);
     });
 
     it('success: header shows hostname + page title, and expanding shows the final URL (tappable) + extracted text', () => {
@@ -388,6 +408,7 @@ describe('ChatScreen ([threadId])', () => {
         renderer = create(createElement(ChatScreen));
       });
 
+      expandActivityPanel(renderer!);
       const collapsedText = renderedText(renderer!);
       expect(collapsedText).toContain('example.com');
       expect(collapsedText).toContain('Docs Home');
@@ -420,6 +441,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderedText(renderer!)).toContain('error');
 
@@ -482,8 +504,10 @@ describe('ChatScreen ([threadId])', () => {
         renderer = create(createElement(ChatScreen));
       });
 
-      expect(renderedText(renderer!)).toContain('partial reply');
       expect(renderer?.root.findByProps({ testID: 'chat-item-stopped-caption' })).toBeTruthy();
+      expect(renderedText(renderer!)).toContain('Stopped');
+      expandActivityPanel(renderer!);
+      expect(renderedText(renderer!)).toContain('partial reply');
     });
 
     it('does NOT show a "Stopped" caption on a normal (non-stopped) assistant item', () => {
@@ -509,6 +533,9 @@ describe('ChatScreen ([threadId])', () => {
         renderer = create(createElement(ChatScreen));
       });
 
+      expect(renderer?.root.findByProps({ testID: 'turn-activity-status' }).props.children).toBe('Writing…');
+      expect(() => renderer?.root.findByProps({ testID: 'markdown' })).toThrow();
+      expandActivityPanel(renderer!);
       expect(renderedText(renderer!)).toContain('# Still streaming');
       expect(() => renderer?.root.findByProps({ testID: 'markdown' })).toThrow();
 
@@ -719,6 +746,7 @@ describe('ChatScreen ([threadId])', () => {
       act(() => {
         renderer = create(createElement(ChatScreen));
       });
+      expandActivityPanel(renderer!);
 
       expect(renderer?.root.findByProps({ testID: 'chat-item-tool-rejected-chip' })).toBeTruthy();
       expect(renderedText(renderer!)).toContain('rejected');

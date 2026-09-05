@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.db.checkpointer import build_postgres_checkpointer
 from app.db.settings import InMemorySettingsStore, PgSettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
+from app.db.turn_stats import InMemoryTurnStatsStore, PgTurnStatsStore, TurnStatsStore
 
 
 def create_app(
@@ -24,6 +25,7 @@ def create_app(
     checkpointer_override: BaseCheckpointSaver | None = None,
     thread_store_override: ThreadStore | None = None,
     settings_store_override: SettingsStore | None = None,
+    turn_stats_store_override: TurnStatsStore | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -57,6 +59,11 @@ def create_app(
     `settings_store_override` (M8-02) mirrors `thread_store_override`
     exactly, for the same reason and with the same `InMemorySettingsStore()`
     fallback when omitted alongside a `checkpointer_override`.
+
+    `turn_stats_store_override` (M9-02) mirrors `settings_store_override`
+    the same way: the real `PgTurnStatsStore` needs the Postgres pool, and
+    tests that don't pass an override get `InMemoryTurnStatsStore()` when a
+    `checkpointer_override` is in play.
     """
     settings = settings or Settings()
 
@@ -66,6 +73,7 @@ def create_app(
             app.state.checkpointer = checkpointer_override
             app.state.thread_store = thread_store_override or InMemoryThreadStore()
             app.state.settings_store = settings_store_override or InMemorySettingsStore()
+            app.state.turn_stats_store = turn_stats_store_override or InMemoryTurnStatsStore()
             app.state.agent = build_agent(app.state.settings, checkpointer_override)
             yield
             return
@@ -75,6 +83,9 @@ def create_app(
             app.state.checkpointer = pg_checkpointer.saver
             app.state.thread_store = thread_store_override or PgThreadStore(pg_checkpointer.pool)
             app.state.settings_store = settings_store_override or PgSettingsStore(
+                pg_checkpointer.pool
+            )
+            app.state.turn_stats_store = turn_stats_store_override or PgTurnStatsStore(
                 pg_checkpointer.pool
             )
             app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver)

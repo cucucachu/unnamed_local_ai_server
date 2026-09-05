@@ -20,7 +20,9 @@ import {
 } from 'react-native';
 
 import { Markdown } from '@/components/Markdown';
+import { TurnActivityPanel } from '@/components/TurnActivityPanel';
 import { copyToClipboard } from '@/lib/clipboard';
+import { formatDuration } from '@/lib/chatTurns';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision } from '@/lib/chatSocket';
@@ -29,6 +31,7 @@ import {
   type ChatAssistantItem,
   type ChatItem,
   type ChatToolItem,
+  type ChatTurn,
   type ChatUserItem,
   type PendingApproval,
   type PendingApprovalAction,
@@ -60,7 +63,7 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
 export default function ChatScreen() {
   const { threadId } = useLocalSearchParams<{ threadId: string }>();
   const {
-    items,
+    turns,
     sendMessage,
     stopTurn,
     busy,
@@ -75,7 +78,7 @@ export default function ChatScreen() {
   const [actionMenu, setActionMenu] = useState<
     { kind: 'user'; item: ChatUserItem } | { kind: 'assistant'; item: ChatAssistantItem } | null
   >(null);
-  const listRef = useRef<FlatList<ChatItem>>(null);
+  const listRef = useRef<FlatList<ChatTurn>>(null);
 
   // M8-03: the composer/Send button is disabled while an approval is
   // pending, in addition to the existing `busy` disable from M8-01.
@@ -118,24 +121,17 @@ export default function ChatScreen() {
   const handleRegenerate = useCallback(
     (assistant: ChatAssistantItem) => {
       setActionMenu(null);
-      const assistantIndex = items.findIndex((item) => item.id === assistant.id);
-      let precedingUser: ChatUserItem | null = null;
-      for (let i = assistantIndex - 1; i >= 0; i -= 1) {
-        const candidate = items[i];
-        if (candidate?.kind === 'user') {
-          precedingUser = candidate;
-          break;
-        }
-      }
-      if (precedingUser === null) return;
-      sendMessage(precedingUser.text, { replaceFromMessageId: precedingUser.id, mode: 'truncate' });
+      const turn = turns.find((candidate) => candidate.final?.id === assistant.id);
+      if (turn?.user == null) return;
+      sendMessage(turn.user.text, { replaceFromMessageId: turn.user.id, mode: 'truncate' });
     },
-    [items, sendMessage],
+    [turns, sendMessage],
   );
 
   const lastAssistantId = (() => {
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      if (items[i]?.kind === 'assistant') return items[i].id;
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const final = turns[i]?.final;
+      if (final) return final.id;
     }
     return null;
   })();
@@ -208,12 +204,12 @@ export default function ChatScreen() {
         ) : null}
         <FlatList
           ref={listRef}
-          data={items}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <ChatItemRow
-              item={item}
-              isLastAssistant={item.kind === 'assistant' && item.id === lastAssistantId}
+          data={turns}
+          keyExtractor={(turn) => turn.id}
+          renderItem={({ item: turn }) => (
+            <ChatTurnRow
+              turn={turn}
+              isLastAssistant={turn.final != null && turn.final.id === lastAssistantId}
               menuDisabled={menuDisabled}
               onUserMenu={(user) => setActionMenu({ kind: 'user', item: user })}
               onAssistantMenu={(assistant) => setActionMenu({ kind: 'assistant', item: assistant })}
@@ -221,14 +217,13 @@ export default function ChatScreen() {
           )}
           contentContainerStyle={styles.listContent}
           style={styles.list}
-          // A plain (non-inverted) list + scroll-to-end on growth, rather
-          // than `inverted`: `inverted` fights the last item's height
-          // changing every token during streaming (content jumps/anchors
-          // oddly since the "top" of an inverted list is really the
-          // bottom-most rendered item). Scrolling to the end on every size
-          // change instead keeps the growing streaming bubble anchored to
-          // the bottom exactly the way a chat UI expects.
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+          // Collapsed-by-default activity means token growth does not
+          // change list height, so this is no longer per-token. While a
+          // turn is running the list stays pinned to the bottom so the
+          // panel (and later the final bubble) stay in view.
+          onContentSizeChange={() => {
+            if (busy) listRef.current?.scrollToEnd({ animated: false });
+          }}
           onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
         />
         {pendingApproval !== null ? (
@@ -305,94 +300,110 @@ const CONNECTION_LABEL: Record<ReturnType<typeof useChat>['connectionState'], st
   open: null,
 };
 
-interface ChatItemRowProps {
-  item: ChatItem;
+interface ChatTurnRowProps {
+  turn: ChatTurn;
   isLastAssistant: boolean;
   menuDisabled: boolean;
   onUserMenu: (item: ChatUserItem) => void;
   onAssistantMenu: (item: ChatAssistantItem) => void;
 }
 
-function ChatItemRow({
-  item,
+function showActivityPanel(turn: ChatTurn): boolean {
+  if (turn.status === 'running' || turn.status === 'cancelled' || turn.status === 'error') {
+    return true;
+  }
+  return turn.activity.length > 0;
+}
+
+function ChatTurnRow({
+  turn,
   isLastAssistant,
   menuDisabled,
   onUserMenu,
   onAssistantMenu,
-}: ChatItemRowProps): ReactElement {
-  switch (item.kind) {
-    case 'user':
-      return (
+}: ChatTurnRowProps): ReactElement {
+  const user = turn.user;
+  const showPanel = showActivityPanel(turn);
+  const showDurationCaption =
+    !showPanel && turn.final != null && turn.durationMs != null && turn.status === 'completed';
+
+  return (
+    <View style={styles.turnBlock} testID="chat-turn">
+      {user != null ? (
         <View style={[styles.bubbleRow, styles.bubbleRowRight]} testID="chat-item-user">
           <MessageMenuAffordance
             testID="chat-item-user-menu"
             accessibilityLabel="Message actions"
             disabled={menuDisabled}
-            onOpen={() => onUserMenu(item)}
+            onOpen={() => onUserMenu(user)}
           />
           <Pressable
             style={[styles.bubble, styles.userBubble]}
-            onLongPress={menuDisabled ? undefined : () => onUserMenu(item)}
+            onLongPress={menuDisabled ? undefined : () => onUserMenu(user)}
             delayLongPress={400}
             testID="chat-item-user-bubble"
           >
-            <Text style={styles.bubbleText}>{item.text}</Text>
+            <Text style={styles.bubbleText}>{user.text}</Text>
           </Pressable>
         </View>
-      );
-    case 'assistant':
-      return (
+      ) : null}
+      {showPanel ? (
+        <TurnActivityPanel turn={turn}>
+          {turn.activity.map((item) => (
+            <ActivityItemRow key={item.id} item={item} />
+          ))}
+        </TurnActivityPanel>
+      ) : null}
+      {showDurationCaption ? (
+        <Text style={styles.durationCaption} testID="turn-activity-caption">
+          {formatDuration(turn.durationMs!)}
+        </Text>
+      ) : null}
+      {turn.final != null ? (
         <View style={[styles.bubbleRow, styles.bubbleRowLeft]} testID="chat-item-assistant">
           <Pressable
             style={[styles.bubble, styles.assistantBubble]}
-            onLongPress={
-              isLastAssistant && !menuDisabled ? () => onAssistantMenu(item) : undefined
-            }
+            onLongPress={isLastAssistant && !menuDisabled ? () => onAssistantMenu(turn.final!) : undefined}
             delayLongPress={400}
             testID="chat-item-assistant-bubble"
           >
-            {item.streaming ? (
-              <Text style={styles.bubbleText}>
-                {item.text}
-                {STREAMING_CURSOR}
-              </Text>
-            ) : (
-              <Markdown>{item.text}</Markdown>
-            )}
-            {item.stopped ? (
-              <Text style={styles.stoppedCaption} testID="chat-item-stopped-caption">
-                Stopped
-              </Text>
-            ) : null}
+            <Markdown>{turn.final.text}</Markdown>
           </Pressable>
           {isLastAssistant ? (
             <MessageMenuAffordance
               testID="chat-item-assistant-menu"
               accessibilityLabel="Regenerate actions"
               disabled={menuDisabled}
-              onOpen={() => onAssistantMenu(item)}
+              onOpen={() => onAssistantMenu(turn.final!)}
             />
           ) : null}
         </View>
+      ) : null}
+    </View>
+  );
+}
+
+function ActivityItemRow({ item }: { item: ChatItem }): ReactElement | null {
+  switch (item.kind) {
+    case 'assistant':
+      if (item.text === '') return null;
+      return (
+        <Text style={styles.activityPlainText} testID="turn-activity-text">
+          {item.text}
+        </Text>
       );
     case 'tool':
       return <ToolItemCard item={item} />;
     case 'error':
       return (
-        <View style={[styles.bubbleRow, styles.bubbleRowLeft]} testID="chat-item-error">
-          <View style={[styles.bubble, styles.errorBubble]}>
-            <Text style={styles.errorText}>{item.message}</Text>
-          </View>
+        <View style={[styles.bubble, styles.errorBubble]} testID="chat-item-error">
+          <Text style={styles.errorText}>{item.message}</Text>
         </View>
       );
     default:
-      return <></>;
+      return null;
   }
 }
-
-// Rendered conditionally at draw time — the stored `text` stays clean so
-// state/tests never have to account for a trailing cursor glyph.
-const STREAMING_CURSOR = ' ▍';
 
 /** Defensive: `item.args` is typed `Record<string, unknown>`, so
  * `args.command` isn't guaranteed to be a string at the type level even
@@ -1030,6 +1041,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
     gap: 8,
+  },
+  turnBlock: {
+    gap: 8,
+  },
+  durationCaption: {
+    color: theme.textMuted,
+    fontSize: 11,
+    alignSelf: 'flex-start',
+    marginLeft: 4,
+  },
+  activityPlainText: {
+    color: theme.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   bubbleRow: {
     flexDirection: 'row',

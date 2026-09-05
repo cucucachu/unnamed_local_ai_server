@@ -29,6 +29,8 @@ export interface ThreadMessage {
   tool_calls: ToolCall[] | null;
   /** M8-04: on `tool` rows, the paired assistant `tool_calls[].id`. */
   tool_call_id?: string | null;
+  /** M9-02: on the final assistant row of a turn that has persisted stats. */
+  turn?: { status: 'completed' | 'cancelled' | 'awaiting_approval'; duration_ms: number } | null;
 }
 
 /** M8-03: one pending mutating tool call awaiting a human decision — same

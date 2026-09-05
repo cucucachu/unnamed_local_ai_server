@@ -29,6 +29,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.db.turn_stats import TURN_STATS_TABLE_DDL
+
 # Our own metadata table, separate from the checkpointer's own
 # `checkpoints`/`checkpoint_blobs`/`checkpoint_writes`/`checkpoint_migrations`
 # tables (created by `AsyncPostgresSaver.setup()`, called before this DDL
@@ -101,5 +103,6 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
     async with pool.connection() as conn:
         await conn.execute(_THREADS_TABLE_DDL)
         await conn.execute(_SETTINGS_TABLE_DDL)
+        await conn.execute(TURN_STATS_TABLE_DDL)
 
     return PostgresCheckpointer(pool=pool, saver=saver)

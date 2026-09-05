@@ -43,7 +43,7 @@
 // fence and asserts a real `<table>` and `<pre>`/code node in the bubble.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -98,7 +98,12 @@ const EDIT_TURN_2_EDITED = 'Say exactly: BRAVO-EDITED';
 // not trip write_file / execute_code).
 const MARKDOWN_MESSAGE =
   'Reply with a markdown table of 3 planets and a python code block printing hello';
-const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
+// M9-02: read_file is not a mutating tool (HITL-safe). The file is written
+// into WORKSPACE_DIR just before the step so the model has something real
+// to open.
+const ACTIVITY_PANEL_FILE = 'activity-panel-smoke.txt';
+const ACTIVITY_PANEL_MESSAGE =
+  'Use read_file to read activity-panel-smoke.txt, then say exactly: READ-OK';
 
 /** Mirrors `chat_ws.py`'s `_derive_title` exactly (see that module's
  * docstring) — collapse whitespace runs to single spaces, then truncate to
@@ -131,7 +136,7 @@ async function sendMessageAndAwaitReply(page, message, priorAssistantCount) {
       if (text.length > 0) {
         sawNonEmptyText = true;
         replyText = text;
-        if (!text.includes(STREAMING_CURSOR)) break; // streaming finished
+        break;
       }
     }
     await page.waitForTimeout(300);
@@ -140,7 +145,35 @@ async function sendMessageAndAwaitReply(page, message, priorAssistantCount) {
   if (!sawNonEmptyText) {
     throw new Error(`no assistant bubble with text appeared within ${TIMEOUT_MS}ms of sending "${message}"`);
   }
-  return replyText.replace(STREAMING_CURSOR, '').trim();
+  return replyText.trim();
+}
+
+async function expandLastActivityPanel(page) {
+  const headers = page.locator('[data-testid="turn-activity-header"]');
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const count = await headers.count();
+    if (count > 0) {
+      await headers.nth(count - 1).click();
+      return;
+    }
+    await page.waitForTimeout(200);
+  }
+  throw new Error('no turn-activity-header to expand');
+}
+
+async function waitForWorkedFor(page, timeoutMs = TIMEOUT_MS) {
+  const locator = page.locator('[data-testid="turn-activity-duration"]');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await locator.count();
+    if (count > 0) {
+      const text = (await locator.last().textContent()) ?? '';
+      if (/Worked for /.test(text)) return text.trim();
+    }
+    await page.waitForTimeout(300);
+  }
+  throw new Error(`"Worked for" header did not appear within ${timeoutMs}ms`);
 }
 
 /** Polls until an element with exact text `text` is visible (used for the
@@ -355,7 +388,9 @@ async function main() {
     await input.fill(EXEC_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
 
-    await expectCountAbove(toolCardLocator, priorToolCardCount, 60_000, 'exec tool card');
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    await expandLastActivityPanel(page);
+    await expectCountAbove(toolCardLocator, priorToolCardCount, 15_000, 'exec tool card');
     const toolCard = toolCardLocator.nth(priorToolCardCount);
     console.log('Step 6 OK — exec tool card appeared');
 
@@ -383,7 +418,9 @@ async function main() {
     await input.fill(WEB_SEARCH_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
 
-    await expectCountAbove(toolCardLocator, priorSearchCardCount, 60_000, 'web_search tool card');
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    await expandLastActivityPanel(page);
+    await expectCountAbove(toolCardLocator, priorSearchCardCount, 15_000, 'web_search tool card');
     const searchCard = toolCardLocator.nth(priorSearchCardCount);
     console.log('Step 7 OK — web_search tool card appeared');
 
@@ -452,15 +489,12 @@ async function main() {
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: 15_000 });
     console.log('Step 8 OK — composer re-enabled (Send button reappeared)');
 
-    // The stopped bubble shows a "Stopped" caption.
+    // The cancelled panel header shows "Stopped after Xs".
     const stoppedCaptionLocator = page.locator('[data-testid="chat-item-stopped-caption"]');
     await stoppedCaptionLocator.first().waitFor({ state: 'visible', timeout: 15_000 });
-    console.log('Step 8 OK — stopped bubble shows a "Stopped" caption');
+    console.log('Step 8 OK — cancelled panel shows a "Stopped after" header');
 
     const postStopAssistantCount = await assistantBubbleLocator.count();
-    if (postStopAssistantCount <= priorAssistantCountForStop) {
-      throw new Error('Step 8: no new assistant bubble appeared for the stopped turn');
-    }
 
     // A follow-up message on the same socket still completes normally.
     const stopFollowUpReply = await sendMessageAndAwaitReply(page, STOP_FOLLOW_UP_MESSAGE, postStopAssistantCount);
@@ -475,7 +509,9 @@ async function main() {
     console.log('Step 9 OK — approval card appeared (HITL on, write_file)');
 
     await page.getByRole('button', { name: 'Approve write_file' }).click();
-    await expectCountAbove(toolCardLocator, approvePriorTools, TIMEOUT_MS, 'approved write_file tool card');
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    await expandLastActivityPanel(page);
+    await expectCountAbove(toolCardLocator, approvePriorTools, 15_000, 'approved write_file tool card');
     const approveCard = toolCardLocator.nth(approvePriorTools);
     if ((await approveCard.locator('[data-testid="chat-item-tool-rejected-chip"]').count()) > 0) {
       throw new Error('Step 9: approved write_file rendered a rejected chip');
@@ -497,6 +533,8 @@ async function main() {
     console.log('Step 10 OK — approval card appeared (reject scenario)');
 
     await page.getByRole('button', { name: 'Reject write_file' }).click();
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    await expandLastActivityPanel(page);
     const rejectedChip = page.locator('[data-testid="chat-item-tool-rejected-chip"]');
     await rejectedChip.first().waitFor({ state: 'visible', timeout: TIMEOUT_MS });
     if (existsSync(workspaceFilePath(HITL_REJECT_FILE))) {
@@ -509,8 +547,8 @@ async function main() {
       if (count > rejectPriorAssistantCount) {
         const newest = assistantBubbleLocator.nth(count - 1);
         const text = (await newest.textContent())?.trim() ?? '';
-        if (text.length > 0 && !text.includes(STREAMING_CURSOR)) {
-          rejectAck = text.replace(STREAMING_CURSOR, '').trim();
+        if (text.length > 0) {
+          rejectAck = text.trim();
           break;
         }
       }
@@ -534,14 +572,12 @@ async function main() {
 
     const offDeadline = Date.now() + TIMEOUT_MS;
     let sawApprovalCard = false;
-    let sawOffToolCard = false;
     while (Date.now() < offDeadline) {
       if ((await page.locator('[data-testid="approval-card"]').count()) > 0) {
         sawApprovalCard = true;
         break;
       }
-      if ((await toolCardLocator.count()) > offPriorTools) {
-        sawOffToolCard = true;
+      if ((await page.getByRole('button', { name: 'Send message' }).count()) > 0) {
         break;
       }
       await page.waitForTimeout(300);
@@ -549,9 +585,9 @@ async function main() {
     if (sawApprovalCard) {
       throw new Error('Step 11: approval card appeared with HITL off');
     }
-    if (!sawOffToolCard) {
-      throw new Error('Step 11: write_file tool card did not appear with HITL off');
-    }
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    await expandLastActivityPanel(page);
+    await expectCountAbove(toolCardLocator, offPriorTools, 15_000, 'HITL-off write_file tool card');
     const offCard = toolCardLocator.nth(offPriorTools);
     await waitForAnyText(offCard, [/write_file/], TIMEOUT_MS);
     const offFileDeadline = Date.now() + 30_000;
@@ -596,7 +632,7 @@ async function main() {
       if (userCount === 2 && assistantCount >= 2) {
         const newest = assistantBubbleLocator.nth(assistantCount - 1);
         const text = (await newest.textContent())?.trim() ?? '';
-        if (text.length > 0 && !text.includes(STREAMING_CURSOR)) {
+        if (text.length > 0) {
           sawEditedReply = true;
           break;
         }
@@ -642,7 +678,7 @@ async function main() {
       if (count >= assistantsBeforeRegen) {
         const newest = page.locator('[data-testid="chat-item-assistant"]').nth(count - 1);
         const text = (await newest.textContent())?.trim() ?? '';
-        if (text.length > 0 && !text.includes(STREAMING_CURSOR)) {
+        if (text.length > 0) {
           sawRegenReply = true;
           break;
         }
@@ -680,8 +716,50 @@ async function main() {
     }
     console.log(`Step 13 OK — assistant bubble has <table> (${tableCount}) and <pre>/code (${preCount}/${codeCount})`);
 
+    // --- Step 14: turn activity panel (M9-02) ---------------------------
+    // HITL is still off from step 11; read_file is not mutating anyway.
+    writeFileSync(workspaceFilePath(ACTIVITY_PANEL_FILE), 'activity-panel smoke marker\n', 'utf8');
+    const activityPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
+    await input.fill(ACTIVITY_PANEL_MESSAGE);
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const runningPanel = page.locator('[data-testid="turn-activity-spinner"]');
+    await runningPanel.first().waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    const assistantsWhileRunning = await page.locator('[data-testid="chat-item-assistant"]').count();
+    if (assistantsWhileRunning > activityPriorAssistants) {
+      throw new Error('Step 14: partial answer text was visible while the activity panel was collapsed');
+    }
+    console.log('Step 14 OK — spinner panel while running; no collapsed-visible answer text');
+
+    await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+    const workedFor = await waitForWorkedFor(page);
+    const activityAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
+    if (activityAssistants <= activityPriorAssistants) {
+      throw new Error('Step 14: expected a single markdown answer after the turn finished');
+    }
+    const activityAnswer = page.locator('[data-testid="chat-item-assistant-bubble"]').last();
+    await activityAnswer.waitFor({ state: 'visible', timeout: 15_000 });
+    if ((await activityAnswer.locator('[data-testid="markdown"]').count()) < 1) {
+      throw new Error('Step 14: finished answer is not markdown');
+    }
+    console.log(`Step 14 OK — ${workedFor} + markdown answer`);
+
+    await expandLastActivityPanel(page);
+    const activityTools = page.locator('[data-testid="chat-item-tool"]');
+    await expectCountAbove(activityTools, 0, 15_000, 'read_file tool card inside activity panel');
+    const readCardText = (await activityTools.last().textContent()) ?? '';
+    if (!/read_file|activity-panel-smoke/.test(readCardText)) {
+      throw new Error(`Step 14: expanded panel did not show a read_file card (text: ${readCardText})`);
+    }
+    console.log('Step 14 OK — expanding the header reveals the tool card');
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForText(page, ACTIVITY_PANEL_MESSAGE, 20_000);
+    const hydratedWorked = await waitForWorkedFor(page, 20_000);
+    console.log(`Step 14 OK — reload shows the same header from history (${hydratedWorked})`);
+
     const elapsedMs = Date.now() - startedAt;
-    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown completed in ${elapsedMs}ms`);
+    console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
     cleanupThreadBestEffort(threadId);
@@ -689,6 +767,7 @@ async function main() {
     removeWorkspaceFileBestEffort(HITL_APPROVE_FILE);
     removeWorkspaceFileBestEffort(HITL_REJECT_FILE);
     removeWorkspaceFileBestEffort(HITL_OFF_FILE);
+    removeWorkspaceFileBestEffort(ACTIVITY_PANEL_FILE);
     if (savedSettings !== null) {
       try {
         settingsRequest('PUT', {

@@ -53,6 +53,7 @@ from pydantic import BaseModel
 
 from app.api.chat_ws import get_pending_approval
 from app.db.threads import ThreadRecord, ThreadStore
+from app.db.turn_stats import TurnStat, TurnStatsStore
 
 router = APIRouter()
 
@@ -74,6 +75,13 @@ class ToolCallOut(BaseModel):
     args: dict
 
 
+class TurnOut(BaseModel):
+    """M9-02: per-turn status + duration, attached to the final assistant row."""
+
+    status: Literal["completed", "cancelled", "awaiting_approval"]
+    duration_ms: int
+
+
 class MessageOut(BaseModel):
     id: str
     role: Literal["user", "assistant", "tool"]
@@ -84,10 +92,23 @@ class MessageOut(BaseModel):
     # frontend can recover `args` from that assistant row (the known
     # `args: {}` gap in `mapHistoryToItems`). `None` on user/assistant rows.
     tool_call_id: str | None = None
+    # M9-02: present on the final assistant row of a turn that has a
+    # `turn_stats` row keyed by this message's id. `None` everywhere else.
+    turn: TurnOut | None = None
 
 
 def _thread_store(request: Request) -> ThreadStore:
     return request.app.state.thread_store
+
+
+def _turn_stats_store(request: Request) -> TurnStatsStore | None:
+    return getattr(request.app.state, "turn_stats_store", None)
+
+
+def _turn_out_from_stat(stat: TurnStat) -> TurnOut | None:
+    if stat.status not in ("completed", "cancelled", "awaiting_approval"):
+        return None
+    return TurnOut(status=stat.status, duration_ms=stat.duration_ms)
 
 
 def _to_thread_out(record: ThreadRecord) -> ThreadOut:
@@ -166,8 +187,22 @@ async def get_thread_messages(thread_id: str, request: Request) -> list[MessageO
     # when the row exists but no checkpoint has been written yet.
     messages = state.values.get("messages", [])
 
-    normalized = (_normalize_message(m) for m in messages)
-    return [m for m in normalized if m is not None]
+    normalized = [m for m in (_normalize_message(m) for m in messages) if m is not None]
+
+    store = _turn_stats_store(request)
+    if store is None or not normalized:
+        return normalized
+    stats = await store.list_for_thread(thread_id)
+    by_final_id = {s.final_message_id: s for s in stats}
+    attached: list[MessageOut] = []
+    for message in normalized:
+        stat = by_final_id.get(message.id)
+        if stat is not None and message.role == "assistant":
+            turn = _turn_out_from_stat(stat)
+            if turn is not None:
+                message = message.model_copy(update={"turn": turn})
+        attached.append(message)
+    return attached
 
 
 @router.get("/threads/{thread_id}/state")
@@ -195,6 +230,9 @@ async def get_thread_state(thread_id: str, request: Request) -> dict:
 async def delete_thread(thread_id: str, request: Request) -> None:
     store = _thread_store(request)
     await store.delete(thread_id)
+    turn_stats = _turn_stats_store(request)
+    if turn_stats is not None:
+        await turn_stats.delete_for_thread(thread_id)
     # `BaseCheckpointSaver.adelete_thread` is a real, non-abstract method on
     # both `AsyncPostgresSaver` (confirmed via
     # `inspect.getsource(AsyncPostgresSaver.adelete_thread)` — deletes from
