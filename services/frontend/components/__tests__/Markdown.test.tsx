@@ -32,6 +32,10 @@ See the [notes file](file:///tmp/notes.txt).
 function renderMarkdown(source: string = FIXTURE, onFileLink?: (url: string) => void): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
+    // `Markdown`'s `children` prop is a typed `string` (the markdown source),
+    // not JSX children — createElement's rest-args form doesn't type-check
+    // against that, so this legitimately passes it via the props object.
+    // eslint-disable-next-line react/no-children-prop
     renderer = create(createElement(Markdown, { children: source, onFileLink }));
   });
   return renderer;

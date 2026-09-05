@@ -2,7 +2,7 @@ import { createElement, type ComponentProps, type ReactElement, type ReactNode }
 import { Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MarkdownDisplay, { MarkdownIt, type ASTNode } from '@ronradtke/react-native-markdown-display';
 
-import { filePathFromHref, normalizeFileLink } from '@/lib/fileLink';
+import { filePathFromHref } from '@/lib/fileLink';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 
 export interface MarkdownProps {
