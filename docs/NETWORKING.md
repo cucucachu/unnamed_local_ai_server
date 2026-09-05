@@ -7,8 +7,8 @@ LAN-only. See also the README's "Network isolation" architecture note.
 
 Run these in order (all idempotent, all under `infra/host/`, all need `sudo`):
 
-1. **Workspace** — `sudo infra/host/setup-workspace.sh`
-   Creates `$WORKSPACE_DIR` (default `/srv/homeai/workspace`), owned by
+1. **Files directory** — `sudo infra/host/setup-files.sh`
+   Creates `$FILES_DIR` (default `/srv/homeai/files`), owned by
    `$HOMEAI_UID:$HOMEAI_GID`.
 2. **GPU driver check** — read `infra/host/setup-gpu-drivers.md` and follow it
    manually (kernel version, `amdgpu`, Mesa/Vulkan, `render`/`video` group

@@ -22,7 +22,7 @@ ENV_FILE="${REPO_ROOT}/.env"
 
 # Pull a single KEY=value out of .env without sourcing the whole file (values
 # may not be shell-safe), falling back to a default if missing/empty - same
-# helper as infra/host/setup-workspace.sh, kept local rather than shared
+# helper as infra/host/setup-files.sh, kept local rather than shared
 # since it's a 5-line function and these two scripts otherwise have no
 # common dependency.
 env_var() {

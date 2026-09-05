@@ -42,7 +42,7 @@ describe('parentPath', () => {
 
 describe('listFiles', () => {
   const cases: { name: string; path: string }[] = [
-    { name: 'the workspace root (empty path)', path: '' },
+    { name: 'the files root (empty path)', path: '' },
     { name: 'a simple nested dir', path: 'docs' },
     { name: 'a path containing a space', path: 'my docs' },
     { name: 'a path with multiple nested segments', path: 'a/b/c' },

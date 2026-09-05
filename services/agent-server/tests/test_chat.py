@@ -33,7 +33,7 @@ _UNKNOWN_THREAD_ID = "00000000-0000-0000-0000-000000000000"
 
 @pytest.fixture
 async def rest_app(fake_model: FakeModel, tmp_path) -> AsyncIterator[FastAPI]:
-    settings = fake_model.settings(workspace_root=str(tmp_path))
+    settings = fake_model.settings(files_root=str(tmp_path))
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),

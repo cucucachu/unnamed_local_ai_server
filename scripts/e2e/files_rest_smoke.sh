@@ -23,14 +23,14 @@
 #      WS chat turn.
 #   2. Uploads a file via multipart `POST /api/files/upload`.
 #   3. Confirms it appears via `GET /api/files`.
-#   4. `ls`'s it on the HOST at the real `WORKSPACE_DIR` from `.env`.
+#   4. `ls`'s it on the HOST at the real `FILES_DIR` from `.env`.
 #   5. Downloads it back via `GET /api/files/download` and confirms it's
 #      byte-identical to the original with `cmp`.
 #   6. Deletes it via `DELETE /api/files`, confirms it's gone from both the
 #      list and the host filesystem.
 #   7. Agent-visibility cross-check: drops a SEPARATE file directly onto the
-#      host workspace directory (bypassing the REST API entirely), then
-#      asks the agent over WS (`scripts/ws_smoke.py`) to list the workspace
+#      host files directory (bypassing the REST API entirely), then
+#      asks the agent over WS (`scripts/ws_smoke.py`) to list the files
 #      root, and confirms the dropped-in filename appears in a `tool_end`
 #      frame's `result_preview` — proof the agent, the files REST API, and
 #      the host all see the exact same directory.
@@ -60,12 +60,12 @@ FILE_CONTENT="FILES-REST-SMOKE-OK ${RUN_ID}"
 AGENT_VIS_FILE_NAME="agent-visibility-${RUN_ID}.txt"
 AGENT_VIS_THREAD_ID="files-rest-smoke-${RUN_ID}"
 
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[files-rest-smoke] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[files-rest-smoke] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-AGENT_VIS_HOST_PATH="${WORKSPACE_DIR}/${AGENT_VIS_FILE_NAME}"
+AGENT_VIS_HOST_PATH="${FILES_DIR}/${AGENT_VIS_FILE_NAME}"
 
 # A dedicated scratch dir (not a bare `mktemp` file) so the local upload
 # source's basename is exactly `$FILE_NAME` — the multipart filename
@@ -143,7 +143,7 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: dir path (workspace-relative) to upload into. $2: local file to upload.
+# $1: dir path (root-relative) to upload into. $2: local file to upload.
 # Prints status on line 1, response body on line 2. Hand-builds the
 # multipart body — `urllib.request` has no built-in multipart encoder, and
 # `requests` isn't a guaranteed-installed dependency on this host's system
@@ -205,7 +205,7 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: workspace-relative file path. $2: local destination path. Prints the
+# $1: root-relative file path. $2: local destination path. Prints the
 # status code on line 1; writes the raw response body bytes to $2.
 download_file() {
   local remote_path="$1" local_dst="$2"
@@ -260,7 +260,7 @@ step_stack_up_and_healthy() {
 }
 
 step_upload() {
-  log "Step 2/8: POST /api/files/upload (${FILE_NAME}, workspace root)..."
+  log "Step 2/8: POST /api/files/upload (${FILE_NAME}, files root)..."
   local resp status body
   resp="$(upload_file "" "$LOCAL_UPLOAD_SRC")"
   status="$(sed -n '1p' <<<"$resp")"
@@ -300,11 +300,11 @@ step_appears_in_list() {
 }
 
 step_visible_on_host() {
-  log "Step 4/8: ls on the host at ${WORKSPACE_DIR}/${UPLOADED_NAME}..."
-  local host_path="${WORKSPACE_DIR}/${UPLOADED_NAME}"
+  log "Step 4/8: ls on the host at ${FILES_DIR}/${UPLOADED_NAME}..."
+  local host_path="${FILES_DIR}/${UPLOADED_NAME}"
   if [ ! -f "$host_path" ]; then
     log "ERROR: ${host_path} does not exist on the host"
-    ls -la "$WORKSPACE_DIR"
+    ls -la "$FILES_DIR"
     return 1
   fi
   if ! cmp -s "$LOCAL_UPLOAD_SRC" "$host_path"; then
@@ -347,8 +347,8 @@ step_delete_and_confirm_gone() {
     log "ERROR: '${UPLOADED_NAME}' still present in list after DELETE: ${body}"
     return 1
   fi
-  if [ -e "${WORKSPACE_DIR}/${UPLOADED_NAME}" ]; then
-    log "ERROR: ${WORKSPACE_DIR}/${UPLOADED_NAME} still exists on the host after DELETE"
+  if [ -e "${FILES_DIR}/${UPLOADED_NAME}" ]; then
+    log "ERROR: ${FILES_DIR}/${UPLOADED_NAME} still exists on the host after DELETE"
     return 1
   fi
   log "OK: '${UPLOADED_NAME}' gone from the list and from the host filesystem"
@@ -356,12 +356,12 @@ step_delete_and_confirm_gone() {
 
 step_agent_visibility_cross_check() {
   log "Step 7/8: agent-visibility cross-check (drop file on host -> agent ls over WS)..."
-  printf 'dropped straight onto the host workspace dir\n' >"$AGENT_VIS_HOST_PATH"
+  printf 'dropped straight onto the host files dir\n' >"$AGENT_VIS_HOST_PATH"
 
   local out
   out="$(mktemp)"
   if ! WS_SMOKE_THREAD_ID="$AGENT_VIS_THREAD_ID" \
-      WS_SMOKE_PROMPT="List the files in the workspace root directory using your ls tool." \
+      WS_SMOKE_PROMPT="List the files in the root directory using your ls tool." \
       timeout "$WS_TURN_TIMEOUT_S" uvx --from websockets python3 "$SCRIPT_DIR/../ws_smoke.py" >"$out" 2>&1; then
     log "ERROR: ws_smoke.py exited non-zero:"
     cat "$out"
@@ -391,7 +391,7 @@ step_agent_visibility_cross_check() {
 
 cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
-  rm -f "${WORKSPACE_DIR}/${UPLOADED_NAME:-$FILE_NAME}" "$AGENT_VIS_HOST_PATH" 2>/dev/null || true
+  rm -f "${FILES_DIR}/${UPLOADED_NAME:-$FILE_NAME}" "$AGENT_VIS_HOST_PATH" 2>/dev/null || true
   rm -rf "$LOCAL_SCRATCH_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT

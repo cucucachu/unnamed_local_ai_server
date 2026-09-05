@@ -3,7 +3,7 @@
 // `node_modules`/browsers first).
 //
 // Opens a real headless Chromium against the live stack (no mocking — real
-// REST `/api/files*` calls against `agent-server`'s workspace directory),
+// REST `/api/files*` calls against `agent-server`'s files directory),
 // drives the actual Files UI, and runs the FULL flow from the ticket's
 // acceptance criteria TWICE:
 //

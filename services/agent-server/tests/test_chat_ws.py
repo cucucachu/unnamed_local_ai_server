@@ -32,7 +32,7 @@ def _make_client(
     thread_store: ThreadStore | None = None,
     settings_store: SettingsStore | None = None,
 ) -> TestClient:
-    settings = fake_model.settings(workspace_root=str(tmp_path))
+    settings = fake_model.settings(files_root=str(tmp_path))
     # `checkpointer_override`/`thread_store_override` keep this on
     # `MemorySaver`/`InMemoryThreadStore` (fast, no real Postgres) rather
     # than the production lifespan's real Postgres connection — see
@@ -229,7 +229,7 @@ async def test_execute_code_tool_turn(
         TextTurn("done"),
     )
     settings = fake_model.settings(
-        workspace_root=str(tmp_path), exec_manager_url=fake_exec_manager.base_url
+        files_root=str(tmp_path), exec_manager_url=fake_exec_manager.base_url
     )
     app = create_app(
         settings,
@@ -290,7 +290,7 @@ async def test_web_search_tool_turn(
         TextTurn("found it"),
     )
     settings = fake_model.settings(
-        workspace_root=str(tmp_path), web_fetch_url=fake_web_fetch.base_url
+        files_root=str(tmp_path), web_fetch_url=fake_web_fetch.base_url
     )
     app = create_app(
         settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()

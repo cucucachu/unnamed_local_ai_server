@@ -7,10 +7,10 @@ before `lifespan` ever runs) — so there's no need for `app.router.
 lifespan_context(app)` here, and no need for `checkpointer_override`/
 `thread_store_override` either. `files_client` below builds `create_app()`
 directly and wraps it in a plain `ASGITransport`, exactly like `tests/
-conftest.py`'s own `client` fixture, just with `workspace_root` pointed at
+conftest.py`'s own `client` fixture, just with `files_root` pointed at
 a fresh `tmp_path` (function-scoped, so a brand-new empty directory per
 test — no shared state across tests) instead of the module's hardcoded
-`/data/workspace`.
+`/data/files`.
 
 Confirmed directly (see `test_upload_dotdot_filename_lands_as_basename`'s
 own module-level introspection, run once against a scratch FastAPI app
@@ -40,7 +40,7 @@ def files_settings(tmp_path: Path) -> Settings:
         model_name="test-model",
         exec_manager_url="http://code-exec-manager:8090",
         exec_default_timeout_s=1,
-        workspace_root=str(tmp_path),
+        files_root=str(tmp_path),
         postgres_password="test",
         _env_file=None,
     )

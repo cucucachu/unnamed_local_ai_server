@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # M4-04 acceptance: "cross-view" smoke test - proves `execute_code` and the
 # file tools (both already-merged M2-03/M4-03 machinery) see the exact same
-# `/workspace` directory that's bind-mounted to the real host filesystem.
+# files directory that's bind-mounted to the real host filesystem, addressed
+# at `/files` from execute_code's shell and at `/` (bare root) from the file
+# tools - two real, distinct, non-aliased mount points onto one directory.
 #
 # From a running (already up and healthy, per M4-04's own ticket) compose
 # stack, this script drives a single WS thread (`scripts/ws_smoke.py`'s
 # connect/send/recv pattern, same as `gate_m2.sh`/`gate_m3.sh`) through two
 # turns:
-#   1. Ask the agent to run `bash -lc 'date > /workspace/exec-proof.txt'` via
+#   1. Ask the agent to run `bash -lc 'date > /files/exec-proof.txt'` via
 #      its `execute_code` tool.
 #   2. On the SAME thread, ask it to `read_file` that same file and report
 #      its content.
 #
 # Asserts BOTH tool calls show up as successful `tool_end` frames, AND that
-# the file genuinely exists on the HOST at `${WORKSPACE_DIR}/exec-proof.txt`
-# (`WORKSPACE_DIR` read from `.env`, same as `gate_m3.sh`/`files_rest_smoke.sh`).
+# the file genuinely exists on the HOST at `${FILES_DIR}/exec-proof.txt`
+# (`FILES_DIR` read from `.env`, same as `gate_m3.sh`/`files_rest_smoke.sh`).
 #
 # `curl` is NOT installed on this host - uses `wget`/Python (`urllib.request`)
 # helpers, same as the other `scripts/e2e/*.sh` gate scripts.
@@ -53,12 +55,12 @@ API_HEALTH_TIMEOUT_S=120
 WS_TURN_TIMEOUT_S=90
 FILE_APPEAR_TIMEOUT_S=15
 
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[exec-crossview-smoke] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[exec-crossview-smoke] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-HOST_FILE_PATH="${WORKSPACE_DIR}/${FILE_NAME}"
+HOST_FILE_PATH="${FILES_DIR}/${FILE_NAME}"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
 
@@ -179,9 +181,9 @@ run_ws_turn() {
 }
 
 step_execute_code_writes_file() {
-  log "Step 2/5: WS prompt -> agent runs 'date > /workspace/${FILE_NAME}' via execute_code..."
+  log "Step 2/5: WS prompt -> agent runs 'date > /files/${FILE_NAME}' via execute_code..."
   rm -f "$HOST_FILE_PATH"
-  local prompt="Use your execute_code tool to run exactly this command: bash -lc 'date > /workspace/${FILE_NAME}'. Just run it and confirm when done."
+  local prompt="Use your execute_code tool to run exactly this command: bash -lc 'date > /files/${FILE_NAME}'. Just run it and confirm when done."
 
   log "Sending execute_code prompt (attempt 1/2)..."
   run_ws_turn "$prompt" /tmp/exec-crossview-attempt-1.log
@@ -207,16 +209,17 @@ step_execute_code_writes_file() {
 
 step_read_file_sees_same_content() {
   log "Step 3/5: same thread, WS prompt -> agent read_file's ${FILE_NAME}..."
-  # NOTE: explicit file-tool virtual path (`/${FILE_NAME}`, NOT
-  # `/workspace/${FILE_NAME}`) - deepagents' `FilesystemBackend` is already
-  # rooted at the workspace dir for file tools (`virtual_mode=True`), so a
-  # file-tool path of `/workspace/...` would look one level too deep. This
-  # is exactly the "file tool paths and /workspace in execute_code refer to
-  # the same directory" nuance the M4-04 system-prompt addition documents -
-  # spelled out here so this plumbing check isn't gated on model path
-  # reasoning it wasn't specifically prompted to get right.
-  local prompt="Now use your read_file tool with file_path exactly '${FILE_NAME}' (workspace-relative; do NOT prefix /workspace — that prefix is only for execute_code shell commands) and tell me exactly what it contains."
-  local retry_prompt="Wrong path. Call read_file now with file_path exactly '${FILE_NAME}' — not '/workspace/${FILE_NAME}', not '/${FILE_NAME}'. Then quote the file contents."
+  # NOTE: explicit file-tool virtual path (`${FILE_NAME}`, NOT
+  # `/files/${FILE_NAME}`) - deepagents' `FilesystemBackend` is rooted at
+  # bare `/` for file tools (`virtual_mode=True`); `/files` is only the
+  # mount point execute_code's shell sees for the identical directory. This
+  # is exactly the "file tool paths and execute_code's /files refer to the
+  # same directory, under two different real prefixes" nuance the M4-04
+  # system-prompt addition documents - spelled out here so this plumbing
+  # check isn't gated on model path reasoning it wasn't specifically
+  # prompted to get right.
+  local prompt="Now use your read_file tool with file_path exactly '${FILE_NAME}' (root-relative; do NOT prefix /files — that prefix is only for execute_code shell commands) and tell me exactly what it contains."
+  local retry_prompt="Wrong path. Call read_file now with file_path exactly '${FILE_NAME}' — not '/files/${FILE_NAME}', not '/${FILE_NAME}'. Then quote the file contents."
 
   log "Sending read_file prompt (attempt 1/2)..."
   run_ws_turn "$prompt" /tmp/exec-crossview-read-attempt-1.log
@@ -289,7 +292,7 @@ except Exception:
 trap cleanup EXIT
 
 main() {
-  log "=== EXEC CROSSVIEW SMOKE (M4-04): execute_code + read_file see the same /workspace ==="
+  log "=== EXEC CROSSVIEW SMOKE (M4-04): execute_code + read_file see the same files directory ==="
   step_stack_healthy
   # M8-03 made HITL on by default; this smoke's execute_code prompt is not
   # wired to send approval_response, so turn HITL off for the run.

@@ -41,7 +41,7 @@ type ResolvedTarget =
 /** Directory vs file vs missing for a `?path=` deep link (M9-03).
  * `GET /api/files` 404s on a file path, so a miss falls through to listing
  * the parent and looking for the basename as a file entry. */
-async function resolveWorkspaceTarget(requested: string): Promise<ResolvedTarget> {
+async function resolveFilesTarget(requested: string): Promise<ResolvedTarget> {
   const path = requested.replace(/^\/+|\/+$/g, '');
   if (!path) return { kind: 'dir', dir: '' };
 
@@ -66,7 +66,7 @@ async function resolveWorkspaceTarget(requested: string): Promise<ResolvedTarget
   }
 }
 
-/** One breadcrumb segment — `path` is the full workspace-relative path this
+/** One breadcrumb segment — `path` is the full root-relative path this
  * segment navigates to when tapped (`""` for the root "Home" segment). */
 interface Crumb {
   label: string;
@@ -175,7 +175,7 @@ export default function FilesScreen() {
     useCallback(() => {
       let cancelled = false;
       void (async () => {
-        const resolved = await resolveWorkspaceTarget(requestedPath);
+        const resolved = await resolveFilesTarget(requestedPath);
         if (cancelled) return;
         if (resolved.kind === 'missing') {
           showToast(`File not found: ${requestedPath}`);

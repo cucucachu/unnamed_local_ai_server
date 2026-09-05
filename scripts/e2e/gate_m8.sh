@@ -40,12 +40,12 @@ API_BASE="http://localhost/api"
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
 
-WORKSPACE_DIR="$(sed -n 's/^WORKSPACE_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$WORKSPACE_DIR" ]; then
-  echo "[gate-m8] ERROR: WORKSPACE_DIR not set in .env" >&2
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[gate-m8] ERROR: FILES_DIR not set in .env" >&2
   exit 1
 fi
-export WORKSPACE_DIR
+export FILES_DIR
 
 log() {
   echo "[gate-m8] $(date '+%H:%M:%S') $*"

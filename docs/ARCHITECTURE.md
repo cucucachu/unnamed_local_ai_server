@@ -38,7 +38,7 @@ flowchart TB
         avahi[avahi-daemon\nmDNS: homeai.local]
 
         subgraph internalnet [Docker network: homeai-internal, internal: true — no route to the internet]
-            agent["Agent Server\nFastAPI + deepagents\napp code at /app\nFilesystemBackend at /data/workspace"]
+            agent["Agent Server\nFastAPI + deepagents\napp code at /app\nFilesystemBackend at /data/files"]
             execmgr[Code-Exec Manager\nFastAPI + docker SDK\nno app-code or secret access]
             model[Model Runner\nllama.cpp server-vulkan]
             pg[(Postgres\ncheckpoints + metadata)]
@@ -49,7 +49,7 @@ flowchart TB
             exec2[Exec container: thread B]
         end
 
-        workspace[("/srv/homeai/workspace\nhost bind mount, persistent")]
+        filesdir[("/srv/homeai/files\nhost bind mount, persistent")]
         dri["/dev/dri\niGPU render node (Vulkan/RADV)"]
         dsock["/var/run/docker.sock"]
     end
@@ -57,13 +57,13 @@ flowchart TB
     proxy -->|"/api, /ws"| agent
     agent --> model
     agent --> pg
-    agent -->|"read/write/edit/ls (direct, in-process)"| workspace
+    agent -->|"read/write/edit/ls (direct, in-process, virtual root /)"| filesdir
     agent -->|"execute_code tool: create/exec/destroy"| execmgr
     execmgr -->|docker API| exec1
     execmgr -->|docker API| exec2
     execmgr -.->|mounted socket, only this service| dsock
-    exec1 -.->|"bind mount, rw, no other access"| workspace
-    exec2 -.->|"bind mount, rw, no other access"| workspace
+    exec1 -.->|"bind mount, rw, no other access, at /files"| filesdir
+    exec2 -.->|"bind mount, rw, no other access, at /files"| filesdir
     model -.->|device passthrough| dri
 ```
 
@@ -140,11 +140,11 @@ sequenceDiagram
     P->>A: proxy upgrade
     A->>M: /v1/chat/completions (stream)
     M-->>A: tool_call: read_file("notes.md")
-    A->>A: FilesystemBackend reads /data/workspace/notes.md directly (no network hop)
+    A->>A: FilesystemBackend reads /data/files/notes.md directly (no network hop; file-tool path was /notes.md)
     A->>M: continue with tool result
     M-->>A: tool_call: execute_code("python resize.py photo.jpg")
     A->>E: POST /sessions/{id}/ensure
-    E->>C: docker create+start (if not running), workspace mounted, network none
+    E->>C: docker create+start (if not running), files dir mounted at /files, network none
     A->>E: POST /sessions/{id}/execute
     E->>C: docker exec
     C-->>E: stdout/stderr/exit
@@ -170,7 +170,7 @@ sequenceDiagram
     participant U as Web / Expo App
     participant P as Caddy
     participant A as Agent Server
-    participant W as Workspace dir
+    participant W as Files dir
 
     U->>P: GET /api/media/stream?path=video.mp4\nRange: bytes=0-
     P->>A: proxy with Range header
@@ -495,8 +495,8 @@ what another doc says it should be.
   `web_search`/`web_fetch` tools (M7-05) — `agent-server` itself never
   joins `homeai-net` or talks to `egress-proxy` directly; see "Security
   model" below.
-- **Mounts**: `${WORKSPACE_DIR}:/data/workspace` (rw bind; host default
-  `/srv/homeai/workspace`) — confirmed in `docker compose config`'s
+- **Mounts**: `${FILES_DIR}:/data/files` (rw bind; host default
+  `/srv/homeai/files`) — confirmed in `docker compose config`'s
   `volumes:` block for this service.
 - **Runs as**: `user: "${HOMEAI_UID}:${HOMEAI_GID}"` (non-root).
 - **Env vars consumed** (compose `environment:` block, cross-checked
@@ -506,13 +506,13 @@ what another doc says it should be.
   `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `TEST_PG_DSN` (only read by
   `tests/test_checkpointer_pg.py`'s integration fixture, not by the
   application itself — compose's own comment on this line says so).
-  **Nuance**: `HOMEAI_UID`/`HOMEAI_GID`/`WORKSPACE_DIR` are used by
+  **Nuance**: `HOMEAI_UID`/`HOMEAI_GID`/`FILES_DIR` are used by
   *compose* to set this service's `user:` field and bind-mount source —
   they are never actually injected into the container's own environment.
-  `Settings.workspace_root` is a hardcoded `/data/workspace` default, not
-  read from a `WORKSPACE_DIR`/`WORKSPACE_ROOT` env var (`.env.example`'s own
+  `Settings.files_root` is a hardcoded `/data/files` default, not
+  read from a `FILES_DIR`/`FILES_ROOT` env var (`.env.example`'s own
   "Consumed by" comments reflect this — they don't list `agent-server` for
-  `WORKSPACE_DIR`).
+  `FILES_DIR`).
 - **Tests**: `services/agent-server/tests/` — `test_health.py`,
   `test_chat.py`, `test_chat_ws.py`, `test_files_rest.py`,
   `test_media_stream.py`, `test_paths.py`, `test_agent_build.py`,
@@ -579,9 +579,9 @@ what another doc says it should be.
   service in the compose file with this mount, enforced by
   `scripts/check_socket_exclusivity.sh`.
 - **Env vars consumed** (compose `environment:` block, cross-checked
-  against `app/core/config.py`'s `Settings`): `WORKSPACE_DIR` (aliased to
-  the field `workspace_host_dir` — deliberately not named
-  `workspace_root`, since this service never reads the workspace itself;
+  against `app/core/config.py`'s `Settings`): `FILES_DIR` (aliased to
+  the field `files_host_dir` — deliberately not named
+  `files_root`, since this service never reads the files directory itself;
   it only tells `dockerd` where the exec-container bind-mount source
   lives), `HOMEAI_UID`, `HOMEAI_GID`, `EXEC_IDLE_MINUTES`,
   `EXEC_DEFAULT_TIMEOUT_S`.
@@ -652,7 +652,7 @@ host and are set up/verified by scripts under `infra/host/` and `scripts/`.
   themselves don't survive a reboot or a `dockerd` restart otherwise).
   Verified by `scripts/verify_network.sh` checks 3–5.
 - **`homeai-backup.timer` / `homeai-backup.service`** (systemd) — runs
-  `infra/host/backup-workspace.sh` daily at 03:00. Installed/removed by
+  `infra/host/backup-files.sh` daily at 03:00. Installed/removed by
   `infra/host/install-backup-timer.sh`. See "Operations" below and
   `README.md`'s "Backups" section for the full mechanics.
 
@@ -661,7 +661,7 @@ host and are set up/verified by scripts under `infra/host/` and `scripts/`.
 ## 3. Contracts
 
 The binding API shapes for `agent-server`'s HTTP API, its WebSocket chat
-protocol, `code-exec-manager`'s internal REST API, and the workspace
+protocol, `code-exec-manager`'s internal REST API, and the files-root
 path-traversal guard shared by the files and media APIs. This section is
 the single source of truth for these shapes — if any code ever disagrees
 with it, fix the code (or update this doc, if the doc is what's actually
@@ -670,9 +670,9 @@ wrong) rather than letting them drift apart silently.
 ### HTTP API (agent-server, all under `/api`)
 
 All JSON. Errors: `{"detail": "<human readable>"}` with an appropriate
-4xx/5xx status. Every `path` parameter is a **workspace-relative POSIX
-path** (`""` = workspace root); any path that resolves outside the
-workspace root returns `400` (see the path-traversal guard below).
+4xx/5xx status. Every `path` parameter is a **files-root-relative POSIX
+path** (`""` = files root); any path that resolves outside the
+files root returns `400` (see the path-traversal guard below).
 
 **Health**
 - `GET /api/health` → `200 {"status": "ok"}`
@@ -731,7 +731,7 @@ checkpoint by id — which may be a sibling the user is not looking at.
 `checkpoint_id=active_checkpoint_id` when set.
 
 **Exec sandbox is per thread, not per branch.** `code-exec-manager`
-sessions and the workspace bind-mount are keyed on `thread_id`. Forking
+sessions and the files-directory bind-mount are keyed on `thread_id`. Forking
 the conversation does **not** branch files on disk — `execute_code` /
 `write_file` on one branch see the same files as every other branch of
 that thread.
@@ -982,7 +982,7 @@ produces, and the spec `scripts/verify_isolation.sh` checks against:
 `tmpfs={"/tmp": "size=512m", "/home/homeai": "size=64m"}`,
 `mem_limit="4g"`, `nano_cpus=4_000_000_000` (4 CPUs),
 `user=f"{HOMEAI_UID}:{HOMEAI_GID}"`, `pids_limit=512`, a single bind mount
-`WORKSPACE_DIR (host path) -> /workspace (rw)`, command `sleep infinity`,
+`FILES_DIR (host path) -> /files (rw)`, command `sleep infinity`,
 labels `{"homeai.exec": "1", "homeai.session": session_id}`. Nothing else
 mounted; no env secrets passed in.
 
@@ -1055,16 +1055,16 @@ like the `FETCH_*` caps).
 Used by the files and media APIs:
 
 ```python
-def resolve_workspace_path(rel: str) -> Path:
-    root = Path("/data/workspace").resolve()
+def resolve_files_path(rel: str) -> Path:
+    root = Path("/data/files").resolve()
     p = (root / rel).resolve()          # resolves symlinks and ".."
     if p != root and root not in p.parents:
-        raise HTTPException(400, "path escapes workspace")
+        raise HTTPException(400, "path escapes files root")
     return p
 ```
 
 Tested against: `../x`, absolute `/etc/passwd`, nested `a/../../x`, and a
-symlink inside the workspace that points outside it (the resolved target
+symlink inside the files root that points outside it (the resolved target
 must be rejected).
 
 ---
@@ -1433,14 +1433,14 @@ design actually protects against them:
    names, tool-call arguments, and file paths — has to be treated as
    attacker-or-hallucination-influenced input, not as trusted instruction.
    The path-traversal guard ("Contracts" above) and the files/media APIs'
-   workspace-relative path handling exist specifically because the model
+   files-root-relative path handling exist specifically because the model
    can be prompted (by a user, or by content it reads from a file) into
-   requesting a path that tries to escape the workspace.
+   requesting a path that tries to escape the files root.
 4. **Untrusted executed code.** The `execute_code` tool runs arbitrary
    shell/Python/etc. the model asked for — genuinely untrusted code by
    construction, since a user (or content the model summarized) can steer
    what gets run. This is the boundary the isolation suite below exists
-   to verify: the exec container can touch the shared workspace and
+   to verify: the exec container can touch the shared files directory and
    nothing else.
 
 ### Isolation verification (M4-05)
@@ -1466,7 +1466,7 @@ exact §7 hardening spec):
   (`curl`) and raw-socket (Python) level.
 - **Filesystem isolation** — the root filesystem is read-only; `docker.sock`
   and agent-server's own `/app`/`/data` paths are absent; `/tmp` and
-  `$HOME` are writable tmpfs; `/workspace` is the sole writable non-tmpfs
+  `$HOME` are writable tmpfs; `/files` is the sole writable non-tmpfs
   (real bind) mount.
 - **Capability dropping** — every Linux capability is dropped (`CapEff`
   all-zero), and the container runs as the configured non-root
@@ -1667,7 +1667,7 @@ docker compose logs -f --tail=200      # last 200 lines, all services
 
 Covered in full in `README.md`'s [Backups](../README.md#backups) section
 (what's covered/not covered, manual run, the daily systemd timer,
-restore steps for both the workspace and Postgres) — not duplicated here
+restore steps for both the files directory and Postgres) — not duplicated here
 to avoid two copies drifting apart.
 
 ### Host checklist
@@ -1685,7 +1685,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m3.sh` | M3 (persistence + files) scripted gate | After touching threads/files/checkpointer code |
 | `scripts/e2e/gate_m4.sh` | M4 (code execution) scripted gate | After touching code-exec-manager or the `execute_code` tool |
 | `scripts/e2e/persistence_smoke.sh` | Thread/message persistence across agent-server restart, plus a pending HITL approval still on `GET /api/threads/{id}/state` after another restart (M8-08) | After touching the checkpointer, HITL interrupt state, or files storage |
-| `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view | After touching the exec ↔ workspace file-visibility path |
+| `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view | After touching the exec ↔ files-directory file-visibility path |
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
@@ -1693,7 +1693,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
 | `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |
-| `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host workspace) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
+| `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host files directory) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 

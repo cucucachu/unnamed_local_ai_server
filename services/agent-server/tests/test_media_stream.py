@@ -5,7 +5,7 @@
 touch `app.state.settings`, set synchronously in `create_app()` well before
 `lifespan` runs, so there's no need for `app.router.lifespan_context(app)`,
 `checkpointer_override`, or `thread_store_override` here either) — a fresh
-`tmp_path`-backed `workspace_root` per test, function-scoped.
+`tmp_path`-backed `files_root` per test, function-scoped.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def media_settings(tmp_path: Path) -> Settings:
         model_name="test-model",
         exec_manager_url="http://code-exec-manager:8090",
         exec_default_timeout_s=1,
-        workspace_root=str(tmp_path),
+        files_root=str(tmp_path),
         postgres_password="test",
         _env_file=None,
     )
@@ -311,7 +311,7 @@ async def test_large_file_streams_across_chunk_boundary(
 # ---------------------------------------------------------------------------
 # traversal guard suite (Conventions & Contracts §8) — same parametrized
 # cases as `test_files_rest.py`'s `GUARD_CASES`/`_bad_path`, since this
-# exercises the exact same shared `resolve_workspace_path` function.
+# exercises the exact same shared `resolve_files_path` function.
 # ---------------------------------------------------------------------------
 
 GUARD_CASES = ["dotdot", "absolute", "nested_dotdot", "symlink"]

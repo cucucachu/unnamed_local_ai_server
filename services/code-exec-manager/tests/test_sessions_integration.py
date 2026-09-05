@@ -59,7 +59,7 @@ def real_docker_client() -> docker.DockerClient:
 
 @pytest.fixture
 def real_settings(tmp_path) -> Settings:
-    return Settings(workspace_host_dir=str(tmp_path), toolbox_image=TOOLBOX_IMAGE, _env_file=None)
+    return Settings(files_host_dir=str(tmp_path), toolbox_image=TOOLBOX_IMAGE, _env_file=None)
 
 
 @pytest.fixture
@@ -108,13 +108,13 @@ async def test_execute_sleep_beyond_timeout_reports_timed_out_quickly(
     assert elapsed < 10
 
 
-async def test_file_written_in_workspace_visible_at_host_path(
+async def test_file_written_in_container_visible_at_host_path(
     real_manager: SessionManager, tmp_path
 ) -> None:
     await real_manager.ensure(SESSION_ID)
 
     result = await real_manager.execute(
-        SESSION_ID, "echo hello > /workspace/from-container.txt", timeout_seconds=10
+        SESSION_ID, "echo hello > /files/from-container.txt", timeout_seconds=10
     )
 
     assert result.exit_code == 0

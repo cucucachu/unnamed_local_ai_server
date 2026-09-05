@@ -20,7 +20,7 @@ from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 
 @pytest.fixture
 async def agent_app(fake_model: FakeModel, tmp_path) -> AsyncIterator[FastAPI]:
-    settings = fake_model.settings(workspace_root=str(tmp_path))
+    settings = fake_model.settings(files_root=str(tmp_path))
     # `checkpointer_override` keeps this fixture on `MemorySaver` (fast, no
     # real Postgres) rather than the production lifespan's real Postgres
     # connection — see `app.main.create_app`'s docstring.

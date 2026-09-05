@@ -590,7 +590,7 @@ describe('ChatScreen ([threadId])', () => {
           {
             id: 'a-done',
             kind: 'assistant',
-            text: 'Saved as [x.md](file:/workspace/notes/x.md)',
+            text: 'Saved as [x.md](file:/files/notes/x.md)',
             streaming: false,
           },
         ],

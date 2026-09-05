@@ -41,10 +41,10 @@ env_var() {
   fi
   echo "${val:-${default}}"
 }
-WORKSPACE_DIR="$(env_var WORKSPACE_DIR /srv/homeai/workspace)"
+FILES_DIR="$(env_var FILES_DIR /srv/homeai/files)"
 HOMEAI_UID="$(env_var HOMEAI_UID 1000)"
 HOMEAI_GID="$(env_var HOMEAI_GID 1000)"
-HOST_SCRATCH_PATH="${WORKSPACE_DIR}/${SCRATCH_FILE_NAME}"
+HOST_SCRATCH_PATH="${FILES_DIR}/${SCRATCH_FILE_NAME}"
 
 log() {
   echo "[m4-02-smoke] $(date '+%H:%M:%S') $*"
@@ -111,7 +111,7 @@ main() {
     --name "$MANAGER_CONTAINER_NAME" \
     -p 127.0.0.1:8090:8090 \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -e "WORKSPACE_DIR=${WORKSPACE_DIR}" \
+    -e "FILES_DIR=${FILES_DIR}" \
     -e "HOMEAI_UID=${HOMEAI_UID}" \
     -e "HOMEAI_GID=${HOMEAI_GID}" \
     "$IMAGE_TAG" >/dev/null
@@ -149,11 +149,11 @@ main() {
   fi
   log "OK: execute returned stdout=42 (${body})"
 
-  log "Step 5/6: write a file in /workspace, verify it lands on the HOST at ${HOST_SCRATCH_PATH}"
+  log "Step 5/6: write a file in /files, verify it lands on the HOST at ${HOST_SCRATCH_PATH}"
   rm -f "$HOST_SCRATCH_PATH"
   resp="$(rest_request POST "${BASE_URL}/sessions/${SESSION_ID}/execute" "$(python3 -c "
 import json
-print(json.dumps({'command': 'printf %s ${SCRATCH_FILE_CONTENT} > /workspace/${SCRATCH_FILE_NAME}'}))
+print(json.dumps({'command': 'printf %s ${SCRATCH_FILE_CONTENT} > /files/${SCRATCH_FILE_NAME}'}))
 ")")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"

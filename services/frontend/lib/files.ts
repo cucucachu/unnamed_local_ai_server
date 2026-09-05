@@ -36,15 +36,15 @@ export interface UploadResult {
   uploaded: string[];
 }
 
-/** Joins a workspace-relative dir (`""` = root) with a bare file/dir name
- * into one workspace-relative path — the inverse of the server's own
+/** Joins a root-relative dir (`""` = root) with a bare file/dir name
+ * into one root-relative path — the inverse of the server's own
  * `_rel_posix` (see `files.py`). Used to build `dst` for rename/move/copy
  * and the target of a new file/dir. */
 export function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
-/** The workspace-relative parent of `path` (`""` for a root-level entry). */
+/** The root-relative parent of `path` (`""` for a root-level entry). */
 export function parentPath(path: string): string {
   const lastSlash = path.lastIndexOf('/');
   return lastSlash === -1 ? '' : path.slice(0, lastSlash);
@@ -131,7 +131,7 @@ export type UploadPart = File | Blob;
  * unwrapped), but the encoder's own consuming loop —
  * `for (const [name, entry] of entries)` — destructures each array
  * element as if it were a `[name, value]` PAIR. For a short string value
- * (e.g. this project's `path` field, often `""` for the workspace root),
+ * (e.g. this project's `path` field, often `""` for the root),
  * that silently destructures into `name = undefined, entry = undefined`
  * (an empty string has no characters to iterate), which then fails the
  * encoder's own `typeof entry === 'string' | entry instanceof Blob |

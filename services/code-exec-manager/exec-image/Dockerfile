@@ -10,9 +10,9 @@
 FROM ubuntu:24.04
 
 # Fixed non-root UID/GID matching the host's HOMEAI_UID/HOMEAI_GID (same
-# identity agent-server itself runs as, and the same owner setup-workspace.sh
-# chowns the shared workspace directory to) - so exec containers can read/
-# write the bind-mounted workspace without needing it world-writable.
+# identity agent-server itself runs as, and the same owner setup-files.sh
+# chowns the shared files directory to) - so exec containers can read/
+# write the bind-mounted files directory without needing it world-writable.
 ARG HOMEAI_UID=1000
 ARG HOMEAI_GID=1000
 
@@ -73,7 +73,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     "beautifulsoup4>=4,<5" "python-dateutil>=2,<3"
 
 USER homeai
-WORKDIR /workspace
+WORKDIR /files
 CMD ["sleep", "infinity"]
 
 # Measured image size (`docker images homeai-exec-toolbox`): 1.88GB - well

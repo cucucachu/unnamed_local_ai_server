@@ -12,7 +12,7 @@
 #   scripts/export-ca.sh
 #
 # Writing ${BACKUP_DIR} under /srv typically needs sudo, same as
-# infra/host/backup-workspace.sh. If this script isn't already root it
+# infra/host/backup-files.sh. If this script isn't already root it
 # will try `sudo -n` for the write; if that isn't cached, it prints the
 # command to re-run.
 

@@ -13,7 +13,7 @@ from app.sessions import build_run_kwargs
 
 def test_hardening_spec_matches_reference_exactly() -> None:
     settings = Settings(
-        workspace_host_dir="/srv/homeai/workspace",
+        files_host_dir="/srv/homeai/files",
         homeai_uid=1000,
         homeai_gid=1000,
         toolbox_image="homeai-exec-toolbox:latest",
@@ -36,21 +36,21 @@ def test_hardening_spec_matches_reference_exactly() -> None:
         "nano_cpus": 4_000_000_000,
         "user": "1000:1000",
         "pids_limit": 512,
-        "volumes": {"/srv/homeai/workspace": {"bind": "/workspace", "mode": "rw"}},
+        "volumes": {"/srv/homeai/files": {"bind": "/files", "mode": "rw"}},
         "labels": {"homeai.exec": "1", "homeai.session": "thread-abc123"},
     }
 
 
 def test_hardening_spec_uses_host_path_not_container_path() -> None:
     # The bind-mount SOURCE must be whatever `dockerd` (not this process)
-    # resolves on the host - `workspace_host_dir`, never a hardcoded
-    # in-container path like agent-server's own `/data/workspace`.
-    settings = Settings(workspace_host_dir="/srv/homeai/workspace", _env_file=None)
+    # resolves on the host - `files_host_dir`, never a hardcoded
+    # in-container path like agent-server's own `/data/files`.
+    settings = Settings(files_host_dir="/srv/homeai/files", _env_file=None)
 
     spec = build_run_kwargs("s1", settings)
 
-    assert list(spec["volumes"].keys()) == ["/srv/homeai/workspace"]
-    assert spec["volumes"]["/srv/homeai/workspace"]["bind"] == "/workspace"
+    assert list(spec["volumes"].keys()) == ["/srv/homeai/files"]
+    assert spec["volumes"]["/srv/homeai/files"]["bind"] == "/files"
 
 
 def test_hardening_spec_reflects_configured_uid_gid() -> None:

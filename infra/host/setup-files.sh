@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# setup-workspace.sh — create and own the shared Home AI Agent workspace directory.
+# setup-files.sh — create and own the shared Home AI Agent files directory.
 #
 # Idempotent: safe to re-run. Must be run with sudo. Reads HOMEAI_UID, HOMEAI_GID,
-# and WORKSPACE_DIR from .env at the repo root (falls back to the same defaults
+# and FILES_DIR from .env at the repo root (falls back to the same defaults
 # as .env.example if a variable is unset/missing).
 #
-# Usage: sudo infra/host/setup-workspace.sh
+# Usage: sudo infra/host/setup-files.sh
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "error: must be run with sudo (needs to chown the workspace directory)" >&2
+  echo "error: must be run with sudo (needs to chown the files directory)" >&2
   exit 1
 fi
 
@@ -31,17 +31,17 @@ env_var() {
 
 HOMEAI_UID="$(env_var HOMEAI_UID 1000)"
 HOMEAI_GID="$(env_var HOMEAI_GID 1000)"
-WORKSPACE_DIR="$(env_var WORKSPACE_DIR /srv/homeai/workspace)"
+FILES_DIR="$(env_var FILES_DIR /srv/homeai/files)"
 
 if [[ ! -f "${ENV_FILE}" ]]; then
-  echo "warning: ${ENV_FILE} not found — using defaults (HOMEAI_UID=${HOMEAI_UID}, HOMEAI_GID=${HOMEAI_GID}, WORKSPACE_DIR=${WORKSPACE_DIR})" >&2
+  echo "warning: ${ENV_FILE} not found — using defaults (HOMEAI_UID=${HOMEAI_UID}, HOMEAI_GID=${HOMEAI_GID}, FILES_DIR=${FILES_DIR})" >&2
 fi
 
-mkdir -p "${WORKSPACE_DIR}"
-chown -R "${HOMEAI_UID}:${HOMEAI_GID}" "${WORKSPACE_DIR}"
-chmod 775 "${WORKSPACE_DIR}"
+mkdir -p "${FILES_DIR}"
+chown -R "${HOMEAI_UID}:${HOMEAI_GID}" "${FILES_DIR}"
+chmod 775 "${FILES_DIR}"
 
-echo "=== setup-workspace.sh summary ==="
-echo "Workspace dir : ${WORKSPACE_DIR}"
+echo "=== setup-files.sh summary ==="
+echo "Files dir     : ${FILES_DIR}"
 echo "Owner         : ${HOMEAI_UID}:${HOMEAI_GID}"
-ls -ld "${WORKSPACE_DIR}"
+ls -ld "${FILES_DIR}"

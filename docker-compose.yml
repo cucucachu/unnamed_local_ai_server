@@ -222,7 +222,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ${WORKSPACE_DIR}:/data/workspace
+      - ${FILES_DIR}:/data/files
     environment:
       MODEL_BASE_URL: ${MODEL_BASE_URL}
       MODEL_NAME: ${MODEL_NAME}
@@ -275,7 +275,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      WORKSPACE_DIR: ${WORKSPACE_DIR}
+      FILES_DIR: ${FILES_DIR}
       HOMEAI_UID: ${HOMEAI_UID}
       HOMEAI_GID: ${HOMEAI_GID}
       EXEC_IDLE_MINUTES: ${EXEC_IDLE_MINUTES}
