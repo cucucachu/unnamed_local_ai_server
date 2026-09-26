@@ -209,6 +209,8 @@ docker compose up -d
 
 Everything runs directly on the target Linux host (native, no cloud) — real `docker compose`, the real GPU, the real model. Only phone/LAN-device checks are deferred to a human host checklist ([`docs/HOST-CHECKS.md`](docs/HOST-CHECKS.md)). Networking details (mDNS, firewall, LAN-only isolation) are in [`docs/NETWORKING.md`](docs/NETWORKING.md).
 
+**If an AI coding agent is working in this repo**, see [`AGENTS.md`](AGENTS.md) before running `docker compose`/`scripts/e2e/*`/`scripts/verify_*` — a sandboxed shell tool usually can't reach the real Docker daemon or network directly, and needs explicit elevated permission (or the user running the command) to verify anything for real.
+
 ## Backups
 
 **What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit) and the Postgres database (thread/message history). Together these are the only genuinely irreplaceable state this stack holds.
