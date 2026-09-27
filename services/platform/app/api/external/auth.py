@@ -27,7 +27,7 @@ from app.api.session_http import (
     session_token,
     set_session_cookie,
 )
-from app.core import invites, passwords, sessions, totp, users
+from app.core import invites, legacy, passwords, sessions, totp, users
 from app.core.bootstrap import Bootstrap
 from app.core.errors import Forbidden, Unauthorized
 
@@ -72,6 +72,7 @@ async def setup(body: SetupRequest, request: Request, response: Response) -> Ses
                 storage=request.app.state.storage,
                 device_label=body.device_label,
             )
+    await legacy.maybe_migrate(request.app)
     return session_response(request, response, user, token)
 
 

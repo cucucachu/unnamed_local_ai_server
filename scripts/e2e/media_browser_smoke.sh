@@ -2,9 +2,8 @@
 # M5-02 full-stack media-player smoke test.
 #
 # Seeds a small synthetic video (`media-browser-smoke-test-video.mp4`, via
-# `ffmpeg` — see `seed_test_video` below) directly into the FILES_DIR
-# host directory,
-# opens a real headless browser against the live stack, navigates to the
+# `ffmpeg` — see `seed_test_video` below) into a temp dir, uploads it into
+# the e2e user's Personal space via the platform files API, opens a real headless browser against the live stack, navigates to the
 # Files tab, taps the seeded file (asserting M5-02's tap-routing opens the
 # player modal directly), and drives real script-level play/seek against
 # the real `<video>` element — see `media_browser_smoke.mjs` for the full
@@ -28,56 +27,38 @@
 #   MEDIA_SMOKE_BASE_URL=http://homeai.local/ scripts/e2e/media_browser_smoke.sh
 #
 # M6-03: video filename prefixed with this script's own name (was the bare
-# generic "test-video.mp4") - written straight to the files ROOT, not a
-# script-unique subfolder (unlike files_browser_smoke.mjs's own
-# RUN_SUFFIX-scoped folders), so a bare generic name was a genuine
-# collision surface with any other script/real-user file of the same name.
+# generic "test-video.mp4"), which was a collision surface while it was
+# written straight into the shared files root.
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 VIDEO_FILE_NAME="media-browser-smoke-test-video.mp4"
 
-# Same ".env, one KEY=value, not the whole file" extraction as
-# `exec_crossview_smoke.sh` — this script only needs FILES_DIR, and the
-# rest of `.env` isn't guaranteed to be shell-safe to `source`.
-ENV_FILE="${REPO_ROOT}/.env"
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' "$ENV_FILE" | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[media-browser-smoke] ERROR: FILES_DIR not set in ${ENV_FILE}" >&2
-  exit 1
-fi
-VIDEO_HOST_PATH="${FILES_DIR}/${VIDEO_FILE_NAME}"
+# M11-01: the clip is generated into a temp dir and uploaded by the .mjs
+# through the platform files API as the e2e user (it lands in that user's
+# Personal space and goes away with the user), never into a host files dir.
+SEED_DIR="$(mktemp -d)"
+VIDEO_SEED_PATH="${SEED_DIR}/${VIDEO_FILE_NAME}"
 
 log() {
   echo "[media-browser-smoke] $(date '+%H:%M:%S') $*"
 }
 
-# Same one-liner M5-01 used for its own live verification: a 10s synthetic
-# test pattern, `yuv420p` for broad player/codec compatibility. Run inside
-# `homeai-exec-toolbox` (which already has `ffmpeg` baked in, per
-# `services/code-exec-manager/exec-image/Dockerfile`) rather than requiring
-# it on the host directly, bind-mounting FILES_DIR at `/w` so the
-# output lands exactly where `agent-server`'s own files-directory mount expects
-# it (`docker-compose.yml`: `${FILES_DIR}:/data/files`).
 seed_test_video() {
-  log "Seeding ${VIDEO_HOST_PATH} via ffmpeg (homeai-exec-toolbox)..."
-  rm -f "$VIDEO_HOST_PATH"
-  docker run --rm -v "${FILES_DIR}:/w" homeai-exec-toolbox:latest \
+  log "Generating ${VIDEO_SEED_PATH} via ffmpeg (homeai-exec-toolbox)..."
+  docker run --rm --user "$(id -u):$(id -g)" -v "${SEED_DIR}:/w" homeai-exec-toolbox:latest \
     ffmpeg -y -f lavfi -i "testsrc=duration=10:size=640x360:rate=30" -pix_fmt yuv420p "/w/${VIDEO_FILE_NAME}"
-  if [ ! -f "$VIDEO_HOST_PATH" ]; then
-    log "ERROR: ${VIDEO_HOST_PATH} was not created"
+  if [ ! -f "$VIDEO_SEED_PATH" ]; then
+    log "ERROR: ${VIDEO_SEED_PATH} was not created"
     exit 1
   fi
-  log "OK: seeded ${VIDEO_HOST_PATH} ($(stat -c%s "$VIDEO_HOST_PATH" 2>/dev/null || stat -f%z "$VIDEO_HOST_PATH") bytes)"
+  log "OK: generated ${VIDEO_SEED_PATH} ($(stat -c%s "$VIDEO_SEED_PATH") bytes)"
 }
 
 cleanup() {
-  # Always runs (success or failure) so this script is safely re-runnable
-  # and never leaves the seeded file behind in the real files directory.
-  rm -f "$VIDEO_HOST_PATH" 2>/dev/null || true
+  rm -rf "$SEED_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -94,4 +75,4 @@ npx playwright install chromium
 seed_test_video
 
 echo "==> Running the smoke test against ${MEDIA_SMOKE_BASE_URL:-http://localhost/}..."
-MEDIA_SMOKE_FILE_NAME="$VIDEO_FILE_NAME" node "$SCRIPT_DIR/media_browser_smoke.mjs"
+MEDIA_SMOKE_FILE_PATH="$VIDEO_SEED_PATH" node "$SCRIPT_DIR/media_browser_smoke.mjs"

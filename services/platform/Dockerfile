@@ -5,6 +5,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
+# ffmpeg: video poster frames for /api/platform/files/thumbnail.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # The container runs with `read_only: true` (docker-compose.yml), so nothing
 # may need to write under /app at runtime: deps are installed here at build
 # time, bytecode is compiled now rather than lazily, and CMD execs the

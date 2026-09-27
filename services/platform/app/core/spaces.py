@@ -192,6 +192,18 @@ async def get_space_by_slug(conn: AsyncConnection, slug: str) -> Row:
     return row
 
 
+async def get_personal_space(conn: AsyncConnection, user_id: UUID) -> Row:
+    cur = await conn.execute(
+        f"SELECT {SPACE_COLUMNS} FROM spaces s "
+        "WHERE s.kind = 'personal' AND s.owner_user_id = %s AND s.archived_at IS NULL",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise NotFound("not_found")
+    return row
+
+
 async def list_user_spaces(conn: AsyncConnection, user_id: UUID) -> list[Row]:
     """Active spaces the user belongs to, with their `role`: personal first, then by name."""
     cur = await conn.execute(

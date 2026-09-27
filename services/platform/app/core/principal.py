@@ -42,6 +42,8 @@ class Principal:
     act: str
     stepped_up: bool
     thread_id: str | None = None
+    # Numeric owner of files created on the user's behalf.
+    uid: int | None = None
 
     @property
     def is_agent(self) -> bool:
@@ -97,6 +99,7 @@ async def require_user(request: Request) -> Principal:
         act=claims["act"],
         stepped_up=row["stepped_up"],
         thread_id=thread_id if isinstance(thread_id, str) else None,
+        uid=row["uid"],
     )
 
 

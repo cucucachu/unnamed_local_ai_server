@@ -29,7 +29,7 @@ from httpx import ASGITransport, AsyncClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from app.core import storage
+from app.core import fsops, storage
 from app.core.config import Settings
 from app.main import create_app
 
@@ -143,17 +143,23 @@ def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
 
 @pytest.fixture(autouse=True)
 def chowns(monkeypatch) -> dict[Path, tuple[int, int]]:
-    """Space-dir chowns as {path: (uid, gid)}, recorded instead of performed.
+    """Space-dir and file chowns as {path: (uid, gid)}, recorded instead of performed.
 
     Tests run unprivileged and can't chown to root:<space gid>;
-    `tests/test_storage.py` checks real ownership as root in a container.
+    `tests/test_storage.py` and `tests/test_fsops.py` check real ownership
+    as root in a container.
     """
     recorded: dict[Path, tuple[int, int]] = {}
 
     def fake_fchown(fd: int, uid: int, gid: int) -> None:
         recorded[Path(os.readlink(f"/proc/self/fd/{fd}"))] = (uid, gid)
 
+    def fake_lchown(path: Path, uid: int, gid: int) -> None:
+        recorded[Path(path)] = (uid, gid)
+
     monkeypatch.setattr(storage, "_fchown", fake_fchown)
+    monkeypatch.setattr(fsops, "_fchown", fake_fchown)
+    monkeypatch.setattr(fsops, "_lchown", fake_lchown)
     return recorded
 
 
@@ -179,3 +185,11 @@ async def platform(pg_database: PgDatabase, tmp_path: Path) -> AsyncIterator[Pla
     app = create_app(make_settings(pg_database, tmp_path))
     async with running(app) as client:
         yield Platform(app, client, pg_database, tmp_path)
+
+
+@pytest.fixture
+async def world(platform: Platform):
+    """Users and a shared space for the files tests (`tests/files_world.py`)."""
+    from tests.files_world import build_world
+
+    return await build_world(platform)

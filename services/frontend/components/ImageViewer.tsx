@@ -11,9 +11,9 @@ export interface ImageViewerProps {
 /**
  * Issue #124 — in-app image viewer for the Files tab's image entries.
  * Mirrors `MediaPlayer`'s "no download needed" contract, reusing the exact
- * same `GET /api/media/stream?path=...` URL (`lib/media.ts`'s `streamUrl`)
+ * same `GET /api/platform/files/stream?path=...` URL (`lib/media.ts`'s `streamUrl`)
  * as an `<Image>` source instead of a video/audio player — confirmed by
- * reading `services/agent-server/app/api/media.py`'s `_stream` that it
+ * reading `services/platform/app/api/external/media.py`'s `_stream` that it
  * streams ANY file under the files root (it only calls
  * `mimetypes.guess_type` to pick a response `Content-Type` header; nothing
  * gates the route on that guess being audio/video), so no new server

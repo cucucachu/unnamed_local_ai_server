@@ -9,8 +9,11 @@ import { FileList } from '@/components/FileList';
 import { PromptModal } from '@/components/PromptModal';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
+import { normalizeFileLink } from '@/lib/fileLink';
 import {
+  ROOT_PATH,
   deletePath,
+  describeFilesError,
   downloadFile,
   joinPath,
   listFiles,
@@ -19,6 +22,7 @@ import {
   parentPath,
   pickAndUpload,
   copyPath,
+  statPath,
   type FileEntry,
 } from '@/lib/files';
 import { previewKind } from '@/lib/media';
@@ -38,47 +42,46 @@ type ResolvedTarget =
   | { kind: 'file'; dir: string; filePath: string }
   | { kind: 'missing' };
 
-/** Directory vs file vs missing for a `?path=` deep link (M9-03).
- * `GET /api/files` 404s on a file path, so a miss falls through to listing
- * the parent and looking for the basename as a file entry. */
+/** A `?path=` value as a virtual path: empty is the root; anything that
+ * isn't under `/personal` or `/spaces` (an old bookmark, a pre-spaces chat
+ * link) is read relative to the personal space, like `file:` links. */
+function requestedToVirtual(requested: string): string {
+  if (requested.replace(/\/+/g, '') === '') return ROOT_PATH;
+  return normalizeFileLink(requested);
+}
+
+/** Directory vs file vs missing for a `?path=` deep link (M9-03), via `stat`. */
 async function resolveFilesTarget(requested: string): Promise<ResolvedTarget> {
-  const path = requested.replace(/^\/+|\/+$/g, '');
-  if (!path) return { kind: 'dir', dir: '' };
-
+  const path = requestedToVirtual(requested);
+  if (path === ROOT_PATH) return { kind: 'dir', dir: ROOT_PATH };
   try {
-    await listFiles(path);
-    return { kind: 'dir', dir: path };
-  } catch (error) {
-    if (!(error instanceof ApiError) || error.status !== 404) {
-      return { kind: 'missing' };
-    }
-  }
-
-  try {
-    const listing = await listFiles(parentPath(path));
-    const entry = listing.entries.find((item) => item.path === path);
-    if (entry?.type === 'file') {
-      return { kind: 'file', dir: parentPath(path), filePath: entry.path };
-    }
-    return { kind: 'missing' };
+    const { entry } = await statPath(path);
+    if (entry.type === 'dir') return { kind: 'dir', dir: entry.path };
+    return { kind: 'file', dir: parentPath(entry.path), filePath: entry.path };
   } catch {
     return { kind: 'missing' };
   }
 }
 
-/** One breadcrumb segment — `path` is the full root-relative path this
- * segment navigates to when tapped (`""` for the root "Home" segment). */
+/** One breadcrumb segment — `path` is the virtual path this segment
+ * navigates to when tapped (`/` for the root "Home" segment). */
 interface Crumb {
   label: string;
   path: string;
 }
 
-function breadcrumbsFor(path: string): Crumb[] {
-  const crumbs: Crumb[] = [{ label: 'Home', path: '' }];
-  if (!path) return crumbs;
+/** Home › <space> › dirs…, where the space crumb is "Personal" or the shared
+ * space's name. `/spaces` gets no crumb of its own: Home already lists every
+ * space. */
+function breadcrumbsFor(path: string, spaceLabel: string | null): Crumb[] {
+  const crumbs: Crumb[] = [{ label: 'Home', path: ROOT_PATH }];
+  const parts = path.split('/').filter(Boolean);
+  const spaceDepth = parts[0] === 'spaces' ? 2 : 1;
+  if (parts.length < spaceDepth) return crumbs;
 
-  let cumulative = '';
-  for (const segment of path.split('/')) {
+  let cumulative = `/${parts.slice(0, spaceDepth).join('/')}`;
+  crumbs.push({ label: spaceLabel ?? parts[spaceDepth - 1], path: cumulative });
+  for (const segment of parts.slice(spaceDepth)) {
     cumulative = joinPath(cumulative, segment);
     crumbs.push({ label: segment, path: cumulative });
   }
@@ -109,7 +112,7 @@ function confirmDeleteEntry(entry: FileEntry): Promise<boolean> {
 }
 
 function errorDetail(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.detail : fallback;
+  return error instanceof ApiError ? describeFilesError(error.detail) : fallback;
 }
 
 /** Which multi-step flow (if any) is in progress for a given entry — drives
@@ -125,6 +128,8 @@ type PendingAction =
  * nested stack like `chat/`). M9-03 keeps the browse path in the URL
  * (`?path=`, also `homeai://files?path=...`) via `useLocalSearchParams` +
  * `router.setParams`, so back/refresh and chat `file:` deep links work.
+ * M11-01 moved it onto the platform's virtual tree: `/` shows Personal and
+ * every shared space, and a viewer's space has no write actions.
  *
  * Mirrors `chat/index.tsx`'s established list-screen conventions: dark
  * theme via `lib/theme.ts`, `useFocusEffect`-driven fetch (also re-fires on
@@ -139,14 +144,18 @@ export default function FilesScreen() {
   const router = useRouter();
   const { path: pathParam } = useLocalSearchParams<{ path?: string | string[] }>();
   const requestedPath = firstSearchParam(pathParam);
-  const [dirPath, setDirPath] = useState('');
+  const [dirPath, setDirPath] = useState(ROOT_PATH);
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  // From the last listing: whether this directory may be changed (editor or
+  // owner; never at the root), and the space's display name for breadcrumbs.
+  const [writable, setWritable] = useState(false);
+  const [spaceLabel, setSpaceLabel] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [highlightedPath, setHighlightedPath] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [actionSheetEntry, setActionSheetEntry] = useState<FileEntry | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
-  const lastGoodDirRef = useRef('');
+  const lastGoodDirRef = useRef(ROOT_PATH);
   const { message: toast, showToast } = useToast();
 
   const setBrowsePath = useCallback(
@@ -161,6 +170,8 @@ export default function FilesScreen() {
     listFiles(targetPath)
       .then((listing) => {
         setEntries(listing.entries);
+        setWritable(listing.writable);
+        setSpaceLabel(listing.space_label ?? null);
         setLoadState('done');
       })
       .catch(() => setLoadState('error'));
@@ -327,7 +338,8 @@ export default function FilesScreen() {
     [refresh, showToast],
   );
 
-  const crumbs = breadcrumbsFor(dirPath);
+  const crumbs = breadcrumbsFor(dirPath, spaceLabel);
+  const atRoot = dirPath === ROOT_PATH;
 
   return (
     <View style={styles.container}>
@@ -382,41 +394,52 @@ export default function FilesScreen() {
         <FileList
           entries={entries}
           onPressEntry={handlePressEntry}
-          onEntryLongPress={handleEntryLongPress}
+          // The root lists spaces, which can't be renamed, moved or deleted here.
+          onEntryLongPress={atRoot ? undefined : handleEntryLongPress}
           highlightedPath={highlightedPath}
         />
       )}
 
-      <View style={styles.actionBar}>
-        <Pressable
-          style={styles.actionBarButton}
-          onPress={handleUploadHere}
-          disabled={uploading}
-          accessibilityRole="button"
-          testID="files-upload-button"
-        >
-          {uploading ? (
-            <ActivityIndicator size="small" color={theme.text} />
-          ) : (
-            <Ionicons name="cloud-upload-outline" size={18} color={theme.text} />
-          )}
-          <Text style={styles.actionBarButtonText}>Upload here</Text>
-        </Pressable>
-        <Pressable
-          style={styles.actionBarButton}
-          onPress={() => setPendingAction({ kind: 'mkdir' })}
-          accessibilityRole="button"
-          testID="files-new-folder-button"
-        >
-          <Ionicons name="folder-open-outline" size={18} color={theme.text} />
-          <Text style={styles.actionBarButtonText}>New folder</Text>
-        </Pressable>
-      </View>
+      {/* Viewers get no write actions; the API refuses them regardless. */}
+      {writable ? (
+        <View style={styles.actionBar}>
+          <Pressable
+            style={styles.actionBarButton}
+            onPress={handleUploadHere}
+            disabled={uploading}
+            accessibilityRole="button"
+            testID="files-upload-button"
+          >
+            {uploading ? (
+              <ActivityIndicator size="small" color={theme.text} />
+            ) : (
+              <Ionicons name="cloud-upload-outline" size={18} color={theme.text} />
+            )}
+            <Text style={styles.actionBarButtonText}>Upload here</Text>
+          </Pressable>
+          <Pressable
+            style={styles.actionBarButton}
+            onPress={() => setPendingAction({ kind: 'mkdir' })}
+            accessibilityRole="button"
+            testID="files-new-folder-button"
+          >
+            <Ionicons name="folder-open-outline" size={18} color={theme.text} />
+            <Text style={styles.actionBarButtonText}>New folder</Text>
+          </Pressable>
+        </View>
+      ) : !atRoot && loadState === 'done' ? (
+        <View style={styles.actionBar}>
+          <Text style={styles.readOnlyText} testID="files-read-only">
+            View only
+          </Text>
+        </View>
+      ) : null}
 
       <FileActionSheet
         entry={actionSheetEntry}
         onClose={() => setActionSheetEntry(null)}
         onPlay={openMedia}
+        canWrite={writable}
         onDownload={handleDownload}
         onRename={(entry) => setPendingAction({ kind: 'rename', entry })}
         onMove={(entry) => setPendingAction({ kind: 'move', entry })}
@@ -550,5 +573,12 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 14,
     fontWeight: '600',
+  },
+  readOnlyText: {
+    flex: 1,
+    color: theme.textMuted,
+    fontSize: 14,
+    textAlign: 'center',
+    paddingVertical: 10,
   },
 });

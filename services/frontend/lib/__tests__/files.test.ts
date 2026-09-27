@@ -1,5 +1,17 @@
 import { ApiError } from '../api';
-import { copyPath, deletePath, joinPath, listFiles, mkdir, movePath, parentPath, uploadToDir, type UploadPart } from '../files';
+import {
+  copyPath,
+  deletePath,
+  describeFilesError,
+  joinPath,
+  listFiles,
+  mkdir,
+  movePath,
+  parentPath,
+  statPath,
+  uploadToDir,
+  type UploadPart,
+} from '../files';
 
 function mockFetchOk(body: unknown, status = 200): jest.Mock {
   const fetchMock = jest.fn().mockResolvedValue({
@@ -18,8 +30,14 @@ afterEach(() => {
 
 describe('joinPath', () => {
   const cases: { name: string; dir: string; entryName: string; expected: string }[] = [
-    { name: 'joining onto the root has no leading slash', dir: '', entryName: 'a.txt', expected: 'a.txt' },
-    { name: 'joining onto a nested dir inserts exactly one slash', dir: 'a/b', entryName: 'c.txt', expected: 'a/b/c.txt' },
+    { name: 'joining onto the root gives a top-level path', dir: '/', entryName: 'personal', expected: '/personal' },
+    {
+      name: 'joining onto a nested dir inserts exactly one slash',
+      dir: '/personal/a/b',
+      entryName: 'c.txt',
+      expected: '/personal/a/b/c.txt',
+    },
+    { name: 'a trailing slash on the dir is not doubled', dir: '/spaces/fam/', entryName: 'x', expected: '/spaces/fam/x' },
   ];
   for (const { name, dir, entryName, expected } of cases) {
     it(name, () => {
@@ -30,8 +48,10 @@ describe('joinPath', () => {
 
 describe('parentPath', () => {
   const cases: { name: string; path: string; expected: string }[] = [
-    { name: 'a root-level entry has an empty parent', path: 'a.txt', expected: '' },
-    { name: 'a nested entry strips only its own last segment', path: 'a/b/c.txt', expected: 'a/b' },
+    { name: 'a space root has the root as its parent', path: '/personal', expected: '/' },
+    { name: 'the root is its own parent', path: '/', expected: '/' },
+    { name: 'a shared space sits under /spaces', path: '/spaces/fam', expected: '/spaces' },
+    { name: 'a nested entry strips only its own last segment', path: '/personal/a/b/c.txt', expected: '/personal/a/b' },
   ];
   for (const { name, path, expected } of cases) {
     it(name, () => {
@@ -42,31 +62,63 @@ describe('parentPath', () => {
 
 describe('listFiles', () => {
   const cases: { name: string; path: string }[] = [
-    { name: 'the files root (empty path)', path: '' },
-    { name: 'a simple nested dir', path: 'docs' },
-    { name: 'a path containing a space', path: 'my docs' },
-    { name: 'a path with multiple nested segments', path: 'a/b/c' },
-    { name: 'a path with a non-ASCII (Cyrillic) name', path: 'тест файл' },
+    { name: 'a space root', path: '/personal' },
+    { name: 'a shared space dir', path: '/spaces/family/docs' },
+    { name: 'a path containing a space', path: '/personal/my docs' },
+    { name: 'a path with a non-ASCII (Cyrillic) name', path: '/personal/тест файл' },
   ];
 
   for (const { name, path } of cases) {
-    it(`GETs /api/files with the path correctly URL-encoded — ${name}`, async () => {
-      const fetchMock = mockFetchOk({ path, entries: [] });
+    it(`GETs /api/platform/files with the path correctly URL-encoded — ${name}`, async () => {
+      const fetchMock = mockFetchOk({ path, entries: [], role: 'owner', writable: true });
 
       await listFiles(path);
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [calledUrl] = fetchMock.mock.calls[0];
-      expect(calledUrl).toContain(`/api/files?path=${encodeURIComponent(path)}`);
+      expect(calledUrl).toContain(`/api/platform/files?path=${encodeURIComponent(path)}`);
     });
   }
 
+  it('shows the root as Personal plus each shared space (no "spaces" folder)', async () => {
+    const dir = (name: string, path: string, label: string) => ({
+      name, path, type: 'dir', size: 0, mtime: '2026-01-01T00:00:00Z', mime: null, label,
+    });
+    const fetchMock = jest.fn().mockImplementation(async (url: string) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () =>
+        url.includes(`path=${encodeURIComponent('/spaces')}`)
+          ? { path: '/spaces', entries: [dir('family', '/spaces/family', 'Family')], role: null, writable: false }
+          : {
+              path: '/',
+              entries: [dir('personal', '/personal', 'Personal'), dir('spaces', '/spaces', 'Shared spaces')],
+              role: null,
+              writable: false,
+            },
+    }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const listing = await listFiles('/');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(listing.path).toBe('/');
+    expect(listing.writable).toBe(false);
+    expect(listing.entries.map((e) => e.path)).toEqual(['/personal', '/spaces/family']);
+  });
+
   it('returns the parsed listing on success', async () => {
-    mockFetchOk({ path: 'docs', entries: [{ name: 'a.txt', path: 'docs/a.txt', type: 'file', size: 3, mtime: '2026-01-01T00:00:00Z', mime: 'text/plain' }] });
+    mockFetchOk({
+      path: '/personal/docs',
+      entries: [{ name: 'a.txt', path: '/personal/docs/a.txt', type: 'file', size: 3, mtime: '2026-01-01T00:00:00Z', mime: 'text/plain' }],
+      role: 'owner',
+      writable: true,
+    });
 
-    const result = await listFiles('docs');
+    const result = await listFiles('/personal/docs');
 
-    expect(result.path).toBe('docs');
+    expect(result.path).toBe('/personal/docs');
     expect(result.entries).toHaveLength(1);
   });
 
@@ -75,13 +127,32 @@ describe('listFiles', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      json: async () => ({ detail: "directory 'missing' not found" }),
+      json: async () => ({ detail: 'not_found' }),
     }) as unknown as typeof fetch;
 
-    const error = await listFiles('missing').catch((e) => e);
+    const error = await listFiles('/personal/missing').catch((e) => e);
 
     expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 404, detail: "directory 'missing' not found" });
+    expect(error).toMatchObject({ status: 404, detail: 'not_found' });
+  });
+});
+
+describe('statPath', () => {
+  it('GETs /api/platform/files/stat with the encoded path', async () => {
+    const fetchMock = mockFetchOk({ entry: { path: '/personal/a b.txt', type: 'file' }, role: 'owner', writable: true });
+
+    const result = await statPath('/personal/a b.txt');
+
+    const [calledUrl] = fetchMock.mock.calls[0];
+    expect(calledUrl).toContain(`/api/platform/files/stat?path=${encodeURIComponent('/personal/a b.txt')}`);
+    expect(result.entry.type).toBe('file');
+  });
+});
+
+describe('describeFilesError', () => {
+  it('turns API codes into readable text and passes anything else through', () => {
+    expect(describeFilesError('insufficient_role')).toBe('You have view-only access here');
+    expect(describeFilesError('something else')).toBe('something else');
   });
 });
 
@@ -93,20 +164,20 @@ describe('mkdir', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [calledUrl, calledInit] = fetchMock.mock.calls[0];
-    expect(calledUrl).toContain('/api/files/mkdir');
+    expect(calledUrl).toContain('/api/platform/files/mkdir');
     expect(calledInit).toMatchObject({ method: 'POST' });
     expect(JSON.parse(calledInit.body)).toEqual({ path: 'a b/новая папка' });
   });
 });
 
 describe('movePath', () => {
-  it('POSTs {src, dst} to /api/files/move', async () => {
+  it('POSTs {src, dst} to /api/platform/files/move', async () => {
     const fetchMock = mockFetchOk({ src: 'a.txt', dst: 'b.txt' });
 
     await movePath('a.txt', 'b.txt');
 
     const [calledUrl, calledInit] = fetchMock.mock.calls[0];
-    expect(calledUrl).toContain('/api/files/move');
+    expect(calledUrl).toContain('/api/platform/files/move');
     expect(JSON.parse(calledInit.body)).toEqual({ src: 'a.txt', dst: 'b.txt' });
   });
 
@@ -126,13 +197,13 @@ describe('movePath', () => {
 });
 
 describe('copyPath', () => {
-  it('POSTs {src, dst} to /api/files/copy', async () => {
+  it('POSTs {src, dst} to /api/platform/files/copy', async () => {
     const fetchMock = mockFetchOk({ src: 'a.txt', dst: 'copy of a.txt' });
 
     await copyPath('a.txt', 'copy of a.txt');
 
     const [calledUrl, calledInit] = fetchMock.mock.calls[0];
-    expect(calledUrl).toContain('/api/files/copy');
+    expect(calledUrl).toContain('/api/platform/files/copy');
     expect(JSON.parse(calledInit.body)).toEqual({ src: 'a.txt', dst: 'copy of a.txt' });
   });
 });
@@ -145,7 +216,7 @@ describe('deletePath', () => {
   ];
 
   for (const { name, path } of cases) {
-    it(`DELETEs /api/files with the path correctly URL-encoded — ${name}`, async () => {
+    it(`DELETEs /api/platform/files with the path correctly URL-encoded — ${name}`, async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: true,
         status: 204,
@@ -159,7 +230,7 @@ describe('deletePath', () => {
       await deletePath(path);
 
       const [calledUrl, calledInit] = fetchMock.mock.calls[0];
-      expect(calledUrl).toContain(`/api/files?path=${encodeURIComponent(path)}`);
+      expect(calledUrl).toContain(`/api/platform/files?path=${encodeURIComponent(path)}`);
       expect(calledInit).toMatchObject({ method: 'DELETE' });
     });
   }
@@ -178,14 +249,14 @@ describe('uploadToDir', () => {
     return { tag } as unknown as UploadPart;
   }
 
-  it('POSTs multipart form data to /api/files/upload with the target dir as the "path" field', async () => {
+  it('POSTs multipart form data to /api/platform/files/upload with the target dir as the "path" field', async () => {
     const fetchMock = mockFetchOk({ uploaded: ['docs/a.txt'] }, 201);
 
     await uploadToDir('docs', [fakePart('a.txt')]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [calledUrl, calledInit] = fetchMock.mock.calls[0];
-    expect(calledUrl).toContain('/api/files/upload');
+    expect(calledUrl).toContain('/api/platform/files/upload');
     expect(calledInit.method).toBe('POST');
 
     const body = calledInit.body as FormData;

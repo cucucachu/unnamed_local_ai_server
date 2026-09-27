@@ -15,10 +15,20 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.api import internal
 from app.api.external import auth, platform
-from app.core import spaces
+from app.core import legacy, spaces
+from app.core.agentfs import AgentFsError
 from app.core.bootstrap import Bootstrap
 from app.core.config import Settings
-from app.core.errors import Conflict, Forbidden, InvalidInput, NotFound, PlatformError, Unauthorized
+from app.core.errors import (
+    Conflict,
+    Forbidden,
+    InvalidInput,
+    NotFound,
+    PlatformError,
+    ServerError,
+    Unauthorized,
+    UnsupportedMedia,
+)
 from app.core.ratelimit import RateLimited, RateLimiter
 from app.core.storage import SpaceStorage, StorageError
 from app.core.tokens import TokenService, load_or_create_signing_key
@@ -32,7 +42,9 @@ STATUS_BY_ERROR: dict[type[PlatformError], int] = {
     Forbidden: 403,
     NotFound: 404,
     Conflict: 409,
+    UnsupportedMedia: 415,
     InvalidInput: 422,
+    ServerError: 500,
 }
 
 
@@ -42,6 +54,12 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(PlatformError)
     async def platform_error(request: Request, exc: PlatformError) -> JSONResponse:
         return JSONResponse({"detail": exc.code}, status_code=STATUS_BY_ERROR.get(type(exc), 400))
+
+    @app.exception_handler(AgentFsError)
+    async def agent_fs_error(request: Request, exc: AgentFsError) -> JSONResponse:
+        """Agent file-tool failures also carry deepagents' own wording in `message`."""
+        body = {"detail": exc.code, "message": exc.message, **exc.extra}
+        return JSONResponse(body, status_code=422)
 
     @app.exception_handler(RateLimited)
     async def rate_limited(request: Request, exc: RateLimited) -> JSONResponse:
@@ -72,7 +90,8 @@ def create_app(
     open the Postgres pool, apply pending migrations, load or generate the
     signing key, give any user without one a personal space, reconcile every
     space's directory tree (per-space failures are logged, not fatal), and
-    (until the first admin exists) prepare the bootstrap setup code. A
+    (until the first admin exists) prepare the bootstrap setup code, then
+    run the legacy files migration if it's enabled (logged, never fatal). A
     failure in any other step fails startup; compose restarts it.
 
     `db_pool_override` is an already-open pool the caller owns (the app
@@ -116,6 +135,7 @@ def create_app(
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s
             )
+            await legacy.maybe_migrate(app)
             yield
         finally:
             if db_pool_override is None:

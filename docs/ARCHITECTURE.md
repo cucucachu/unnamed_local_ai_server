@@ -747,7 +747,11 @@ what another doc says it should be.
   (password + optional TOTP), opaque sessions, step-up, invites, the admin
   user API, the bootstrap setup code, `/internal/auth/verify` for Caddy,
   and the recovery CLI. As of M10-05: spaces, memberships, the user
-  directory, and each space's directory tree under `SPACES_DIR`. It also holds the Ed25519 signing key every
+  directory, and each space's directory tree under `SPACES_DIR`. As of
+  M11-01: the files and media API over virtual paths (`/personal/…`,
+  `/spaces/<slug>/…`) that the Files tab uses and that M11-02's agent
+  backend will call, and the one-shot legacy `FILES_DIR` migration (off by
+  default). It also holds the Ed25519 signing key every
   platform token is signed with and serves the public half as a JWKS.
   API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
@@ -755,7 +759,9 @@ what another doc says it should be.
   --no-dev`) with bytecode compiled at build time; `CMD` runs
   `/app/.venv/bin/uvicorn` directly (not `uv run`), so nothing writes under
   the read-only root at runtime, with `--workers 1` (the rate limiter and
-  the in-memory setup code are per-process).
+  the in-memory setup code are per-process). The image carries `ffmpeg`
+  (Debian's) for video thumbnails, cached under `/tmp/media-thumbnails`
+  (the tmpfs, so a restart empties it).
 - **Published port**: none.
 - **Internal port**: `8100`. Caddy routes `/api/auth/*` (no auth, since
   M10-06), `/api/platform/*` and `/ws/platform/*` (behind `forward_auth`
@@ -769,7 +775,9 @@ what another doc says it should be.
   `${SPACES_DIR}:/data/spaces` (rw bind, host default
   `/srv/homeai/spaces`; must exist at startup). Docker creates a missing
   `SPACES_DIR` as `root:root 0755` on first `up`; keep it that way (only
-  root may create entries in it — see "Spaces" below).
+  root may create entries in it — see "Spaces" below). M11-01 also
+  mounts `${FILES_DIR}:/data/legacy-files` (rw) as the source of the
+  legacy migration; nothing else reads it.
 - **Runs as**: root, with `cap_drop: [ALL]` + `cap_add: [CHOWN,
   DAC_OVERRIDE, FOWNER, FSETID]` (it assigns per-user/per-space ownership;
   `FSETID` because the kernel clears the setgid bit on a `chmod` by a
@@ -787,7 +795,20 @@ what another doc says it should be.
   `/data/platform/setup-code` if present (else generates a new
   `XXXX-XXXX-XXXX-XXXX` code, ~79 bits) and logs it in a banner
   (`HOME AI SETUP CODE: …`); once set, it deletes any leftover file. Any
-  failure fails startup.
+  failure fails startup. Last, the legacy migration (below) if enabled.
+- **Legacy files migration** (`app/core/legacy.py`, M11-01; only when
+  `PLATFORM_MIGRATE_LEGACY_FILES=1`, and compose defaults it to `0` until
+  M11-02 moves the agent onto spaces): once a bootstrap admin exists (at
+  startup, or right after `POST /api/auth/setup`), every top-level entry of
+  `/data/legacy-files` is moved into that admin's personal `files/` and
+  chowned to `<admin uid>:<personal gid>` (dirs `2770`, files `0660`,
+  executables `0770`); a name that already exists there gets ` (migrated)`
+  / ` (migrated N)` before its extension. It then writes
+  `/data/platform/legacy-files-migrated.json` (`admin_id`, `space_id`,
+  `entries`, `migrated_at`) and logs `legacy files: moved N entries …`.
+  The marker makes it run once; an interrupted run resumes on the next
+  start (moved entries are gone from the source), and a failure is logged
+  and doesn't block startup.
 - **Accounts** (`app/core/`): `users` (argon2id hashes via `argon2-cffi`
   defaults, transparently rehashed on login if parameters change;
   `uid` from sequence `user_uid_seq` starting at 20000), `sessions` (`hs_`
@@ -844,7 +865,9 @@ what another doc says it should be.
   (service bearers for `/internal/*` endpoints that need a caller,
   compared in constant time — `app/api/internal/service_auth.py`; an
   empty token matches nothing. Only `PLATFORM_AGENT_TOKEN` is used so far,
-  by `GET /internal/bootstrap-admin`). DB host/port/user/name default to
+  by `GET /internal/bootstrap-admin`). `PLATFORM_MIGRATE_LEGACY_FILES`
+  (`0`/`1`, see above; the source dir `PLATFORM_LEGACY_FILES_DIR` defaults
+  to `/data/legacy-files`). DB host/port/user/name default to
   `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
   `/data/platform`/`/data/spaces`; `PLATFORM_AUTH_RATE_LIMIT` /
   `PLATFORM_AUTH_RATE_WINDOW_S` default to `5` / `60` (not set in compose).
@@ -869,10 +892,21 @@ what another doc says it should be.
   `test_totp.py` (RFC 6238 vectors), `test_ratelimit.py`,
   `test_internal_api.py` (M10-04: `/internal/bootstrap-admin` and the
   service bearer — wrong/other-service/session tokens and an unset token
-  all `401`). Unprivileged
+  all `401`). M11-01: `test_vfs.py` (the virtual-path guard: the old
+  `resolve_files_path` suite ported, plus roles, non-member vs unknown
+  slug, cross-space and swapped-`files/` symlinks), `test_files_api.py`
+  (every route through the guard cases, the owner/editor/viewer/non-member
+  × user/agent matrix, cross-space move/copy, recorded ownership and
+  modes), `test_media_api.py` (Range, HEAD, 416, thumbnails),
+  `test_thumbnails.py`, `test_agentfs.py` (values pinned against
+  deepagents 0.7.11's `FilesystemBackend`), `test_fsops.py` (real
+  ownership and modes as root in a container, like `test_storage.py`),
+  `test_legacy.py` (off by default, waits for bootstrap, idempotent,
+  collisions, resume). Unprivileged
   tests record space-dir chowns via the autouse `chowns` fixture instead
   of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
-  `scripts/e2e/platform_spaces_smoke.sh`.
+  `scripts/e2e/platform_spaces_smoke.sh`,
+  `scripts/e2e/platform_files_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
@@ -1396,6 +1430,114 @@ spaces have exactly one member (their owner) and refuse every membership
 change (`409 personal_space`), admin or not; a malformed `{id}` is `422
 invalid_request`.
 
+**Files** (`app/api/external/files.py`, `media.py`; M11-01). The same
+operations agent-server's `/api/files*` and `/api/media/*` offer (those stay
+in place, over `FILES_DIR`, until M11-02), over *virtual paths* instead of
+paths relative to one files root:
+
+- `/` lists `personal` (label "Personal") and `spaces` (label "Shared
+  spaces"); `/spaces` lists the caller's shared spaces by slug. Both are
+  synthetic and read-only: any write naming them is `403 read_only`.
+- `/personal/<rest>` is `<rest>` in the caller's personal space's
+  `files/`; `/spaces/<slug>/<rest>` the same in a shared space. A personal
+  space's slug isn't addressable under `/spaces`, and any other top level
+  is `404 not_found`.
+- Paths in requests are absolute or relative to `/` (`personal/a.txt` =
+  `/personal/a.txt`); `.` segments, repeated and trailing slashes are
+  dropped. Paths in responses are normalized virtual paths (slug
+  lowercase, no trailing slash). The frontend's `file:` links use the same
+  paths; a bare `file:notes.txt` means `/personal/notes.txt`.
+
+*The guard*, `vfs.resolve_virtual_path(conn, principal, storage, vpath,
+need)` (`app/core/vfs.py`), is the only way a route gets a host path. It
+keeps agent-server's `resolve_files_path` rules and adds the space check:
+
+1. `422 invalid_path` for a null byte, any `..` segment (refused outright,
+   not normalized), or a path that — after resolving symlinks — isn't
+   inside that space's `files/` (so a symlink to another space, to the
+   space's `apps/`, or to a loop is refused too).
+2. The space is looked up (personal, or by slug; archived spaces don't
+   resolve) and `authorize_space(…, need)` applies: `need` is `read` for
+   list/stat/download/stream/thumbnail/read/grep/glob and `write` for the
+   rest. A non-member, an archived space, and a slug that doesn't exist
+   are all `404 not_found` with the same body; a viewer asking to write is
+   `403 insufficient_role`. Agent delegations (`act=agent`) get their
+   user's role.
+3. `files/` itself must be a real directory, not a symlink (its parent is
+   group-writable), else `404 not_found`.
+
+Delete, move, rename, stat, and a move/copy destination resolve only the
+parent, so they act on a final symlink itself rather than its target;
+listings show a symlink as a `file` entry.
+
+*Ownership*: everything created is `<caller uid>:<space gid>` — files
+`0660` (`0770` if copied from an executable), dirs `2770` — through
+`app/core/fsops.py` (`O_NOFOLLOW` opens, `fchown`/`fchmod` on the fd).
+Overwriting a file keeps its owner. A cross-space move re-groups the moved
+tree to the destination space (owners kept); a copy belongs to the caller
+and the destination space.
+
+*Objects*: `FileEntry` `{"name", "path", "type": "file"|"dir", "size",
+"mtime": ts, "mime": str|null}`, plus `"label"` and `"role"` on the
+synthetic space entries (`/personal`, `/spaces`, `/spaces/<slug>`). A
+listing: `{"path", "entries": [FileEntry], "role": SpaceRole|null,
+"writable": bool, "space_label": str|null}` — `role`/`writable` are the
+caller's in that space (`null`/`false` at `/` and `/spaces`),
+`space_label` is "Personal" or the space's name. Entries are sorted dirs
+first, then case-insensitively by name.
+
+All routes: guard *user* (so an agent delegation too), `401
+unauthenticated` without a principal, and the guard errors above. `path`
+is a query parameter unless the request column says otherwise.
+
+| Method + path | Need | Request | Success | Errors |
+|---|---|---|---|---|
+| `GET /api/platform/files` | read | `?path=` (default `/`) | `200` listing | `404 not_found` (missing, or a file) |
+| `GET /api/platform/files/stat` | read | `?path=` | `200 {"entry": FileEntry, "role", "writable"}` (a space root returns its space entry) | `404 not_found` |
+| `POST /api/platform/files/upload` | write | multipart: `path` (target dir) + one or more `file` parts | `201 {"uploaded": [vpath]}`. Stored under each part's basename; existing files are overwritten; streamed to disk. | `404 not_found` (dir missing), `422 invalid_filename` (empty, `.`, `..`), `409 is_a_directory` |
+| `GET /api/platform/files/download` | read | `?path=` | `200` bytes, `Content-Disposition: attachment` | `404 not_found` (missing, a dir, or not a regular file) |
+| `POST /api/platform/files/mkdir` | write | `{"path"}` | `201 {"path"}` — `mkdir -p`; an existing dir is fine | `409 not_a_directory`/`already_exists` (a file in the way), `403 read_only` |
+| `POST /api/platform/files/move` | write on both | `{"src", "dst"}` (`dst` is the new full path) | `200 {"src", "dst"}`; within or across spaces | `404 not_found` (src), `409 already_exists` (dst), `404 parent_not_found` (dst's parent), `422 invalid_destination` (into itself), `403 read_only` (a space root either side) |
+| `POST /api/platform/files/rename` | write | `{"path", "name"}` | `200 {"src", "dst"}` — a move within the same dir | move's errors, `422 invalid_name` (empty, `.`, `..`, `/`, NUL) |
+| `POST /api/platform/files/copy` | write on both | `{"src", "dst"}` | `200 {"src", "dst"}`; dirs recursively, symlinks inside a copied tree are copied as links; a whole space root may be copied | move's errors except `read_only` on `src` |
+| `DELETE /api/platform/files` | write | `?path=` | `204`; dirs recursively; a symlink is removed, never its target | `404 not_found`, `403 read_only` (a space root) |
+| `GET`/`HEAD /api/platform/files/stream` | read | `?path=`, optional `Range: bytes=a-b` / `a-` / `-n` | `200` whole file or `206` + `Content-Range: bytes a-b/size`; always `Accept-Ranges: bytes`, `Cache-Control: no-store`, a guessed `Content-Type`. A non-`bytes` unit or a multi-range request gets the whole file (200). | `416` + `Content-Range: bytes */size` (malformed or unsatisfiable `bytes=` range, or an empty file), `404 not_found` |
+| `GET /api/platform/files/thumbnail` | read | `?path=` (a video) | `200 image/jpeg` poster frame, `Cache-Control: private, max-age=86400`; generated once per path+mtime+size | `415 unsupported_media` (not a video extension), `404 not_found`, `500 thumbnail_failed` (ffmpeg failed) |
+
+Agent-backend routes — the server half of M11-02's `PlatformFilesBackend`,
+matching `deepagents==0.7.11`'s `FilesystemBackend` (`app/core/agentfs.py`
+lists the deliberate differences). A failure the agent should read back is
+`422 {"detail": code, "message": "<deepagents' wording>", …}`.
+
+| Method + path | Need | Request | Success | Errors (`422` unless noted) |
+|---|---|---|---|---|
+| `POST /api/platform/files/read` | read | `{"path", "offset": 0, "limit": 2000}` | text: `200 {"path", "content", "encoding": "utf-8", "total_lines", "start_line", "end_line", "next_offset"}` (lines `offset`… raw, no gutters; `next_offset` omitted at the end). Empty or whitespace-only: `content` is `EMPTY_CONTENT_WARNING`. `limit: 0`: `"no_lines_requested": true`. Images/video/audio/pdf/ppt(x) by extension: `{"content": base64, "encoding": "base64"}`. | `not_text` (not UTF-8), `offset_out_of_range` (+ `total_lines`), `file_too_large` (video > 1 GiB); `404 not_found` |
+| `POST /api/platform/files/write` | write | `{"path", "content"}` | `200 {"path"}` — create or overwrite, parents created | `409 is_a_directory` |
+| `PUT /api/platform/files/content` | write | `?path=`, raw body | `200 {"path"}` — same, for bytes (`upload_files`) | `409 is_a_directory` |
+| `POST /api/platform/files/edit` | write | `{"path", "old_string", "new_string", "replace_all": false}` | `200 {"path", "occurrences"}`; CRLF/CR normalized to LF | `string_not_found`, `string_not_unique` (+ `occurrences`), `trailing_newline_mismatch`, `not_text`; `404 not_found` |
+| `POST /api/platform/files/grep` | read | `{"pattern", "path"?, "glob"?, "max_count"?}` | `200 {"matches": [{"path", "line", "text"}], "truncated", "error": str|null}` — literal substring per line, path order; files > 10 MiB and symlinks skipped; 15 s budget | `invalid_glob` |
+| `POST /api/platform/files/glob` | read | `{"pattern", "path"?}` | `200 {"matches": [{"path", "is_dir": false, "size", "modified_at"}], "truncated", "truncation_reason": "budget"|null}` — regular files only, sorted; 5 s budget | `invalid_glob` (incl. `..`) |
+
+For grep and glob, `path` is optional. It can be a space, a directory, or a
+file (a file searches only that file), or it can be `/` or `/spaces`.
+`/` searches every space the caller can read, and `/spaces` every shared one.
+A missing path returns empty results rather than 404. `glob` patterns are
+relative to `path`.
+
+*Which side formats what*, for M11-02, checked against deepagents 0.7.11:
+
+- **The server:**
+  - slices lines;
+  - base64-encodes binary types;
+  - supplies the empty-file reminder;
+  - checks edits and writes deepagents' exact messages for them;
+  - runs grep and glob and filters their paths.
+- **The client (agent-server):**
+  - adds the `cat -n`-style line-number gutter, which the filesystem middleware adds in 0.7.11;
+  - maps HTTP errors to deepagents' error strings and `FileOperationError` codes. For example, a 404 on read becomes `Error: File '<path>' not found`;
+  - adds the trailing `/` on directories in `ls`.
+- **Neither side** supports deepagents' `context_lines` for grep, which the agent tool doesn't expose.
+
 **`/internal/*`** (never routed by Caddy)
 
 - `GET /internal/health` → `200 {"status":"ok"}`, or `503
@@ -1519,7 +1661,7 @@ like the `FETCH_*` caps).
 
 ### Path-traversal guard
 
-Used by the files and media APIs:
+agent-server's files and media APIs (until M11-02) use:
 
 ```python
 def resolve_files_path(rel: str) -> Path:
@@ -1533,6 +1675,11 @@ def resolve_files_path(rel: str) -> Path:
 Tested against: `../x`, absolute `/etc/passwd`, nested `a/../../x`, and a
 symlink inside the files root that points outside it (the resolved target
 must be rejected).
+
+The platform files API (M11-01) uses `vfs.resolve_virtual_path` instead —
+the same containment rule per space `files/`, plus `..` refused outright,
+membership/role checks, and cross-space symlinks refused; see §3 "Platform
+API" → "Files". The suite above is ported in `services/platform/tests/test_vfs.py`.
 
 ---
 
@@ -2155,8 +2302,8 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m4.sh` | M4 (code execution) scripted gate | After touching code-exec-manager or the `execute_code` tool |
 | `scripts/e2e/persistence_smoke.sh` | Thread/message persistence across agent-server restart, plus a pending HITL approval still on `GET /api/threads/{id}/state` after another restart (M8-08) | After touching the checkpointer, HITL interrupt state, or files storage |
 | `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view | After touching the exec ↔ files-directory file-visibility path |
-| `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks | Quick check after a small files/threads API change |
-| `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit) | After frontend changes to the corresponding tab, or before a milestone gate |
+| `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`, and still checks that the agent sees `FILES_DIR`) | Quick check after a small files/threads API change |
+| `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
@@ -2166,6 +2313,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
+| `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |

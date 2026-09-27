@@ -195,3 +195,133 @@ class MemberAddRequest(BaseModel):
 
 class MemberPatchRequest(BaseModel):
     role: SpaceRole
+
+
+# --- files (virtual paths: `/personal/...`, `/spaces/<slug>/...`) -------------
+
+VPath = Annotated[str, Field(max_length=4096)]
+
+
+class FileEntryOut(BaseModel):
+    name: str
+    path: str
+    type: Literal["file", "dir"]
+    size: int
+    mtime: datetime
+    mime: str | None
+    # Only on the synthetic entries (`/personal`, `/spaces`, `/spaces/<slug>`).
+    label: str | None = None
+    role: SpaceRole | None = None
+
+
+class FileListOut(BaseModel):
+    path: str
+    entries: list[FileEntryOut]
+    role: SpaceRole | None
+    writable: bool
+    # The listed space's display name ("Personal" or the space's name); None for `/`, `/spaces`.
+    space_label: str | None = None
+
+
+class FileStatOut(BaseModel):
+    entry: FileEntryOut
+    role: SpaceRole | None
+    writable: bool
+
+
+class UploadOut(BaseModel):
+    uploaded: list[str]
+
+
+class PathBody(BaseModel):
+    path: VPath
+
+
+class PathOut(BaseModel):
+    path: str
+
+
+class MoveCopyBody(BaseModel):
+    src: VPath
+    dst: VPath
+
+
+class RenameBody(BaseModel):
+    path: VPath
+    name: Short
+
+
+class MoveCopyOut(BaseModel):
+    src: str
+    dst: str
+
+
+class ReadBody(BaseModel):
+    path: VPath
+    offset: int = 0
+    limit: int = 2000
+
+
+class ReadOut(BaseModel):
+    path: str
+    content: str
+    encoding: Literal["utf-8", "base64"]
+    total_lines: int | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    next_offset: int | None = None
+    no_lines_requested: bool = False
+
+
+class WriteBody(BaseModel):
+    path: VPath
+    content: str
+
+
+class EditBody(BaseModel):
+    path: VPath
+    old_string: str
+    new_string: str
+    replace_all: bool = False
+
+
+class EditOut(BaseModel):
+    path: str
+    occurrences: int
+
+
+class GrepBody(BaseModel):
+    pattern: str = Field(min_length=1, max_length=4096)
+    path: VPath | None = None
+    glob: Short | None = None
+    max_count: int | None = Field(default=None, ge=0)
+
+
+class GrepMatchOut(BaseModel):
+    path: str
+    line: int
+    text: str
+
+
+class GrepOut(BaseModel):
+    matches: list[GrepMatchOut]
+    truncated: bool
+    error: str | None
+
+
+class GlobBody(BaseModel):
+    pattern: Short
+    path: VPath | None = None
+
+
+class GlobMatchOut(BaseModel):
+    path: str
+    is_dir: bool
+    size: int | None = None
+    modified_at: datetime | None = None
+
+
+class GlobOut(BaseModel):
+    matches: list[GlobMatchOut]
+    truncated: bool
+    truncation_reason: Literal["budget"] | None

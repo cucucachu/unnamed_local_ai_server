@@ -306,7 +306,9 @@ boundary; UID/GID permissions are defense in depth.
 On the switch to the platform files API (M11-01), the pre-Stage-3 files root
 (`FILES_DIR`, mounted read-write into the platform at `/data/legacy-files`)
 is moved into the **bootstrap admin's personal space** `files/`, chowned,
-and a marker file prevents re-running. Idempotent and logged.
+and a marker file prevents re-running. Idempotent and logged. It runs only
+with `PLATFORM_MIGRATE_LEGACY_FILES=1`, which stays off until M11-02 moves
+the agent onto spaces (details: `docs/ARCHITECTURE.md` §2 `platform`).
 
 Pre-Stage-3 chat threads (no owner) and the old global chat settings are
 assigned to the bootstrap admin earlier, from M10-04: agent-server asks

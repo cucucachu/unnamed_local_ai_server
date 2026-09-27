@@ -9,6 +9,8 @@
 #   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
 #      after it signs in as a throwaway CLI user via auth_helpers.mjs)
 #   -> admin_browser_smoke.sh (M10-07: Settings invites/spaces/TOTP)
+#   -> platform_files_smoke.sh (M11-01: files API role matrix, cross-space
+#      move, Range, ownership, straight against `platform`)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
 #   -> video_thumbnail_browser_smoke.sh -> chat_browser_smoke.sh
 #   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
@@ -206,6 +208,7 @@ main() {
   run_step "verify_network.sh"       sudo bash "${REPO_ROOT}/scripts/verify_network.sh"
   run_step "auth_browser_smoke.sh"   bash "${SCRIPT_DIR}/auth_browser_smoke.sh"
   run_step "admin_browser_smoke.sh"  bash "${SCRIPT_DIR}/admin_browser_smoke.sh"
+  run_step "platform_files_smoke.sh" bash "${SCRIPT_DIR}/platform_files_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "image_browser_smoke.sh"  bash "${SCRIPT_DIR}/image_browser_smoke.sh"

@@ -629,7 +629,7 @@ describe('ChatScreen ([threadId])', () => {
 
       expect(mockPush).toHaveBeenCalledWith({
         pathname: '/files',
-        params: { path: 'notes/x.md' },
+        params: { path: '/personal/notes/x.md' },
       });
     });
 
