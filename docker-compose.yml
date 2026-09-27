@@ -315,8 +315,12 @@ services:
     volumes:
       - platform-data:/data/platform
       - ${SPACES_DIR}:/data/spaces
+      # Pre-spaces files root, only touched when PLATFORM_MIGRATE_LEGACY_FILES=1
+      # (moved into the bootstrap admin's personal space, then left empty).
+      - ${FILES_DIR}:/data/legacy-files
     environment:
       PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD}
+      PLATFORM_MIGRATE_LEGACY_FILES: ${PLATFORM_MIGRATE_LEGACY_FILES:-0}
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
     healthcheck:

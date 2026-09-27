@@ -30,3 +30,11 @@ class Conflict(PlatformError):
 
 class NotFound(PlatformError):
     """404: an id that doesn't exist (or that the caller may not see)."""
+
+
+class UnsupportedMedia(PlatformError):
+    """415: the file isn't the kind this route handles (a thumbnail for a non-video, ...)."""
+
+
+class ServerError(PlatformError):
+    """500: a failure the caller can't fix (ffmpeg couldn't decode a video, ...)."""

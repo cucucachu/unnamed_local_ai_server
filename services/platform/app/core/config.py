@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # (`app/core/storage.py`). Must exist at startup.
     platform_spaces_dir: Path = Path("/data/spaces")
 
+    # Pre-Stage-3 files root (`${FILES_DIR}` bind mount), moved into the
+    # bootstrap admin's personal space when enabled (`app/core/legacy.py`).
+    # Off until M11-02 moves the agent's file tools onto the platform.
+    platform_migrate_legacy_files: bool = False
+    platform_legacy_files_dir: Path = Path("/data/legacy-files")
+
     # Service-to-service bearer secrets for `/internal/*` (docs/PLATFORM.md §4
     # "Service-to-service auth"; `app/api/internal/service_auth.py`). Empty
     # means that service can't call anything.

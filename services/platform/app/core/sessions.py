@@ -82,7 +82,7 @@ async def load_active(conn: AsyncConnection, session_id: UUID, user_id: UUID) ->
     cur = await conn.execute(
         "SELECT s.id AS session_id, (s.stepped_up_until IS NOT NULL"
         "       AND s.stepped_up_until > now()) AS stepped_up,"
-        "       u.id, u.username, u.display_name, u.role"
+        "       u.id, u.username, u.display_name, u.role, u.uid"
         " FROM sessions s JOIN users u ON u.id = s.user_id"
         f" WHERE s.id = %s AND s.user_id = %s AND {_ACTIVE}",
         (session_id, user_id),
