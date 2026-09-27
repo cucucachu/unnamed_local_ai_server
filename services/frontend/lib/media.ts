@@ -1,4 +1,5 @@
 import { apiBase } from './api';
+import { authHeaders } from './session';
 
 /**
  * Extension-based media classifier for the files screen's tap-routing
@@ -94,4 +95,13 @@ export function streamUrl(path: string): string {
  * path is even eligible for a thumbnail. */
 export function thumbnailUrl(path: string): string {
   return `${apiBase()}/api/media/thumbnail?path=${encodeURIComponent(path)}`;
+}
+
+/** Source object for components that load a URL themselves (`Image`,
+ * `expo-video`, `expo-audio`) rather than through `apiFetch`: carries the
+ * native bearer header; on web it's just `{ uri }` since the cookie rides
+ * along. */
+export function authedSource(uri: string): { uri: string; headers?: Record<string, string> } {
+  const headers = authHeaders();
+  return Object.keys(headers).length > 0 ? { uri, headers } : { uri };
 }

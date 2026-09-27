@@ -22,7 +22,7 @@ describe('lib/settings', () => {
     expect(result).toEqual({ hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate' });
     const [calledPath, calledInit] = fetchMock.mock.calls[0];
     expect(calledPath).toContain('/api/settings');
-    expect(calledInit).toBeUndefined();
+    expect(calledInit.method).toBeUndefined();
   });
 
   it('updateSettings(partial) PUTs the partial body and resolves with the merged document', async () => {

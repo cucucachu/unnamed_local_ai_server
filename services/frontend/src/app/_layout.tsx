@@ -3,6 +3,8 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppKeyboardProvider } from '@/components/AppKeyboardProvider';
+import { AuthGate } from '@/components/AuthGate';
+import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { SettingsProvider } from '@/components/SettingsProvider';
 
 // Dark is the forced/default scheme for this app (not system-following) —
@@ -28,25 +30,47 @@ export default function RootLayout() {
           Must wrap every screen that uses `AppKeyboardAvoidingView`. */}
       <AppKeyboardProvider>
         <ThemeProvider value={DarkTheme}>
-          {/* M8-02: loaded once at the app root (per the ticket) so every
-              screen — today just `settings.tsx`, later M8-03/M8-05/M8-07's
-              consumers — reads the same in-memory document via
-              `useSettings()` instead of each fetching its own copy. */}
-          <SettingsProvider>
-            <Stack screenOptions={{ headerShown: false }}>
-              {/* M5-02: the media player opens as a modal over whichever tab
-                  triggered it (the Files tab today), per the ticket's "Expo
-                  Router modal presentation" spec — a sibling of the implicit
-                  `(tabs)` group route, not nested inside it. */}
-              <Stack.Screen name="media" options={{ presentation: 'modal', headerShown: false }} />
-              {/* M8-02: same modal-stack-screen pattern as `media` above, for
-                  the new settings screen. */}
-              <Stack.Screen name="settings" options={{ presentation: 'modal', headerShown: false }} />
-            </Stack>
-          </SettingsProvider>
+          <AuthProvider>
+            <AuthGate>
+              <AppStack />
+            </AuthGate>
+          </AuthProvider>
           <StatusBar style="light" />
         </ThemeProvider>
       </AppKeyboardProvider>
     </GestureHandlerRootView>
+  );
+}
+
+function AppStack() {
+  const { state } = useAuth();
+  const user = state.phase === 'ready' ? state.user : null;
+
+  return (
+    // M8-02: loaded once at the app root (per the ticket) so every screen
+    // reads the same in-memory document via `useSettings()` instead of each
+    // fetching its own copy. Reloaded when the signed-in user changes.
+    <SettingsProvider reloadKey={user?.id ?? null}>
+      {/* Guards: Expo Router sends any visit to an unavailable screen to
+          the first available one — `(tabs)` when signed in, `login` when
+          not. `invite` is reachable either way. */}
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Protected guard={user !== null}>
+          <Stack.Screen name="(tabs)" />
+          {/* M5-02: the media player opens as a modal over whichever tab
+              triggered it (the Files tab today), per the ticket's "Expo
+              Router modal presentation" spec — a sibling of the implicit
+              `(tabs)` group route, not nested inside it. */}
+          <Stack.Screen name="media" options={{ presentation: 'modal', headerShown: false }} />
+          {/* M8-02: same modal-stack-screen pattern as `media` above, for
+              the new settings screen. */}
+          <Stack.Screen name="settings" options={{ presentation: 'modal', headerShown: false }} />
+        </Stack.Protected>
+        <Stack.Protected guard={user === null}>
+          <Stack.Screen name="login" />
+        </Stack.Protected>
+        <Stack.Screen name="invite" />
+      </Stack>
+    </SettingsProvider>
   );
 }

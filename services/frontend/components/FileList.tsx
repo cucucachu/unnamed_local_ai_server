@@ -4,7 +4,7 @@ import { FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 're
 
 import { categoryFor, formatFileSize, iconNameFor } from '@/lib/fileDisplay';
 import type { FileEntry } from '@/lib/files';
-import { mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
+import { authedSource, mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 
@@ -115,7 +115,7 @@ function FileThumbnail({ path, name }: { path: string; name: string }) {
     <View style={styles.thumbnailBox}>
       {status === 'loading' ? <Ionicons name="image-outline" size={16} color={theme.textMuted} /> : null}
       <Image
-        source={{ uri: streamUrl(path) }}
+        source={authedSource(streamUrl(path))}
         style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
         resizeMode="cover"
         onLoad={() => setStatus('loaded')}
@@ -156,7 +156,7 @@ function VideoThumbnail({ path, name }: { path: string; name: string }) {
         <Ionicons name="videocam-outline" size={16} color={theme.textMuted} />
       ) : null}
       <Image
-        source={{ uri: thumbnailUrl(path) }}
+        source={authedSource(thumbnailUrl(path))}
         style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
         resizeMode="cover"
         onLoad={() => setStatus('loaded')}

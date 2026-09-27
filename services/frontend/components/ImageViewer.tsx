@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 
-import { streamUrl } from '@/lib/media';
+import { authedSource, streamUrl } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 export interface ImageViewerProps {
@@ -40,7 +40,7 @@ export function ImageViewer({ path }: ImageViewerProps) {
         <Text style={styles.errorText}>Couldn&apos;t load this image.</Text>
       ) : (
         <Image
-          source={{ uri: streamUrl(path) }}
+          source={authedSource(streamUrl(path))}
           style={styles.image}
           resizeMode="contain"
           onLoad={() => setStatus('loaded')}
