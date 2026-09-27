@@ -17,6 +17,17 @@ export type MediaKind = 'video' | 'audio';
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv']);
 const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'wav', 'ogg', 'flac']);
 
+/** Case-insensitive last dot-segment of `name`, or `null` for "no real
+ * extension" (no dot at all, or a trailing dot with nothing after it) —
+ * shared by `mediaKind` and `isImageFile` so both apply the exact same
+ * "only the LAST dot-segment counts" rule (a multi-dot name like
+ * `my.video.file.mp4` is still `"mp4"`, not `"video.file.mp4"`). */
+function extensionOf(name: string): string | null {
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === name.length - 1) return null;
+  return name.slice(lastDot + 1).toLowerCase();
+}
+
 /** `null` for anything without a recognized media extension (no extension
  * at all, an unknown extension, or an empty name) — callers treat `null` as
  * "not playable, fall through to the action sheet". Case-insensitive
@@ -24,13 +35,39 @@ const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'wav', 'ogg', 'flac']);
  * multi-dot name like `my.video.file.mp4` is still `"mp4"`, not
  * `"video.file.mp4"`. */
 export function mediaKind(name: string): MediaKind | null {
-  const lastDot = name.lastIndexOf('.');
-  if (lastDot === -1 || lastDot === name.length - 1) return null;
-
-  const extension = name.slice(lastDot + 1).toLowerCase();
+  const extension = extensionOf(name);
+  if (extension === null) return null;
   if (VIDEO_EXTENSIONS.has(extension)) return 'video';
   if (AUDIO_EXTENSIONS.has(extension)) return 'audio';
   return null;
+}
+
+/** Issue #124: extension-based image check, deliberately separate from
+ * `fileDisplay.ts`'s MIME-based `categoryFor` — same rationale as
+ * `mediaKind` above (this module's own docstring): a purely client-side,
+ * extension-based signal for "should tapping this route straight to a
+ * viewer?" that doesn't depend on the server's `mimetypes.guess_type` call
+ * having correctly identified the file. Kept as its own function (not
+ * folded into `mediaKind`) so `mediaKind`'s existing "image extensions
+ * return null" contract — already asserted by `lib/__tests__/media.test.ts`
+ * — never changes; every `mediaKind` call site keeps meaning "video or
+ * audio", not "any previewable file". */
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif', 'svg']);
+
+export function isImageFile(name: string): boolean {
+  const extension = extensionOf(name);
+  return extension !== null && IMAGE_EXTENSIONS.has(extension);
+}
+
+/** Everything the Files tab's tap-routing decision needs, folding
+ * `mediaKind` and `isImageFile` into one "does this file get its own
+ * in-app viewer?" check (M5-02's video/audio players, or issue #124's
+ * image viewer) — `null` means "fall through to the action sheet",
+ * exactly like `mediaKind` on its own already meant for video/audio. */
+export type PreviewKind = MediaKind | 'image';
+
+export function previewKind(name: string): PreviewKind | null {
+  return mediaKind(name) ?? (isImageFile(name) ? 'image' : null);
 }
 
 /** Streaming URL for a root-relative `path`, hitting M5-01's

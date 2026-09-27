@@ -2,8 +2,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { ImageViewer } from '@/components/ImageViewer';
 import { MediaPlayer } from '@/components/MediaPlayer';
-import { mediaKind } from '@/lib/media';
+import { previewKind } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 /**
@@ -14,19 +15,22 @@ import { theme } from '@/lib/theme';
  * outside that tab's own nested stack).
  *
  * `path`/`kind` arrive as route params (see `files.tsx`'s `handlePressEntry`
- * / `FileActionSheet`'s "Play" action, both of which `router.push` here).
- * `kind` is re-derived from `path` via `mediaKind` rather than trusted as-is
- * — defensive against a stale/hand-typed `kind` param ever disagreeing with
- * the actual file extension (e.g. a deep link) — and the screen renders a
- * plain "can't play this file" message instead of crashing if `path` turns
- * out not to be a recognized media file at all.
+ * / `FileActionSheet`'s "Play"/"View" action, both of which `router.push`
+ * here). `kind` is re-derived from `path` via `previewKind` rather than
+ * trusted as-is — defensive against a stale/hand-typed `kind` param ever
+ * disagreeing with the actual file extension (e.g. a deep link) — and the
+ * screen renders a plain "can't preview this file" message instead of
+ * crashing if `path` turns out not to be a recognized media/image file at
+ * all. Issue #124 folded the image case into this same screen (rather than
+ * a separate route) via `previewKind` (video/audio/image), reusing the
+ * close-button/filename header this screen already had for M5-02.
  */
 export default function MediaScreen() {
   const { path } = useLocalSearchParams<{ path: string; kind: string }>();
   const router = useRouter();
 
   const decodedPath = path ?? '';
-  const kind = mediaKind(decodedPath);
+  const kind = previewKind(decodedPath);
   const filename = decodedPath.split('/').pop() || decodedPath;
 
   return (
@@ -47,10 +51,12 @@ export default function MediaScreen() {
       </View>
 
       <View style={styles.playerWrap}>
-        {kind !== null ? (
+        {kind === 'image' ? (
+          <ImageViewer path={decodedPath} />
+        ) : kind !== null ? (
           <MediaPlayer path={decodedPath} kind={kind} />
         ) : (
-          <Text style={styles.errorText}>Can&apos;t play this file.</Text>
+          <Text style={styles.errorText}>Can&apos;t preview this file.</Text>
         )}
       </View>
     </View>

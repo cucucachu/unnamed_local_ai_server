@@ -16,6 +16,14 @@ const FILE_A: FileEntry = {
   mtime: '2026-08-30T19:55:00.000Z',
   mime: 'text/plain',
 };
+const IMAGE_FILE: FileEntry = {
+  name: 'photo.png',
+  path: 'photo.png',
+  type: 'file',
+  size: 2048,
+  mtime: '2026-08-30T19:55:00.000Z',
+  mime: 'image/png',
+};
 
 // Same "walk <Text> nodes" helper as `ThreadListScreen`'s own test suite
 // (`chat/__tests__/index.test.tsx`) — a `FlatList`'s rendered output can't
@@ -144,6 +152,56 @@ describe('FileList', () => {
       const row = findRow(renderer, FILE_A.name);
       expect(row.props.onLongPress).toBeUndefined();
       expect(row.props.onContextMenu).toBeUndefined();
+    });
+  });
+
+  // Issue #124: image entries get a preview thumbnail instead of the
+  // generic icon; every other entry (dirs, non-image files) is unaffected.
+  // Same "composite vs. host both match a bare testID lookup" shape as
+  // `findRow` above — `onLoad` only survives on the actual `Image` element,
+  // so filtering on it (rather than `onPress`) uniquely picks that one out.
+  function findThumbnail(renderer: ReactTestRenderer) {
+    const candidates = renderer.root.findAllByProps({ testID: 'file-thumbnail' });
+    const thumbnail = candidates.find((node) => typeof node.props.onLoad === 'function');
+    if (!thumbnail) throw new Error('no thumbnail Image found');
+    return thumbnail;
+  }
+
+  describe('image thumbnails (issue #124)', () => {
+    it('renders a thumbnail for an image entry', () => {
+      const renderer = render(createElement(FileList, { entries: [IMAGE_FILE], onPressEntry: jest.fn() }));
+
+      expect(findThumbnail(renderer)).toBeTruthy();
+    });
+
+    it('does not render a thumbnail for a non-image file or a directory', () => {
+      const renderer = render(createElement(FileList, { entries: [DIR_A, FILE_A], onPressEntry: jest.fn() }));
+
+      expect(renderer.root.findAllByProps({ testID: 'file-thumbnail' })).toHaveLength(0);
+    });
+
+    it('falls back to the generic image icon if the thumbnail fails to load', () => {
+      const renderer = render(createElement(FileList, { entries: [IMAGE_FILE], onPressEntry: jest.fn() }));
+
+      act(() => {
+        findThumbnail(renderer).props.onError();
+      });
+
+      expect(renderer.root.findAllByProps({ testID: 'file-thumbnail' })).toHaveLength(0);
+      // Still a row for the entry, just rendering the fallback icon instead.
+      expect(findRow(renderer, IMAGE_FILE.name)).toBeTruthy();
+    });
+
+    it('still routes taps/long-presses through the same row Pressable as any other entry', () => {
+      const onPressEntry = jest.fn();
+      const renderer = render(createElement(FileList, { entries: [IMAGE_FILE], onPressEntry }));
+
+      const row = findRow(renderer, IMAGE_FILE.name);
+      act(() => {
+        row.props.onPress();
+      });
+
+      expect(onPressEntry).toHaveBeenCalledWith(IMAGE_FILE);
     });
   });
 });

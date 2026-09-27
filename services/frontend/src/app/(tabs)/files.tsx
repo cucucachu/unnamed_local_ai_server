@@ -21,7 +21,7 @@ import {
   copyPath,
   type FileEntry,
 } from '@/lib/files';
-import { mediaKind } from '@/lib/media';
+import { previewKind } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 type LoadState = 'loading' | 'error' | 'done';
@@ -202,11 +202,11 @@ export default function FilesScreen() {
   const refresh = useCallback(() => load(dirPath), [load, dirPath]);
 
   // Shared by both the direct-tap route below and `FileActionSheet`'s
-  // "Play" action, so there's exactly one place that knows the media
-  // route's pathname/params shape.
+  // "Play"/"View" action, so there's exactly one place that knows the
+  // media route's pathname/params shape.
   const openMedia = useCallback(
     (entry: FileEntry) => {
-      const kind = mediaKind(entry.name);
+      const kind = previewKind(entry.name);
       if (kind === null) return;
       router.push({ pathname: '/media', params: { path: entry.path, kind } });
     },
@@ -217,11 +217,13 @@ export default function FilesScreen() {
     (entry: FileEntry) => {
       if (entry.type === 'dir') {
         setBrowsePath(entry.path);
-      } else if (mediaKind(entry.name) !== null) {
+      } else if (previewKind(entry.name) !== null) {
         // M5-02: a recognized video/audio file opens the player directly
-        // instead of the action sheet — "Play" is still available there
-        // too (for parity with every other file action), reached via
-        // long-press below.
+        // instead of the action sheet. Issue #124 extended this to image
+        // files too, opening the in-app viewer instead of forcing a
+        // download-first flow. "Play"/"View" is still available in the
+        // action sheet too (for parity with every other file action),
+        // reached via long-press below.
         openMedia(entry);
       } else {
         setActionSheetEntry(entry);
