@@ -96,6 +96,32 @@ export function deleteE2eUsers(...usernames) {
   }
 }
 
+/** Deletes shared spaces by slug (memberships cascade) and their
+ * directories. Only `e2e-*` slugs; best effort. */
+export function deleteE2eSpaces(...slugs) {
+  const names = slugs.filter((slug) => /^e2e-[a-z0-9-]+$/.test(slug ?? ''));
+  if (names.length === 0) return;
+  const list = names.map((n) => `'${n}'`).join(', ');
+  try {
+    const ids = psql(`DELETE FROM spaces WHERE slug IN (${list}) AND kind = 'shared' RETURNING id`)
+      .split('\n').filter((id) => /^[0-9a-f-]{36}$/.test(id));
+    for (const id of ids) compose(['exec', '-T', 'platform', 'rm', '-rf', `/data/spaces/${id}`], '');
+  } catch (error) {
+    console.warn(`WARN: could not delete spaces ${names.join(', ')}: ${error.message}`);
+  }
+}
+
+/** Deletes invites carrying `label` (an `e2e-*` label from a UI smoke,
+ * which never sees the invite id). */
+export function deleteInvitesLabeled(label) {
+  if (!/^e2e-[a-z0-9 -]+$/.test(label ?? '')) return;
+  try {
+    psql(`DELETE FROM invites WHERE label = '${label}'`);
+  } catch (error) {
+    console.warn(`WARN: could not delete invites labeled ${label}: ${error.message}`);
+  }
+}
+
 export function deleteInvite(inviteId) {
   if (!/^[0-9a-f-]{36}$/.test(inviteId ?? '')) return;
   try {

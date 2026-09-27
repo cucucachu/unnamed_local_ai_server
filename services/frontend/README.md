@@ -27,6 +27,11 @@ src/app/(tabs)/chat.tsx      placeholder — "Chat — coming M2-06"
 src/app/(tabs)/files.tsx     placeholder — "Files — coming M3-05"
 src/app/login.tsx            signed-out entry: Setup (bootstrap open) or Login
 src/app/invite.tsx           invite accept (/invite?token=…, homeai://invite?token=…)
+src/app/settings/            Settings modal stack (M10-07): hub (chat settings + links), account (name,
+                             password, TOTP), sessions, spaces/ (+ [spaceId] members), users + invites (admins)
+lib/platform.ts              platform /api/platform/* client (me, sessions, TOTP, spaces, members, admin)
+lib/stepUp.ts                withStepUp(): retry once after a password prompt on 403 step_up_required;
+                             components/StepUpProvider.tsx owns the prompt for the Settings stack
 lib/api.ts                   apiBase() / wsUrl() / apiFetch<T>() / ApiError — the only place URLs are built;
                              attaches credentials and signs out on 401
 lib/auth.ts                  platform /api/auth/* client (status, login, setup, invite accept, logout)
