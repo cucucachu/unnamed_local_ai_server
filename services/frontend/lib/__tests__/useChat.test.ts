@@ -872,6 +872,29 @@ describe('useChat — history hydration', () => {
     expect(hook.current().items).toEqual([{ id: 'm-2', kind: 'user', text: 'second attempt' }]);
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
+
+  it('a 404 from history is "not_found" and never opens the socket', async () => {
+    mockThreadMessagesFailure(404, "thread 'x' not found");
+
+    const hook = renderUseChatSync();
+    await flush();
+
+    expect(hook.current().hydrationState).toBe('not_found');
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it('a 4404 close after hydration switches to "not_found" without reconnecting', async () => {
+    const hook = await renderUseChat();
+    expect(hook.current().hydrationState).toBe('done');
+
+    act(() => {
+      latestSocket().onclose?.({ code: 4404 });
+    });
+
+    expect(hook.current().hydrationState).toBe('not_found');
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    hook.unmount();
+  });
 });
 
 describe('mapHistoryToItems', () => {

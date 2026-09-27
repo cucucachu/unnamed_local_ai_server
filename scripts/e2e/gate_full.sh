@@ -8,6 +8,7 @@
 #   -> gate_m3.sh -> exec_crossview_smoke.sh -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
 #   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
 #      after it signs in as a throwaway CLI user via auth_helpers.mjs)
+#   -> admin_browser_smoke.sh (M10-07: Settings invites/spaces/TOTP)
 #   -> platform_files_smoke.sh (M11-01: files API role matrix, cross-space
 #      move, Range, ownership, straight against `platform`)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
@@ -206,6 +207,7 @@ main() {
   run_step "verify_isolation.sh"     bash "${REPO_ROOT}/scripts/verify_isolation.sh"
   run_step "verify_network.sh"       sudo bash "${REPO_ROOT}/scripts/verify_network.sh"
   run_step "auth_browser_smoke.sh"   bash "${SCRIPT_DIR}/auth_browser_smoke.sh"
+  run_step "admin_browser_smoke.sh"  bash "${SCRIPT_DIR}/admin_browser_smoke.sh"
   run_step "platform_files_smoke.sh" bash "${SCRIPT_DIR}/platform_files_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"

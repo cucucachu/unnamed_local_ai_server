@@ -127,6 +127,12 @@ export async function acceptInvite({
   );
 }
 
+/** Re-confirms the password for this session, unlocking admin routes for
+ * five minutes (`stepped_up_until`). */
+export function stepUp(password: string): Promise<{ stepped_up_until: string }> {
+  return postJson<{ stepped_up_until: string }>('/api/auth/step-up', { password });
+}
+
 /** Revokes the session server-side (best effort) and always clears it
  * locally — a dead network shouldn't strand the user in a session they
  * asked to leave. */
