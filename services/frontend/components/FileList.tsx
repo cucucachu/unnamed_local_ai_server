@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { categoryFor, formatFileSize, iconNameFor } from '@/lib/fileDisplay';
-import type { FileEntry } from '@/lib/files';
+import type { FileEntry, SpaceRole } from '@/lib/files';
 import { authedSource, mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
@@ -89,7 +89,7 @@ export function FileList({
 /**
  * Issue #124: a small preview thumbnail for image entries, in place of the
  * generic `image-outline` icon every entry otherwise gets from
- * `iconNameFor`. Reuses the exact same `GET /api/media/stream?path=...`
+ * `iconNameFor`. Reuses the exact same `GET /api/platform/files/stream?path=...`
  * URL as the in-app image viewer (`ImageViewer.tsx`'s own docstring has the
  * full "this endpoint streams any file, not just recognized media" citation)
  * — no new thumbnail-generation endpoint, no new server-side dependency,
@@ -132,7 +132,7 @@ function FileThumbnail({ path, name }: { path: string; name: string }) {
  * (`loading` / `loaded` / `error`) shape and same generic-icon-on-error
  * fallback as `FileThumbnail` above (issue #124's image thumbnail), just
  * pointed at `thumbnailUrl` (the server's `ffmpeg`-generated, cached JPEG
- * — `GET /api/media/thumbnail`) instead of `streamUrl` (the raw file
+ * — `GET /api/platform/files/thumbnail`) instead of `streamUrl` (the raw file
  * bytes `FileThumbnail` streams directly, which only works for images
  * because a browser/RN `Image` can decode a still image file as-is but
  * can't decode an arbitrary video container into a frame on its own).
@@ -168,6 +168,12 @@ function VideoThumbnail({ path, name }: { path: string; name: string }) {
   );
 }
 
+const ROLE_TEXT: Record<SpaceRole, string> = {
+  owner: 'Owner',
+  editor: 'Editor',
+  viewer: 'View only',
+};
+
 function FileRow({
   entry,
   onPress,
@@ -188,7 +194,14 @@ function FileRow({
   // check, which a MIME-based category (e.g. `.mkv`'s often-missing
   // default MIME type) can't be relied on to match.
   const isVideo = entry.type === 'file' && mediaKind(entry.name) === 'video';
-  const subtitle = entry.type === 'file' ? `${formatFileSize(entry.size)} · ${relativeTime(entry.mtime)}` : null;
+  // Space entries (the Files root) show the space's name and the user's role.
+  const displayName = entry.label ?? entry.name;
+  const subtitle =
+    entry.type === 'file'
+      ? `${formatFileSize(entry.size)} · ${relativeTime(entry.mtime)}`
+      : entry.role
+        ? ROLE_TEXT[entry.role]
+        : null;
 
   // Web right-click -> the same action sheet as native long-press (per the
   // ticket). Confirmed real, not guessed: `react-native-web`'s `View` (which
@@ -216,7 +229,7 @@ function FileRow({
       onPress={() => onPress(entry)}
       onLongPress={onLongPress ? () => onLongPress(entry) : undefined}
       accessibilityRole="button"
-      accessibilityLabel={entry.name}
+      accessibilityLabel={displayName}
       testID={highlighted ? 'file-entry-highlighted' : 'file-row'}
       {...webContextMenuProps}
     >
@@ -226,7 +239,7 @@ function FileRow({
         <VideoThumbnail path={entry.path} name={entry.name} />
       ) : (
         <Ionicons
-          name={iconName}
+          name={entry.label ? (entry.path === '/personal' ? 'person-circle-outline' : 'people-outline') : iconName}
           size={22}
           color={entry.type === 'dir' ? theme.accent : theme.textMuted}
           style={styles.icon}
@@ -234,7 +247,7 @@ function FileRow({
       )}
       <View style={styles.textContainer}>
         <Text style={styles.name} numberOfLines={1}>
-          {entry.name}
+          {displayName}
         </Text>
         {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       </View>

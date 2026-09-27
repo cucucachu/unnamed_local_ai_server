@@ -71,20 +71,20 @@ export function previewKind(name: string): PreviewKind | null {
   return mediaKind(name) ?? (isImageFile(name) ? 'image' : null);
 }
 
-/** Streaming URL for a root-relative `path`, hitting M5-01's
- * `GET /api/media/stream?path=<...>` (Range-request byte streaming — see
- * `services/agent-server/app/api/media.py`). `encodeURIComponent` on the
+/** Streaming URL for a virtual `path`, hitting
+ * `GET /api/platform/files/stream?path=<...>` (Range-request byte streaming —
+ * see `services/platform/app/api/external/media.py`). `encodeURIComponent` on the
  * whole path (not just its `/`-separated segments) matches `lib/files.ts`'s
  * `listFiles`/`deletePath` convention for this same query param — the
  * server decodes the full query value back to the original string
  * regardless of how internal `/` characters got percent-encoded. */
 export function streamUrl(path: string): string {
-  return `${apiBase()}/api/media/stream?path=${encodeURIComponent(path)}`;
+  return `${apiBase()}/api/platform/files/stream?path=${encodeURIComponent(path)}`;
 }
 
 /** Issue #125: poster-frame thumbnail URL, hitting
- * `GET /api/media/thumbnail?path=<...>` (server-side `ffmpeg`-generated,
- * cached JPEG — see `services/agent-server/app/core/thumbnails.py`).
+ * `GET /api/platform/files/thumbnail?path=<...>` (server-side
+ * `ffmpeg`-generated, cached JPEG — see the platform's `app/core/thumbnails.py`).
  * Same `encodeURIComponent`-the-whole-path convention as `streamUrl`
  * above. Callers are expected to have already checked `mediaKind(name)
  * === 'video'` (this module's own extension-based check, not
@@ -94,7 +94,7 @@ export function streamUrl(path: string): string {
  * (`is_video_file` in `app/core/thumbnails.py`) to decide whether a given
  * path is even eligible for a thumbnail. */
 export function thumbnailUrl(path: string): string {
-  return `${apiBase()}/api/media/thumbnail?path=${encodeURIComponent(path)}`;
+  return `${apiBase()}/api/platform/files/thumbnail?path=${encodeURIComponent(path)}`;
 }
 
 /** Source object for components that load a URL themselves (`Image`,

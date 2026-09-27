@@ -25,6 +25,9 @@ export interface FileActionSheetProps {
    * route) is identical, so the prop keeps its original M5-02 name rather
    * than gaining an `onView` twin. */
   onPlay?: (entry: FileEntry) => void;
+  /** False in a space the user can only view: Rename/Move/Copy/Delete are
+   * left out (the API would refuse them). Defaults to true. */
+  canWrite?: boolean;
 }
 
 interface ActionSpec {
@@ -57,7 +60,17 @@ interface ActionSpec {
  * on an image gets parity with tapping it directly (`files.tsx`'s
  * `handlePressEntry` routes both to the same `/media` screen).
  */
-export function FileActionSheet({ entry, onClose, onDownload, onRename, onMove, onCopy, onDelete, onPlay }: FileActionSheetProps) {
+export function FileActionSheet({
+  entry,
+  onClose,
+  onDownload,
+  onRename,
+  onMove,
+  onCopy,
+  onDelete,
+  onPlay,
+  canWrite = true,
+}: FileActionSheetProps) {
   if (!entry) return null;
 
   const kind = entry.type === 'file' ? previewKind(entry.name) : null;
@@ -68,13 +81,16 @@ export function FileActionSheet({ entry, onClose, onDownload, onRename, onMove, 
       : { key: 'play', label: 'Play', icon: 'play-circle-outline', run: onPlay! }
     : null;
 
-  const actions: ActionSpec[] = [
-    ...(previewSpec ? [previewSpec] : []),
-    { key: 'download', label: 'Download', icon: 'download-outline', run: onDownload },
+  const writeActions: ActionSpec[] = [
     { key: 'rename', label: 'Rename', icon: 'create-outline', run: onRename },
     { key: 'move', label: 'Move', icon: 'folder-open-outline', run: onMove },
     { key: 'copy', label: 'Copy', icon: 'copy-outline', run: onCopy },
     { key: 'delete', label: 'Delete', icon: 'trash-outline', danger: true, run: onDelete },
+  ];
+  const actions: ActionSpec[] = [
+    ...(previewSpec ? [previewSpec] : []),
+    { key: 'download', label: 'Download', icon: 'download-outline', run: onDownload },
+    ...(canWrite ? writeActions : []),
   ];
 
   return (

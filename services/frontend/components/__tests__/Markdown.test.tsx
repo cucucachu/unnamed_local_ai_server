@@ -107,7 +107,7 @@ describe('Markdown', () => {
     act(() => {
       (link?.props as { onPress: () => void }).onPress();
     });
-    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+    expect(onFileLink).toHaveBeenCalledWith('/personal/notes/link-test.md');
   });
 
   it('unwraps a file: link the model put inside a code span', () => {
@@ -123,7 +123,7 @@ describe('Markdown', () => {
     act(() => {
       (link?.props as { onPress: () => void }).onPress();
     });
-    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+    expect(onFileLink).toHaveBeenCalledWith('/personal/notes/link-test.md');
   });
 
   it('treats a bare root-relative href as a file link', () => {
@@ -135,7 +135,7 @@ describe('Markdown', () => {
     act(() => {
       (link?.props as { onPress: () => void }).onPress();
     });
-    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+    expect(onFileLink).toHaveBeenCalledWith('/personal/notes/link-test.md');
   });
 
   it('treats file:relative/path (no slashes after the scheme) as a file link', () => {
@@ -147,7 +147,7 @@ describe('Markdown', () => {
     act(() => {
       (link?.props as { onPress: () => void }).onPress();
     });
-    expect(onFileLink).toHaveBeenCalledWith('notes/link-test.md');
+    expect(onFileLink).toHaveBeenCalledWith('/personal/notes/link-test.md');
   });
 
   it('routes file: links to onFileLink and does not call Linking.openURL', () => {
@@ -160,7 +160,7 @@ describe('Markdown', () => {
     act(() => {
       (pressable.props as { onPress: () => void }).onPress();
     });
-    expect(onFileLink).toHaveBeenCalledWith('tmp/notes.txt');
+    expect(onFileLink).toHaveBeenCalledWith('/personal/tmp/notes.txt');
     expect(renderer.root.findByProps({ testID: 'file-link' })).toBeTruthy();
     expect(openURL).not.toHaveBeenCalled();
     openURL.mockRestore();

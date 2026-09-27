@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { FileList } from '@/components/FileList';
-import { listFiles, type FileEntry } from '@/lib/files';
+import { ROOT_PATH, listFiles, parentPath, type FileEntry } from '@/lib/files';
 import { theme } from '@/lib/theme';
 
 export interface DestinationPickerModalProps {
@@ -28,6 +28,9 @@ type LoadState = 'loading' | 'error' | 'done';
  * mount naturally starts browsing from the current `initialPath` with no
  * extra "reset path when (re-)opened" effect needed.
  *
+ * Only a directory the user can change (editor or owner of its space) can
+ * be selected; the root and view-only spaces can still be browsed through.
+ *
  * `loadState` is DERIVED from `loadedForPath`/`erroredForPath` rather than
  * an effect calling `setState('loading')` synchronously up front — every
  * actual `setState` call here happens inside the fetch's `.then()`/
@@ -41,6 +44,7 @@ type LoadState = 'loading' | 'error' | 'done';
 export function DestinationPickerModal({ initialPath, onSelect, onCancel }: DestinationPickerModalProps) {
   const [path, setPath] = useState(initialPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [writable, setWritable] = useState(false);
   const [loadedForPath, setLoadedForPath] = useState<string | null>(null);
   const [erroredForPath, setErroredForPath] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
@@ -51,6 +55,7 @@ export function DestinationPickerModal({ initialPath, onSelect, onCancel }: Dest
       .then((listing) => {
         if (cancelled) return;
         setEntries(listing.entries);
+        setWritable(listing.writable);
         setLoadedForPath(path);
         setErroredForPath(null);
       })
@@ -70,7 +75,7 @@ export function DestinationPickerModal({ initialPath, onSelect, onCancel }: Dest
 
   const retry = useCallback(() => setRetryAttempt((n) => n + 1), []);
 
-  const segments = path ? path.split('/') : [];
+  const canSelect = loadState === 'done' && writable;
 
   return (
     <Modal visible animationType="slide" onRequestClose={onCancel} testID="destination-picker-modal">
@@ -80,17 +85,25 @@ export function DestinationPickerModal({ initialPath, onSelect, onCancel }: Dest
             <Text style={styles.headerButton}>Cancel</Text>
           </Pressable>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            /{segments.join('/')}
+            {path}
           </Text>
-          <Pressable onPress={() => onSelect(path)} accessibilityRole="button" testID="destination-picker-select">
-            <Text style={[styles.headerButton, styles.selectButton]}>Select this folder</Text>
+          <Pressable
+            onPress={() => onSelect(path)}
+            disabled={!canSelect}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canSelect }}
+            testID="destination-picker-select"
+          >
+            <Text style={[styles.headerButton, styles.selectButton, !canSelect && styles.selectDisabled]}>
+              Select this folder
+            </Text>
           </Pressable>
         </View>
 
-        {path ? (
+        {path !== ROOT_PATH ? (
           <Pressable
             style={styles.upRow}
-            onPress={() => setPath(segments.slice(0, -1).join('/'))}
+            onPress={() => setPath(parentPath(path))}
             accessibilityRole="button"
             testID="destination-picker-up"
           >
@@ -139,6 +152,9 @@ const styles = StyleSheet.create({
   selectButton: {
     color: theme.accent,
     fontWeight: '600',
+  },
+  selectDisabled: {
+    color: theme.textMuted,
   },
   headerTitle: {
     flex: 1,

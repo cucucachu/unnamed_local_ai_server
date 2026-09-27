@@ -99,31 +99,31 @@ describe('streamUrl', () => {
     Platform.OS = 'ios';
   });
 
-  it('builds the exact /api/media/stream?path=<encoded> shape', () => {
-    expect(streamUrl('videos/clip.mp4')).toBe('/api/media/stream?path=videos%2Fclip.mp4');
+  it('builds the exact /api/platform/files/stream?path=<encoded> shape', () => {
+    expect(streamUrl('videos/clip.mp4')).toBe('/api/platform/files/stream?path=videos%2Fclip.mp4');
   });
 
   it('encodes a space in the path', () => {
-    expect(streamUrl('my videos/clip.mp4')).toBe('/api/media/stream?path=my%20videos%2Fclip.mp4');
+    expect(streamUrl('my videos/clip.mp4')).toBe('/api/platform/files/stream?path=my%20videos%2Fclip.mp4');
   });
 
   it('encodes a "#" in the path (fragment-significant char, must not reach the URL raw)', () => {
-    expect(streamUrl('clip#1.mp4')).toBe('/api/media/stream?path=clip%231.mp4');
+    expect(streamUrl('clip#1.mp4')).toBe('/api/platform/files/stream?path=clip%231.mp4');
   });
 
   it('encodes a "?" in the path (query-significant char, must not reach the URL raw)', () => {
-    expect(streamUrl('clip?final.mp4')).toBe('/api/media/stream?path=clip%3Ffinal.mp4');
+    expect(streamUrl('clip?final.mp4')).toBe('/api/platform/files/stream?path=clip%3Ffinal.mp4');
   });
 
   it('encodes unicode characters in the path', () => {
     expect(streamUrl('видео/тест файл.mp4')).toBe(
-      '/api/media/stream?path=%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE%2F%D1%82%D0%B5%D1%81%D1%82%20%D1%84%D0%B0%D0%B9%D0%BB.mp4',
+      '/api/platform/files/stream?path=%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE%2F%D1%82%D0%B5%D1%81%D1%82%20%D1%84%D0%B0%D0%B9%D0%BB.mp4',
     );
   });
 
   it('applies real encodeURIComponent, not a pass-through (raw special chars never appear verbatim)', () => {
     const url = streamUrl('a b#c?d');
-    expect(url).toBe(`/api/media/stream?path=${encodeURIComponent('a b#c?d')}`);
+    expect(url).toBe(`/api/platform/files/stream?path=${encodeURIComponent('a b#c?d')}`);
     expect(url).not.toContain(' ');
     expect(url).not.toContain('#c');
     expect(url).not.toContain('?d');
@@ -131,12 +131,12 @@ describe('streamUrl', () => {
 
   it('prefixes with apiBase() on native (non-web) instead of being always-relative', () => {
     Platform.OS = 'ios';
-    expect(streamUrl('clip.mp4')).toBe('http://homeai.local/api/media/stream?path=clip.mp4');
+    expect(streamUrl('clip.mp4')).toBe('http://homeai.local/api/platform/files/stream?path=clip.mp4');
   });
 });
 
 // Issue #125: same URL-building convention as `streamUrl` above, just a
-// different endpoint (`/api/media/thumbnail`) — kept as its own minimal
+// different endpoint (`/api/platform/files/thumbnail`) — kept as its own minimal
 // suite rather than duplicating every encoding case from `streamUrl`'s
 // suite, since it's the exact same `encodeURIComponent`-the-whole-path
 // logic and those cases already prove that logic works.
@@ -149,18 +149,18 @@ describe('thumbnailUrl', () => {
     Platform.OS = 'ios';
   });
 
-  it('builds the exact /api/media/thumbnail?path=<encoded> shape', () => {
-    expect(thumbnailUrl('videos/clip.mp4')).toBe('/api/media/thumbnail?path=videos%2Fclip.mp4');
+  it('builds the exact /api/platform/files/thumbnail?path=<encoded> shape', () => {
+    expect(thumbnailUrl('videos/clip.mp4')).toBe('/api/platform/files/thumbnail?path=videos%2Fclip.mp4');
   });
 
   it('encodes special characters in the path', () => {
     expect(thumbnailUrl('my videos/clip#1.mp4')).toBe(
-      '/api/media/thumbnail?path=my%20videos%2Fclip%231.mp4',
+      '/api/platform/files/thumbnail?path=my%20videos%2Fclip%231.mp4',
     );
   });
 
   it('prefixes with apiBase() on native (non-web) instead of being always-relative', () => {
     Platform.OS = 'ios';
-    expect(thumbnailUrl('clip.mp4')).toBe('http://homeai.local/api/media/thumbnail?path=clip.mp4');
+    expect(thumbnailUrl('clip.mp4')).toBe('http://homeai.local/api/platform/files/thumbnail?path=clip.mp4');
   });
 });

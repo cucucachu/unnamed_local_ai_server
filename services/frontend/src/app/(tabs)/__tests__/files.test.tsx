@@ -28,7 +28,7 @@ import FilesScreen from '../files';
 
 const VIDEO_FILE: FileEntry = {
   name: 'clip.mp4',
-  path: 'clip.mp4',
+  path: '/personal/clip.mp4',
   type: 'file',
   size: 2048,
   mtime: '2026-08-30T10:00:00.000Z',
@@ -36,7 +36,7 @@ const VIDEO_FILE: FileEntry = {
 };
 const TEXT_FILE: FileEntry = {
   name: 'notes.txt',
-  path: 'notes.txt',
+  path: '/personal/notes.txt',
   type: 'file',
   size: 512,
   mtime: '2026-08-30T10:00:00.000Z',
@@ -44,7 +44,7 @@ const TEXT_FILE: FileEntry = {
 };
 const IMAGE_FILE: FileEntry = {
   name: 'photo.png',
-  path: 'photo.png',
+  path: '/personal/photo.png',
   type: 'file',
   size: 4096,
   mtime: '2026-08-30T10:00:00.000Z',
@@ -52,7 +52,7 @@ const IMAGE_FILE: FileEntry = {
 };
 const NOTES_DIR: FileEntry = {
   name: 'notes',
-  path: 'notes',
+  path: '/personal/notes',
   type: 'dir',
   size: 0,
   mtime: '2026-08-30T10:00:00.000Z',
@@ -60,48 +60,72 @@ const NOTES_DIR: FileEntry = {
 };
 const LINK_TEST_FILE: FileEntry = {
   name: 'link-test.md',
-  path: 'notes/link-test.md',
+  path: '/personal/notes/link-test.md',
   type: 'file',
   size: 12,
   mtime: '2026-08-30T10:00:00.000Z',
   mime: 'text/markdown',
 };
+const PERSONAL_SPACE: FileEntry = {
+  name: 'personal',
+  path: '/personal',
+  type: 'dir',
+  size: 0,
+  mtime: '2026-08-30T10:00:00.000Z',
+  mime: null,
+  label: 'Personal',
+  role: 'owner',
+};
+const SHARED_SPACES: FileEntry = { ...PERSONAL_SPACE, name: 'spaces', path: '/spaces', label: 'Shared spaces', role: null };
+const FAMILY_SPACE: FileEntry = { ...PERSONAL_SPACE, name: 'family', path: '/spaces/family', label: 'Family', role: 'viewer' };
 
-/** Mocks `GET /api/files` (the only call this screen's initial render
- * makes) — same "route `global.fetch` by method" shape as
- * `chat/__tests__/index.test.tsx`'s `mockThreadsApi`, simplified to just
- * the one GET this suite needs. */
-function mockFilesApi(entries: FileEntry[]): void {
-  const fetchMock = jest.fn(async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => ({ path: '', entries }),
-  }));
-  global.fetch = fetchMock as unknown as typeof fetch;
+interface Dir {
+  entries: FileEntry[];
+  writable?: boolean;
+  label?: string | null;
 }
 
-function mockFilesApiByPath(listings: Record<string, FileEntry[] | 'missing'>): void {
+/** Routes `global.fetch` like the platform files API: `GET …/files?path=`
+ * lists a known directory, `GET …/files/stat?path=` stats a known directory
+ * or a file listed in one, anything else is a 404. A plain entry array is a
+ * writable personal-space directory. */
+function mockFilesApiByPath(dirs: Record<string, FileEntry[] | Dir>): jest.Mock {
+  const known = (path: string): Dir | undefined => {
+    const dir = Object.prototype.hasOwnProperty.call(dirs, path) ? dirs[path] : undefined;
+    return Array.isArray(dir) ? { entries: dir } : dir;
+  };
   const fetchMock = jest.fn(async (input: RequestInfo) => {
-    const url = typeof input === 'string' ? input : String(input);
-    const query = new URL(url, 'http://localhost').searchParams.get('path') ?? '';
-    const listing = Object.prototype.hasOwnProperty.call(listings, query) ? listings[query] : 'missing';
-    if (listing === 'missing') {
-      return {
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        json: async () => ({ detail: `directory '${query}' not found` }),
-      };
+    const url = new URL(typeof input === 'string' ? input : String(input), 'http://localhost');
+    const path = url.searchParams.get('path') ?? '';
+    const ok = (body: unknown) => ({ ok: true, status: 200, statusText: 'OK', json: async () => body });
+    const dir = known(path);
+    if (url.pathname.endsWith('/stat')) {
+      const file = Object.values(dirs)
+        .flatMap((d) => (Array.isArray(d) ? d : d.entries))
+        .find((e) => e.path === path);
+      if (dir) return ok({ entry: { name: path.split('/').pop(), path, type: 'dir' }, role: 'owner', writable: true });
+      if (file) return ok({ entry: file, role: 'owner', writable: true });
+    } else if (dir) {
+      const root = path === '/' || path === '/spaces';
+      return ok({
+        path,
+        entries: dir.entries,
+        role: root ? null : 'owner',
+        writable: dir.writable ?? !root,
+        space_label: dir.label !== undefined ? dir.label : root ? null : 'Personal',
+      });
     }
-    return {
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      json: async () => ({ path: query, entries: listing }),
-    };
+    return { ok: false, status: 404, statusText: 'Not Found', json: async () => ({ detail: 'not_found' }) };
   });
   global.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+/** One writable directory, `/personal`, holding `entries` — where the
+ * tap-routing tests start. */
+function mockFilesApi(entries: FileEntry[]): void {
+  mockSearchParams = { path: '/personal' };
+  mockFilesApiByPath({ '/personal': entries });
 }
 
 function toastText(renderer: ReactTestRenderer): string {
@@ -296,11 +320,8 @@ describe('FilesScreen — image tap routing (issue #124)', () => {
 
 describe('FilesScreen — ?path= deep link (M9-03)', () => {
   it('opens a directory path param and lists its entries', async () => {
-    mockSearchParams = { path: 'notes' };
-    mockFilesApiByPath({
-      notes: [LINK_TEST_FILE],
-      '': [NOTES_DIR],
-    });
+    mockSearchParams = { path: '/personal/notes' };
+    mockFilesApiByPath({ '/personal/notes': [LINK_TEST_FILE], '/personal': [NOTES_DIR] });
 
     const renderer = await renderScreen();
 
@@ -309,12 +330,8 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
   });
 
   it('opens a file path param at its parent and highlights the entry', async () => {
-    mockSearchParams = { path: 'notes/link-test.md' };
-    mockFilesApiByPath({
-      'notes/link-test.md': 'missing',
-      notes: [LINK_TEST_FILE],
-      '': [NOTES_DIR],
-    });
+    mockSearchParams = { path: '/personal/notes/link-test.md' };
+    mockFilesApiByPath({ '/personal/notes': [LINK_TEST_FILE], '/personal': [NOTES_DIR] });
 
     const renderer = await renderScreen();
 
@@ -325,12 +342,21 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
+  it('reads a pre-spaces relative path as a path in the personal space', async () => {
+    mockSearchParams = { path: 'notes/link-test.md' };
+    mockFilesApiByPath({ '/personal/notes': [LINK_TEST_FILE], '/personal': [NOTES_DIR] });
+
+    const renderer = await renderScreen();
+
+    const highlighted = renderer.root
+      .findAllByProps({ testID: 'file-entry-highlighted' })
+      .find((node) => typeof node.props.onPress === 'function');
+    expect(highlighted?.props.accessibilityLabel).toBe(LINK_TEST_FILE.name);
+  });
+
   it('does not auto-open the media player when deep-linking to a media file', async () => {
     mockSearchParams = { path: VIDEO_FILE.path };
-    mockFilesApiByPath({
-      [VIDEO_FILE.path]: 'missing',
-      '': [VIDEO_FILE],
-    });
+    mockFilesApiByPath({ '/personal': [VIDEO_FILE] });
 
     const renderer = await renderScreen();
 
@@ -342,10 +368,8 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
   });
 
   it('stays on the current listing and toasts when the path is missing', async () => {
-    mockFilesApiByPath({
-      '': [NOTES_DIR, TEXT_FILE],
-      notes: [LINK_TEST_FILE],
-    });
+    mockSearchParams = { path: '/personal' };
+    mockFilesApiByPath({ '/personal': [NOTES_DIR, TEXT_FILE], '/personal/notes': [LINK_TEST_FILE] });
 
     const renderer = await renderScreen();
     expect(findRow(renderer, NOTES_DIR.name)).toBeTruthy();
@@ -363,10 +387,8 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
   });
 
   it('syncs a directory tap to the URL via setParams', async () => {
-    mockFilesApiByPath({
-      '': [NOTES_DIR, TEXT_FILE],
-      notes: [LINK_TEST_FILE],
-    });
+    mockSearchParams = { path: '/personal' };
+    mockFilesApiByPath({ '/personal': [NOTES_DIR, TEXT_FILE], '/personal/notes': [LINK_TEST_FILE] });
 
     const renderer = await renderScreen();
     const row = findRow(renderer, NOTES_DIR.name);
@@ -376,5 +398,86 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
     });
 
     expect(mockSetParams).toHaveBeenCalledWith({ path: NOTES_DIR.path });
+  });
+});
+
+function crumbLabels(renderer: ReactTestRenderer): string[] {
+  return renderer.root
+    .findAllByProps({ testID: 'breadcrumb-segment' })
+    .filter((node) => typeof node.props.onPress === 'function')
+    .map((node) => String(node.props.accessibilityLabel));
+}
+
+describe('FilesScreen — spaces (M11-01)', () => {
+  it('shows Personal and each shared space at the root, with no write actions', async () => {
+    mockFilesApiByPath({ '/': [PERSONAL_SPACE, SHARED_SPACES], '/spaces': [FAMILY_SPACE] });
+
+    const renderer = await renderScreen();
+
+    expect(findRow(renderer, 'Personal')).toBeTruthy();
+    expect(findRow(renderer, 'Family')).toBeTruthy();
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Shared spaces' })).toHaveLength(0);
+    expect(crumbLabels(renderer)).toEqual(['Home']);
+    expect(renderer.root.findAllByProps({ testID: 'files-upload-button' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'files-read-only' })).toHaveLength(0);
+    // Spaces themselves have no action sheet.
+    expect(findRow(renderer, 'Family').props.onLongPress).toBeUndefined();
+
+    await act(async () => {
+      findRow(renderer, 'Family').props.onPress();
+    });
+    expect(mockSetParams).toHaveBeenCalledWith({ path: '/spaces/family' });
+  });
+
+  it('breadcrumbs name the space and go through it, not through /spaces', async () => {
+    mockSearchParams = { path: '/spaces/family/trip' };
+    mockFilesApiByPath({ '/spaces/family/trip': { entries: [], label: 'Family' } });
+
+    const renderer = await renderScreen();
+
+    expect(crumbLabels(renderer)).toEqual(['Home', 'Family', 'trip']);
+    const familyCrumb = renderer.root
+      .findAllByProps({ testID: 'breadcrumb-segment', accessibilityLabel: 'Family' })
+      .find((node) => typeof node.props.onPress === 'function');
+    await act(async () => {
+      familyCrumb?.props.onPress();
+    });
+    expect(mockSetParams).toHaveBeenCalledWith({ path: '/spaces/family' });
+  });
+
+  it('a view-only space hides upload, new folder, rename, move, copy and delete', async () => {
+    const photo = { ...IMAGE_FILE, path: '/spaces/family/photo.png' };
+    const doc = { ...TEXT_FILE, path: '/spaces/family/notes.txt' };
+    mockSearchParams = { path: '/spaces/family' };
+    mockFilesApiByPath({ '/spaces/family': { entries: [photo, doc], writable: false, label: 'Family' } });
+
+    const renderer = await renderScreen();
+
+    expect(renderer.root.findAllByProps({ testID: 'files-upload-button' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'files-new-folder-button' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'files-read-only' }).length).toBeGreaterThan(0);
+
+    await act(async () => {
+      findRow(renderer, doc.name).props.onLongPress();
+    });
+    for (const action of ['rename', 'move', 'copy', 'delete']) {
+      expect(renderer.root.findAllByProps({ testID: `file-action-${action}` })).toHaveLength(0);
+    }
+    expect(renderer.root.findAllByProps({ testID: 'file-action-download' }).length).toBeGreaterThan(0);
+  });
+
+  it('an editable space keeps every action', async () => {
+    mockFilesApi([TEXT_FILE]);
+
+    const renderer = await renderScreen();
+
+    expect(renderer.root.findAllByProps({ testID: 'files-upload-button' }).length).toBeGreaterThan(0);
+    expect(crumbLabels(renderer)).toEqual(['Home', 'Personal']);
+    await act(async () => {
+      findRow(renderer, TEXT_FILE.name).props.onLongPress();
+    });
+    for (const action of ['download', 'rename', 'move', 'copy', 'delete']) {
+      expect(renderer.root.findAllByProps({ testID: `file-action-${action}` }).length).toBeGreaterThan(0);
+    }
   });
 });

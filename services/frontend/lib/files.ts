@@ -9,15 +9,24 @@ import { ApiError, apiBase, apiFetch, detailFromBody } from './api';
 import { authHeaders, notifyUnauthorized } from './session';
 
 /**
- * Typed client for the "Reference: Shared Conventions & Contracts" issue
- * (#34), §5 "Files" REST endpoints — implemented server-side in M3-03
- * (`services/agent-server/app/api/files.py`). Do not deviate from these
- * shapes; mirrors that module's Pydantic DTOs (`FileEntryOut`, `FileListOut`,
- * `UploadOut`) field-for-field, and follows `threads.ts`'s established
- * client-module style (docstring citing the exact contract section,
- * `encodeURIComponent` on the query-param `path`, reusing `apiFetch` for
- * every JSON call).
+ * Typed client for the platform files API (`/api/platform/files*`,
+ * docs/ARCHITECTURE.md §3 "Files"; `services/platform/app/api/external/
+ * files.py`). Paths are virtual and absolute:
+ *
+ *   /                    Personal + every shared space (read-only)
+ *   /personal/...        the user's own space
+ *   /spaces/<slug>/...   a shared space the user belongs to
+ *
+ * Entry/listing shapes mirror that module's Pydantic DTOs field-for-field.
+ * `path` always travels as a query/body value, so `encodeURIComponent`
+ * percent-encoding its `/`s is correct; the server decodes the whole value.
  */
+
+const FILES_API = '/api/platform/files';
+
+export const ROOT_PATH = '/';
+
+export type SpaceRole = 'owner' | 'editor' | 'viewer';
 
 export interface FileEntry {
   name: string;
@@ -26,78 +35,119 @@ export interface FileEntry {
   size: number;
   mtime: string;
   mime: string | null;
+  /** Display name for a space entry (`Personal`, the space's name); absent otherwise. */
+  label?: string | null;
+  /** The caller's role, on space entries only. */
+  role?: SpaceRole | null;
 }
 
 export interface FileListing {
   path: string;
   entries: FileEntry[];
+  role: SpaceRole | null;
+  /** Whether the caller may change this directory (editor or owner of its space). */
+  writable: boolean;
+  /** The listed space's display name; `null` at `/`. */
+  space_label?: string | null;
+}
+
+export interface FileStat {
+  entry: FileEntry;
+  role: SpaceRole | null;
+  writable: boolean;
 }
 
 export interface UploadResult {
   uploaded: string[];
 }
 
-/** Joins a root-relative dir (`""` = root) with a bare file/dir name
- * into one root-relative path — the inverse of the server's own
- * `_rel_posix` (see `files.py`). Used to build `dst` for rename/move/copy
- * and the target of a new file/dir. */
+/** `dir` + `name` as one virtual path (`joinPath('/', 'personal')` = `/personal`). */
 export function joinPath(dir: string, name: string): string {
-  return dir ? `${dir}/${name}` : name;
+  return `${dir.replace(/\/+$/, '')}/${name}`;
 }
 
-/** The root-relative parent of `path` (`""` for a root-level entry). */
+/** The virtual parent of `path` (`/` for a top-level entry and for `/` itself). */
 export function parentPath(path: string): string {
-  const lastSlash = path.lastIndexOf('/');
-  return lastSlash === -1 ? '' : path.slice(0, lastSlash);
+  const trimmed = path.replace(/\/+$/, '');
+  const lastSlash = trimmed.lastIndexOf('/');
+  return lastSlash <= 0 ? ROOT_PATH : trimmed.slice(0, lastSlash);
 }
 
-/** `GET /api/files?path=<dir>` — `entries` are pre-sorted dirs-first,
- * case-insensitive by name, by the server (§5's `list_files`); never
- * re-sorted here per the ticket. `path` is a query PARAM value (not a URL
- * path segment), so `encodeURIComponent` percent-encoding its internal `/`
- * characters as `%2F` is correct, not a bug — the server decodes the whole
- * query value back to the original string regardless of how its `/`s were
- * encoded. */
+function query(path: string): string {
+  return `path=${encodeURIComponent(path)}`;
+}
+
+/** `GET /api/platform/files?path=<dir>`; entries come pre-sorted (dirs first,
+ * case-insensitive) from the server. The root is shown as Personal plus each
+ * shared space, so `/` merges the server's `/` and `/spaces` listings rather
+ * than showing a "Shared spaces" folder in between. */
 export async function listFiles(path: string): Promise<FileListing> {
-  return apiFetch<FileListing>(`/api/files?path=${encodeURIComponent(path)}`);
+  if (path !== ROOT_PATH) {
+    return apiFetch<FileListing>(`${FILES_API}?${query(path)}`);
+  }
+  const [root, shared] = await Promise.all([
+    apiFetch<FileListing>(`${FILES_API}?${query(ROOT_PATH)}`),
+    apiFetch<FileListing>(`${FILES_API}?${query('/spaces')}`),
+  ]);
+  return { ...root, entries: [...root.entries.filter((e) => e.path !== '/spaces'), ...shared.entries] };
 }
 
-/** `POST /api/files/mkdir` — `201 {"path": str}`. `409` if a FILE (not a
- * dir) already exists at `path` (server-side `exist_ok=True` only
- * suppresses the "already exists" error for an existing directory). */
+/** `GET /api/platform/files/stat?path=<p>`: file or dir, `404` if missing. */
+export async function statPath(path: string): Promise<FileStat> {
+  return apiFetch<FileStat>(`${FILES_API}/stat?${query(path)}`);
+}
+
+/** `POST /api/platform/files/mkdir`: `mkdir -p`, `201 {"path"}`; `409` if a
+ * file is in the way. */
 export async function mkdir(path: string): Promise<{ path: string }> {
-  return apiFetch<{ path: string }>('/api/files/mkdir', {
+  return apiFetch<{ path: string }>(`${FILES_API}/mkdir`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
   });
 }
 
-/** `POST /api/files/move` — rename == move with the same parent (per the
- * ticket). `409` if `dst` already exists. */
+/** `POST /api/platform/files/move`: rename, move, or move across spaces
+ * (write access needed on both). `409` if `dst` already exists. */
 export async function movePath(src: string, dst: string): Promise<{ src: string; dst: string }> {
-  return apiFetch<{ src: string; dst: string }>('/api/files/move', {
+  return apiFetch<{ src: string; dst: string }>(`${FILES_API}/move`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ src, dst }),
   });
 }
 
-/** `POST /api/files/copy` — `409` if `dst` already exists. */
+/** `POST /api/platform/files/copy`: `409` if `dst` already exists. */
 export async function copyPath(src: string, dst: string): Promise<{ src: string; dst: string }> {
-  return apiFetch<{ src: string; dst: string }>('/api/files/copy', {
+  return apiFetch<{ src: string; dst: string }>(`${FILES_API}/copy`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ src, dst }),
   });
 }
 
-/** `DELETE /api/files?path=<p>` — `204 No Content`; see `threads.ts`'s
+/** `DELETE /api/platform/files?path=<p>`: `204 No Content`; see `threads.ts`'s
  * `deleteThread` for why `apiFetch<void>` needs no special-casing for the
- * empty body (its own `try/catch` around `response.json()` already treats
- * an unparsable/empty body as `undefined`). */
+ * empty body. */
 export async function deletePath(path: string): Promise<void> {
-  await apiFetch<void>(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+  await apiFetch<void>(`${FILES_API}?${query(path)}`, { method: 'DELETE' });
+}
+
+/** Human text for the files API's error codes, for toasts. */
+const ERROR_TEXT: Record<string, string> = {
+  insufficient_role: 'You have view-only access here',
+  read_only: "This location can't be changed",
+  already_exists: 'Something with that name already exists',
+  not_found: 'Not found',
+  parent_not_found: 'Destination folder not found',
+  invalid_destination: "Can't move a folder into itself",
+  invalid_path: 'Invalid path',
+  invalid_name: 'Invalid name',
+  invalid_filename: 'Invalid file name',
+};
+
+export function describeFilesError(detail: string): string {
+  return ERROR_TEXT[detail] ?? detail;
 }
 
 /**
@@ -156,7 +206,7 @@ export async function uploadToDir(targetDir: string, parts: UploadPart[]): Promi
   for (const part of parts) {
     formData.append('file', part);
   }
-  return apiFetch<UploadResult>('/api/files/upload', { method: 'POST', body: formData });
+  return apiFetch<UploadResult>(`${FILES_API}/upload`, { method: 'POST', body: formData });
 }
 
 /**
@@ -273,14 +323,14 @@ async function copyPickedAsset(asset: DocumentPicker.DocumentPickerAsset): Promi
  * `file` field) rather than one combined multipart request for the whole
  * batch — `File.upload()`'s own shape is fundamentally single-file — so
  * `pickAndUploadNative` below calls this once per picked asset and merges
- * the `uploaded` arrays. The server's `POST /api/files/upload` (§5) treats
+ * the `uploaded` arrays. The server's `POST /api/platform/files/upload` treats
  * every request as "however many `file` fields are present", so a batch of
  * single-file requests is just as correct as one multi-file request, only
  * less efficient for very large batches (fine for this app's picker-driven
  * upload flow).
  */
 async function uploadOneNative(targetDir: string, file: File): Promise<UploadResult> {
-  const response = await file.upload(`${apiBase()}/api/files/upload`, {
+  const response = await file.upload(`${apiBase()}${FILES_API}/upload`, {
     uploadType: UploadType.MULTIPART,
     fieldName: 'file',
     parameters: { path: targetDir },
@@ -317,7 +367,7 @@ async function pickAndUploadNative(targetDir: string): Promise<UploadResult | nu
 /**
  * Web: `window.open` on the download URL directly triggers the browser's
  * own download flow via the server's `Content-Disposition: attachment`
- * header (§5) — no client-side blob/anchor dance needed. `apiBase()`
+ * header — no client-side blob/anchor dance needed. `apiBase()`
  * returns `''` on web (`lib/api.ts`), so this resolves to a same-origin
  * relative URL exactly like every other web REST call in this app.
  *
@@ -338,7 +388,7 @@ async function pickAndUploadNative(targetDir: string): Promise<UploadResult | nu
  * `expo-sharing`'s share sheet, per the ticket.
  */
 export async function downloadFile(path: string): Promise<void> {
-  const url = `${apiBase()}/api/files/download?path=${encodeURIComponent(path)}`;
+  const url = `${apiBase()}${FILES_API}/download?${query(path)}`;
 
   if (Platform.OS === 'web') {
     window.open(url, '_blank');
