@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     platform_spaces_dir: Path = Path("/data/spaces")
 
     # Service-to-service bearer secrets for `/internal/*` (docs/PLATFORM.md §4
-    # "Service-to-service auth"). Not enforced yet - no endpoint that needs
-    # them exists until the delegation / exec-grant tickets.
+    # "Service-to-service auth"; `app/api/internal/service_auth.py`). Empty
+    # means that service can't call anything.
     platform_agent_token: str = ""
     platform_exec_token: str = ""
 
