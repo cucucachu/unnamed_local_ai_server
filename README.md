@@ -14,6 +14,7 @@ A private, local, always-on AI agent for your home network — a chat assistant 
 - [Project status & roadmap](#project-status--roadmap)
 - [Working with the GitHub issues](#working-with-the-github-issues)
 - [Getting started](#getting-started)
+- [Accounts and recovery](#accounts-and-recovery)
 - [Backups](#backups)
 - [License](#license)
 
@@ -225,9 +226,38 @@ Everything runs directly on the target Linux host (native, no cloud) — real `d
 
 **If an AI coding agent is working in this repo**, see [`AGENTS.md`](AGENTS.md) before running `docker compose`/`scripts/e2e/*`/`scripts/verify_*` — a sandboxed shell tool usually can't reach the real Docker daemon or network directly, and needs explicit elevated permission (or the user running the command) to verify anything for real.
 
+## Accounts and recovery
+
+Stage 3 (M10) adds accounts, owned by the `platform` service ([`docs/PLATFORM.md`](docs/PLATFORM.md) §4; API contract in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3 "Platform API").
+
+**First admin (bootstrap)**: on first start the platform prints a one-time setup code and keeps it in its data volume until someone uses it:
+
+```bash
+docker compose logs platform | grep "SETUP CODE"
+docker compose exec platform cat /data/platform/setup-code
+```
+
+Whoever enters that code on the setup screen (`POST /api/auth/setup`) becomes the **bootstrap admin**; pre-Stage-3 threads and files will be assigned to them. After that, setup is closed for good and the code file is deleted. Everyone else joins by admin invite (single-use link, 7 days).
+
+**Recovery CLI** (anyone with Docker on the host is root anyway, so this is the physical-access path). It runs inside the running container with the image's own Python — not `uv run`, which would try to write to the read-only root:
+
+```bash
+docker compose exec platform python -m app.cli list-users
+docker compose exec platform python -m app.cli create-user alice --role admin     # prompts for a password
+docker compose exec platform python -m app.cli reset-password alice [--clear-totp] # revokes all their sessions
+docker compose exec platform python -m app.cli set-role alice member               # refuses to remove the last admin
+docker compose exec platform python -m app.cli disable-user alice                  # revokes their sessions
+docker compose exec platform python -m app.cli enable-user alice
+
+# Non-interactive (scripts): first line of stdin is the password; note -T.
+printf '%s\n' "$PW" | docker compose exec -T platform python -m app.cli create-user e2e-bob --password-stdin
+```
+
+Users created with the CLI **don't** complete bootstrap — the setup code keeps working until someone uses it. Errors print `error: <code>` and exit 1.
+
 ## Backups
 
-**What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit) and the Postgres database (thread/message history). Together these are the only genuinely irreplaceable state this stack holds.
+**What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit), both Postgres databases (`homeai`: thread/message history; `homeai_platform`: users, sessions, invites), and the `platform-data` volume (the platform's token-signing key, plus the setup code until the first admin exists). Together these are the only genuinely irreplaceable state this stack holds.
 
 **What's not covered**: model weights (`services/model-runner/models/*.gguf` — multi-GB, re-downloadable any time via `./services/model-runner/fetch-model.sh`, not user data) and `.env` (holds `POSTGRES_PASSWORD` — a secret, deliberately not swept into a backup dir; back it up yourself, out of band, if you want to). v1 backup is a full local mirror only — no off-site/cloud copy, no encryption, no incremental snapshots (see `infra/host/backup-files.sh`'s docstring and M6-03's ticket for the explicit out-of-scope list).
 
@@ -237,7 +267,7 @@ Everything runs directly on the target Linux host (native, no cloud) — real `d
 sudo infra/host/backup-files.sh
 ```
 
-Mirrors `FILES_DIR` into `$BACKUP_DIR/files` (`rsync -a --delete` — exact mirror, not additive) and, if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` (keeps the last 14 by count; skipped with a warning, not an error, if the stack is down). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
+Mirrors `FILES_DIR` into `$BACKUP_DIR/files` (`rsync -a --delete` — exact mirror, not additive); if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` and `$BACKUP_DIR/pg/homeai_platform-<date>.sql.gz` (keeps the last 14 of each by count; skipped with a warning, not an error, if the stack is down); and mirrors the `homeai_platform-data` volume into `$BACKUP_DIR/platform-data` (root-only, `0700` — it contains the private signing key; works with the stack down too). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
 
 **Automatic daily backups** (03:00, via a systemd timer):
 
@@ -257,7 +287,22 @@ docker compose up -d
 
 # Postgres: gunzip the dump into a fresh/scratch database via psql
 gunzip -c "$BACKUP_DIR/pg/homeai-<date>.sql.gz" | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+
+# Platform database: same, into an empty homeai_platform (db-init recreates
+# the database and the `platform` role the dump's OWNER statements expect)
+docker compose stop platform
+docker compose exec -T postgres psql -U "$POSTGRES_USER" -d postgres -c 'DROP DATABASE homeai_platform'
+docker compose run --rm db-init
+gunzip -c "$BACKUP_DIR/pg/homeai_platform-<date>.sql.gz" | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d homeai_platform
+docker compose start platform
+
+# platform-data volume (signing key): copy back into the volume's host directory
+docker compose stop platform
+sudo rsync -a --delete "$BACKUP_DIR/platform-data/" "$(docker volume inspect -f '{{.Mountpoint}}' homeai_platform-data)/"
+docker compose start platform
 ```
+
+Restore the platform database and `platform-data` from the same backup run: sessions and identity tokens are only valid against the signing key they were issued with (a mismatched key just logs everyone out).
 
 ## License
 

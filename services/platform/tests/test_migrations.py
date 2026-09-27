@@ -6,6 +6,8 @@ from psycopg.rows import dict_row
 
 from app.db.migrate import MIGRATIONS_DIR, MigrationError, load_migrations, run_migrations
 
+SHIPPED = [(1, "init"), (2, "accounts")]
+
 
 async def _connect(dsn: str) -> psycopg.AsyncConnection:
     return await psycopg.AsyncConnection.connect(dsn, autocommit=True, row_factory=dict_row)
@@ -40,16 +42,18 @@ def _with_init(tmp_path, **extra: str):
 async def test_fresh_database_gets_initial_schema(pg_database):
     async with await _connect(pg_database.dsn) as conn:
         applied = await run_migrations(conn)
-        assert [m.filename for m in applied] == ["0001_init.sql"]
-        assert {"schema_migrations", "platform_state"} <= await _tables(conn)
-        assert await _recorded(conn) == [(1, "init")]
+        assert [m.filename for m in applied] == ["0001_init.sql", "0002_accounts.sql"]
+        assert {"schema_migrations", "platform_state", "users", "sessions", "invites"} <= (
+            await _tables(conn)
+        )
+        assert await _recorded(conn) == SHIPPED
 
 
 async def test_second_run_applies_nothing(pg_database):
     async with await _connect(pg_database.dsn) as conn:
         assert await run_migrations(conn)
         assert await run_migrations(conn) == []
-        assert await _recorded(conn) == [(1, "init")]
+        assert await _recorded(conn) == SHIPPED
 
 
 async def test_platform_state_is_key_value_jsonb(pg_database):
@@ -70,8 +74,8 @@ async def test_concurrent_runners_apply_once(pg_database):
     conns = [await _connect(pg_database.dsn) for _ in range(4)]
     try:
         results = await asyncio.gather(*(run_migrations(c) for c in conns))
-        assert sorted(len(r) for r in results) == [0, 0, 0, 1]
-        assert await _recorded(conns[0]) == [(1, "init")]
+        assert sorted(len(r) for r in results) == [0, 0, 0, len(SHIPPED)]
+        assert await _recorded(conns[0]) == SHIPPED
     finally:
         for c in conns:
             await c.close()
@@ -141,3 +145,18 @@ def test_shipped_migrations_are_well_formed():
     migrations = load_migrations()
     assert migrations[0].filename == "0001_init.sql"
     assert [m.version for m in migrations] == list(range(1, len(migrations) + 1))
+
+
+async def test_user_uids_start_at_20000(pg_database):
+    async with await _connect(pg_database.dsn) as conn:
+        await run_migrations(conn)
+        cur = await conn.execute(
+            "INSERT INTO users (username, display_name, role, password_hash) "
+            "VALUES ('a', 'A', 'member', 'x'), ('b', 'B', 'admin', 'x') RETURNING uid"
+        )
+        assert [row["uid"] for row in await cur.fetchall()] == [20000, 20001]
+        with pytest.raises(psycopg.errors.CheckViolation):
+            await conn.execute(
+                "INSERT INTO users (username, display_name, role, password_hash) "
+                "VALUES ('Upper', 'U', 'member', 'x')"
+            )

@@ -11,8 +11,11 @@
 # no extra User=/permission wrangling: root can always read FILES_DIR
 # and always reach docker.sock for the pg_dump step below.
 #
-# What's backed up: the files directory (files.rest-managed content) and
-# the Postgres database (thread/message state — see docs/ARCHITECTURE.md).
+# What's backed up: the files directory (files.rest-managed content), the
+# Postgres databases (`homeai`: thread/message state; `homeai_platform`:
+# users, sessions, invites — see docs/ARCHITECTURE.md), and the
+# `platform-data` volume (the platform's signing key and, before the first
+# admin exists, the setup code). The volume copy stays root-only.
 # What's NOT backed up: model weights (services/model-runner/models/ —
 # multi-GB, re-downloadable via fetch-model.sh, not user data), Docker
 # images/containers, .env (secrets — back that up yourself, out of band, if
@@ -54,10 +57,17 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   echo "warning: ${ENV_FILE} not found — using defaults (FILES_DIR=${FILES_DIR}, BACKUP_DIR=${BACKUP_DIR})" >&2
 fi
 
-mkdir -p "${BACKUP_DIR}/files" "${BACKUP_DIR}/pg"
+PLATFORM_DB="homeai_platform"
+PLATFORM_VOLUME="homeai_platform-data"
+
+mkdir -p "${BACKUP_DIR}/files" "${BACKUP_DIR}/pg" "${BACKUP_DIR}/platform-data"
 # Same owner as the files directory itself, so the regular dev user can browse/
-# restore from backups without needing sudo just to read them.
-chown -R "${HOMEAI_UID}:${HOMEAI_GID}" "${BACKUP_DIR}"
+# restore from backups without needing sudo just to read them. Not
+# platform-data: it holds the platform's private signing key.
+chown "${HOMEAI_UID}:${HOMEAI_GID}" "${BACKUP_DIR}"
+chown -R "${HOMEAI_UID}:${HOMEAI_GID}" "${BACKUP_DIR}/files" "${BACKUP_DIR}/pg"
+chown root:root "${BACKUP_DIR}/platform-data"
+chmod 0700 "${BACKUP_DIR}/platform-data"
 
 # --- 1. Files mirror ------------------------------------------------------
 
@@ -69,32 +79,60 @@ else
   echo "warning: ${FILES_DIR} does not exist — skipping files mirror." >&2
 fi
 
-# --- 2. Postgres dump ----------------------------------------------------------
+# --- 2. Postgres dumps ---------------------------------------------------------
 # Skips (with a warning, not an error — a nightly timer shouldn't fail the
 # whole run just because the stack happened to be down) if the postgres
 # container isn't up.
 
 cd "${REPO_ROOT}"
 
-if docker compose exec -T postgres pg_isready -U "${POSTGRES_USER}" >/dev/null 2>&1; then
-  DUMP_FILE="${BACKUP_DIR}/pg/homeai-$(date +%F).sql.gz"
-  echo "Dumping Postgres (${POSTGRES_DB}) -> ${DUMP_FILE} ..."
-  docker compose exec -T postgres pg_dump -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip >"${DUMP_FILE}"
-  echo "Postgres dump done."
+# dump_db DB PREFIX: dump DB to pg/PREFIX-<date>.sql.gz, keep the newest
+# KEEP_PG_DUMPS of that prefix (by count, mtime order).
+dump_db() {
+  local db="$1" prefix="$2" dump_file
+  dump_file="${BACKUP_DIR}/pg/${prefix}-$(date +%F).sql.gz"
+  echo "Dumping Postgres (${db}) -> ${dump_file} ..."
+  docker compose exec -T postgres pg_dump -U "${POSTGRES_USER}" "${db}" | gzip >"${dump_file}"
+  chown "${HOMEAI_UID}:${HOMEAI_GID}" "${dump_file}"
+  echo "Postgres dump (${db}) done."
 
-  # Prune to the last KEEP_PG_DUMPS by count (mtime order, oldest first).
-  mapfile -t dumps < <(ls -1t "${BACKUP_DIR}/pg"/homeai-*.sql.gz 2>/dev/null)
+  mapfile -t dumps < <(ls -1t "${BACKUP_DIR}/pg/${prefix}"-*.sql.gz 2>/dev/null)
   if [[ "${#dumps[@]}" -gt "${KEEP_PG_DUMPS}" ]]; then
     for ((i = KEEP_PG_DUMPS; i < ${#dumps[@]}; i++)); do
       echo "Pruning old dump: ${dumps[$i]}"
       rm -f "${dumps[$i]}"
     done
   fi
+}
+
+if docker compose exec -T postgres pg_isready -U "${POSTGRES_USER}" >/dev/null 2>&1; then
+  dump_db "${POSTGRES_DB}" homeai
+  if [[ "$(docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d postgres -tAc \
+    "SELECT 1 FROM pg_database WHERE datname = '${PLATFORM_DB}'")" == 1* ]]; then
+    dump_db "${PLATFORM_DB}" "${PLATFORM_DB}"
+  else
+    echo "warning: database ${PLATFORM_DB} doesn't exist yet — skipping its dump." >&2
+  fi
 else
   echo "warning: postgres container not reachable (stack down?) — skipping pg dump." >&2
+fi
+
+# --- 3. platform-data volume ------------------------------------------------
+# Copied straight from the volume's host directory (root can read it), so
+# this works whether or not the stack is up.
+
+if PLATFORM_DATA_SRC="$(docker volume inspect -f '{{.Mountpoint}}' "${PLATFORM_VOLUME}" 2>/dev/null)"; then
+  echo "Mirroring volume ${PLATFORM_VOLUME} -> ${BACKUP_DIR}/platform-data ..."
+  rsync -a --delete "${PLATFORM_DATA_SRC}/" "${BACKUP_DIR}/platform-data/"
+  chmod 0700 "${BACKUP_DIR}/platform-data"
+  echo "platform-data mirror done."
+else
+  echo "warning: volume ${PLATFORM_VOLUME} not found — skipping platform-data mirror." >&2
 fi
 
 echo "=== backup-files.sh summary ==="
 echo "Files mirror     : ${BACKUP_DIR}/files"
 DUMP_COUNT="$(find "${BACKUP_DIR}/pg" -maxdepth 1 -name 'homeai-*.sql.gz' | wc -l)"
-echo "Postgres dumps   : ${BACKUP_DIR}/pg (${DUMP_COUNT} kept)"
+PLATFORM_DUMP_COUNT="$(find "${BACKUP_DIR}/pg" -maxdepth 1 -name "${PLATFORM_DB}-*.sql.gz" | wc -l)"
+echo "Postgres dumps   : ${BACKUP_DIR}/pg (${DUMP_COUNT} homeai, ${PLATFORM_DUMP_COUNT} ${PLATFORM_DB} kept)"
+echo "platform-data    : ${BACKUP_DIR}/platform-data (root-only)"

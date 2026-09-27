@@ -17,13 +17,20 @@ import shutil
 import subprocess
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import psycopg
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+
+from app.core.config import Settings
+from app.main import create_app
 
 PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "postgres:17")
 SUPERUSER = "homeai"
@@ -111,3 +118,43 @@ def pg_database(pg_server: PgServer) -> Iterator[PgDatabase]:
             conn.execute(
                 sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(dbname))
             )
+
+
+# --- a running app against a fresh database ---------------------------------
+
+
+def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
+    return Settings(
+        platform_db_host=db.host,
+        platform_db_port=db.port,
+        platform_db_user=db.user,
+        platform_db_password=db.password,
+        platform_db_name=db.dbname,
+        platform_data_dir=data_dir,
+        _env_file=None,
+        **overrides,
+    )
+
+
+@asynccontextmanager
+async def running(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://platform") as client:
+            yield client
+
+
+@dataclass
+class Platform:
+    app: FastAPI
+    client: AsyncClient
+    db: PgDatabase
+    data_dir: Path
+
+
+@pytest.fixture
+async def platform(pg_database: PgDatabase, tmp_path: Path) -> AsyncIterator[Platform]:
+    """The app, started (migrated, bootstrap prepared), with an httpx client on it."""
+    app = create_app(make_settings(pg_database, tmp_path))
+    async with running(app) as client:
+        yield Platform(app, client, pg_database, tmp_path)
