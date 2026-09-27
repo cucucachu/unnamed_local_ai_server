@@ -205,14 +205,41 @@ what another doc says it should be.
 ### `caddy`
 
 - **Purpose**: the single ingress point for the whole LAN — reverse proxy
-  for `/api`/`/ws` to `agent-server` (and `/api/auth/*`, unauthenticated,
-  to `platform`), and static file server for the Expo web build. The only service that publishes host ports. HTTP on `:80`
+  for `/api`/`/ws` to `agent-server` and `platform`, the auth gate in
+  front of them (`forward_auth`, below), and static file server for the
+  Expo web build. The only service that publishes host ports. HTTP on `:80`
   stays first-class (no redirect to HTTPS) so Expo Go and phones that
   have not installed the local CA keep working. HTTPS on
   `https://homeai.local` uses Caddy's `tls internal` CA (M9-05) so
   browsers get a secure context (needed for microphone access). The same
   public root cert is served at `http://homeai.local/ca.crt` (trusted-LAN
   trade-off — see `docs/NETWORKING.md`).
+- **Routing (M10-04, `docs/PLATFORM.md` §3)**, identical on `:80` and
+  `https://homeai.local`:
+
+  | Path | Auth | Upstream |
+  |---|---|---|
+  | `/api/auth/*` | public (login, setup, invite accept, status) | `platform:8100` |
+  | `/api/health` | public | `agent-server:8000` |
+  | `/api/platform/*`, `/ws/platform/*` | `forward_auth` | `platform:8100` |
+  | every other `/api/*`, `/ws/*` | `forward_auth` | `agent-server:8000` |
+  | `/ca.crt` (`:80` only), everything else | public | static (`/srv/www`, SPA fallback to `index.html`) |
+
+  `forward_auth` sends each request's headers to `GET
+  platform:8100/internal/auth/verify`; a `401` goes back to the client
+  as-is (a WebSocket upgrade is refused with HTTP 401 before reaching the
+  upstream), a `200` copies its `X-HomeAI-Identity` JWT onto the proxied
+  request. A top-level `request_header -X-HomeAI-Identity` strips any
+  client-supplied copy before any route runs, and forward_auth itself
+  replaces the header, so the only identity an upstream ever sees is the
+  platform's. The verify subrequest drops `Connection`/`Upgrade`
+  (otherwise uvicorn treats the verify call itself as a WebSocket
+  handshake and answers 403); the upgrade still reaches the upstream.
+  No `trusted_proxies` is configured, so Caddy overwrites any
+  client-supplied `X-Forwarded-For`/`-Proto`/`-Host` with what it
+  actually saw — the platform's per-IP rate limits (last XFF hop) can't
+  be spoofed. `/internal/*` is never routed. Range and `HEAD` requests to
+  `/api/media/*` pass through unchanged (206 + `Content-Range`).
 - **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
   `npx expo export --platform web` against `services/frontend/`), final
   stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
@@ -236,7 +263,9 @@ what another doc says it should be.
   script that goes through it (`scripts/e2e/chat_browser_smoke.sh`,
   `files_browser_smoke.sh`, `media_browser_smoke.sh`,
   `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh`,
-  `auth_browser_smoke.sh`) and by
+  `auth_browser_smoke.sh`), by `scripts/e2e/tenancy_threads_smoke.sh`
+  (unauthenticated `401` over REST and WS, a forged or replayed
+  `X-HomeAI-Identity` ignored) and by
   `scripts/verify_network.sh`'s "end-to-end reachability" check. The
   frontend code it serves has its own unit tests — see `services/frontend/`:
   run with `cd services/frontend && npm test` (`check-platform.mjs` +
@@ -493,6 +522,28 @@ what another doc says it should be.
   streaming, the `execute_code` tool's HTTP client to `code-exec-manager`,
   and the `web_search`/`web_fetch` tools' HTTP client to `web-fetch`
   (M7-05).
+- **Auth (M10-04)**: every route except `GET /api/health` needs a valid
+  `X-HomeAI-Identity` JWT (`app/core/identity.py`): EdDSA, `iss
+  homeai-platform`, `aud homeai`, unexpired, `act=user` (agent tokens
+  aren't accepted yet), `sub` a user UUID. Keys come from the platform's
+  `GET /internal/jwks`, fetched lazily and cached; an unknown `kid`
+  triggers one refetch (rate-limited to one per 10 s), 3 s timeout. REST
+  routes get it via a `current_user` dependency on each router; the chat
+  socket verifies on upgrade (see the WS protocol below). Failures: `401
+  {"detail":"unauthenticated"}`; JWKS unreachable with no cached key:
+  `503` (so clients don't sign the user out over an outage). Caddy
+  already rejected unauthenticated requests; this check is what makes a
+  request that bypasses Caddy (e.g. from inside the Docker network)
+  worthless without a platform-signed token.
+  **Tenancy**: threads have an owner (`threads.owner_user_id`) and every
+  thread operation is scoped to the caller; settings are per user
+  (`user_settings`). Files, media, and exec sessions stay shared (auth
+  only). **Pre-M10 data**: threads with no owner and the old global
+  `settings` row are handed to the bootstrap admin once one exists
+  (`app/core/orphans.py`: asks `GET /internal/bootstrap-admin` with
+  `PLATFORM_AGENT_TOKEN`, retried at most every 10 s from `GET
+  /api/threads` until it succeeds); until then they're invisible to
+  everyone.
 - **Image/base**: `python:3.12-slim` + `uv` (astral's static binary
   copied in), plus `ffmpeg` (apt, issue #125 — server-side video
   poster-frame thumbnail generation, `app/core/thumbnails.py`; not a
@@ -514,7 +565,10 @@ what another doc says it should be.
   against `app/core/config.py`'s `Settings` class): `MODEL_BASE_URL`,
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
   `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05), `POSTGRES_USER`,
-  `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `TEST_PG_DSN` (only read by
+  `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PLATFORM_AGENT_TOKEN` (M10-04;
+  service bearer for `GET /internal/bootstrap-admin` — unset means pre-M10
+  threads/settings stay unassigned, with a startup warning; `PLATFORM_URL`
+  defaults to `http://platform:8100`), and `TEST_PG_DSN` (only read by
   `tests/test_checkpointer_pg.py`'s integration fixture, not by the
   application itself — compose's own comment on this line says so).
   **Nuance**: `HOMEAI_UID`/`HOMEAI_GID`/`FILES_DIR` are used by
@@ -530,9 +584,16 @@ what another doc says it should be.
   `test_execute_code_tool.py`, `test_execute_code_integration.py`,
   `test_web_tools.py` (M7-05, `respx`-mocked `web-fetch`),
   `test_checkpointer_pg.py`, `test_threads_pg.py`, `test_fake_model.py`,
+  `test_identity.py` (M10-04: real JWT verification — valid, forged,
+  expired, wrong `aud`/`iss`, `act=agent`, `alg` confusion, key rotation,
+  JWKS outage), `test_auth_enforcement.py` (M10-04: every non-health
+  route `401`s without a real identity, WS `4401`/`4404`, two-user thread
+  and settings isolation, orphan hand-over),
   plus the `fake_model/`/`fake_exec_manager/`/`fake_web_fetch/` test
   doubles used to keep most of the suite deterministic and independent of
-  the real model/Docker/web-fetch.
+  the real model/Docker/web-fetch. Most tests sign in through
+  `tests/fake_identity.py` (`identity_verifier_override=
+  FixedIdentityVerifier()` on `create_app`, a fixed test user).
   Run: `cd services/agent-server && uv run ruff check . && uv run pytest`
   (the default marker selection skips the `integration` tests). The
   Postgres-backed integration tests need a real reachable Postgres via
@@ -697,8 +758,9 @@ what another doc says it should be.
   the in-memory setup code are per-process).
 - **Published port**: none.
 - **Internal port**: `8100`. Caddy routes `/api/auth/*` (no auth, since
-  M10-06); `/api/platform/*` and `forward_auth` land in M10-04;
-  `/internal/*` is never routed.
+  M10-06), `/api/platform/*` and `/ws/platform/*` (behind `forward_auth`
+  to `/internal/auth/verify`, since M10-04); `/internal/*` is never
+  routed.
 - **Network**: `homeai-internal` only.
 - **Mounts**: named volume `platform-data:/data/platform` (signing key at
   `keys/signing-key.pem`, dir `0700`, file `0600`; losing the volume
@@ -779,8 +841,10 @@ what another doc says it should be.
   (`SELECT 1` against the pool; `503` if the database is unreachable).
 - **Env vars consumed** (cross-checked against `app/core/config.py`):
   `PLATFORM_DB_PASSWORD`, `PLATFORM_AGENT_TOKEN`, `PLATFORM_EXEC_TOKEN`
-  (the two service tokens are loaded but not enforced until an endpoint
-  that needs them exists). DB host/port/user/name default to
+  (service bearers for `/internal/*` endpoints that need a caller,
+  compared in constant time — `app/api/internal/service_auth.py`; an
+  empty token matches nothing. Only `PLATFORM_AGENT_TOKEN` is used so far,
+  by `GET /internal/bootstrap-admin`). DB host/port/user/name default to
   `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
   `/data/platform`/`/data/spaces`; `PLATFORM_AUTH_RATE_LIMIT` /
   `PLATFORM_AUTH_RATE_WINDOW_S` default to `5` / `60` (not set in compose).
@@ -802,7 +866,10 @@ what another doc says it should be.
   compose `cap_add` set — real `root:<gid> 2770` on disk, drift repair,
   symlink refusal, a member's new file inheriting the space GID; also
   asserts the caps match `docker-compose.yml`), `test_cli.py`,
-  `test_totp.py` (RFC 6238 vectors), `test_ratelimit.py`. Unprivileged
+  `test_totp.py` (RFC 6238 vectors), `test_ratelimit.py`,
+  `test_internal_api.py` (M10-04: `/internal/bootstrap-admin` and the
+  service bearer — wrong/other-service/session tokens and an unset token
+  all `401`). Unprivileged
   tests record space-dir chowns via the autouse `chowns` fixture instead
   of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
   `scripts/e2e/platform_spaces_smoke.sh`.
@@ -850,14 +917,27 @@ All JSON. Errors: `{"detail": "<human readable>"}` with an appropriate
 path** (`""` = files root); any path that resolves outside the
 files root returns `400` (see the path-traversal guard below).
 
-**Health**
-- `GET /api/health` → `200 {"status": "ok"}`
+**Auth (M10-04).** Every route except `GET /api/health` requires a
+signed-in user: Caddy's `forward_auth` answers `401
+{"detail":"unauthenticated"}` without a valid session cookie/bearer, and
+agent-server itself answers the same `401` unless the request carries a
+platform-signed `X-HomeAI-Identity` (`act=user`). `503` means the
+platform's signing keys couldn't be fetched — retry, don't sign out.
 
-**Threads**
+**Health**
+- `GET /api/health` → `200 {"status": "ok"}` (public)
+
+**Threads** — owned by the user who created them. Another user's thread
+behaves exactly like one that doesn't exist: `404` from `messages`,
+`branches`, `active_branch`; `{"pending_approval": null}` from `state`;
+`DELETE` is its usual idempotent `204` and changes nothing; it never
+appears in `GET /api/threads`. Threads created before M10-04 (no owner)
+belong to the bootstrap admin once one exists (see `agent-server` in §2).
 - `POST /api/threads` body `{"title": "optional string"}` → `201
   {"id": "<uuid>", "title": "New chat", "created_at": iso8601,
   "updated_at": iso8601}`
-- `GET /api/threads` → `200 [{thread}, ...]`, ordered by `updated_at` desc
+- `GET /api/threads` → `200 [{thread}, ...]`, the caller's own, ordered
+  by `updated_at` desc
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
   "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null,
@@ -935,7 +1015,9 @@ that thread.
   Content`, `Accept-Ranges: bytes`; see "Media file playback flow" above
   for the exact request/response sequence.
 
-**Settings**
+**Settings** — per user since M10-04 (`user_settings`, keyed by
+`(user_id, key)`); the pre-M10 global document was moved to the bootstrap
+admin. The WS reads the connected user's values each turn.
 - `GET /api/settings` → `200 {"hitl_enabled": bool, "thinking_enabled":
   bool, "edit_mode_default": "truncate"|"fork"}` — the full document,
   defaults applied for any key not yet stored (`hitl_enabled` defaults
@@ -950,6 +1032,19 @@ that thread.
 One JSON object per text frame. The connection stays open across turns;
 turns for one thread are serialized server-side by a per-thread
 `asyncio.Lock`.
+
+**Opening (M10-04).** Caddy refuses an unauthenticated upgrade with HTTP
+`401` (the browser sees a close before open). Past Caddy, the server
+accepts the socket and then, before sending any frame, closes it with:
+`4401` if `X-HomeAI-Identity` is missing or invalid (the client probes
+its session and shows sign-in); `1011` if the platform's signing keys
+can't be fetched; `4404` (reason `thread not found`) unless
+`{thread_id}` is an existing thread owned by the caller — another user's
+thread and a nonexistent id are indistinguishable. The socket no longer
+creates threads: create one with `POST /api/threads` first (the frontend
+already does). Pre-M10 checkpoints under non-UUID ids (`smoke-1`,
+`gate-m2`, …) are therefore unreachable. An open socket isn't closed if
+the session is revoked mid-connection; the next connect is refused.
 
 Client → server:
 
@@ -1138,9 +1233,10 @@ service over `homeai-internal` — neither tool ever talks to
 ### Platform API (`platform`, port 8100)
 
 Design: `docs/PLATFORM.md` §3–§5. Implemented in M10-03 (accounts &
-sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` (M10-06);
-`/api/platform/*` routing lands in M10-04, and until then only services on
-`homeai-internal` can reach those.
+sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
+(M10-06) and `/api/platform/*`, `/ws/platform/*` behind `forward_auth`
+(M10-04, see `caddy` in §2); `/internal/*` is reachable only from
+`homeai-internal`.
 
 **Conventions**
 
@@ -1305,6 +1401,12 @@ invalid_request`.
   bumped at most once a minute). Otherwise `401 {"detail":
   "unauthenticated"}` (no credential, unknown/revoked/expired session,
   disabled user). One indexed query.
+- `GET /internal/bootstrap-admin` (M10-04) — service auth: `Authorization:
+  Bearer <PLATFORM_AGENT_TOKEN>` (anything else, including a session
+  token, `401 unauthenticated`). `200 {"user_id": "<uuid>"}` — the admin
+  who completed bootstrap (a CLI-created admin doesn't count) — or `404
+  {"detail": "bootstrap_pending"}`. agent-server uses it to hand pre-M10
+  threads and settings to that user.
 
 **Token format** (`app/core/tokens.py`, `TokenService`): EdDSA JWTs with
 header `kid`, `iss="homeai-platform"`, `aud="homeai"`, `iat`, `exp`, plus
@@ -1758,15 +1860,18 @@ Three real trust boundaries this system has, in order of how much this
 design actually protects against them:
 
 1. **Trusted LAN.** The whole product assumes it's reachable only from a
-   small, trusted home network — no auth, no rate limiting. Local HTTPS
-   (`https://homeai.local`, Caddy `tls internal`) is confidentiality on
-   the LAN (and a browser secure context), **not** authentication: anyone
-   who can reach the host still has the full API. HTTP on `:80` remains
-   available on purpose. This is a deliberate v1 scope decision (see
-   `docs/NETWORKING.md`), not an oversight; it's enforced by network
-   topology (only `caddy` publishes ports, `ufw` + the `DOCKER-USER`
-   iptables rules LAN-scope 80 and 443), not by anything in the
-   application layer.
+   small, trusted home network. That's enforced by network topology (only
+   `caddy` publishes ports, `ufw` + the `DOCKER-USER` iptables rules
+   LAN-scope 80 and 443). Since M10-04 every API and WebSocket route
+   except health and the sign-in endpoints also requires a platform
+   session (Caddy `forward_auth`, identity re-verified by agent-server),
+   and threads/settings are per user — but files, media, and code
+   execution are shared by every signed-in user, and none of this is
+   hardened for internet exposure. Local HTTPS (`https://homeai.local`,
+   Caddy `tls internal`) is confidentiality on the LAN (and a browser
+   secure context); HTTP on `:80` remains available on purpose, so a
+   session cookie on `:80` crosses the LAN in the clear (see
+   `docs/NETWORKING.md`).
 2. **No outbound internet access, by default — and when Stage 2 grants it,
    it's read-only and filtered by a proxy, not trusted client code.**
    "No internet" is the default for every container, enforced at the
@@ -1989,7 +2094,6 @@ M7-03; the recipe below is what it actually does, not a plan):**
 - Public ACME certificates / a real domain (local HTTPS via Caddy's
   internal CA shipped in M9-05; HTTP is not redirected and HSTS is off).
 - Simple shared-password auth at the proxy if the network trust model changes.
-- Multi-user thread ownership (currently single-user/home-trusted).
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
 - EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).
@@ -2053,8 +2157,22 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
+| `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and
 safe to re-run; `gate_full.sh`'s own header comment has the exact chain
 order if you need to run a subset by hand.
+
+**Signing in (M10-04).** The curl/urllib/WebSocket scripts source
+`scripts/e2e/lib/auth.sh`: `e2e_auth_begin <prefix>` creates a throwaway
+`e2e-<prefix>-<hex>` user with the recovery CLI, signs in through Caddy's
+`/api/auth/login`, and exports `E2E_AUTH_COOKIE` (a `Cookie:` value;
+`scripts/ws_smoke.py` and `ensure_hitl.sh` read it) plus `E2E_COOKIE_JAR`;
+`e2e_auth_end` deletes the user, its personal space, and its threads,
+checkpoints, and settings. A script started by another that is already
+signed in (e.g. everything under `gate_full.sh`) reuses that session, so
+per-user state like `hitl_enabled` carries across the chain. The
+browser smokes sign in through the UI (`auth_helpers.mjs`) and send the
+page's cookie on their side-channel REST calls. None of this completes
+bootstrap.

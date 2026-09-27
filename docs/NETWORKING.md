@@ -237,9 +237,9 @@ microphone access) installs that root **once**. HTTP on `:80` is not
 redirected and stays the default for anything that has not installed
 the CA.
 
-TLS here is confidentiality on the LAN, not authentication — there is
-still no login. Anyone on the allowed subnet who can reach the host has
-the full API, HTTP or HTTPS.
+TLS here is confidentiality on the LAN, not authentication. Sign-in
+(platform sessions, enforced at Caddy since M10-04) is what gates the
+API; over plain HTTP the session cookie crosses the LAN unencrypted.
 
 ### Get the root certificate
 
@@ -367,8 +367,9 @@ always the device, not this setup:
 ## What would change for internet exposure
 
 Nothing here is designed for it, and the recommendation is: don't — this
-setup's entire security model (no auth, no rate limiting, an
-`execute_code` tool that runs arbitrary shell commands) assumes a trusted
+setup's security model (home-grade sign-in with files and code execution
+shared by every signed-in user, an `execute_code` tool that runs
+arbitrary shell commands, plain HTTP kept on purpose) assumes a trusted
 LAN, and none of that is safe to expose to the public internet as-is.
 Local HTTPS encrypts the LAN hop; it does not authenticate callers.
 If remote access is ever genuinely needed (e.g. checking on a home server
