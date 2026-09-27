@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from app.main import create_app
+from tests.fake_identity import FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 
 
@@ -24,7 +25,11 @@ async def agent_app(fake_model: FakeModel, tmp_path) -> AsyncIterator[FastAPI]:
     # `checkpointer_override` keeps this fixture on `MemorySaver` (fast, no
     # real Postgres) rather than the production lifespan's real Postgres
     # connection — see `app.main.create_app`'s docstring.
-    app = create_app(settings, checkpointer_override=MemorySaver())
+    app = create_app(
+        settings,
+        checkpointer_override=MemorySaver(),
+        identity_verifier_override=FixedIdentityVerifier(),
+    )
     async with app.router.lifespan_context(app):
         yield app
 

@@ -31,6 +31,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
 from app.main import create_app
+from tests.fake_identity import FixedIdentityVerifier
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ def files_settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 async def files_client(files_settings: Settings) -> AsyncIterator[AsyncClient]:
-    app = create_app(files_settings)
+    app = create_app(files_settings, identity_verifier_override=FixedIdentityVerifier())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac

@@ -3,6 +3,8 @@
 Contract added to `docs/ARCHITECTURE.md` §3 "HTTP API" alongside the other
 endpoints there — do not deviate from the shapes below.
 
+Settings are per user (M10-04): both routes act on the caller's own document.
+
 `GET` always returns the full document (defaults filled in for anything not
 yet stored, per `app/db/settings.py::SettingsDocument`). `PUT` accepts a
 PARTIAL document (any subset of the three fields) and validates strictly:
@@ -20,6 +22,7 @@ from typing import Literal
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict
 
+from app.core.identity import CurrentUser
 from app.db.settings import SettingsDocument, SettingsStore
 
 router = APIRouter()
@@ -54,13 +57,15 @@ def _settings_store(request: Request) -> SettingsStore:
 
 
 @router.get("/settings", response_model=SettingsDocument)
-async def get_settings(request: Request) -> SettingsDocument:
+async def get_settings(request: Request, user: CurrentUser) -> SettingsDocument:
     store = _settings_store(request)
-    return await store.get_document()
+    return await store.get_document(user.user_id)
 
 
 @router.put("/settings", response_model=SettingsDocument)
-async def update_settings(body: SettingsUpdateBody, request: Request) -> SettingsDocument:
+async def update_settings(
+    body: SettingsUpdateBody, request: Request, user: CurrentUser
+) -> SettingsDocument:
     store = _settings_store(request)
     # `exclude_unset=True`: only fields the caller actually sent are merged
     # (a field explicitly omitted from the request body stays untouched in
@@ -69,4 +74,4 @@ async def update_settings(body: SettingsUpdateBody, request: Request) -> Setting
     # three fields are nullable in `SettingsDocument`, so that's already
     # rejected as a `422` type error before reaching here.
     partial = body.model_dump(exclude_unset=True)
-    return await store.update_document(partial)
+    return await store.update_document(user.user_id, partial)

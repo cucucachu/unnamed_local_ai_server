@@ -19,9 +19,10 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.db.settings import InMemorySettingsStore, SettingsStore
-from app.db.threads import InMemoryThreadStore, ThreadStore
+from app.db.threads import ThreadStore
 from app.main import create_app
 from tests.fake_exec_manager.scripting import FakeExecManager
+from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore, FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.fake_web_fetch.scripting import FakeWebFetch
 
@@ -46,21 +47,24 @@ def _make_client(
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),
-        thread_store_override=thread_store or InMemoryThreadStore(),
+        thread_store_override=thread_store or AutoCreateThreadStore(),
         settings_store_override=settings_store or InMemorySettingsStore(),
+        identity_verifier_override=FixedIdentityVerifier(),
     )
     return TestClient(app)
 
 
 async def _no_hitl_settings_store() -> InMemorySettingsStore:
     store = InMemorySettingsStore()
-    await store.update_document({"hitl_enabled": False})
+    await store.update_document(TEST_USER_ID, {"hitl_enabled": False})
     return store
 
 
 async def _thinking_settings_store(*, thinking_enabled: bool) -> InMemorySettingsStore:
     store = InMemorySettingsStore()
-    await store.update_document({"hitl_enabled": False, "thinking_enabled": thinking_enabled})
+    await store.update_document(
+        TEST_USER_ID, {"hitl_enabled": False, "thinking_enabled": thinking_enabled}
+    )
     return store
 
 
@@ -234,10 +238,11 @@ async def test_execute_code_tool_turn(
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),
-        thread_store_override=InMemoryThreadStore(),
+        thread_store_override=AutoCreateThreadStore(),
         # `hitl_enabled: False` (M8-03): this test is about `execute_code`'s
         # wire format, not the approval flow.
         settings_store_override=await _no_hitl_settings_store(),
+        identity_verifier_override=FixedIdentityVerifier(),
     )
 
     with TestClient(app) as client, client.websocket_connect("/ws/chat/exec-thread") as ws:
@@ -293,7 +298,10 @@ async def test_web_search_tool_turn(
         files_root=str(tmp_path), web_fetch_url=fake_web_fetch.base_url
     )
     app = create_app(
-        settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()
+        settings,
+        checkpointer_override=MemorySaver(),
+        thread_store_override=AutoCreateThreadStore(),
+        identity_verifier_override=FixedIdentityVerifier(),
     )
 
     with TestClient(app) as client, client.websocket_connect("/ws/chat/web-thread") as ws:
@@ -477,17 +485,17 @@ async def test_cancel_outside_turn_is_noop(fake_model: FakeModel, tmp_path) -> N
 
 
 async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, tmp_path) -> None:
-    """M3-02: connection-time auto-insert, title auto-set from msg 1, `updated_at` bump."""
+    """M3-02: title auto-set from msg 1, `updated_at` bump."""
     fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
-    thread_store = InMemoryThreadStore()
+    thread_store = AutoCreateThreadStore()
     thread_id = "title-bump-thread"
     long_message = "hello world " * 10  # > 60 chars once whitespace-collapsed
 
     with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
-        # `ensure_exists` runs once at connection-open, before any message.
-        created = await thread_store.get(thread_id)
+        # The connect-time ownership lookup created it (`AutoCreateThreadStore`).
+        created = await thread_store.get(thread_id, TEST_USER_ID)
         assert created is not None
         assert created.title == "New chat"
 
@@ -503,7 +511,7 @@ async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, tmp_path
         ws.send_json({"type": "user_message", "content": "a totally different second message"})
         _drain_turn(ws)
 
-        after_turns = await thread_store.get(thread_id)
+        after_turns = await thread_store.get(thread_id, TEST_USER_ID)
 
     expected_title = " ".join(long_message.split())[:60] + "..."
     assert after_turns.title == expected_title
@@ -514,7 +522,7 @@ async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
     """M8-04: replace_from_message_id + mode=truncate drops from that user
     message onward, then runs the new HumanMessage. Title is not re-derived."""
     fake_model.queue(TextTurn("reply one"), TextTurn("reply two"), TextTurn("reply three"))
-    thread_store = InMemoryThreadStore()
+    thread_store = AutoCreateThreadStore()
     thread_id = "truncate-then-run"
 
     with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
@@ -536,7 +544,7 @@ async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
         ]
         turn_two_id = before[2]["id"]
         assert before[2]["role"] == "user"
-        title_after_three = (await thread_store.get(thread_id)).title
+        title_after_three = (await thread_store.get(thread_id, TEST_USER_ID)).title
 
         fake_model.queue(TextTurn("edited reply"))
         ws.send_json(
@@ -558,7 +566,7 @@ async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
     assert [m["content"] for m in after if m["role"] == "user"] == ["turn one", "turn two edited"]
     assert [m["content"] for m in after if m["role"] == "assistant"] == ["reply one", "edited reply"]
     # Title stays the first-turn derivation, not the edited content.
-    assert (await thread_store.get(thread_id)).title == title_after_three
+    assert (await thread_store.get(thread_id, TEST_USER_ID)).title == title_after_three
     assert all(isinstance(m["id"], str) and m["id"] for m in after)
 
 
@@ -630,7 +638,7 @@ async def test_fork_produces_two_tips_and_switch_changes_history(
     """M8-05: fork keeps the old continuation; branches lists both tips;
     switching history + a new turn on the old branch extends that branch."""
     fake_model.queue(TextTurn("reply one"), TextTurn("reply two"), TextTurn("reply three"))
-    thread_store = InMemoryThreadStore()
+    thread_store = AutoCreateThreadStore()
     thread_id = "fork-two-tips"
 
     with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
@@ -727,7 +735,7 @@ async def test_fork_produces_two_tips_and_switch_changes_history(
         assert _user_contents(back_on_fork) == ["turn one", "turn two forked"]
         assert "turn four" not in _user_contents(back_on_fork)
 
-        record = await thread_store.get(thread_id)
+        record = await thread_store.get(thread_id, TEST_USER_ID)
         assert record is not None
         assert record.active_checkpoint_id == sibling
 

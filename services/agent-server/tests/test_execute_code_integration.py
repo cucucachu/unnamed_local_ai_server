@@ -21,23 +21,20 @@ This is a REAL LLM call (Gemma via the real model-runner), so it's
 nondeterministic: one retry on failure, same policy as
 `scripts/e2e/gate_m2.sh`/`scripts/e2e/gate_m3.sh`.
 
-Run it (stack already up):
+Since M10-04 the API needs a signed-in user: the test runs as whoever
+`E2E_AUTH_COOKIE` (`homeai_session=...`) belongs to and is SKIPPED without
+it. From the repo root, with the stack already up:
 
-    cd services/agent-server && uv run pytest -m integration -q
-
-Or, more reliably (avoids any host/compose-network hostname mismatch — see
-`test_checkpointer_pg.py`'s own docstring for the same advice, and note the
-running `agent-server` container must have been rebuilt+recreated to pick up
-this test file / the `execute_code` tool source in the first place):
-
-    docker compose exec agent-server uv run pytest -m integration -q
+    source scripts/e2e/lib/auth.sh && e2e_auth_begin pytest && \\
+        (cd services/agent-server && uv run pytest -m integration -q \\
+            tests/test_execute_code_integration.py); e2e_auth_end
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import uuid
+import os
 
 import httpx
 import pytest
@@ -46,6 +43,7 @@ from websockets.asyncio.client import connect
 API_BASE = "http://localhost/api"
 WS_BASE = "ws://localhost/ws/chat"
 WS_TURN_TIMEOUT_S = 90
+AUTH = {"Cookie": os.environ.get("E2E_AUTH_COOKIE", "")}
 
 
 def _stack_reachable() -> bool:
@@ -62,13 +60,17 @@ pytestmark = [
         not _stack_reachable(),
         reason="http://localhost/api/health not reachable - no real stack to test against",
     ),
+    pytest.mark.skipif(
+        not AUTH["Cookie"],
+        reason="E2E_AUTH_COOKIE not set - the real stack needs a signed-in user",
+    ),
 ]
 
 
 async def _run_ws_turn(thread_id: str, prompt: str) -> list[dict]:
     """Send one `user_message` and collect frames through `turn_end`/`error`."""
     frames: list[dict] = []
-    async with connect(f"{WS_BASE}/{thread_id}") as ws:
+    async with connect(f"{WS_BASE}/{thread_id}", additional_headers=AUTH) as ws:
         await ws.send(json.dumps({"type": "user_message", "content": prompt}))
         async with asyncio.timeout(WS_TURN_TIMEOUT_S):
             async for raw in ws:
@@ -91,7 +93,7 @@ def _execute_code_tool_end_with_42(frames: list[dict]) -> dict | None:
 
 
 async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
-    thread_id = f"exec-integration-{uuid.uuid4()}"
+    thread_id = None
     prompt = "Use execute_code to run: python3 -c 'print(21*2)' and tell me the output."
 
     # This test is about `execute_code` reaching the real exec-manager, not
@@ -100,7 +102,10 @@ async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
     # for the duration and restore whatever was there.
     saved_settings = None
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers=AUTH) as client:
+            created = await client.post(f"{API_BASE}/threads", json={})
+            created.raise_for_status()
+            thread_id = created.json()["id"]
             saved = await client.get(f"{API_BASE}/settings")
             if saved.status_code == 200:
                 saved_settings = saved.json()
@@ -124,8 +129,9 @@ async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
         # Best-effort cleanup so repeated runs don't accumulate threads -
         # never let a cleanup failure mask the real assertion result above.
         try:
-            async with httpx.AsyncClient() as client:
-                await client.delete(f"{API_BASE}/threads/{thread_id}")
+            async with httpx.AsyncClient(headers=AUTH) as client:
+                if thread_id is not None:
+                    await client.delete(f"{API_BASE}/threads/{thread_id}")
                 if saved_settings is not None:
                     await client.put(
                         f"{API_BASE}/settings",

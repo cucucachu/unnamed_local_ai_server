@@ -16,14 +16,14 @@ re-test from scratch.
 from __future__ import annotations
 
 from app.db.settings import InMemorySettingsStore
-from app.db.threads import InMemoryThreadStore
+from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.test_chat_ws import _assert_turn_end, _drain_turn, _make_client
 
 
 async def _hitl_settings_store(enabled: bool) -> InMemorySettingsStore:
     store = InMemorySettingsStore()
-    await store.update_document({"hitl_enabled": enabled})
+    await store.update_document(TEST_USER_ID, {"hitl_enabled": enabled})
     return store
 
 
@@ -186,7 +186,7 @@ async def test_thread_state_reflects_pending_approval_across_reconnect(
     """Simulates a reconnect: query `/api/threads/{id}/state` with no WS turn
     running, after a previous turn left an approval pending."""
     fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
-    thread_store = InMemoryThreadStore()
+    thread_store = AutoCreateThreadStore()
 
     with _make_client(
         fake_model,
@@ -213,7 +213,7 @@ async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, 
     left pending by a previous connection (the checkpointer is the source
     of truth — see `chat_ws` hydrating `pending_approval` on connect)."""
     fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
-    thread_store = InMemoryThreadStore()
+    thread_store = AutoCreateThreadStore()
 
     with _make_client(
         fake_model,
