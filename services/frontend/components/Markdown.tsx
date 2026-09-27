@@ -124,7 +124,10 @@ export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement 
     // Default `textgroup` is a `<Text>` wrapper; Pressable `file:` links
     // nested inside it are flattened away on web (no `data-testid`).
     textgroup: (node: ASTNode, children: ReactNode[]) => (
-      <View key={node.key} style={styles.textGroup}>
+      <View
+        key={node.key}
+        style={Platform.OS === 'web' ? [styles.textGroup, styles.textGroupWeb] : styles.textGroup}
+      >
         {children}
       </View>
     ),
@@ -485,5 +488,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
+  },
+  // `textGroup` is itself a nested flex container (a View) sitting inside
+  // `markdownStyles.paragraph`'s own row/wrap flex. RNW's `View` hardcodes
+  // `flexShrink: 0` (to mirror RN Yoga's default, unlike the browser's CSS
+  // default of `1`) — so on web this box never shrinks below its content's
+  // width. Per the flexbox spec, a flex item that is *itself* a flex
+  // container also gets an automatic `min-width: auto` equal to its
+  // max-content size (not a wrap-aware min-content size), compounding the
+  // problem: a lone long text run has no sibling to force a wrap, so the
+  // box — and the bubble around it — overflows instead of wrapping
+  // (issue #123, aka flexbugs #1: https://github.com/philipwalton/flexbugs#flexbug-1).
+  // `flexShrink: 1` + `minWidth: 0` let it shrink to the paragraph's actual
+  // available width, after which the single plain `<Text>` child (not
+  // itself a flex container) wraps normally. Scoped to web (applied
+  // conditionally in the `textgroup` rule above, not baked in here): native
+  // (Yoga) doesn't share either CSS default above and already wraps
+  // correctly without this.
+  textGroupWeb: {
+    minWidth: 0,
+    flexShrink: 1,
   },
 });
