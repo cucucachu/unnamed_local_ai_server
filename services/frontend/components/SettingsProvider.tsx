@@ -61,9 +61,12 @@ export interface SettingsProviderProps {
    * shows its own toast for its own calls instead of relying on this prop.
    */
   onError?: (message: string) => void;
+  /** The document is re-fetched whenever this changes (the signed-in user's
+   * id, from `_layout.tsx`). */
+  reloadKey?: string | null;
 }
 
-export function SettingsProvider({ children, onError }: SettingsProviderProps) {
+export function SettingsProvider({ children, onError, reloadKey }: SettingsProviderProps) {
   const [settings, setSettings] = useState<SettingsDocument | null>(null);
   const [loading, setLoading] = useState(true);
   // Avoids a stale-closure `onError` inside `updateSettings` without having
@@ -108,7 +111,7 @@ export function SettingsProvider({ children, onError }: SettingsProviderProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
   const handleUpdate = useCallback(async (partial: SettingsPartial) => {
     const previous = settingsRef.current;

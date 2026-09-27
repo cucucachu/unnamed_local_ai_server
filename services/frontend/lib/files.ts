@@ -6,6 +6,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 
 import { ApiError, apiBase, apiFetch, detailFromBody } from './api';
+import { authHeaders, notifyUnauthorized } from './session';
 
 /**
  * Typed client for the "Reference: Shared Conventions & Contracts" issue
@@ -283,6 +284,7 @@ async function uploadOneNative(targetDir: string, file: File): Promise<UploadRes
     uploadType: UploadType.MULTIPART,
     fieldName: 'file',
     parameters: { path: targetDir },
+    headers: authHeaders(),
   });
 
   let body: unknown;
@@ -293,6 +295,7 @@ async function uploadOneNative(targetDir: string, file: File): Promise<UploadRes
   }
 
   if (response.status < 200 || response.status >= 300) {
+    if (response.status === 401) notifyUnauthorized();
     throw new ApiError(response.status, detailFromBody(body, `Upload failed (${response.status})`));
   }
   return body as UploadResult;
@@ -351,7 +354,10 @@ export async function downloadFile(path: string): Promise<void> {
     // action — "download it back" is explicitly one of the Tier B phone
     // checks) overwrites the previous cached copy instead of rejecting
     // with `DestinationAlreadyExists`.
-    downloaded = await File.downloadFileAsync(url, destination, { idempotent: true });
+    downloaded = await File.downloadFileAsync(url, destination, {
+      idempotent: true,
+      headers: authHeaders(),
+    });
   } catch (error) {
     // Mirrors `apiFetch`'s error-shape convention (throw `ApiError`) even
     // though this path never goes through `apiFetch` itself — status is

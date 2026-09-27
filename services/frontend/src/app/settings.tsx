@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { useCallback } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
+import { useAuth } from '@/components/AuthProvider';
 import { useSettings } from '@/components/SettingsProvider';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
@@ -27,6 +28,8 @@ import { theme } from '@/lib/theme';
 export default function SettingsScreen() {
   const router = useRouter();
   const { settings, loading, updateSettings } = useSettings();
+  const { state: authState, logout } = useAuth();
+  const user = authState.phase === 'ready' ? authState.user : null;
   const { message: toast, showToast } = useToast();
 
   const handleToggleHitl = useCallback(
@@ -114,6 +117,24 @@ export default function SettingsScreen() {
           </Text>
         </View>
       )}
+
+      <View style={styles.account}>
+        {user ? (
+          <Text style={styles.accountText} testID="settings-account">
+            Signed in as {user.display_name} ({user.username})
+          </Text>
+        ) : null}
+        {/* Signing out flips `_layout.tsx`'s route guards, which close this
+            modal and land on Login. */}
+        <Pressable
+          onPress={logout}
+          style={styles.logoutButton}
+          accessibilityRole="button"
+          testID="settings-logout"
+        >
+          <Text style={styles.logoutText}>Log out</Text>
+        </Pressable>
+      </View>
 
       <Toast message={toast} testID="settings-toast" />
     </View>
@@ -273,5 +294,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     marginTop: 8,
+  },
+  account: {
+    marginTop: 'auto',
+    padding: 16,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+  },
+  accountText: {
+    color: theme.textMuted,
+    fontSize: 13,
+  },
+  logoutButton: {
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.danger,
+  },
+  logoutText: {
+    color: theme.danger,
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

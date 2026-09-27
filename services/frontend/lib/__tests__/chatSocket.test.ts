@@ -1,9 +1,11 @@
-import { openChatSocket, type WebSocketCtor, type WebSocketLike } from '../chatSocket';
+import { openChatSocket, WS_CLOSE_UNAUTHORIZED, type WebSocketCtor, type WebSocketLike } from '../chatSocket';
+import { onUnauthorized, setSessionToken } from '../session';
 
 class FakeWebSocket implements WebSocketLike {
   static instances: FakeWebSocket[] = [];
 
   readonly url: string;
+  readonly options: { headers: Record<string, string> } | undefined;
   readonly sent: string[] = [];
   closed = false;
   onopen: ((event: unknown) => void) | null = null;
@@ -11,8 +13,9 @@ class FakeWebSocket implements WebSocketLike {
   onerror: ((event: unknown) => void) | null = null;
   onclose: ((event: unknown) => void) | null = null;
 
-  constructor(url: string) {
+  constructor(url: string, _protocols?: string | string[], options?: { headers: Record<string, string> }) {
     this.url = url;
+    this.options = options;
     FakeWebSocket.instances.push(this);
   }
 
@@ -30,10 +33,15 @@ class FakeWebSocket implements WebSocketLike {
     this.onmessage?.({ data: JSON.stringify(frame) });
   }
 
+  /** Test helper: simulate the handshake completing. */
+  open(): void {
+    this.onopen?.({});
+  }
+
   /** Test helper: simulate an unsolicited drop (server/network went away). */
-  drop(): void {
+  drop(code?: number): void {
     this.closed = true;
-    this.onclose?.({});
+    this.onclose?.({ code });
   }
 }
 
@@ -328,5 +336,95 @@ describe('openChatSocket — reconnect behavior', () => {
     jest.advanceTimersByTime(10000);
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+describe('openChatSocket — auth', () => {
+  const originalFetch = global.fetch;
+  const listener = jest.fn();
+  let unsubscribe: () => void = () => {};
+
+  function statusFetch(authenticated: boolean) {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ setup_required: false, authenticated }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  beforeEach(() => {
+    listener.mockReset();
+    unsubscribe = onUnauthorized(listener);
+  });
+
+  afterEach(() => {
+    unsubscribe();
+    setSessionToken(null);
+    global.fetch = originalFetch;
+  });
+
+  it('passes the native bearer token as a WebSocket header', () => {
+    setSessionToken('hs_tok');
+    openChatSocket('thread-1', makeHandlers(), Ctor).close();
+
+    expect(latestSocket().options).toEqual({ headers: { Authorization: 'Bearer hs_tok' } });
+  });
+
+  it('passes no options without a token (browser WebSocket; cookie auth)', () => {
+    openChatSocket('thread-1', makeHandlers(), Ctor).close();
+
+    expect(latestSocket().options).toBeUndefined();
+  });
+
+  it('a socket rejected before opening probes the session and signs out when it is gone', async () => {
+    const fetchMock = statusFetch(false);
+    const chat = openChatSocket('thread-1', makeHandlers(), Ctor);
+
+    latestSocket().drop(1006);
+    await flush();
+    chat.close();
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/auth/status');
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pre-open failure with a valid session does not sign out', async () => {
+    statusFetch(true);
+    const chat = openChatSocket('thread-1', makeHandlers(), Ctor);
+
+    latestSocket().drop(1006);
+    await flush();
+    chat.close();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary drop after opening does not probe', async () => {
+    const fetchMock = statusFetch(false);
+    const chat = openChatSocket('thread-1', makeHandlers(), Ctor);
+
+    latestSocket().open();
+    latestSocket().drop(1001);
+    await flush();
+    chat.close();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it(`close code ${WS_CLOSE_UNAUTHORIZED} after opening probes the session`, async () => {
+    statusFetch(false);
+    const chat = openChatSocket('thread-1', makeHandlers(), Ctor);
+
+    latestSocket().open();
+    latestSocket().drop(WS_CLOSE_UNAUTHORIZED);
+    await flush();
+    chat.close();
+
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

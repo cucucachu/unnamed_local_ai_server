@@ -25,10 +25,38 @@ src/app/_layout.tsx          root layout (dark theme, no header)
 src/app/(tabs)/_layout.tsx   tab navigator (Chat, Files)
 src/app/(tabs)/chat.tsx      placeholder — "Chat — coming M2-06"
 src/app/(tabs)/files.tsx     placeholder — "Files — coming M3-05"
-lib/api.ts                   apiBase() / wsUrl() / apiFetch<T>() / ApiError — the only place URLs are built
+src/app/login.tsx            signed-out entry: Setup (bootstrap open) or Login
+src/app/invite.tsx           invite accept (/invite?token=…, homeai://invite?token=…)
+lib/api.ts                   apiBase() / wsUrl() / apiFetch<T>() / ApiError — the only place URLs are built;
+                             attaches credentials and signs out on 401
+lib/auth.ts                  platform /api/auth/* client (status, login, setup, invite accept, logout)
+lib/session.ts               in-memory session token + authHeaders() + onUnauthorized()
+lib/tokenStore.ts            native token persistence (expo-secure-store); tokenStore.web.ts is a no-op
+components/AuthProvider.tsx  app-root auth state; AuthGate.tsx holds the app until status answers
 lib/chatSocket.ts             typed WS client for /ws/chat/{thread_id} (M2-06 imports its frame types)
 lib/__tests__/               Jest (jest-expo) unit tests for the above
 ```
+
+## Sign-in (M10-06)
+
+The app asks the platform (`GET /api/auth/status`) who's signed in before
+showing anything. `src/app/_layout.tsx` guards routes with
+`Stack.Protected`: the tabs, media, and settings exist only while signed in,
+`/login` only while signed out, and `/invite` always. While the server still
+wants its first admin, `/login` shows Setup (setup code from `docker compose
+logs platform` or `docker compose exec platform cat /data/platform/setup-code`),
+with a link to sign in instead for accounts made with the recovery CLI.
+
+- **Web**: the `HttpOnly` `homeai_session` cookie. No token ever touches JS.
+- **Native (Expo Go)**: auth calls send `X-HomeAI-Client: native`; the
+  returned `session_token` goes in `expo-secure-store` and every request,
+  native upload/download, media load, and the chat WebSocket send
+  `Authorization: Bearer …`.
+- Any `401` from a non-auth call (or a chat socket the platform confirms
+  has lost its session) signs out back to `/login`. Logout is in Settings.
+
+Test accounts: `docker compose exec platform python -m app.cli create-user
+<name> --password-stdin` (see `services/platform/app/cli.py`).
 
 ## Local development
 

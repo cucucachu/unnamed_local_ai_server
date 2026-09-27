@@ -31,6 +31,8 @@
 
 import { chromium } from 'playwright';
 
+import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+
 const BASE_URL = process.env.IMAGE_SMOKE_BASE_URL ?? 'http://localhost/';
 const UI_TIMEOUT_MS = 20_000;
 
@@ -66,6 +68,7 @@ async function pollImageState(imgLocator, predicate, timeoutMs, label) {
 
 async function main() {
   const startedAt = Date.now();
+  const e2eUser = createE2eUser({ prefix: 'e2e-image' });
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -74,6 +77,8 @@ async function main() {
     page.on('dialog', (dialog) => dialog.accept());
 
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+
+    await loginThroughUi(page, e2eUser);
     await page.getByRole('tab', { name: 'Files' }).click();
     await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
 
@@ -139,6 +144,7 @@ async function main() {
     console.log(`PASS: upload -> thumbnail -> direct-tap viewer -> right-click "View" flow completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    deleteE2eUsers(e2eUser.username);
   }
 }
 

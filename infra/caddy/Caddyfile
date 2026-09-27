@@ -7,6 +7,11 @@
 (app) {
 	encode gzip
 
+	# Login, setup, invite accept, status: unauthenticated by design
+	# (docs/PLATFORM.md §3 "HTTP routing").
+	handle /api/auth/* {
+		reverse_proxy platform:8100
+	}
 	handle /api/* {
 		reverse_proxy agent-server:8000
 	}

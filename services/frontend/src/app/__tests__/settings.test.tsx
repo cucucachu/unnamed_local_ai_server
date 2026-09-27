@@ -11,6 +11,18 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ back: mockBack, push: jest.fn() }),
 }));
 
+const mockLogout = jest.fn();
+jest.mock('@/components/AuthProvider', () => ({
+  useAuth: () => ({
+    state: {
+      phase: 'ready',
+      setupRequired: false,
+      user: { id: 'u1', username: 'alice', display_name: 'Alice', role: 'member' },
+    },
+    logout: mockLogout,
+  }),
+}));
+
 // `useSettings()` is mocked directly (rather than rendering a real
 // `SettingsProvider` + mocking `fetch`) since this suite is about the
 // SCREEN's own rendering/interaction logic — `components/__tests__/
@@ -57,6 +69,8 @@ async function renderScreen(): Promise<ReactTestRenderer> {
 
 beforeEach(() => {
   mockBack.mockReset();
+  mockLogout.mockReset();
+  mockLogout.mockResolvedValue(undefined);
   mockUpdateSettings.mockReset();
   mockUpdateSettings.mockResolvedValue(undefined);
   mockSettingsValue = { hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate' };
@@ -149,5 +163,21 @@ describe('SettingsScreen', () => {
     });
 
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('shows the signed-in account', async () => {
+    const renderer = await renderScreen();
+
+    expect(textOf(renderer)).toContain('Signed in as Alice (alice)');
+  });
+
+  it('Log out signs out', async () => {
+    const renderer = await renderScreen();
+
+    await act(async () => {
+      renderer.root.findByProps({ testID: 'settings-logout' }).props.onPress();
+    });
+
+    expect(mockLogout).toHaveBeenCalledTimes(1);
   });
 });

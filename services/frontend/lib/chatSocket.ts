@@ -1,4 +1,5 @@
-import { wsUrl } from './api';
+import { probeSession, wsUrl } from './api';
+import { authHeaders } from './session';
 
 /**
  * Typed client for the `/ws/chat/{thread_id}` WS contract — "Reference:
@@ -191,7 +192,18 @@ export interface WebSocketLike {
   onclose: ((event: unknown) => void) | null;
 }
 
-export type WebSocketCtor = new (url: string) => WebSocketLike;
+/** The third argument is React Native's extension (browsers take only
+ * `url, protocols`); it's how native sends its bearer token, since a
+ * browser-style cookie isn't available there. */
+export type WebSocketCtor = new (
+  url: string,
+  protocols?: string | string[],
+  options?: { headers: Record<string, string> },
+) => WebSocketLike;
+
+/** Close code an app server may use to say "your session is gone" once the
+ * socket is already open. */
+export const WS_CLOSE_UNAUTHORIZED = 4401;
 
 function defaultWebSocketCtor(): WebSocketCtor {
   return (globalThis as { WebSocket?: WebSocketCtor }).WebSocket as WebSocketCtor;
@@ -300,8 +312,15 @@ export function openChatSocket(
     }, delay);
   }
 
-  function handleClose(): void {
+  function handleClose(event: unknown, opened: boolean): void {
     if (closedByClient) return;
+
+    // A rejected upgrade (e.g. `forward_auth` 401) never opens and exposes
+    // no status to JS, so ask the platform directly; `probeSession` signs
+    // out only if it confirms the session is gone.
+    if (!opened || (event as { code?: unknown } | null)?.code === WS_CLOSE_UNAUTHORIZED) {
+      void probeSession();
+    }
 
     if (turnInFlight) {
       // Drop mid-turn: surface it instead of silently reconnecting into a
@@ -321,8 +340,14 @@ export function openChatSocket(
 
   function connect(): void {
     handlers.onConnectionStateChange?.(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-    socket = new WebSocketImpl(url);
+    const headers = authHeaders();
+    socket =
+      Object.keys(headers).length > 0
+        ? new WebSocketImpl(url, undefined, { headers })
+        : new WebSocketImpl(url);
+    let opened = false;
     socket.onopen = () => {
+      opened = true;
       reconnectAttempts = 0;
       handlers.onConnectionStateChange?.('open');
     };
@@ -331,7 +356,7 @@ export function openChatSocket(
     // `onclose` alone owns the reconnect/surface-error decision — handling
     // it in both places would double-fire.
     socket.onerror = () => {};
-    socket.onclose = handleClose;
+    socket.onclose = (event) => handleClose(event, opened);
   }
 
   connect();

@@ -30,6 +30,8 @@
 
 import { chromium } from 'playwright';
 
+import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+
 const BASE_URL = process.env.MEDIA_SMOKE_BASE_URL ?? 'http://localhost/';
 const VIDEO_FILE_NAME = process.env.MEDIA_SMOKE_FILE_NAME ?? 'media-browser-smoke-test-video.mp4';
 const UI_TIMEOUT_MS = 20_000;
@@ -76,10 +78,12 @@ async function main() {
   // opened the modal — this test's own script-driven `.play()`/seek calls
   // (explicitly sanctioned by the ticket) shouldn't be flaky on that browser
   // policy, which has nothing to do with what's actually being tested here.
+  const e2eUser = createE2eUser({ prefix: 'e2e-media' });
   const browser = await chromium.launch({ headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
   try {
     const page = await browser.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, e2eUser);
 
     await page.getByRole('tab', { name: 'Files' }).click();
     await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
@@ -126,6 +130,7 @@ async function main() {
     console.log(`PASS: tap-to-play -> play -> script-driven seek flow completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    deleteE2eUsers(e2eUser.username);
   }
 }
 

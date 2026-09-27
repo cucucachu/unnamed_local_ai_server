@@ -71,6 +71,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
+import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE =
   process.env.CHAT_SMOKE_API_BASE ?? new URL('/api', BASE_URL).href.replace(/\/$/, '');
@@ -481,8 +483,12 @@ function installFakeSpeechRecognition() {
   window.webkitSpeechRecognition = FakeSpeechRecognition;
 }
 
+/** Set by `main()`; every fresh browser context signs in as it. */
+let e2eUser;
+
 async function openNewChatOn(page, origin) {
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
+  await loginThroughUi(page, e2eUser);
   await page.getByRole('tab', { name: 'Chat' }).click();
   const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
   await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
@@ -585,6 +591,7 @@ async function main() {
       contextOptions.ignoreHTTPSErrors = true;
     }
   }
+  e2eUser = createE2eUser({ prefix: 'e2e-chat' });
   const browser = await chromium.launch(launchOptions);
   try {
     // Existing steps include `execute_code` (step 6), which HITL-on would
@@ -597,6 +604,7 @@ async function main() {
     await context.addInitScript(installFakeSpeechRecognition);
     const page = await context.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, e2eUser);
 
     // Explicit navigation to the Chat tab (even though it's also the `/`
     // redirect target today — see `src/app/(tabs)/index.tsx` — so this
@@ -1342,6 +1350,7 @@ async function main() {
     console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch + file-link + voice-input completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    deleteE2eUsers(e2eUser.username);
     cleanupThreadBestEffort(threadId);
     cleanupThreadBestEffort(editThreadId);
     cleanupThreadBestEffort(forkThreadId);

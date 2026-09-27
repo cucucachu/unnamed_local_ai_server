@@ -4,7 +4,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { useCallback, useState } from 'react';
 import { GestureResponderEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { streamUrl } from '@/lib/media';
+import { authedSource, streamUrl } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 export interface MediaPlayerProps {
@@ -39,7 +39,7 @@ export function MediaPlayer({ path, kind }: MediaPlayerProps) {
  * stretching, with letterbox bars filling any leftover space for sources
  * that aren't actually 16:9. */
 function NativeVideoPlayer({ path }: { path: string }) {
-  const player = useVideoPlayer(streamUrl(path));
+  const player = useVideoPlayer(authedSource(streamUrl(path)));
 
   return (
     <View style={styles.videoBox} testID="media-player-video">
@@ -91,7 +91,7 @@ function ScrubBar({ progress, onSeek }: { progress: number; onSeek: (ratio: numb
 }
 
 function NativeAudioPlayer({ path }: { path: string }) {
-  const player = useAudioPlayer(streamUrl(path));
+  const player = useAudioPlayer(authedSource(streamUrl(path)));
   const status = useAudioPlayerStatus(player);
 
   const togglePlayback = useCallback(() => {

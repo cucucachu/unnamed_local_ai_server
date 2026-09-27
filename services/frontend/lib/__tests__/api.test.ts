@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 
-import { apiFetch, ApiError, wsUrl } from '../api';
+import { apiFetch, ApiError, probeSession, wsUrl } from '../api';
+import { onUnauthorized, setSessionToken } from '../session';
 
 describe('apiFetch', () => {
   const originalFetch = global.fetch;
@@ -68,6 +69,93 @@ describe('apiFetch', () => {
     const [calledPath, calledInit] = fetchMock.mock.calls[0];
     expect(calledPath).toContain('/api/threads');
     expect(calledInit).toMatchObject({ method: 'POST', body: '{}' });
+  });
+});
+
+describe('apiFetch credentials + 401 handling', () => {
+  const originalFetch = global.fetch;
+  let unsubscribe: () => void = () => {};
+  const listener = jest.fn();
+
+  function respond(status: number, body: unknown) {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: '',
+      json: async () => body,
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    listener.mockReset();
+    unsubscribe = onUnauthorized(listener);
+  });
+
+  afterEach(() => {
+    unsubscribe();
+    setSessionToken(null);
+    global.fetch = originalFetch;
+  });
+
+  it('sends credentials and merges the bearer header with caller headers', async () => {
+    setSessionToken('hs_tok');
+    const fetchMock = respond(200, {});
+
+    await apiFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' } });
+
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      credentials: 'include',
+      headers: { Authorization: 'Bearer hs_tok', 'Content-Type': 'application/json' },
+    });
+  });
+
+  it('sends no Authorization header without a token (web cookie session)', async () => {
+    const fetchMock = respond(200, {});
+
+    await apiFetch('/api/threads');
+
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({});
+  });
+
+  it('a 401 notifies unauthorized listeners (back to Login) and still throws', async () => {
+    respond(401, { detail: 'unauthenticated' });
+
+    const error = await apiFetch('/api/threads').catch((e) => e);
+
+    expect(error).toMatchObject({ status: 401, detail: 'unauthenticated' });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('signOutOnUnauthorized: false leaves the session alone', async () => {
+    respond(401, { detail: 'invalid_credentials' });
+
+    await apiFetch('/api/auth/login', { method: 'POST' }, { signOutOnUnauthorized: false }).catch(() => {});
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('non-401 errors do not sign out', async () => {
+    respond(403, { detail: 'admin_required' });
+
+    await apiFetch('/api/threads').catch(() => {});
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('probeSession signs out only on a definite authenticated: false', async () => {
+    respond(200, { setup_required: false, authenticated: true });
+    await probeSession();
+    expect(listener).not.toHaveBeenCalled();
+
+    global.fetch = jest.fn().mockRejectedValue(new TypeError('offline')) as unknown as typeof fetch;
+    await probeSession();
+    expect(listener).not.toHaveBeenCalled();
+
+    respond(200, { setup_required: false, authenticated: false });
+    await probeSession();
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });
 
