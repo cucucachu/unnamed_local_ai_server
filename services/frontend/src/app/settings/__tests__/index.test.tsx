@@ -7,17 +7,19 @@ import type { SettingsDocument } from '@/lib/settings';
 import { theme } from '@/lib/theme';
 
 const mockBack = jest.fn();
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ back: mockBack, push: jest.fn() }),
+  useRouter: () => ({ back: mockBack, push: mockPush }),
 }));
 
 const mockLogout = jest.fn();
+let mockRole: 'admin' | 'member' = 'member';
 jest.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     state: {
       phase: 'ready',
       setupRequired: false,
-      user: { id: 'u1', username: 'alice', display_name: 'Alice', role: 'member' },
+      user: { id: 'u1', username: 'alice', display_name: 'Alice', role: mockRole },
     },
     logout: mockLogout,
   }),
@@ -44,7 +46,7 @@ jest.mock('@/components/SettingsProvider', () => ({
 }));
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
-import SettingsScreen from '../settings';
+import SettingsScreen from '..';
 
 function textOf(renderer: ReactTestRenderer): string {
   return renderer.root
@@ -69,6 +71,8 @@ async function renderScreen(): Promise<ReactTestRenderer> {
 
 beforeEach(() => {
   mockBack.mockReset();
+  mockPush.mockReset();
+  mockRole = 'member';
   mockLogout.mockReset();
   mockLogout.mockResolvedValue(undefined);
   mockUpdateSettings.mockReset();
@@ -179,5 +183,36 @@ describe('SettingsScreen', () => {
     });
 
     expect(mockLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it('links to Account, Sessions, and Spaces; members see no Admin section', async () => {
+    const renderer = await renderScreen();
+
+    for (const [testID, path] of [
+      ['settings-nav-account', '/settings/account'],
+      ['settings-nav-sessions', '/settings/sessions'],
+      ['settings-nav-spaces', '/settings/spaces'],
+    ]) {
+      await act(async () => {
+        renderer.root.findByProps({ testID }).props.onPress();
+      });
+      expect(mockPush).toHaveBeenLastCalledWith(path);
+    }
+    expect(renderer.root.findAllByProps({ testID: 'settings-nav-users' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'settings-nav-invites' })).toHaveLength(0);
+  });
+
+  it('admins also get Users and Invites', async () => {
+    mockRole = 'admin';
+    const renderer = await renderScreen();
+
+    await act(async () => {
+      renderer.root.findByProps({ testID: 'settings-nav-users' }).props.onPress();
+    });
+    expect(mockPush).toHaveBeenLastCalledWith('/settings/users');
+    await act(async () => {
+      renderer.root.findByProps({ testID: 'settings-nav-invites' }).props.onPress();
+    });
+    expect(mockPush).toHaveBeenLastCalledWith('/settings/invites');
   });
 });
