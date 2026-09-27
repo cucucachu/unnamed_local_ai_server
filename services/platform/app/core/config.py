@@ -1,0 +1,49 @@
+"""Application settings, sourced from environment variables via pydantic-settings.
+
+Variable names match `.env.example`, lower-cased and unprefixed.
+"""
+
+from pathlib import Path
+
+from psycopg.conninfo import make_conninfo
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Postgres: the `platform` role and `homeai_platform` database are created
+    # by the `db-init` one-shot (infra/postgres/db-init.sh), not by the
+    # postgres image itself. Host/port/user/db are fixed by that script and
+    # docker-compose.yml; only the password comes from `.env`.
+    platform_db_host: str = "postgres"
+    platform_db_port: int = 5432
+    platform_db_user: str = "platform"
+    platform_db_password: str = ""
+    platform_db_name: str = "homeai_platform"
+
+    # `platform-data` named volume: signing keys (`keys/`), later the
+    # bootstrap setup code (docs/PLATFORM.md §4).
+    platform_data_dir: Path = Path("/data/platform")
+    # `${SPACES_DIR}` bind mount. Not read yet; spaces land in M10-05.
+    platform_spaces_dir: Path = Path("/data/spaces")
+
+    # Service-to-service bearer secrets for `/internal/*` (docs/PLATFORM.md §4
+    # "Service-to-service auth"). Not enforced yet - no endpoint that needs
+    # them exists until the delegation / exec-grant tickets.
+    platform_agent_token: str = ""
+    platform_exec_token: str = ""
+
+    @property
+    def keys_dir(self) -> Path:
+        return self.platform_data_dir / "keys"
+
+    @property
+    def database_dsn(self) -> str:
+        return make_conninfo(
+            host=self.platform_db_host,
+            port=self.platform_db_port,
+            user=self.platform_db_user,
+            password=self.platform_db_password,
+            dbname=self.platform_db_name,
+        )

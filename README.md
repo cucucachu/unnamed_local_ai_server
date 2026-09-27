@@ -204,7 +204,7 @@ Repo scaffold and host scripts (milestone M0) are landing incrementally — see 
 ```bash
 git clone git@github.com:cucucachu/unnamed_local_ai_server.git
 cd unnamed_local_ai_server
-cp .env.example .env   # fill in POSTGRES_PASSWORD, RENDER_GID/VIDEO_GID, LAN_SUBNET
+cp .env.example .env   # fill in POSTGRES_PASSWORD, PLATFORM_* secrets, RENDER_GID/VIDEO_GID, LAN_SUBNET
 
 ./services/model-runner/fetch-model.sh   # downloads the default GGUF quant (~14.6 GB) into services/model-runner/models/
 
