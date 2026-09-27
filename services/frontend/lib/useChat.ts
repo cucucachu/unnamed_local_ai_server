@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { ApiError } from './api';
 import {
   openChatSocket,
   type ApprovalDecision,
@@ -139,9 +140,11 @@ export type ChatItem = ChatUserItem | ChatAssistantItem | ChatToolItem | ChatErr
  * `'loading'` while `GET /api/threads/{id}/messages` (M3-02/M3-04's history
  * hydration call) is in flight; `'error'` if it failed (socket is never
  * opened in this state — see the module doc below); `'done'` once history
- * has been mapped into `items` and the live socket has been opened.
+ * has been mapped into `items` and the live socket has been opened;
+ * `'not_found'` if the thread doesn't exist or isn't the caller's (a `404`
+ * from history, or the socket closing with `4404`) — terminal, no socket.
  */
-export type HydrationState = 'loading' | 'error' | 'done';
+export type HydrationState = 'loading' | 'error' | 'done' | 'not_found';
 
 /** Mirrors `chat_ws.py`'s `_TOOL_CATEGORY_BY_NAME` (Conventions & Contracts
  * §6 category assignment). The §5 history DTO (`ThreadMessage`, from
@@ -402,9 +405,9 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
         }
         if (!cancelled) setHydrationState('done');
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
-        setHydrationState('error');
+        setHydrationState(error instanceof ApiError && error.status === 404 ? 'not_found' : 'error');
       });
 
     return () => {
@@ -610,6 +613,9 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
                   );
             return [...closed, { id: makeId('error'), kind: 'error', message: frame.message }];
           });
+        },
+        onNotFound: () => {
+          if (!cancelled) setHydrationState('not_found');
         },
         onConnectionStateChange: setConnectionState,
       },

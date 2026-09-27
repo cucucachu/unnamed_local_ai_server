@@ -267,6 +267,23 @@ export default function ChatScreen() {
     );
   }
 
+  if (hydrationState === 'not_found') {
+    return (
+      <View style={[styles.container, styles.centered]} testID="chat-not-found">
+        <Text style={styles.hydrationErrorText}>Chat not found.</Text>
+        <Text style={styles.notFoundDetail}>It may have been deleted, or it belongs to another account.</Text>
+        <Pressable
+          style={styles.retryButton}
+          onPress={() => router.replace('/chat')}
+          accessibilityRole="button"
+          testID="chat-not-found-back"
+        >
+          <Text style={styles.retryButtonText}>Back to chats</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <AppKeyboardAvoidingView style={styles.flex}>
       <View style={styles.container}>
@@ -1219,6 +1236,12 @@ const styles = StyleSheet.create({
   hydrationErrorText: {
     color: theme.danger,
     fontSize: 15,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  notFoundDetail: {
+    color: theme.textMuted,
+    fontSize: 13,
     textAlign: 'center',
     paddingHorizontal: 24,
   },
