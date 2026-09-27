@@ -4,18 +4,51 @@
 	auto_https disable_redirects
 }
 
+# Session check for every authenticated route (docs/PLATFORM.md §3): the
+# platform validates the cookie/bearer and answers 200 with the identity JWT
+# (copied onto the proxied request) or 401 (returned to the client as-is).
+(authenticated) {
+	forward_auth platform:8100 {
+		uri /internal/auth/verify
+		copy_headers X-HomeAI-Identity
+		# The subrequest carries the client's headers; on a WebSocket
+		# upgrade uvicorn would treat the verify call itself as a WS
+		# handshake and reject it (403). The upgrade still reaches the
+		# upstream: these only apply to the verify request.
+		header_up -Connection
+		header_up -Upgrade
+	}
+}
+
 (app) {
 	encode gzip
 
-	# Login, setup, invite accept, status: unauthenticated by design
-	# (docs/PLATFORM.md §3 "HTTP routing").
+	# Only forward_auth may set the identity. Top-level request_header sorts
+	# before every handle block, so a client-supplied copy is gone before
+	# any route (authenticated or not) sees the request.
+	request_header -X-HomeAI-Identity
+
+	# Login, setup, invite accept, status: unauthenticated by design.
 	handle /api/auth/* {
 		reverse_proxy platform:8100
 	}
+	handle /api/health {
+		reverse_proxy agent-server:8000
+	}
+	handle /api/platform/* {
+		import authenticated
+		reverse_proxy platform:8100
+	}
+	handle /ws/platform/* {
+		import authenticated
+		reverse_proxy platform:8100
+	}
 	handle /api/* {
+		import authenticated
 		reverse_proxy agent-server:8000
 	}
 	handle /ws/* {
+		import authenticated
 		reverse_proxy agent-server:8000
 	}
 	handle {

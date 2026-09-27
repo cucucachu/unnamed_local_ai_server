@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     files_root: str = "/data/files"
 
+    # Identity JWKS and the service-auth `/internal/*` routes. Without a
+    # token, pre-Stage-3 threads are never handed to the bootstrap admin.
+    platform_url: str = "http://platform:8100"
+    platform_agent_token: str = ""
+
     postgres_user: str = "homeai"
     postgres_password: str = ""
     postgres_db: str = "homeai"

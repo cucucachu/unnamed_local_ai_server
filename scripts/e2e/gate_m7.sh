@@ -59,6 +59,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
+trap e2e_auth_end EXIT
 
 API_BASE="http://localhost/api"
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
@@ -122,8 +125,10 @@ step_stack_up_and_healthy() {
     return 1
   fi
   log "OK: model-runner healthy + ${API_BASE}/health OK"
+  e2e_auth_begin gate-m7
   # M8-03 made HITL on by default; web_research_smoke / research_browser
   # write_file turns are not wired to send approval_response.
+  # (research_browser_smoke.mjs also turns it off for its own browser user.)
   log "Turning hitl_enabled off so research write_file is not interrupted..."
   bash "${SCRIPT_DIR}/ensure_hitl.sh" false >/dev/null
   log "OK: hitl_enabled=false"

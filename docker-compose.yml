@@ -239,6 +239,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # M10-04: lets agent-server ask the platform for the bootstrap admin
+      # (pre-Stage-3 threads are handed to them). Identity JWTs are checked
+      # against the platform's JWKS, which needs no secret.
+      PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       # Only used by `tests/test_checkpointer_pg.py` (integration tests) so
       # `docker compose exec agent-server uv run pytest -m integration`
       # "just works" without hand-typing a DSN. Not read by the app itself.

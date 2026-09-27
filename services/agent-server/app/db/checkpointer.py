@@ -29,6 +29,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.db.settings import LEGACY_SETTINGS_TABLE_DDL, USER_SETTINGS_TABLE_DDL
 from app.db.turn_stats import TURN_STATS_TABLE_DDL
 
 # Our own metadata table, separate from the checkpointer's own
@@ -58,15 +59,14 @@ _THREADS_ACTIVE_CHECKPOINT_DDL = """
 ALTER TABLE threads ADD COLUMN IF NOT EXISTS active_checkpoint_id TEXT;
 """
 
-# `settings` (M8-02): one row per `SettingsDocument` field, see
-# `app/db/settings.py` for the read/merge logic. Created here, next to
-# `threads`, per the ticket's "same pattern as `app/db/threads.py`" spec.
-_SETTINGS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value JSONB NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+# M10-04: the platform user who owns the thread. Null = a pre-Stage-3
+# thread, visible to nobody until `ThreadStore.adopt_orphans` hands it to the
+# bootstrap admin. No FK: users live in the platform's own database.
+_THREADS_OWNER_DDL = """
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS owner_user_id UUID;
+"""
+_THREADS_OWNER_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS threads_owner_updated_idx ON threads (owner_user_id, updated_at DESC);
 """
 
 
@@ -111,7 +111,10 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
     async with pool.connection() as conn:
         await conn.execute(_THREADS_TABLE_DDL)
         await conn.execute(_THREADS_ACTIVE_CHECKPOINT_DDL)
-        await conn.execute(_SETTINGS_TABLE_DDL)
+        await conn.execute(_THREADS_OWNER_DDL)
+        await conn.execute(_THREADS_OWNER_INDEX_DDL)
+        await conn.execute(LEGACY_SETTINGS_TABLE_DDL)
+        await conn.execute(USER_SETTINGS_TABLE_DDL)
         await conn.execute(TURN_STATS_TABLE_DDL)
 
     return PostgresCheckpointer(pool=pool, saver=saver)

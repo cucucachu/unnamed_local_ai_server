@@ -57,9 +57,10 @@ invalid frame while idle.
   direct `InterruptOnConfig.when` predicate mechanism works as-is with the
   installed `deepagents==0.7.11`/`langchain==1.6.x` — no dual-compiled-graph
   fallback was needed. This module is the ONLY thing that sets
-  `hitl_enabled` in `configurable` — read fresh from `SettingsStore` at the
-  start of every turn (`_current_hitl_enabled` below), so a mid-conversation
-  settings change takes effect on the very next turn.
+  `hitl_enabled` in `configurable` — read fresh from the connected user's
+  `SettingsStore` document at the start of every turn
+  (`_current_hitl_enabled` below), so a mid-conversation settings change
+  takes effect on the very next turn.
 - After a turn's `astream_events` stream completes (fresh OR resumed —
   see below), `_run_turn` checks `agent.aget_state(config).tasks[*].
   interrupts` for a pending `Interrupt`. `HumanInTheLoopMiddleware.
@@ -203,14 +204,8 @@ M2-04's final report for the full transcript):
 This ticket adds `ThreadStore` bookkeeping side-effects around the existing
 turn lifecycle (the wire format above is untouched — no new/changed frames):
 
-- On connect (once per WS connection, before the receive loop): auto-insert
-  a `threads` row for `thread_id` if one doesn't already exist, so a thread
-  driven purely over WS (e.g. `scripts/ws_smoke.py`'s default `smoke-1`, or
-  any pre-M3-02 gate script) still shows up for `GET /api/threads` /
-  `GET .../messages` rather than 404ing there. See `PgThreadStore`'s
-  docstring (`app/db/threads.py`) for what happens when `thread_id` isn't a
-  valid UUID (the common case for these legacy/manual thread ids) — this
-  call still can't fail the connection either way.
+- (Until M10-04, connecting also auto-created the `threads` row; now the
+  thread must already exist and belong to the caller — see below.)
 - On each well-formed `user_message`, before running the turn: set the
   thread's title to the first 60 chars of the message IF the title is still
   the default `"New chat"` (a no-op otherwise) — see `_derive_title`.
@@ -244,6 +239,22 @@ turn lifecycle (the wire format above is untouched — no new/changed frames):
   `configurable` (LangGraph time-travel fork). The old continuation
   stays as a sibling branch; the new tip becomes `active_checkpoint_id`.
 
+## M10-04 authentication and ownership
+
+The socket is accepted first, then authenticated from `X-HomeAI-Identity`
+(set by Caddy's `forward_auth`, verified in `app/core/identity.py`), so a
+failure can carry a close code a browser can see:
+
+- no / invalid identity -> close `4401` (the client re-checks its session);
+- the platform's JWKS unreachable -> close `1011`;
+- `thread_id` unknown, not a UUID (Postgres), or another user's thread ->
+  close `4404`, identical in all three cases; nothing is read from the
+  checkpointer first.
+
+Once past that, every turn, resume, and settings read on the connection is
+for that thread and that user (settings are per user). A later
+`DELETE`/re-own of the thread doesn't affect an already-open socket.
+
 ## M8-05 active branch
 
 `threads.active_checkpoint_id` (null = chronological latest) is the tip
@@ -273,6 +284,7 @@ from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.build import MUTATING_TOOL_NAMES
+from app.core.identity import IDENTITY_HEADER, IdentityError, KeysUnavailable
 from app.db.turn_stats import TurnStat
 
 router = APIRouter()
@@ -860,7 +872,7 @@ async def _send_error_and_close(websocket: WebSocket, message: str, code: int) -
         await websocket.close(code=code)
 
 
-async def _current_hitl_enabled(websocket: WebSocket) -> bool:
+async def _current_hitl_enabled(websocket: WebSocket, user_id: str) -> bool:
     """Fresh per-turn read of `SettingsStore.get_document().hitl_enabled` (M8-03).
 
     Read at the START of every turn (fresh AND resumed) rather than cached
@@ -868,18 +880,18 @@ async def _current_hitl_enabled(websocket: WebSocket) -> bool:
     (`PUT /api/settings`) takes effect on the very next turn.
     """
     settings_store = websocket.app.state.settings_store
-    document = await settings_store.get_document()
+    document = await settings_store.get_document(user_id)
     return document.hitl_enabled
 
 
-async def _current_thinking_enabled(websocket: WebSocket) -> bool:
+async def _current_thinking_enabled(websocket: WebSocket, user_id: str) -> bool:
     """Fresh per-turn read of `SettingsStore.get_document().thinking_enabled` (M8-07).
 
     Same "read at the start of every turn" rule as `_current_hitl_enabled`.
     Default is `False` (`SettingsDocument.thinking_enabled`).
     """
     settings_store = websocket.app.state.settings_store
-    document = await settings_store.get_document()
+    document = await settings_store.get_document(user_id)
     return document.thinking_enabled
 
 
@@ -961,17 +973,38 @@ async def persist_active_tip(thread_store: Any, agent: Any, thread_id: str) -> s
     return tip
 
 
-async def active_checkpoint_id_for(thread_store: Any, thread_id: str) -> str | None:
-    record = await thread_store.get(thread_id)
+async def active_checkpoint_id_for(
+    thread_store: Any, thread_id: str, owner_user_id: str
+) -> str | None:
+    record = await thread_store.get(thread_id, owner_user_id)
     return record.active_checkpoint_id if record is not None else None
+
+
+WS_CLOSE_UNAUTHORIZED = 4401
+WS_CLOSE_NOT_FOUND = 4404
 
 
 @router.websocket("/ws/chat/{thread_id}")
 async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     await websocket.accept()
 
+    try:
+        identity = await websocket.app.state.identity_verifier.verify(
+            websocket.headers.get(IDENTITY_HEADER)
+        )
+    except KeysUnavailable:
+        await websocket.close(code=1011, reason="identity keys unavailable")
+        return
+    except IdentityError:
+        await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
+        return
+    user_id = identity.user_id
+
     thread_store = websocket.app.state.thread_store
-    await thread_store.ensure_exists(thread_id)
+    record = await thread_store.get(thread_id, user_id)
+    if record is None:
+        await websocket.close(code=WS_CLOSE_NOT_FOUND, reason="thread not found")
+        return
 
     # M8-03: local routing state for this connection only — `None` while
     # idle/mid-turn, set to the dict `_run_turn` returned right after a
@@ -983,9 +1016,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
     # checkpointer on connect rather than starting at `None` and treating
     # a legitimate resume as an invalid idle-frame (1008).
     pending_approval: dict | None = await get_pending_approval(
-        websocket.app.state.agent,
-        thread_id,
-        await active_checkpoint_id_for(thread_store, thread_id),
+        websocket.app.state.agent, thread_id, record.active_checkpoint_id
     )
 
     while True:
@@ -1019,12 +1050,14 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                     )
                     return
 
-            hitl_enabled = await _current_hitl_enabled(websocket)
-            thinking_enabled = await _current_thinking_enabled(websocket)
+            hitl_enabled = await _current_hitl_enabled(websocket, user_id)
+            thinking_enabled = await _current_thinking_enabled(websocket, user_id)
             run_input = Command(resume={"decisions": decisions})
             async with lock:
                 try:
-                    resume_from = await active_checkpoint_id_for(thread_store, thread_id)
+                    resume_from = await active_checkpoint_id_for(
+                        thread_store, thread_id, user_id
+                    )
                     outcome, new_pending = await _run_turn_or_interrupt(
                         websocket,
                         thread_id,
@@ -1065,7 +1098,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             return
 
         settings_store = websocket.app.state.settings_store
-        document = await settings_store.get_document()
+        document = await settings_store.get_document(user_id)
         hitl_enabled = document.hitl_enabled
         thinking_enabled = document.thinking_enabled
 
@@ -1083,7 +1116,9 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
 
         async with lock:
             try:
-                start_checkpoint = await active_checkpoint_id_for(thread_store, thread_id)
+                start_checkpoint = await active_checkpoint_id_for(
+                    thread_store, thread_id, user_id
+                )
                 if parsed.replace_from_message_id is not None:
                     assert mode in ("truncate", "fork")
                     if mode == "fork":

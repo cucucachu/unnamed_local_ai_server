@@ -52,7 +52,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 
 const BASE_URL = process.env.RESEARCH_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE = process.env.RESEARCH_SMOKE_API_BASE ?? 'http://localhost/api';
@@ -140,6 +140,8 @@ async function expandLastActivityPanel(page) {
 
 /** Set by `main()`; `createNewThread` signs each fresh page in as it. */
 let e2eUser;
+// `homeai_session=...` from the latest signed-in page (`createNewThread`).
+let smokeCookie = null;
 
 /** Creates a new thread from the UI ("New chat" header button) and returns
  * its id (captured from the URL, same technique as `chat_browser_smoke.mjs`'s
@@ -147,6 +149,10 @@ let e2eUser;
 async function createNewThread(page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   await loginThroughUi(page, e2eUser);
+  smokeCookie = await sessionCookie(page.context());
+  // HITL is per user and on by default; the positive scenario's write_file
+  // isn't wired to approve it.
+  apiRequest('PUT', `${API_BASE}/settings`, { hitl_enabled: false });
   await page.getByRole('tab', { name: 'Chat' }).click();
   const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
   await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
@@ -202,22 +208,26 @@ async function classifyNewToolCards(page, priorCount) {
  * code-exec-manager session to also clean up). */
 function deleteThreadBestEffort(threadId) {
   if (!threadId) return;
-  const script = `
-import sys
-import urllib.error
-import urllib.request
-
-req = urllib.request.Request(sys.argv[1], method='DELETE')
-try:
-    urllib.request.urlopen(req, timeout=15)
-except Exception:
-    pass
-`;
   try {
-    execFileSync('python3', ['-c', script, `${API_BASE}/threads/${threadId}`]);
+    apiRequest('DELETE', `${API_BASE}/threads/${threadId}`);
   } catch {
     // best-effort
   }
+}
+
+/** One REST call as the smoke's signed-in user (python3 urllib — this host
+ * has no curl). Throws on a non-2xx answer. */
+function apiRequest(method, url, body) {
+  const script = `
+import os, sys, urllib.request
+method, url, body = sys.argv[1:4]
+req = urllib.request.Request(url, data=body.encode() or None, method=method,
+                             headers={'Cookie': os.environ['E2E_AUTH_COOKIE'], 'Content-Type': 'application/json'})
+urllib.request.urlopen(req, timeout=15)
+`;
+  execFileSync('python3', ['-c', script, method, url, body ? JSON.stringify(body) : ''], {
+    env: { ...process.env, E2E_AUTH_COOKIE: smokeCookie ?? '' },
+  });
 }
 
 // Single attempt at the positive scenario: new thread, one turn, tool-card

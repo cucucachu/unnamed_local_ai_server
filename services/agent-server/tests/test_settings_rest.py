@@ -22,6 +22,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.core.config import Settings
 from app.db.settings import InMemorySettingsStore
 from app.main import create_app
+from tests.fake_identity import FixedIdentityVerifier
 
 
 @pytest.fixture
@@ -43,6 +44,7 @@ async def settings_app(settings_settings: Settings) -> AsyncIterator[FastAPI]:
         settings_settings,
         checkpointer_override=MemorySaver(),
         settings_store_override=InMemorySettingsStore(),
+        identity_verifier_override=FixedIdentityVerifier(),
     )
     async with app.router.lifespan_context(app):
         yield app

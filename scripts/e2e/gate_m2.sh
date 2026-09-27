@@ -22,11 +22,13 @@
 #   6. Cleans up the file it created so re-running this script is safe
 #      (idempotent - the acceptance criteria require two green runs in a row).
 #
-# M6-03: cleanup also deletes the "gate-m2" LangGraph checkpoint via the
-# threads REST DELETE endpoint, so this thread's conversation history
-# doesn't grow unbounded across repeated runs (e.g. inside gate_full.sh,
-# which runs this script standalone AND again via gate_m4.sh's own
-# regression step).
+# M6-03: cleanup also deletes this run's thread via the threads REST DELETE
+# endpoint, so conversation history doesn't grow unbounded across repeated
+# runs (e.g. inside gate_full.sh, which runs this script standalone AND
+# again via gate_m4.sh's own regression step).
+#
+# M10-04: runs signed in (`lib/auth.sh`) and creates its thread via `POST
+# /api/threads` — the chat socket only accepts threads the user owns.
 #
 # `curl` is NOT installed on this host (verified: `apt install curl` would
 # be needed, and passwordless sudo isn't available here either). `wget` IS
@@ -43,8 +45,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
 
-THREAD_ID="gate-m2"
+# Set once signed in (`create_thread`).
+THREAD_ID=""
 FILE_NAME="gate-m2.txt"
 EXPECTED_CONTENT="GATE-OK"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
@@ -260,26 +265,33 @@ cleanup() {
     bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
-  # M6-03: also delete the "gate-m2" checkpoint. `PgThreadStore.delete`/
-  # `ensure_exists` no-op for this non-UUID thread id (see
-  # app/db/threads.py's own docstring - it's a legacy/manual WS-only id,
-  # never inserted into the `threads` table), but
-  # `checkpointer.adelete_thread` still deletes the real chat-memory
-  # checkpoint regardless of UUID-ness, so this is a genuine (not just
-  # REST-list-cosmetic) cleanup.
-  python3 -c "
-import urllib.request
-try:
-    urllib.request.urlopen(urllib.request.Request('http://localhost/api/threads/${THREAD_ID}', method='DELETE'), timeout=15)
-except Exception:
-    pass
-" 2>/dev/null || true
+  # M6-03: also delete this run's thread and its checkpoints.
+  if [ -n "$THREAD_ID" ]; then
+    python3 -c "
+import os, sys, urllib.request
+req = urllib.request.Request(f'http://localhost/api/threads/{sys.argv[1]}', method='DELETE', headers={'Cookie': os.environ['E2E_AUTH_COOKIE']})
+urllib.request.urlopen(req, timeout=15)
+" "$THREAD_ID" 2>/dev/null || true
+  fi
+  e2e_auth_end
 }
 trap cleanup EXIT
+
+create_thread() {
+  THREAD_ID="$(python3 -c "
+import json, os, urllib.request
+req = urllib.request.Request('http://localhost/api/threads', data=b'{}', method='POST',
+    headers={'Content-Type': 'application/json', 'Cookie': os.environ['E2E_AUTH_COOKIE']})
+print(json.loads(urllib.request.urlopen(req, timeout=15).read())['id'])
+")"
+  log "OK: created thread ${THREAD_ID}"
+}
 
 main() {
   log "=== GATE M2 (G1+G2): browser -> agent -> real file write ==="
   step_stack_up_and_healthy
+  e2e_auth_begin gate-m2
+  create_thread
   # M8-03 made HITL on by default; this gate's write_file prompt is not
   # wired to send approval_response, so turn HITL off for the run.
   log "Turning hitl_enabled off so write_file is not interrupted..."

@@ -4,8 +4,8 @@
 #
 # Chains, in this exact order (per the ticket) against ONE fresh
 # `docker compose up -d --build` for the whole run:
-#   gate_m2.sh -> persistence_smoke.sh -> gate_m3.sh -> exec_crossview_smoke.sh
-#   -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
+#   gate_m2.sh -> tenancy_threads_smoke.sh (M10-04) -> persistence_smoke.sh
+#   -> gate_m3.sh -> exec_crossview_smoke.sh -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
 #   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
 #      after it signs in as a throwaway CLI user via auth_helpers.mjs)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
@@ -45,11 +45,18 @@
 # step. persistence_smoke.sh / chat_browser_smoke.sh / gate_m8.sh turn HITL
 # back on for their own assertions and restore afterwards.
 #
+# M10-04: every API call needs a session and settings are per user, so this
+# script signs in once as a throwaway `e2e-*` user (`lib/auth.sh`) before
+# that PUT; the curl/urllib/WS scripts it runs inherit the exported session
+# (and so the HITL setting), and the user is deleted on exit. The browser
+# smokes sign in as their own users. tenancy_threads_smoke.sh (two more
+# users, cross-user isolation) runs right after gate_m2.sh.
+#
 # Every one of these is already a self-contained script that exits non-zero
 # on its own failure and does its own health-waiting/cleanup (several also
 # do their own internal `docker compose up -d --build` — left in place
 # deliberately, per the ticket: after this script's own initial `up`, those
-# calls are just fast no-ops). This script's only job is to run all 15 in
+# calls are just fast no-ops). This script's only job is to run all 16 in
 # order, capture PASS/FAIL + wall-clock seconds for each, and CONTINUE to
 # the next one even if a step fails — so a single run gives the full
 # picture instead of stopping at the first red — then print a summary table
@@ -82,6 +89,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
+trap e2e_auth_end EXIT
 
 log() {
   echo "[gate-full] $(date '+%H:%M:%S') $*"
@@ -128,6 +138,8 @@ step_stack_up() {
     log "ERROR: ${API_BASE}/health never came up within ${API_HEALTH_TIMEOUT_S}s"
     return 1
   fi
+  e2e_auth_begin gate-full
+  log "Signed in as ${E2E_AUTH_USER} for the whole chain"
   # HITL-on-by-default would stall pre-M8 mutating gates on approval_request.
   log "Turning hitl_enabled off for pre-M8 mutating steps..."
   bash "${SCRIPT_DIR}/ensure_hitl.sh" false >/dev/null
@@ -184,6 +196,7 @@ main() {
   step_stack_up
 
   run_step "gate_m2.sh"              bash "${SCRIPT_DIR}/gate_m2.sh"
+  run_step "tenancy_threads_smoke.sh" bash "${SCRIPT_DIR}/tenancy_threads_smoke.sh"
   run_step "persistence_smoke.sh"    bash "${SCRIPT_DIR}/persistence_smoke.sh"
   run_step "gate_m3.sh"              bash "${SCRIPT_DIR}/gate_m3.sh"
   run_step "exec_crossview_smoke.sh" bash "${SCRIPT_DIR}/exec_crossview_smoke.sh"

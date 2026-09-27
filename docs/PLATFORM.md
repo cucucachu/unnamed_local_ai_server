@@ -148,6 +148,7 @@ flowchart TB
 | Path | Upstream | Auth |
 |---|---|---|
 | `/api/auth/*` | `platform:8100` | none (login, setup, invite accept, status) |
+| `/api/health` | `agent-server:8000` | none (liveness for scripts and monitors) |
 | `/api/platform/*` | `platform:8100` | `forward_auth` |
 | `/ws/platform/*` | `platform:8100` | `forward_auth` |
 | `/api/*` (everything else) | `agent-server:8000` | `forward_auth` |
@@ -305,8 +306,13 @@ boundary; UID/GID permissions are defense in depth.
 On the switch to the platform files API (M11-01), the pre-Stage-3 files root
 (`FILES_DIR`, mounted read-write into the platform at `/data/legacy-files`)
 is moved into the **bootstrap admin's personal space** `files/`, chowned,
-and a marker file prevents re-running. Pre-Stage-3 chat threads (no owner)
-are assigned to the bootstrap admin. Both steps are idempotent and logged.
+and a marker file prevents re-running. Idempotent and logged.
+
+Pre-Stage-3 chat threads (no owner) and the old global chat settings are
+assigned to the bootstrap admin earlier, from M10-04: agent-server asks
+`GET /internal/bootstrap-admin` (service token `PLATFORM_AGENT_TOKEN`)
+until bootstrap has completed, then adopts them once (idempotent, logged).
+Until then they're visible to nobody.
 
 ## 6. The agent and code execution under delegation
 

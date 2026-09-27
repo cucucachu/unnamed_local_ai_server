@@ -4,20 +4,30 @@
 what the Dockerfile's `uv run uvicorn app.main:app` command serves.
 """
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.build import build_agent
 from app.api import chat, chat_ws, files, health, media
 from app.api import settings as settings_api
 from app.core.config import Settings
+from app.core.identity import (
+    IdentityVerifier,
+    JwksIdentityVerifier,
+    current_user,
+    http_jwks_fetcher,
+)
+from app.core.orphans import OrphanAdopter, http_admin_lookup
 from app.db.checkpointer import build_postgres_checkpointer
 from app.db.settings import InMemorySettingsStore, PgSettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
 from app.db.turn_stats import InMemoryTurnStatsStore, PgTurnStatsStore, TurnStatsStore
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -26,6 +36,7 @@ def create_app(
     thread_store_override: ThreadStore | None = None,
     settings_store_override: SettingsStore | None = None,
     turn_stats_store_override: TurnStatsStore | None = None,
+    identity_verifier_override: IdentityVerifier | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -64,8 +75,24 @@ def create_app(
     the same way: the real `PgTurnStatsStore` needs the Postgres pool, and
     tests that don't pass an override get `InMemoryTurnStatsStore()` when a
     `checkpointer_override` is in play.
+
+    `identity_verifier_override` (M10-04) replaces the JWKS-backed verifier
+    of `X-HomeAI-Identity` (`app/core/identity.py`). Unlike the stores it
+    has no test-mode default: tests pass a fake that yields a fixed user,
+    or a `JwksIdentityVerifier` over a local key pair.
     """
     settings = settings or Settings()
+
+    def install_orphan_adopter(app: FastAPI) -> None:
+        s: Settings = app.state.settings
+        lookup = None
+        if s.platform_agent_token:
+            lookup = http_admin_lookup(s.platform_url, s.platform_agent_token)
+        else:
+            logger.warning("PLATFORM_AGENT_TOKEN unset: ownerless threads stay unassigned")
+        app.state.orphan_adopter = OrphanAdopter(
+            lookup, app.state.thread_store, app.state.settings_store
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -74,6 +101,7 @@ def create_app(
             app.state.thread_store = thread_store_override or InMemoryThreadStore()
             app.state.settings_store = settings_store_override or InMemorySettingsStore()
             app.state.turn_stats_store = turn_stats_store_override or InMemoryTurnStatsStore()
+            install_orphan_adopter(app)
             app.state.agent = build_agent(app.state.settings, checkpointer_override)
             yield
             return
@@ -88,6 +116,7 @@ def create_app(
             app.state.turn_stats_store = turn_stats_store_override or PgTurnStatsStore(
                 pg_checkpointer.pool
             )
+            install_orphan_adopter(app)
             app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver)
             yield
         finally:
@@ -95,18 +124,26 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
+    app.state.identity_verifier = identity_verifier_override or JwksIdentityVerifier(
+        http_jwks_fetcher(f"{settings.platform_url}/internal/jwks")
+    )
 
+    authenticated = [Depends(current_user)]
     app.include_router(health.router, prefix="/api")
-    app.include_router(chat.router, prefix="/api")
-    app.include_router(files.router, prefix="/api")
-    app.include_router(media.router, prefix="/api")
-    app.include_router(settings_api.router, prefix="/api")
+    app.include_router(chat.router, prefix="/api", dependencies=authenticated)
+    app.include_router(files.router, prefix="/api", dependencies=authenticated)
+    app.include_router(media.router, prefix="/api", dependencies=authenticated)
+    app.include_router(settings_api.router, prefix="/api", dependencies=authenticated)
     # No prefix: the WS route's own path (`/ws/chat/{thread_id}`) must match
     # Caddy's `/ws/*` routing exactly (see `infra/caddy/Caddyfile`), not be
-    # nested under `/api` like the REST routes above.
+    # nested under `/api` like the REST routes above. It authenticates itself
+    # after accepting, so a failure can be reported as close code 4401.
     app.include_router(chat_ws.router)
 
     return app
 
 
+# Root stays at WARNING: httpx logs every model request at INFO.
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s:%(name)s: %(message)s")
+logging.getLogger("app").setLevel(logging.INFO)
 app = create_app()

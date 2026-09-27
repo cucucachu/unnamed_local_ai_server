@@ -37,6 +37,9 @@
 #   8. Cleans up both files it created so re-running this script is safe
 #      (idempotent, trap on EXIT — mirrors `gate_m2.sh`'s own convention).
 #
+# M10-04: runs signed in (`lib/auth.sh`); the step-7 thread is created via
+# `POST /api/threads` since the chat socket only accepts owned threads.
+#
 # Usage:
 #   scripts/e2e/files_rest_smoke.sh
 #
@@ -47,6 +50,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
 
 API_BASE="http://localhost/api"
 
@@ -58,7 +63,8 @@ RUN_ID="$$-$(date +%s)"
 FILE_NAME="files-rest-smoke-${RUN_ID}.txt"
 FILE_CONTENT="FILES-REST-SMOKE-OK ${RUN_ID}"
 AGENT_VIS_FILE_NAME="agent-visibility-${RUN_ID}.txt"
-AGENT_VIS_THREAD_ID="files-rest-smoke-${RUN_ID}"
+# Created in step 7.
+AGENT_VIS_THREAD_ID=""
 
 FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
 if [ -z "$FILES_DIR" ]; then
@@ -125,6 +131,7 @@ wait_for_api_health() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -132,6 +139,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -193,7 +201,10 @@ req = urllib.request.Request(
     url,
     data=body,
     method="POST",
-    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    headers={
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Cookie": os.environ["E2E_AUTH_COOKIE"],
+    },
 )
 try:
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -210,6 +221,7 @@ PY
 download_file() {
   local remote_path="$1" local_dst="$2"
   python3 - "${API_BASE}/files/download" "$remote_path" "$local_dst" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -217,8 +229,9 @@ import urllib.request
 
 url_base, remote_path, local_dst = sys.argv[1], sys.argv[2], sys.argv[3]
 url = f"{url_base}?{urllib.parse.urlencode({'path': remote_path})}"
+req = urllib.request.Request(url, headers={"Cookie": os.environ["E2E_AUTH_COOKIE"]})
 try:
-    with urllib.request.urlopen(url, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         with open(local_dst, "wb") as f:
             f.write(resp.read())
         print(resp.status)
@@ -358,6 +371,16 @@ step_agent_visibility_cross_check() {
   log "Step 7/8: agent-visibility cross-check (drop file on host -> agent ls over WS)..."
   printf 'dropped straight onto the host files dir\n' >"$AGENT_VIS_HOST_PATH"
 
+  local resp status body
+  resp="$(rest_request POST "${API_BASE}/threads" '{}')"
+  status="$(sed -n '1p' <<<"$resp")"
+  body="$(sed -n '2p' <<<"$resp")"
+  if [ "$status" != "201" ]; then
+    log "ERROR: expected 201 from POST /api/threads, got ${status}: ${body}"
+    return 1
+  fi
+  AGENT_VIS_THREAD_ID="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$body")"
+
   local out
   out="$(mktemp)"
   if ! WS_SMOKE_THREAD_ID="$AGENT_VIS_THREAD_ID" \
@@ -393,12 +416,17 @@ cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
   rm -f "${FILES_DIR}/${UPLOADED_NAME:-$FILE_NAME}" "$AGENT_VIS_HOST_PATH" 2>/dev/null || true
   rm -rf "$LOCAL_SCRATCH_DIR" 2>/dev/null || true
+  if [ -n "$AGENT_VIS_THREAD_ID" ]; then
+    rest_request DELETE "${API_BASE}/threads/${AGENT_VIS_THREAD_ID}" >/dev/null 2>&1 || true
+  fi
+  e2e_auth_end
 }
 trap cleanup EXIT
 
 main() {
   log "=== FILES REST SMOKE (M3-03): upload -> list -> host ls -> download -> delete -> agent visibility ==="
   step_stack_up_and_healthy
+  e2e_auth_begin files
   step_upload
   step_appears_in_list
   step_visible_on_host

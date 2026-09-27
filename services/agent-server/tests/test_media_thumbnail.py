@@ -29,6 +29,7 @@ from httpx import ASGITransport, AsyncClient
 from app.core import thumbnails as thumbnails_module
 from app.core.config import Settings
 from app.main import create_app
+from tests.fake_identity import FixedIdentityVerifier
 
 _HAS_FFMPEG = shutil.which("ffmpeg") is not None
 _requires_ffmpeg = pytest.mark.skipif(
@@ -53,7 +54,7 @@ def thumbnail_settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 async def thumbnail_client(thumbnail_settings: Settings) -> AsyncIterator[AsyncClient]:
-    app = create_app(thumbnail_settings)
+    app = create_app(thumbnail_settings, identity_verifier_override=FixedIdentityVerifier())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac

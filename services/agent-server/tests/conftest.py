@@ -13,6 +13,7 @@ from app.db.threads import InMemoryThreadStore
 from app.main import create_app
 from tests.fake_exec_manager.scripting import FakeExecManager
 from tests.fake_exec_manager.server import create_fake_exec_manager_app
+from tests.fake_identity import FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel
 from tests.fake_model.server import create_fake_model_app
 from tests.fake_web_fetch.scripting import FakeWebFetch
@@ -39,7 +40,10 @@ async def client(test_settings: Settings) -> AsyncIterator[AsyncClient]:
     # the production lifespan's real Postgres connection — see
     # `app.main.create_app`'s docstring.
     app = create_app(
-        test_settings, checkpointer_override=MemorySaver(), thread_store_override=InMemoryThreadStore()
+        test_settings,
+        checkpointer_override=MemorySaver(),
+        thread_store_override=InMemoryThreadStore(),
+        identity_verifier_override=FixedIdentityVerifier(),
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:

@@ -37,6 +37,9 @@
 # are cleaned up in the same EXIT trap so this stays re-runnable inside
 # `gate_m8.sh` / `gate_full.sh`.
 #
+# M10-04: runs signed in (`lib/auth.sh`); both threads are created via `POST
+# /api/threads` since the chat socket only accepts threads the user owns.
+#
 # Usage:
 #   scripts/e2e/persistence_smoke.sh
 #
@@ -47,9 +50,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
 
-THREAD_ID="persistence-smoke-pg-1"
-HITL_THREAD_ID="persistence-smoke-hitl-1"
+# Created once signed in (`create_thread`).
+THREAD_ID=""
+HITL_THREAD_ID=""
 HITL_FILE_NAME="persistence-smoke-pending.txt"
 NAME="Bob"
 
@@ -105,6 +111,7 @@ wait_for_api_health() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -112,6 +119,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -144,7 +152,21 @@ print(pending['interrupt_id'])
 }
 
 delete_thread() {
+  [ -n "$1" ] || return 0
   rest_request DELETE "${API_BASE}/threads/${1}" >/dev/null 2>&1 || true
+}
+
+# Prints the new thread's id.
+create_thread() {
+  local resp status body
+  resp="$(rest_request POST "${API_BASE}/threads" '{}')"
+  status="$(sed -n '1p' <<<"$resp")"
+  body="$(sed -n '2p' <<<"$resp")"
+  if [ "$status" != "201" ]; then
+    log "ERROR: POST /api/threads expected 201, got ${status}: ${body}" >&2
+    return 1
+  fi
+  json_field "$body" id
 }
 
 get_thread_state_body() {
@@ -282,6 +304,7 @@ trigger_pending_approval_once() {
   HITL_WS_LOG="$out"
   rm -f "$HITL_HOST_FILE"
   delete_thread "$HITL_THREAD_ID"
+  HITL_THREAD_ID="$(create_thread)" || return 1
 
   # `timeout` + PYTHONUNBUFFERED so a hung turn still leaves a partial log
   # (same reason as gate_m4.sh). ws_smoke.py stops on turn_end, including
@@ -371,11 +394,14 @@ cleanup() {
   if [ -n "$SAVED_HITL" ] && [ "$SAVED_HITL" != "true" ]; then
     rest_request PUT "${API_BASE}/settings" "{\"hitl_enabled\": ${SAVED_HITL}}" >/dev/null 2>&1 || true
   fi
+  e2e_auth_end
 }
 trap cleanup EXIT
 
 main() {
   log "=== PERSISTENCE SMOKE (M3-01/M8-08): checkpoint + pending HITL approval survive agent-server restart ==="
+  e2e_auth_begin persistence
+  THREAD_ID="$(create_thread)"
   step_tell_name
   step_restart_agent_server "Step 2/5: restarting agent-server"
   step_ask_name_survived

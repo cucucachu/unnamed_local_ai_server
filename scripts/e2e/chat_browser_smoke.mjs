@@ -71,7 +71,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE =
@@ -335,8 +335,10 @@ async function waitForAnyText(container, patterns, timeoutMs) {
 function pythonSslPreamble() {
   // urllib on this host has no curl; when the smoke is pointed at
   // https://homeai.local the Caddy local CA must be loaded explicitly.
+  // Every call acts as the page's signed-in user (E2E_AUTH_COOKIE, set in
+  // main() from the browser context).
   return `
-import ssl, urllib.request
+import os, ssl, urllib.request
 def _ssl_ctx():
     ca = ${JSON.stringify(CA_PATH)}
     if not ca:
@@ -345,6 +347,9 @@ def _ssl_ctx():
     ctx.load_verify_locations(ca)
     return ctx
 def urlopen(req, timeout=15):
+    if isinstance(req, str):
+        req = urllib.request.Request(req)
+    req.add_header('Cookie', os.environ['E2E_AUTH_COOKIE'])
     ctx = _ssl_ctx()
     if ctx is None:
         return urllib.request.urlopen(req, timeout=timeout)
@@ -594,17 +599,18 @@ async function main() {
   e2eUser = createE2eUser({ prefix: 'e2e-chat' });
   const browser = await chromium.launch(launchOptions);
   try {
-    // Existing steps include `execute_code` (step 6), which HITL-on would
-    // pause behind an approval card. Force HITL off for those, then
-    // toggle it for the M8-03 scenarios below. Restore in `finally`.
-    savedSettings = settingsRequest('GET');
-    settingsRequest('PUT', { hitl_enabled: false });
-
     const context = await browser.newContext(contextOptions);
     await context.addInitScript(installFakeSpeechRecognition);
     const page = await context.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, e2eUser);
+    process.env.E2E_AUTH_COOKIE = await sessionCookie(context);
+
+    // Existing steps include `execute_code` (step 6), which HITL-on would
+    // pause behind an approval card. Force HITL off for those, then
+    // toggle it for the M8-03 scenarios below. Restore in `finally`.
+    savedSettings = settingsRequest('GET');
+    settingsRequest('PUT', { hitl_enabled: false });
 
     // Explicit navigation to the Chat tab (even though it's also the `/`
     // redirect target today — see `src/app/(tabs)/index.tsx` — so this
@@ -1350,7 +1356,6 @@ async function main() {
     console.log(`PASS: full create -> send -> list -> reopen -> follow-up + HITL approve/reject/off + edit/regenerate + markdown + activity panel + thinking on/off + fork/switch + file-link + voice-input completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
-    deleteE2eUsers(e2eUser.username);
     cleanupThreadBestEffort(threadId);
     cleanupThreadBestEffort(editThreadId);
     cleanupThreadBestEffort(forkThreadId);
@@ -1375,6 +1380,7 @@ async function main() {
         // best-effort restore
       }
     }
+    deleteE2eUsers(e2eUser.username);
   }
 }
 

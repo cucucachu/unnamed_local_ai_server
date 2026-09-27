@@ -47,9 +47,13 @@
 #      row).
 #
 # M6-03: cleanup now also deletes the code-exec-manager session/container
-# this script's `execute_code` call creates (session_id == THREAD_ID ==
-# "gate-m4") - without this, the exec container sat alive until the 30-min
-# idle reaper (EXEC_IDLE_MINUTES) fired.
+# this script's `execute_code` call creates (session_id == THREAD_ID) -
+# without this, the exec container sat alive until the 30-min idle reaper
+# (EXEC_IDLE_MINUTES) fired.
+#
+# M10-04: runs signed in (`lib/auth.sh`); the thread is created via `POST
+# /api/threads` since the chat socket only accepts threads the user owns.
+# The gate_m2/gate_m3 regression step inherits the same session.
 #
 # Out of scope (per the ticket): media (M5), real photo EXIF work - the
 # dummy `.txt` files ARE the point (determinism).
@@ -68,10 +72,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
 
 API_BASE="http://localhost/api"
 
-THREAD_ID="gate-m4"
+# Created once signed in (`create_thread`).
+THREAD_ID=""
 PROMPT="In gate-m4/photos there are files named img_XXX.txt. Write a Python script in gate-m4/ that renames each to renamed_XXX.txt, run it with execute_code, and confirm the result."
 
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
@@ -176,6 +183,7 @@ wait_for_full_stack_healthy() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -183,6 +191,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -418,6 +427,10 @@ cleanup() {
     fi
   fi
 
+  if [ -z "$THREAD_ID" ]; then
+    e2e_auth_end
+    return
+  fi
   rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
 
   # M6-03: code-exec-manager publishes no host port (M4-03) - reached here
@@ -431,12 +444,28 @@ try:
 except Exception:
     pass
 " "$THREAD_ID" >/dev/null 2>&1 || true
+  e2e_auth_end
 }
 trap cleanup EXIT
+
+create_thread() {
+  local resp status body
+  resp="$(rest_request POST "${API_BASE}/threads" '{}')"
+  status="$(sed -n '1p' <<<"$resp")"
+  body="$(sed -n '2p' <<<"$resp")"
+  if [ "$status" != "201" ]; then
+    log "ERROR: expected 201 from POST /api/threads, got ${status}: ${body}"
+    return 1
+  fi
+  THREAD_ID="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$body")"
+  log "OK: created thread ${THREAD_ID}"
+}
 
 main() {
   log "=== GATE M4 (G4): agent writes+runs a script on real files; isolation green ==="
   step_stack_up_and_healthy
+  e2e_auth_begin gate-m4
+  create_thread
   # M8-03 made HITL on by default; this gate's write_file/execute_code
   # prompts are not wired to send approval_response, so turn HITL off.
   log "Turning hitl_enabled off so mutating tools are not interrupted..."

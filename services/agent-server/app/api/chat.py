@@ -40,6 +40,14 @@ for the full transcript):
   `TextAccessor`) — used here (as in `chat_ws.py`) instead of raw `.content`
   so a future content-block-shaped model response wouldn't need any changes
   to this normalization.
+
+## Ownership (M10-04)
+
+Every route takes the verified caller (`CurrentUser`) and resolves the
+thread through `ThreadStore.get(thread_id, owner)`. Another user's thread is
+indistinguishable from a missing one: `404` where a missing thread is
+`404`, `{"pending_approval": null}` from `/state`, and a no-op `204` from
+`DELETE` — and none of them read or touch its checkpoints.
 """
 
 from __future__ import annotations
@@ -53,12 +61,12 @@ from langgraph.types import StateSnapshot
 from pydantic import BaseModel
 
 from app.api.chat_ws import (
-    active_checkpoint_id_for,
     checkpoint_id_of,
     get_pending_approval,
     graph_config,
     list_state_history,
 )
+from app.core.identity import CurrentUser
 from app.db.threads import ThreadRecord, ThreadStore
 from app.db.turn_stats import TurnStat, TurnStatsStore
 
@@ -185,26 +193,35 @@ def _normalize_message(message: BaseMessage) -> MessageOut | None:
 
 
 @router.post("/threads", status_code=201, response_model=ThreadOut)
-async def create_thread(request: Request, body: CreateThreadBody | None = None) -> ThreadOut:
+async def create_thread(
+    request: Request, user: CurrentUser, body: CreateThreadBody | None = None
+) -> ThreadOut:
     store = _thread_store(request)
     title = body.title if body is not None else None
-    record = await store.create(title)
+    record = await store.create(user.user_id, title)
     return _to_thread_out(record)
 
 
 @router.get("/threads", response_model=list[ThreadOut])
-async def list_threads(request: Request) -> list[ThreadOut]:
+async def list_threads(request: Request, user: CurrentUser) -> list[ThreadOut]:
+    await request.app.state.orphan_adopter.adopt()
     store = _thread_store(request)
-    records = await store.list_all()
+    records = await store.list_for_owner(user.user_id)
     return [_to_thread_out(r) for r in records]
 
 
-@router.get("/threads/{thread_id}/messages", response_model=list[MessageOut])
-async def get_thread_messages(thread_id: str, request: Request) -> list[MessageOut]:
-    store = _thread_store(request)
-    record = await store.get(thread_id)
+async def _owned_thread(request: Request, thread_id: str, user_id: str) -> ThreadRecord:
+    record = await _thread_store(request).get(thread_id, user_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
+    return record
+
+
+@router.get("/threads/{thread_id}/messages", response_model=list[MessageOut])
+async def get_thread_messages(
+    thread_id: str, request: Request, user: CurrentUser
+) -> list[MessageOut]:
+    record = await _owned_thread(request, thread_id, user.user_id)
 
     agent = request.app.state.agent
     state = await agent.aget_state(graph_config(thread_id, record.active_checkpoint_id))
@@ -231,7 +248,7 @@ async def get_thread_messages(thread_id: str, request: Request) -> list[MessageO
 
 
 @router.get("/threads/{thread_id}/state")
-async def get_thread_state(thread_id: str, request: Request) -> dict:
+async def get_thread_state(thread_id: str, request: Request, user: CurrentUser) -> dict:
     """`GET /api/threads/{id}/state` -> `{"pending_approval": {...} | null}` (M8-03).
 
     Same shape as the `approval_request` frame's payload minus the frame's
@@ -244,12 +261,14 @@ async def get_thread_state(thread_id: str, request: Request) -> dict:
     .../messages`): a thread with no checkpoint yet trivially has no
     pending approval, and this endpoint's only caller polls it
     unconditionally on every connect/reconnect, thread-existence
-    already-checked-elsewhere included.
+    already-checked-elsewhere included. Another user's thread gets the
+    same answer, without its checkpoints being read.
     """
-    store = _thread_store(request)
-    checkpoint_id = await active_checkpoint_id_for(store, thread_id)
+    record = await _thread_store(request).get(thread_id, user.user_id)
+    if record is None:
+        return {"pending_approval": None}
     agent = request.app.state.agent
-    pending_approval = await get_pending_approval(agent, thread_id, checkpoint_id)
+    pending_approval = await get_pending_approval(agent, thread_id, record.active_checkpoint_id)
     return {"pending_approval": pending_approval}
 
 
@@ -364,16 +383,15 @@ def _build_branch_points(
 
 
 @router.get("/threads/{thread_id}/branches", response_model=list[BranchPointOut])
-async def get_thread_branches(thread_id: str, request: Request) -> list[BranchPointOut]:
+async def get_thread_branches(
+    thread_id: str, request: Request, user: CurrentUser
+) -> list[BranchPointOut]:
     """`GET /api/threads/{id}/branches` (M8-05).
 
     One entry per point on the active lineage that has more than one child
     branch, computed from `aget_state_history` parent links.
     """
-    store = _thread_store(request)
-    record = await store.get(thread_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
+    record = await _owned_thread(request, thread_id, user.user_id)
 
     agent = request.app.state.agent
     snapshots = await list_state_history(agent, thread_id)
@@ -381,16 +399,16 @@ async def get_thread_branches(thread_id: str, request: Request) -> list[BranchPo
 
 
 @router.put("/threads/{thread_id}/active_branch", status_code=204)
-async def set_active_branch(thread_id: str, request: Request, body: ActiveBranchBody) -> None:
+async def set_active_branch(
+    thread_id: str, request: Request, body: ActiveBranchBody, user: CurrentUser
+) -> None:
     """`PUT /api/threads/{id}/active_branch` `{checkpoint_id}` (M8-05).
 
     Sets the thread's active tip. 404 if `checkpoint_id` is not a tip of
     this thread (unknown id, or it has children).
     """
+    await _owned_thread(request, thread_id, user.user_id)
     store = _thread_store(request)
-    record = await store.get(thread_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
 
     agent = request.app.state.agent
     snapshots = await list_state_history(agent, thread_id)
@@ -414,9 +432,10 @@ async def set_active_branch(thread_id: str, request: Request, body: ActiveBranch
 
 
 @router.delete("/threads/{thread_id}", status_code=204)
-async def delete_thread(thread_id: str, request: Request) -> None:
+async def delete_thread(thread_id: str, request: Request, user: CurrentUser) -> None:
     store = _thread_store(request)
-    await store.delete(thread_id)
+    if not await store.delete(thread_id, user.user_id):
+        return
     turn_stats = _turn_stats_store(request)
     if turn_stats is not None:
         await turn_stats.delete_for_thread(thread_id)

@@ -26,6 +26,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.db.threads import InMemoryThreadStore
 from app.main import create_app
+from tests.fake_identity import FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 
 _UNKNOWN_THREAD_ID = "00000000-0000-0000-0000-000000000000"
@@ -38,6 +39,7 @@ async def rest_app(fake_model: FakeModel, tmp_path) -> AsyncIterator[FastAPI]:
         settings,
         checkpointer_override=MemorySaver(),
         thread_store_override=InMemoryThreadStore(),
+        identity_verifier_override=FixedIdentityVerifier(),
     )
     async with app.router.lifespan_context(app):
         yield app

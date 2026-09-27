@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
 from app.main import create_app
+from tests.fake_identity import FixedIdentityVerifier
 
 _FILE_SIZE = 10 * 1024  # 10 KiB, per the ticket's spec.
 
@@ -38,7 +39,7 @@ def media_settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 async def media_client(media_settings: Settings) -> AsyncIterator[AsyncClient]:
-    app = create_app(media_settings)
+    app = create_app(media_settings, identity_verifier_override=FixedIdentityVerifier())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac

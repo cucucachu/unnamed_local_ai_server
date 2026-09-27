@@ -33,6 +33,9 @@
 # (EXEC_IDLE_MINUTES) fired, which is well past a `gate_full.sh` run's own
 # timeframe.
 #
+# M10-04: runs signed in (`lib/auth.sh`); the thread is created via `POST
+# /api/threads` since the chat socket only accepts threads the user owns.
+#
 # Usage:
 #   scripts/e2e/exec_crossview_smoke.sh
 #
@@ -43,11 +46,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
 
 API_BASE="http://localhost/api"
 
-RUN_ID="$$-$(date +%s)"
-THREAD_ID="exec-crossview-${RUN_ID}"
+# Created once signed in (`create_thread`).
+THREAD_ID=""
 FILE_NAME="exec-proof.txt"
 
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
@@ -115,6 +120,7 @@ wait_for_api_health() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -122,6 +128,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -274,6 +281,10 @@ cleanup() {
   rm -f "$HOST_FILE_PATH" 2>/dev/null || true
   rm -f /tmp/exec-crossview-attempt-1.log /tmp/exec-crossview-attempt-2.log \
         /tmp/exec-crossview-read-attempt-1.log /tmp/exec-crossview-read-attempt-2.log 2>/dev/null || true
+  if [ -z "$THREAD_ID" ]; then
+    e2e_auth_end
+    return
+  fi
   rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
   # M6-03: code-exec-manager publishes no host port (M4-03) - reached here
   # by execing python3 directly inside its own container against its own
@@ -288,12 +299,28 @@ try:
 except Exception:
     pass
 " "$THREAD_ID" >/dev/null 2>&1 || true
+  e2e_auth_end
 }
 trap cleanup EXIT
+
+create_thread() {
+  local resp status body
+  resp="$(rest_request POST "${API_BASE}/threads" '{}')"
+  status="$(sed -n '1p' <<<"$resp")"
+  body="$(sed -n '2p' <<<"$resp")"
+  if [ "$status" != "201" ]; then
+    log "ERROR: expected 201 from POST /api/threads, got ${status}: ${body}"
+    return 1
+  fi
+  THREAD_ID="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$body")"
+  log "OK: created thread ${THREAD_ID}"
+}
 
 main() {
   log "=== EXEC CROSSVIEW SMOKE (M4-04): execute_code + read_file see the same files directory ==="
   step_stack_healthy
+  e2e_auth_begin exec
+  create_thread
   # M8-03 made HITL on by default; this smoke's execute_code prompt is not
   # wired to send approval_response, so turn HITL off for the run.
   log "Turning hitl_enabled off so execute_code is not interrupted..."
