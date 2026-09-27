@@ -1,7 +1,9 @@
 from fastapi import APIRouter
 
-from app.api.external import admin, me
+from app.api.external import admin, directory, me, spaces
 
 router = APIRouter(prefix="/api/platform")
 router.include_router(me.router)
+router.include_router(directory.router)
+router.include_router(spaces.router)
 router.include_router(admin.router)

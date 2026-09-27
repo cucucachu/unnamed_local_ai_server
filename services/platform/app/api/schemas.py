@@ -136,3 +136,62 @@ class InviteCreated(InviteOut):
 
 class InviteList(BaseModel):
     invites: list[InviteOut]
+
+
+class DirectoryUser(BaseModel):
+    id: UUID
+    username: str
+    display_name: str
+
+
+class Directory(BaseModel):
+    users: list[DirectoryUser]
+
+
+SpaceRole = Literal["owner", "editor", "viewer"]
+
+
+class SpaceOut(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    kind: Literal["personal", "shared"]
+    gid: int
+    owner_user_id: UUID | None
+    role: SpaceRole | None
+    created_at: datetime
+    archived_at: datetime | None
+
+
+class SpaceList(BaseModel):
+    spaces: list[SpaceOut]
+
+
+class SpaceCreateRequest(BaseModel):
+    slug: Short
+    name: Short
+
+
+class SpacePatchRequest(BaseModel):
+    name: Short
+
+
+class MemberOut(BaseModel):
+    user_id: UUID
+    username: str
+    display_name: str
+    role: SpaceRole
+    added_at: datetime
+
+
+class MemberList(BaseModel):
+    members: list[MemberOut]
+
+
+class MemberAddRequest(BaseModel):
+    user_id: UUID
+    role: SpaceRole
+
+
+class MemberPatchRequest(BaseModel):
+    role: SpaceRole

@@ -27,6 +27,7 @@ from psycopg.types.json import Jsonb
 
 from app.core import sessions, users
 from app.core.errors import Conflict, Unauthorized
+from app.core.storage import SpaceStorage
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class Bootstrap:
         username: str,
         display_name: str,
         password: str,
+        storage: SpaceStorage,
         device_label: str | None = None,
     ) -> tuple[Row, str]:
         """Create the bootstrap admin and log them in; returns (user, session token)."""
@@ -121,7 +123,7 @@ class Bootstrap:
             await conn.execute("SELECT pg_advisory_xact_lock(%s)", (SETUP_LOCK_KEY,))
             if await bootstrap_admin_id(conn) is not None:
                 raise Conflict("setup_complete")
-            user = await users.insert_user(conn, new_user)
+            user = await users.insert_user(conn, new_user, storage)
             await conn.execute(
                 "INSERT INTO platform_state (key, value) VALUES (%s, %s)",
                 (STATE_KEY, Jsonb(str(user["id"]))),

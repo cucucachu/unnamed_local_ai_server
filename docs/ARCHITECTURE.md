@@ -684,7 +684,8 @@ what another doc says it should be.
   the app registry, and all user storage. As of M10-03: accounts
   (password + optional TOTP), opaque sessions, step-up, invites, the admin
   user API, the bootstrap setup code, `/internal/auth/verify` for Caddy,
-  and the recovery CLI; it also holds the Ed25519 signing key every
+  and the recovery CLI. As of M10-05: spaces, memberships, the user
+  directory, and each space's directory tree under `SPACES_DIR`. It also holds the Ed25519 signing key every
   platform token is signed with and serves the public half as a JWKS.
   API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
@@ -702,15 +703,22 @@ what another doc says it should be.
   rotates the key and invalidates every outstanding token; `setup-code`,
   `0600`, only until the first admin exists), and
   `${SPACES_DIR}:/data/spaces` (rw bind, host default
-  `/srv/homeai/spaces`; not read until M10-05). Docker creates a missing
-  `SPACES_DIR` as `root:root 0755` on first `up`.
+  `/srv/homeai/spaces`; must exist at startup). Docker creates a missing
+  `SPACES_DIR` as `root:root 0755` on first `up`; keep it that way (only
+  root may create entries in it — see "Spaces" below).
 - **Runs as**: root, with `cap_drop: [ALL]` + `cap_add: [CHOWN,
-  DAC_OVERRIDE, FOWNER]` (it's the component that will assign per-user/
-  per-space ownership), `read_only: true` + `tmpfs: /tmp`,
-  `no-new-privileges`.
+  DAC_OVERRIDE, FOWNER, FSETID]` (it assigns per-user/per-space ownership;
+  `FSETID` because the kernel clears the setgid bit on a `chmod` by a
+  process outside the file's group, which root is for every space GID),
+  `read_only: true` + `tmpfs: /tmp`, `no-new-privileges`.
 - **Startup**: opens a psycopg pool to `homeai_platform` as role
   `platform`, applies pending migrations, loads (or on first start
-  generates) the signing key, then bootstrap: while
+  generates) the signing key, gives every user without one a personal
+  space (backfill for users created before `0003`), reconciles every
+  space's directory tree (archived included; a per-space failure is logged
+  as `space <id>: storage reconcile failed: …` and skipped, a missing
+  `SPACES_DIR` fails startup; summary line `spaces: N personal spaces
+  backfilled; storage reconciled N ok, N failed`), then bootstrap: while
   `platform_state.bootstrap_admin_id` is unset it reuses
   `/data/platform/setup-code` if present (else generates a new
   `XXXX-XXXX-XXXX-XXXX` code, ~79 bits) and logs it in a banner
@@ -728,10 +736,33 @@ what another doc says it should be.
   their sessions; a self-service password change revokes all the user's
   *other* sessions. Bootstrap is completed only by `POST /api/auth/setup`;
   CLI- or invite-created users never complete it.
+- **Spaces** (`app/core/spaces.py`, `app/core/storage.py`): `spaces`
+  (`gid` from sequence `space_gid_seq` starting at 30000; `slug` unique
+  across personal and shared spaces, immutable, archived spaces keep
+  theirs) and `space_members` (`owner`|`editor`|`viewer`). Every user row
+  is inserted together with its personal space in one transaction
+  (`users.insert_user`, the only user-creation path: setup, invite accept,
+  CLI); the personal slug is the username with `.`/`_` → `-`, suffixed
+  `-2`, `-3`, … on collision or for the reserved `personal`/`spaces`. A
+  trigger keeps a personal space's only member its owner; a user row with
+  a personal space can't be deleted (FK, no cascade). Membership changes
+  lock the space row, and never leave a shared space without an owner.
+  **`authorize_space(conn, principal, space_id, need)`** is the check every
+  space-data route uses — contract in §3 "Platform API" → "Spaces".
+  **Storage**: each space's row and `${SPACES_DIR}/<space_id>/{files,apps}`
+  (all three `root:<gid>`, mode `2770`) are created in the same
+  transaction, dirs before commit, so a storage failure rolls the row back.
+  Below `<space_id>/` is group-writable, so the platform opens each child
+  with `O_NOFOLLOW` relative to its parent's fd and fixes it with
+  `fchown`/`fchmod`: a planted symlink fails the space instead of
+  redirecting a root chown. The host user (uid 1000) can list
+  `SPACES_DIR` but not inside a space; use `docker compose exec platform
+  ls -ln /data/spaces/<id>`.
 - **Recovery CLI** (`app/cli.py`, run in the container; the image's
   `python` is the venv's, and it needs nothing writable):
   `docker compose exec platform python -m app.cli
-  {create-user,reset-password,set-role,disable-user,enable-user,list-users}`
+  {create-user,reset-password,set-role,disable-user,enable-user,list-users,
+  create-space,add-member,list-spaces}`
   — see `README.md` "Accounts and recovery".
 - **Migrations**: `services/platform/app/db/migrations/NNNN_name.sql`,
   forward-only, applied by `app/db/migrate.py` in one transaction after
@@ -740,7 +771,8 @@ what another doc says it should be.
   name, and a SHA-256 of each file; editing an already-applied file is a
   startup error. `0001_init` creates `schema_migrations` and
   `platform_state` (key → JSONB); `0002_accounts` creates `users`,
-  `sessions`, `invites`.
+  `sessions`, `invites`; `0003_spaces` creates `spaces`, `space_members`,
+  and the personal-space member trigger.
 - **Healthcheck**: `GET /internal/health` via the image's `python`
   (`SELECT 1` against the pool; `503` if the database is unreachable).
 - **Env vars consumed** (cross-checked against `app/core/config.py`):
@@ -759,8 +791,19 @@ what another doc says it should be.
   revoked/expired/disabled, sliding expiry, step-up, rate limits, no
   plaintext tokens), `test_platform_api.py` (principal resolution incl.
   delegation `act=agent`, self-service, admin users, last admin,
-  invites), `test_cli.py`, `test_totp.py` (RFC 6238 vectors),
-  `test_ratelimit.py`. Live: `scripts/e2e/platform_auth_smoke.sh`.
+  invites), `test_spaces.py` (personal-space invariants on every creation
+  path, slug collisions, backfill of pre-`0003` users, dir modes +
+  recorded chowns, startup reconcile, symlink refusal, the
+  `authorize_space` role × act matrix, spaces/members API, last owner,
+  admin override limits, directory), `test_storage.py` (runs
+  `app/core/storage.py` as root in a `python:3.12-slim` container with the
+  compose `cap_add` set — real `root:<gid> 2770` on disk, drift repair,
+  symlink refusal, a member's new file inheriting the space GID; also
+  asserts the caps match `docker-compose.yml`), `test_cli.py`,
+  `test_totp.py` (RFC 6238 vectors), `test_ratelimit.py`. Unprivileged
+  tests record space-dir chowns via the autouse `chowns` fixture instead
+  of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
+  `scripts/e2e/platform_spaces_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
@@ -1092,8 +1135,8 @@ service over `homeai-internal` — neither tool ever talks to
 
 ### Platform API (`platform`, port 8100)
 
-Design: `docs/PLATFORM.md` §3–§4. Implemented in M10-03 (accounts &
-sessions). Routing through Caddy lands in M10-04: until then only services
+Design: `docs/PLATFORM.md` §3–§5. Implemented in M10-03 (accounts &
+sessions) and M10-05 (spaces). Routing through Caddy lands in M10-04: until then only services
 on `homeai-internal` can reach these.
 
 **Conventions**
@@ -1147,13 +1190,24 @@ on `homeai-internal` can reach these.
   "revoked_at": ts|null}`.
 - `SessionResponse`: `{"user": User}` (web) or `{"user": User,
   "session_token": "hs_…"}` (native).
+- `Space`: `{"id", "slug", "name", "kind": "personal"|"shared", "gid": int,
+  "owner_user_id": id|null (personal only), "role":
+  "owner"|"editor"|"viewer"|null (the caller's; null only in the admin
+  list when the admin isn't a member), "created_at", "archived_at":
+  ts|null}`.
+- `Member`: `{"user_id", "username", "display_name", "role":
+  "owner"|"editor"|"viewer", "added_at"}`.
+- `DirectoryUser`: `{"id", "username", "display_name"}`.
 
 **Input rules** (`422` codes): `username` is trimmed and lowercased, then
 must match `^[a-z0-9][a-z0-9._-]{0,31}$` (`invalid_username`); `password`
 8–1024 characters (`weak_password`); `display_name` trimmed, 1–64
 printable characters (`invalid_display_name`); invite `label` ≤ 64
 printable characters (`invalid_label`); `device_label` is trimmed and cut
-to 64 characters. Setup codes are compared ignoring case, spaces, and
+to 64 characters. Space `slug` is trimmed and lowercased, then must match
+`^[a-z0-9][a-z0-9-]{0,39}$` (`invalid_slug`) and not be `personal` or
+`spaces` (`reserved_slug`); space `name` trimmed, 1–64 printable
+characters (`invalid_name`). Setup codes are compared ignoring case, spaces, and
 dashes.
 
 **`/api/auth/*`** (no Caddy auth; routes read the session credential
@@ -1180,15 +1234,44 @@ themselves)
 | `POST /api/platform/me/totp/enroll` | human | `{"password"}` | `200 {"secret": base32, "otpauth_uri": "otpauth://totp/HomeAI:<username>?secret=…&issuer=HomeAI&algorithm=SHA1&digits=6&period=30"}`. Pending until confirmed; re-enrolling replaces the pending secret. | `403 invalid_password`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/confirm` | human | `{"code"}` | `200 User` (`totp_enabled: true`) | `403 invalid_totp`, `409 totp_not_pending`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/disable` | human | `{"password"}` | `200 User` (`totp_enabled: false`) | `403 invalid_password`, `409 totp_not_enabled`, `429 rate_limited` |
+| `GET /api/platform/users/directory` | human | — | `200 {"users": [DirectoryUser]}` (enabled users only, by username) — for member pickers | — |
+| `GET /api/platform/spaces` | user | — | `200 {"spaces": [Space]}` — the caller's active spaces with their `role`; personal first, then by name | — |
+| `POST /api/platform/spaces` | human | `{"slug", "name"}` | `201 Space` — a shared space; the caller is its only `owner`; its directory tree exists on return | `422 invalid_slug`, `422 reserved_slug`, `422 invalid_name`, `409 slug_taken` (incl. personal and archived spaces' slugs) |
+| `GET /api/platform/spaces/{id}` | space `read` | — | `200 Space` | space errors |
+| `PATCH /api/platform/spaces/{id}` | space `manage` | `{"name"}` (the slug is immutable; other fields are ignored) | `200 Space`. Personal spaces can be renamed. | space errors, `422 invalid_name` |
+| `DELETE /api/platform/spaces/{id}` | space `manage` | — | `204` — archives: hidden from every route (`404`), rows and files kept, slug stays taken | space errors, `409 personal_space` |
+| `GET /api/platform/spaces/{id}/members` | membership `read` | — | `200 {"members": [Member]}` (owners, editors, viewers; then by username) | space errors |
+| `POST /api/platform/spaces/{id}/members` | membership `manage` | `{"user_id", "role": "owner"\|"editor"\|"viewer"}` | `201 Member` | space errors, `409 personal_space`, `422 unknown_user`, `409 user_disabled`, `409 already_member` |
+| `PATCH /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | `{"role"}` | `200 Member` | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` (demoting the only owner) |
+| `DELETE /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | — | `204`; the user loses access at once | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` |
 | `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | — |
 | `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). | `404 not_found`, `409 last_admin` (would leave no enabled admin) |
 | `POST /api/platform/admin/invites` | admin | `{"label"?}` | `201 Invite + {"token": "hi_…", "accept_url": "<scheme>://<host>/invite?token=<token>"}` — the only time the token is returned. Single use, expires in 7 days. `accept_url` uses `X-Forwarded-Host`/`Host` and `X-Forwarded-Proto` as seen by the platform. | `422 invalid_label` |
 | `GET /api/platform/admin/invites` | admin | — | `200 {"invites": [Invite]}` (newest first, no tokens) | — |
 | `DELETE /api/platform/admin/invites/{id}` | admin | — | `204` (revokes if pending; no-op otherwise) | `404 not_found` |
+| `GET /api/platform/admin/spaces` | admin | — | `200 {"spaces": [Space]}` — every space, personal and archived included (oldest first); `role` is the admin's own or `null` | — |
 
 Admin-guard failures (`403 agent_not_allowed` / `admin_required` /
 `step_up_required`) apply to every `/admin` route. The web app's `/invite?token=…` screen should read the token and
 `POST /api/auth/invite/accept`.
+
+**Spaces authorization.** *space `need`* = `spaces.authorize_space(conn,
+principal, space_id, need)` (`app/core/spaces.py`) — the one check every
+route that touches a space's contents uses (files, app instances, … in
+later milestones). `need` is `read` (viewer+), `write` (editor+), or
+`manage` (owner). *Space errors*, in order: not a member, unknown id, or
+archived → `404 not_found` (a non-member can't tell whether a space
+exists); `need="manage"` from an agent delegation (`act=agent`) → `403
+agent_not_allowed` (agents get their user's read/write, never
+management); role below `need` → `403 insufficient_role`. Admins get
+nothing extra from it. *membership `need`* = `spaces.authorize_membership`,
+used only by the four `/members` routes: `authorize_space`, except that a
+stepped-up admin in person (`act=user`, `role=admin`, fresh step-up) may
+list and change the members of any active space. That override never
+covers `GET`/`PATCH`/`DELETE /spaces/{id}` or any space data. Personal
+spaces have exactly one member (their owner) and refuse every membership
+change (`409 personal_space`), admin or not; a malformed `{id}` is `422
+invalid_request`.
 
 **`/internal/*`** (never routed by Caddy)
 
@@ -1950,7 +2033,8 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |
 | `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host files directory) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
-| `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member on exit | After touching `services/platform/` auth/session code |
+| `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
+| `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and
