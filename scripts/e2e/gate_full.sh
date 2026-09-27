@@ -6,6 +6,8 @@
 # `docker compose up -d --build` for the whole run:
 #   gate_m2.sh -> persistence_smoke.sh -> gate_m3.sh -> exec_crossview_smoke.sh
 #   -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
+#   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
+#      after it signs in as a throwaway CLI user via auth_helpers.mjs)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
 #   -> video_thumbnail_browser_smoke.sh -> chat_browser_smoke.sh
 #   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
@@ -188,6 +190,7 @@ main() {
   run_step "gate_m4.sh"              bash "${SCRIPT_DIR}/gate_m4.sh"
   run_step "verify_isolation.sh"     bash "${REPO_ROOT}/scripts/verify_isolation.sh"
   run_step "verify_network.sh"       sudo bash "${REPO_ROOT}/scripts/verify_network.sh"
+  run_step "auth_browser_smoke.sh"   bash "${SCRIPT_DIR}/auth_browser_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "image_browser_smoke.sh"  bash "${SCRIPT_DIR}/image_browser_smoke.sh"

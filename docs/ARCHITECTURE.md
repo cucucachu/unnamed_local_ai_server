@@ -205,8 +205,8 @@ what another doc says it should be.
 ### `caddy`
 
 - **Purpose**: the single ingress point for the whole LAN — reverse proxy
-  for `/api`/`/ws` to `agent-server`, and static file server for the Expo
-  web build. The only service that publishes host ports. HTTP on `:80`
+  for `/api`/`/ws` to `agent-server` (and `/api/auth/*`, unauthenticated,
+  to `platform`), and static file server for the Expo web build. The only service that publishes host ports. HTTP on `:80`
   stays first-class (no redirect to HTTPS) so Expo Go and phones that
   have not installed the local CA keep working. HTTPS on
   `https://homeai.local` uses Caddy's `tls internal` CA (M9-05) so
@@ -235,7 +235,8 @@ what another doc says it should be.
   a static Caddyfile). Verified indirectly by every browser e2e smoke
   script that goes through it (`scripts/e2e/chat_browser_smoke.sh`,
   `files_browser_smoke.sh`, `media_browser_smoke.sh`,
-  `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh`) and by
+  `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh`,
+  `auth_browser_smoke.sh`) and by
   `scripts/verify_network.sh`'s "end-to-end reachability" check. The
   frontend code it serves has its own unit tests — see `services/frontend/`:
   run with `cd services/frontend && npm test` (`check-platform.mjs` +
@@ -694,8 +695,9 @@ what another doc says it should be.
   the read-only root at runtime, with `--workers 1` (the rate limiter and
   the in-memory setup code are per-process).
 - **Published port**: none.
-- **Internal port**: `8100`. Caddy routing (`/api/auth/*`,
-  `/api/platform/*`) lands in M10-04; `/internal/*` is never routed.
+- **Internal port**: `8100`. Caddy routes `/api/auth/*` (no auth, since
+  M10-06); `/api/platform/*` and `forward_auth` land in M10-04;
+  `/internal/*` is never routed.
 - **Network**: `homeai-internal` only.
 - **Mounts**: named volume `platform-data:/data/platform` (signing key at
   `keys/signing-key.pem`, dir `0700`, file `0600`; losing the volume
@@ -1093,8 +1095,9 @@ service over `homeai-internal` — neither tool ever talks to
 ### Platform API (`platform`, port 8100)
 
 Design: `docs/PLATFORM.md` §3–§4. Implemented in M10-03 (accounts &
-sessions). Routing through Caddy lands in M10-04: until then only services
-on `homeai-internal` can reach these.
+sessions). Caddy routes `/api/auth/*` (M10-06); `/api/platform/*` routing
+lands in M10-04, and until then only services on `homeai-internal` can
+reach those.
 
 **Conventions**
 
@@ -1187,8 +1190,22 @@ themselves)
 | `DELETE /api/platform/admin/invites/{id}` | admin | — | `204` (revokes if pending; no-op otherwise) | `404 not_found` |
 
 Admin-guard failures (`403 agent_not_allowed` / `admin_required` /
-`step_up_required`) apply to every `/admin` route. The web app's `/invite?token=…` screen should read the token and
-`POST /api/auth/invite/accept`.
+`step_up_required`) apply to every `/admin` route.
+
+**Client behavior** (`services/frontend`, M10-06): on launch the app calls
+`GET /api/auth/status` and shows Setup (while `setup_required`, with a
+"sign in instead" link for recovery-CLI accounts), Login, or the app.
+Signed-out visits land on `/login`; `/invite?token=…` (native
+`homeai://invite?token=…`) is reachable signed in or out and calls
+`POST /api/auth/invite/accept`. Web relies on the cookie
+(`credentials: "include"`); native sends `X-HomeAI-Client: native` on
+`/api/auth/*`, keeps `session_token` in `expo-secure-store`, and sends
+`Authorization: Bearer` on every request, native upload/download/media
+load, and the chat WebSocket (React Native's `WebSocket(url, protocols,
+{headers})`). Any `401` outside `/api/auth/*` signs the client out. A
+WebSocket that closes before opening (a `forward_auth` rejection is
+invisible to browser JS), or with close code `4401`, makes the client
+re-check `GET /api/auth/status` and sign out if `authenticated` is false.
 
 **`/internal/*`** (never routed by Caddy)
 
@@ -1942,7 +1959,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/persistence_smoke.sh` | Thread/message persistence across agent-server restart, plus a pending HITL approval still on `GET /api/threads/{id}/state` after another restart (M8-08) | After touching the checkpointer, HITL interrupt state, or files storage |
 | `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view | After touching the exec ↔ files-directory file-visibility path |
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks | Quick check after a small files/threads API change |
-| `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
+| `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit) | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
@@ -1951,6 +1968,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host files directory) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member on exit | After touching `services/platform/` auth/session code |
+| `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and

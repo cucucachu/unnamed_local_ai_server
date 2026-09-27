@@ -52,6 +52,8 @@ import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
+import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+
 const BASE_URL = process.env.RESEARCH_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE = process.env.RESEARCH_SMOKE_API_BASE ?? 'http://localhost/api';
 const FILES_DIR = process.env.FILES_DIR ?? '';
@@ -136,11 +138,15 @@ async function expandLastActivityPanel(page) {
   throw new Error('no turn-activity-header to expand');
 }
 
+/** Set by `main()`; `createNewThread` signs each fresh page in as it. */
+let e2eUser;
+
 /** Creates a new thread from the UI ("New chat" header button) and returns
  * its id (captured from the URL, same technique as `chat_browser_smoke.mjs`'s
  * M6-03 cleanup addition) so the caller can clean it up afterward. */
 async function createNewThread(page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await loginThroughUi(page, e2eUser);
   await page.getByRole('tab', { name: 'Chat' }).click();
   const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
   await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
@@ -375,6 +381,8 @@ async function main() {
     return;
   }
 
+  e2eUser = createE2eUser({ prefix: 'e2e-research' });
+
   const browser = await chromium.launch({ headless: true });
   try {
     if (scenario === 'positive') {
@@ -385,6 +393,7 @@ async function main() {
     console.log(`PASS: ${scenario} scenario`);
   } finally {
     await browser.close();
+    deleteE2eUsers(e2eUser.username);
   }
 }
 

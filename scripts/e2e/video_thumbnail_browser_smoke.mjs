@@ -38,6 +38,8 @@
 
 import { chromium } from 'playwright';
 
+import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+
 const BASE_URL = process.env.VIDEO_THUMBNAIL_SMOKE_BASE_URL ?? 'http://localhost/';
 const VIDEO_FILE_NAME =
   process.env.VIDEO_THUMBNAIL_SMOKE_FILE_NAME ?? 'video-thumbnail-browser-smoke-test-video.mp4';
@@ -65,10 +67,12 @@ async function pollImageState(imgLocator, predicate, timeoutMs, label) {
 
 async function main() {
   const startedAt = Date.now();
+  const e2eUser = createE2eUser({ prefix: 'e2e-videothumb' });
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, e2eUser);
     await page.getByRole('tab', { name: 'Files' }).click();
     await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
     await waitForVisibleText(page, VIDEO_FILE_NAME); // confirms the seeded file is listed
@@ -124,6 +128,7 @@ async function main() {
     console.log(`PASS: list thumbnail -> cached-on-revisit -> direct-tap playback flow completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    deleteE2eUsers(e2eUser.username);
   }
 }
 

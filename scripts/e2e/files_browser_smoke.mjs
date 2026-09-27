@@ -37,6 +37,8 @@
 // — same "idempotent, re-runnable" convention as `files_rest_smoke.sh`.
 
 import { chromium } from 'playwright';
+
+import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
 import { execFileSync } from 'node:child_process';
 
 const BASE_URL = process.env.FILES_SMOKE_BASE_URL ?? 'http://localhost/';
@@ -210,6 +212,8 @@ async function main() {
   restDeleteBestEffort(ASCII_FLOW.folderName);
   restDeleteBestEffort(UNICODE_FLOW.folderName);
 
+  const e2eUser = createE2eUser({ prefix: 'e2e-files' });
+
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -219,6 +223,8 @@ async function main() {
     page.on('dialog', (dialog) => dialog.accept());
 
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+
+    await loginThroughUi(page, e2eUser);
     await page.getByRole('tab', { name: 'Files' }).click();
     await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
 
@@ -229,6 +235,7 @@ async function main() {
     console.log(`PASS: both flows (ASCII + space/non-ASCII) completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    deleteE2eUsers(e2eUser.username);
     restDeleteBestEffort(ASCII_FLOW.folderName);
     restDeleteBestEffort(UNICODE_FLOW.folderName);
   }
