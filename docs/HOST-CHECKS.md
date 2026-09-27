@@ -100,3 +100,14 @@ agent run.
 - [ ] (M9-07) iOS Safari/Expo Go: markdown and panel render; no regressions.
 
 > **PM sign-off: G9 passed ____**
+
+## M10
+
+- [ ] (M10-08) Get the setup code (`docker compose exec platform cat /data/platform/setup-code`, or `docker compose logs platform | grep -i setup`), open `http://homeai.local`, complete Setup as yourself — you become the bootstrap admin; your pre-Stage-3 chat threads (and settings) appear under your account.
+- [ ] (M10-08) Settings → Account: enable TOTP with an authenticator app; sign out and back in with the code.
+- [ ] (M10-08) Settings → Admin → Invites: invite a second person; they accept on their phone in the browser **and** in Expo Go (sign in with the same account); each sees only their own threads.
+- [ ] (M10-08) Settings → Spaces: create a shared space and add them; they see it in their Spaces list.
+- [ ] (M10-08) Settings → Sessions: revoke one of your other devices; it is signed out on its next request.
+
+> **PM sign-off: G10 passed ____**
+

@@ -92,7 +92,10 @@ echo "     setup_required=$setup_required"
 if [[ "$setup_required" == "True" ]]; then
   code="$(docker compose exec -T platform cat /data/platform/setup-code | tr -d '\r\n')"
   [[ "$code" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$ ]] || fail "setup-code file: '$code'"
-  docker compose logs platform | grep -q "HOME AI SETUP CODE: $code" ||
+  # Captured first: `grep -q` exiting early would SIGPIPE `docker compose
+  # logs` and fail the pipeline under `pipefail`.
+  platform_logs="$(docker compose logs platform 2>&1)"
+  grep -q "HOME AI SETUP CODE: $code" <<<"$platform_logs" ||
     fail "setup code not in docker compose logs platform"
   echo "ok   setup code present in /data/platform/setup-code and the logs"
   r="$(curl_i -H 'Content-Type: application/json' \

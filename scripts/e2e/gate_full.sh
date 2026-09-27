@@ -229,6 +229,9 @@ main() {
   # that script's header). Same idempotent reasoning as the gate_m7.sh/
   # gate_m8.sh steps above.
   run_step "gate_m9.sh"              bash "${SCRIPT_DIR}/gate_m9.sh"
+  # M10-08: gate_m10.sh re-runs the M10 platform/tenancy/auth smokes above
+  # as its own chain; same idempotent reasoning.
+  run_step "gate_m10.sh"             bash "${SCRIPT_DIR}/gate_m10.sh"
 
   print_summary
 
