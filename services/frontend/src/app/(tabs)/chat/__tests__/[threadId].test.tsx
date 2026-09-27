@@ -18,9 +18,10 @@ jest.mock('@/lib/useChat', () => ({
 // `useLocalSearchParams` needs a route param to hand back. `useRouter`
 // is mocked for M9-03's `file:` → Files-tab push.
 const mockPush = jest.fn();
+const mockReplace = jest.fn();
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ threadId: 'thread-123' }),
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
 
 const mockCopyToClipboard = jest.fn().mockResolvedValue(undefined);
@@ -126,6 +127,24 @@ describe('ChatScreen ([threadId])', () => {
       retryButton?.props.onPress();
     });
     expect(retryHydration).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows "Chat not found" with a way back (no retry, no composer) when hydrationState is "not_found"', () => {
+    setUseChatResult({ hydrationState: 'not_found' });
+
+    let renderer: ReturnType<typeof create> | undefined;
+    act(() => {
+      renderer = create(createElement(ChatScreen));
+    });
+
+    expect(renderer?.root.findAllByProps({ testID: 'chat-not-found' }).length).toBeGreaterThan(0);
+    expect(renderer?.root.findAllByProps({ accessibilityLabel: 'Retry loading conversation' })).toHaveLength(0);
+    expect(() => renderer?.root.findByProps({ placeholder: 'Message…' })).toThrow();
+
+    act(() => {
+      renderer?.root.find((node) => node.props.testID === 'chat-not-found-back' && typeof node.props.onPress === 'function').props.onPress();
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/chat');
   });
 
   it('renders without crashing with an empty item list once hydration is done', () => {

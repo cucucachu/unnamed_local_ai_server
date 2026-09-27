@@ -1367,6 +1367,16 @@ load, and the chat WebSocket (React Native's `WebSocket(url, protocols,
 WebSocket that closes before opening (a `forward_auth` rejection is
 invisible to browser JS), or with close code `4401`, makes the client
 re-check `GET /api/auth/status` and sign out if `authenticated` is false.
+A chat socket closed with `4404` (or a `404` from the thread's history)
+shows "Chat not found" instead of reconnecting (M10-07).
+
+Settings (M10-07, `src/app/settings/`) covers `/me` (display name,
+password, TOTP enroll with the `otpauth_uri` as a QR), sessions, spaces and
+members (owners manage shared spaces), and, for admins, users and invites.
+Any `403 step_up_required` opens a password prompt, calls `POST
+/api/auth/step-up`, and retries the request once. Invite links are built
+from the page origin (web) or `EXPO_PUBLIC_API_HOST` (native), not the
+response's `accept_url`.
 
 **Spaces authorization.** *space `need`* = `spaces.authorize_space(conn,
 principal, space_id, need)` (`app/core/spaces.py`) — the one check every

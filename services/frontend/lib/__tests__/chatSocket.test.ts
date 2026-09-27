@@ -1,4 +1,4 @@
-import { openChatSocket, WS_CLOSE_UNAUTHORIZED, type WebSocketCtor, type WebSocketLike } from '../chatSocket';
+import { openChatSocket, WS_CLOSE_NOT_FOUND, WS_CLOSE_UNAUTHORIZED, type WebSocketCtor, type WebSocketLike } from '../chatSocket';
 import { onUnauthorized, setSessionToken } from '../session';
 
 class FakeWebSocket implements WebSocketLike {
@@ -324,6 +324,20 @@ describe('openChatSocket — reconnect behavior', () => {
     expect(handlers.onError).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'error', message: expect.stringContaining('turn') }),
     );
+  });
+
+  it(`close code ${WS_CLOSE_NOT_FOUND} reports not-found and never reconnects`, () => {
+    const handlers = { ...makeHandlers(), onNotFound: jest.fn(), onConnectionStateChange: jest.fn() };
+    openChatSocket('thread-1', handlers, Ctor);
+
+    latestSocket().open();
+    latestSocket().drop(WS_CLOSE_NOT_FOUND);
+    jest.advanceTimersByTime(10000);
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(handlers.onNotFound).toHaveBeenCalledTimes(1);
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onConnectionStateChange).toHaveBeenLastCalledWith('closed');
   });
 
   it('close() prevents any pending reconnect from firing', () => {

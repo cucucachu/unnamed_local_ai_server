@@ -155,6 +155,9 @@ export interface ChatSocketHandlers {
   onApprovalRequest?: (frame: ApprovalRequestFrame) => void;
   onTurnEnd?: (frame: TurnEndFrame) => void;
   onError?: (frame: ErrorFrame) => void;
+  /** The server closed with `4404`: the thread doesn't exist or isn't the
+   * caller's. Terminal — no reconnect follows. */
+  onNotFound?: () => void;
   /** Optional: fires whenever the socket's own connection lifecycle state
    * changes (independent of any particular frame). Additive — existing
    * callers that don't pass it are unaffected. */
@@ -204,6 +207,10 @@ export type WebSocketCtor = new (
 /** Close code an app server may use to say "your session is gone" once the
  * socket is already open. */
 export const WS_CLOSE_UNAUTHORIZED = 4401;
+
+/** Close code for "thread not found" — a missing thread and another user's
+ * thread are indistinguishable. */
+export const WS_CLOSE_NOT_FOUND = 4404;
 
 function defaultWebSocketCtor(): WebSocketCtor {
   return (globalThis as { WebSocket?: WebSocketCtor }).WebSocket as WebSocketCtor;
@@ -314,6 +321,13 @@ export function openChatSocket(
 
   function handleClose(event: unknown, opened: boolean): void {
     if (closedByClient) return;
+
+    if ((event as { code?: unknown } | null)?.code === WS_CLOSE_NOT_FOUND) {
+      turnInFlight = false;
+      handlers.onConnectionStateChange?.('closed');
+      handlers.onNotFound?.();
+      return;
+    }
 
     // A rejected upgrade (e.g. `forward_auth` 401) never opens and exposes
     // no status to JS, so ask the platform directly; `probeSession` signs

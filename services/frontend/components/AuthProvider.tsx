@@ -36,6 +36,9 @@ export interface AuthContextValue {
   setup: (input: SetupInput) => Promise<void>;
   acceptInvite: (input: InviteAcceptInput) => Promise<void>;
   logout: () => Promise<void>;
+  /** Adopts a fresh copy of the signed-in user (e.g. from `PATCH
+   * /api/platform/me`); ignored if it's someone else. */
+  updateUser: (user: User) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -104,9 +107,15 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
     await refresh();
   }, [refresh]);
 
+  const updateUser = useCallback((user: User) => {
+    setState((previous) =>
+      previous.phase === 'ready' && previous.user?.id === user.id ? { ...previous, user } : previous,
+    );
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ state, refresh, login, setup, acceptInvite, logout }),
-    [state, refresh, login, setup, acceptInvite, logout],
+    () => ({ state, refresh, login, setup, acceptInvite, logout, updateUser }),
+    [state, refresh, login, setup, acceptInvite, logout, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
