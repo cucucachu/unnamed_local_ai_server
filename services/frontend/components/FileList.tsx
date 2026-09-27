@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useEffect, useRef } from 'react';
-import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { formatFileSize, iconNameFor } from '@/lib/fileDisplay';
+import { categoryFor, formatFileSize, iconNameFor } from '@/lib/fileDisplay';
 import type { FileEntry } from '@/lib/files';
+import { streamUrl } from '@/lib/media';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 
@@ -85,6 +86,47 @@ export function FileList({
   );
 }
 
+/**
+ * Issue #124: a small preview thumbnail for image entries, in place of the
+ * generic `image-outline` icon every entry otherwise gets from
+ * `iconNameFor`. Reuses the exact same `GET /api/media/stream?path=...`
+ * URL as the in-app image viewer (`ImageViewer.tsx`'s own docstring has the
+ * full "this endpoint streams any file, not just recognized media" citation)
+ * — no new thumbnail-generation endpoint, no new server-side dependency,
+ * per the issue's own stated preference for a client-side-only first pass.
+ *
+ * Three explicit states (`loading` / `loaded` / `error`) rather than a bare
+ * boolean so a failed image load (corrupt file, permission hiccup, huge
+ * file that times out) falls back to the same generic icon every other
+ * entry shows, instead of a broken-image glyph — the ticket's own
+ * "sensible loading/fallback state" acceptance criterion. `FlatList`
+ * itself already limits how many of these are mounted at once (standard
+ * virtualization — only rows near the visible window render), so no extra
+ * throttling is added here.
+ */
+function FileThumbnail({ path, name }: { path: string; name: string }) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+
+  if (status === 'error') {
+    return <Ionicons name="image-outline" size={22} color={theme.textMuted} style={styles.icon} />;
+  }
+
+  return (
+    <View style={styles.thumbnailBox}>
+      {status === 'loading' ? <Ionicons name="image-outline" size={16} color={theme.textMuted} /> : null}
+      <Image
+        source={{ uri: streamUrl(path) }}
+        style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
+        resizeMode="cover"
+        onLoad={() => setStatus('loaded')}
+        onError={() => setStatus('error')}
+        testID="file-thumbnail"
+        accessibilityLabel={`${name} thumbnail`}
+      />
+    </View>
+  );
+}
+
 function FileRow({
   entry,
   onPress,
@@ -97,6 +139,7 @@ function FileRow({
   highlighted: boolean;
 }) {
   const iconName = iconNameFor(entry);
+  const isImage = entry.type === 'file' && categoryFor(entry) === 'image';
   const subtitle = entry.type === 'file' ? `${formatFileSize(entry.size)} · ${relativeTime(entry.mtime)}` : null;
 
   // Web right-click -> the same action sheet as native long-press (per the
@@ -129,12 +172,16 @@ function FileRow({
       testID={highlighted ? 'file-entry-highlighted' : 'file-row'}
       {...webContextMenuProps}
     >
-      <Ionicons
-        name={iconName}
-        size={22}
-        color={entry.type === 'dir' ? theme.accent : theme.textMuted}
-        style={styles.icon}
-      />
+      {isImage ? (
+        <FileThumbnail path={entry.path} name={entry.name} />
+      ) : (
+        <Ionicons
+          name={iconName}
+          size={22}
+          color={entry.type === 'dir' ? theme.accent : theme.textMuted}
+          style={styles.icon}
+        />
+      )}
       <View style={styles.textContainer}>
         <Text style={styles.name} numberOfLines={1}>
           {entry.name}
@@ -166,6 +213,22 @@ const styles = StyleSheet.create({
   },
   icon: {
     width: 22,
+  },
+  thumbnailBox: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thumbnail: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 5,
+    backgroundColor: theme.surface,
+  },
+  thumbnailHidden: {
+    opacity: 0,
   },
   textContainer: {
     flex: 1,

@@ -42,6 +42,14 @@ const TEXT_FILE: FileEntry = {
   mtime: '2026-08-30T10:00:00.000Z',
   mime: 'text/plain',
 };
+const IMAGE_FILE: FileEntry = {
+  name: 'photo.png',
+  path: 'photo.png',
+  type: 'file',
+  size: 4096,
+  mtime: '2026-08-30T10:00:00.000Z',
+  mime: 'image/png',
+};
 const NOTES_DIR: FileEntry = {
   name: 'notes',
   path: 'notes',
@@ -227,6 +235,62 @@ describe('FilesScreen — tap routing (M5-02)', () => {
     });
 
     expect(renderer.root.findAllByProps({ testID: 'file-action-play' })).toHaveLength(0);
+  });
+});
+
+describe('FilesScreen — image tap routing (issue #124)', () => {
+  it('tapping an image file navigates straight to the media modal with kind "image"', async () => {
+    mockFilesApi([IMAGE_FILE]);
+
+    const renderer = await renderScreen();
+    const row = findRow(renderer, IMAGE_FILE.name);
+
+    await act(async () => {
+      row.props.onPress();
+    });
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/media',
+      params: { path: IMAGE_FILE.path, kind: 'image' },
+    });
+    // Bypasses the action sheet, same as the existing video-tap behavior.
+    expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' })).toHaveLength(0);
+  });
+
+  it('long-press on an image file opens the action sheet with a "View" action (not "Play")', async () => {
+    mockFilesApi([IMAGE_FILE]);
+
+    const renderer = await renderScreen();
+    const row = findRow(renderer, IMAGE_FILE.name);
+
+    await act(async () => {
+      row.props.onLongPress();
+    });
+
+    expect(renderer.root.findAllByProps({ testID: 'file-action-view' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({ testID: 'file-action-play' })).toHaveLength(0);
+  });
+
+  it('the action sheet\'s "View" action navigates to the same media route as a direct tap', async () => {
+    mockFilesApi([IMAGE_FILE]);
+
+    const renderer = await renderScreen();
+    const row = findRow(renderer, IMAGE_FILE.name);
+    await act(async () => {
+      row.props.onLongPress();
+    });
+
+    const viewActions = renderer.root.findAllByProps({ testID: 'file-action-view' });
+    const viewAction = viewActions.find((node) => typeof node.props.onPress === 'function');
+    if (!viewAction) throw new Error('no Pressable found for the "View" action');
+    await act(async () => {
+      viewAction.props.onPress();
+    });
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/media',
+      params: { path: IMAGE_FILE.path, kind: 'image' },
+    });
   });
 });
 

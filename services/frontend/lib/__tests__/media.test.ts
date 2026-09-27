@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-import { mediaKind, streamUrl } from '../media';
+import { isImageFile, mediaKind, previewKind, streamUrl } from '../media';
 
 // `apiBase()` (`lib/api.ts`) is `Platform.OS`-dependent — `''` on web,
 // otherwise `EXPO_PUBLIC_API_HOST ?? 'http://homeai.local'` — so `streamUrl`
@@ -41,6 +41,53 @@ describe('mediaKind', () => {
       expect(mediaKind(fileName)).toBe(expected);
     });
   }
+});
+
+describe('isImageFile', () => {
+  const cases: { name: string; fileName: string; expected: boolean }[] = [
+    { name: 'png is an image', fileName: 'photo.png', expected: true },
+    { name: 'jpg is an image', fileName: 'photo.jpg', expected: true },
+    { name: 'jpeg is an image', fileName: 'photo.jpeg', expected: true },
+    { name: 'gif is an image', fileName: 'photo.gif', expected: true },
+    { name: 'webp is an image', fileName: 'photo.webp', expected: true },
+    { name: 'bmp is an image', fileName: 'photo.bmp', expected: true },
+    { name: 'heic is an image', fileName: 'photo.heic', expected: true },
+    { name: 'heif is an image', fileName: 'photo.heif', expected: true },
+    { name: 'svg is an image', fileName: 'photo.svg', expected: true },
+    { name: 'case-insensitive: uppercase extension still matches', fileName: 'PHOTO.PNG', expected: true },
+    {
+      name: 'multi-dot name: only the last segment counts as the extension',
+      fileName: 'my.photo.file.png',
+      expected: true,
+    },
+    { name: 'no extension at all is not an image', fileName: 'README', expected: false },
+    { name: 'a trailing dot with nothing after it is not an image', fileName: 'weird.', expected: false },
+    { name: 'a video extension is not an image', fileName: 'clip.mp4', expected: false },
+    { name: 'an unknown extension is not an image', fileName: 'document.pdf', expected: false },
+    { name: 'empty string is not an image', fileName: '', expected: false },
+  ];
+
+  for (const { name, fileName, expected } of cases) {
+    it(name, () => {
+      expect(isImageFile(fileName)).toBe(expected);
+    });
+  }
+});
+
+describe('previewKind', () => {
+  it('returns "video"/"audio" for mediaKind extensions (same as mediaKind)', () => {
+    expect(previewKind('clip.mp4')).toBe('video');
+    expect(previewKind('song.mp3')).toBe('audio');
+  });
+
+  it('returns "image" for image extensions', () => {
+    expect(previewKind('photo.png')).toBe('image');
+  });
+
+  it('returns null for anything neither media nor image', () => {
+    expect(previewKind('document.pdf')).toBeNull();
+    expect(previewKind('README')).toBeNull();
+  });
 });
 
 describe('streamUrl', () => {
