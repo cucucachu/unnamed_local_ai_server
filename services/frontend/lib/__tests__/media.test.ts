@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-import { isImageFile, mediaKind, previewKind, streamUrl } from '../media';
+import { isImageFile, mediaKind, previewKind, streamUrl, thumbnailUrl } from '../media';
 
 // `apiBase()` (`lib/api.ts`) is `Platform.OS`-dependent — `''` on web,
 // otherwise `EXPO_PUBLIC_API_HOST ?? 'http://homeai.local'` — so `streamUrl`
@@ -132,5 +132,35 @@ describe('streamUrl', () => {
   it('prefixes with apiBase() on native (non-web) instead of being always-relative', () => {
     Platform.OS = 'ios';
     expect(streamUrl('clip.mp4')).toBe('http://homeai.local/api/media/stream?path=clip.mp4');
+  });
+});
+
+// Issue #125: same URL-building convention as `streamUrl` above, just a
+// different endpoint (`/api/media/thumbnail`) — kept as its own minimal
+// suite rather than duplicating every encoding case from `streamUrl`'s
+// suite, since it's the exact same `encodeURIComponent`-the-whole-path
+// logic and those cases already prove that logic works.
+describe('thumbnailUrl', () => {
+  beforeEach(() => {
+    Platform.OS = 'web';
+  });
+
+  afterEach(() => {
+    Platform.OS = 'ios';
+  });
+
+  it('builds the exact /api/media/thumbnail?path=<encoded> shape', () => {
+    expect(thumbnailUrl('videos/clip.mp4')).toBe('/api/media/thumbnail?path=videos%2Fclip.mp4');
+  });
+
+  it('encodes special characters in the path', () => {
+    expect(thumbnailUrl('my videos/clip#1.mp4')).toBe(
+      '/api/media/thumbnail?path=my%20videos%2Fclip%231.mp4',
+    );
+  });
+
+  it('prefixes with apiBase() on native (non-web) instead of being always-relative', () => {
+    Platform.OS = 'ios';
+    expect(thumbnailUrl('clip.mp4')).toBe('http://homeai.local/api/media/thumbnail?path=clip.mp4');
   });
 });

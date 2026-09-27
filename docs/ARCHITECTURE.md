@@ -230,7 +230,7 @@ what another doc says it should be.
   a static Caddyfile). Verified indirectly by every browser e2e smoke
   script that goes through it (`scripts/e2e/chat_browser_smoke.sh`,
   `files_browser_smoke.sh`, `media_browser_smoke.sh`,
-  `image_browser_smoke.sh`) and by
+  `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh`) and by
   `scripts/verify_network.sh`'s "end-to-end reachability" check. The
   frontend code it serves has its own unit tests — see `services/frontend/`:
   run with `cd services/frontend && npm test` (`check-platform.mjs` +
@@ -488,7 +488,11 @@ what another doc says it should be.
   and the `web_search`/`web_fetch` tools' HTTP client to `web-fetch`
   (M7-05).
 - **Image/base**: `python:3.12-slim` + `uv` (astral's static binary
-  copied in). Dockerfile: `services/agent-server/Dockerfile`.
+  copied in), plus `ffmpeg` (apt, issue #125 — server-side video
+  poster-frame thumbnail generation, `app/core/thumbnails.py`; not a
+  Python dependency, so it's an OS package install in the Dockerfile
+  rather than a `pyproject.toml` entry). Dockerfile:
+  `services/agent-server/Dockerfile`.
 - **Published port**: none.
 - **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
 - **Network (M7-01)**: `homeai-internal` only — no route to the public
@@ -1688,7 +1692,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/persistence_smoke.sh` | Thread/message persistence across agent-server restart, plus a pending HITL approval still on `GET /api/threads/{id}/state` after another restart (M8-08) | After touching the checkpointer, HITL interrupt state, or files storage |
 | `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view | After touching the exec ↔ files-directory file-visibility path |
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks | Quick check after a small files/threads API change |
-| `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
+| `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Issue #125 full-stack video-thumbnail smoke test.
+#
+# Seeds a small synthetic video into the FILES_DIR host directory (same
+# `ffmpeg`-via-`homeai-exec-toolbox` convention as
+# `media_browser_smoke.sh`'s own `seed_test_video` — see that script's
+# header for exactly why: ffmpeg lives in that image, not necessarily on
+# this host), opens a real headless browser against the live stack,
+# navigates to the Files tab, and asserts the row shows a real, decoded
+# poster-frame thumbnail `<img>` (server-generated via
+# `GET /api/media/thumbnail`, `app/core/thumbnails.py`) instead of the
+# generic `videocam-outline` icon — see `video_thumbnail_browser_smoke.mjs`
+# for the exact step-by-step. Cleans up the seeded file on any exit
+# (success or failure).
+#
+# Prerequisites (not managed by this script — same convention as
+# `media_browser_smoke.sh`/`image_browser_smoke.sh`):
+#   - The full docker-compose stack is up and healthy:
+#       docker compose up -d
+#     (rebuild `caddy`/`agent-server` first if either changed:
+#       docker compose build caddy agent-server && docker compose up -d caddy agent-server
+#     — `agent-server` needs a rebuild here specifically because this
+#     issue added `ffmpeg` to ITS Dockerfile, unlike the image-viewer/
+#     media-player smoke scripts which never touched that image.)
+#   - Node.js/npm available on PATH (e.g. via nvm).
+#   - `docker` available on PATH, and the `homeai-exec-toolbox:latest`
+#     image already built (`services/code-exec-manager/build-exec-image.sh`).
+#
+# Usage:
+#   scripts/e2e/video_thumbnail_browser_smoke.sh
+#   VIDEO_THUMBNAIL_SMOKE_BASE_URL=http://homeai.local/ scripts/e2e/video_thumbnail_browser_smoke.sh
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+VIDEO_FILE_NAME="video-thumbnail-browser-smoke-test-video.mp4"
+
+# Same ".env, one KEY=value, not the whole file" extraction as
+# `media_browser_smoke.sh`.
+ENV_FILE="${REPO_ROOT}/.env"
+FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' "$ENV_FILE" | head -n1 | xargs)"
+if [ -z "$FILES_DIR" ]; then
+  echo "[video-thumbnail-browser-smoke] ERROR: FILES_DIR not set in ${ENV_FILE}" >&2
+  exit 1
+fi
+VIDEO_HOST_PATH="${FILES_DIR}/${VIDEO_FILE_NAME}"
+
+log() {
+  echo "[video-thumbnail-browser-smoke] $(date '+%H:%M:%S') $*"
+}
+
+# Same one-liner `media_browser_smoke.sh` uses for its own seeded video —
+# a short synthetic test pattern, `yuv420p` for broad codec compatibility.
+# Run inside `homeai-exec-toolbox` (which already has `ffmpeg` baked in),
+# bind-mounting FILES_DIR at `/w` so the output lands exactly where
+# `agent-server`'s own files-directory mount expects it
+# (`docker-compose.yml`: `${FILES_DIR}:/data/files`).
+seed_test_video() {
+  log "Seeding ${VIDEO_HOST_PATH} via ffmpeg (homeai-exec-toolbox)..."
+  rm -f "$VIDEO_HOST_PATH"
+  docker run --rm -v "${FILES_DIR}:/w" homeai-exec-toolbox:latest \
+    ffmpeg -y -f lavfi -i "testsrc=duration=3:size=320x240:rate=10" -pix_fmt yuv420p "/w/${VIDEO_FILE_NAME}"
+  if [ ! -f "$VIDEO_HOST_PATH" ]; then
+    log "ERROR: ${VIDEO_HOST_PATH} was not created"
+    exit 1
+  fi
+  log "OK: seeded ${VIDEO_HOST_PATH} ($(stat -c%s "$VIDEO_HOST_PATH" 2>/dev/null || stat -f%z "$VIDEO_HOST_PATH") bytes)"
+}
+
+cleanup() {
+  # Always runs (success or failure) so this script is safely re-runnable
+  # and never leaves the seeded file (or a cached thumbnail for it) behind.
+  rm -f "$VIDEO_HOST_PATH" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+cd "$SCRIPT_DIR"
+
+if [ ! -d node_modules/playwright ]; then
+  echo "==> Installing Playwright (npm install)..."
+  npm install
+fi
+
+echo "==> Ensuring the Chromium browser binary is installed..."
+npx playwright install chromium
+
+seed_test_video
+
+echo "==> Running the smoke test against ${VIDEO_THUMBNAIL_SMOKE_BASE_URL:-http://localhost/}..."
+VIDEO_THUMBNAIL_SMOKE_FILE_NAME="$VIDEO_FILE_NAME" node "$SCRIPT_DIR/video_thumbnail_browser_smoke.mjs"

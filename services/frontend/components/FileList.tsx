@@ -4,7 +4,7 @@ import { FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 're
 
 import { categoryFor, formatFileSize, iconNameFor } from '@/lib/fileDisplay';
 import type { FileEntry } from '@/lib/files';
-import { streamUrl } from '@/lib/media';
+import { mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 
@@ -127,6 +127,47 @@ function FileThumbnail({ path, name }: { path: string; name: string }) {
   );
 }
 
+/**
+ * Issue #125: poster-frame thumbnail for video entries — same three-state
+ * (`loading` / `loaded` / `error`) shape and same generic-icon-on-error
+ * fallback as `FileThumbnail` above (issue #124's image thumbnail), just
+ * pointed at `thumbnailUrl` (the server's `ffmpeg`-generated, cached JPEG
+ * — `GET /api/media/thumbnail`) instead of `streamUrl` (the raw file
+ * bytes `FileThumbnail` streams directly, which only works for images
+ * because a browser/RN `Image` can decode a still image file as-is but
+ * can't decode an arbitrary video container into a frame on its own).
+ * Falls back to the same `videocam-outline` glyph `iconNameFor` would
+ * have shown anyway, so a 404/415/500 from the thumbnail endpoint (e.g. a
+ * video `ffmpeg` genuinely can't decode) degrades to exactly what this
+ * row looked like before this issue.
+ */
+function VideoThumbnail({ path, name }: { path: string; name: string }) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+
+  if (status === 'error') {
+    return (
+      <Ionicons name="videocam-outline" size={22} color={theme.textMuted} style={styles.icon} />
+    );
+  }
+
+  return (
+    <View style={styles.thumbnailBox}>
+      {status === 'loading' ? (
+        <Ionicons name="videocam-outline" size={16} color={theme.textMuted} />
+      ) : null}
+      <Image
+        source={{ uri: thumbnailUrl(path) }}
+        style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
+        resizeMode="cover"
+        onLoad={() => setStatus('loaded')}
+        onError={() => setStatus('error')}
+        testID="video-thumbnail"
+        accessibilityLabel={`${name} thumbnail`}
+      />
+    </View>
+  );
+}
+
 function FileRow({
   entry,
   onPress,
@@ -140,6 +181,13 @@ function FileRow({
 }) {
   const iconName = iconNameFor(entry);
   const isImage = entry.type === 'file' && categoryFor(entry) === 'image';
+  // Extension-based (`mediaKind`), not `categoryFor`'s MIME-based check —
+  // see `VideoThumbnail`'s own docstring and `lib/media.ts`'s `mediaKind`
+  // docstring for why: this must agree with the server's own
+  // extension-based `is_video_file` (`app/core/thumbnails.py`) eligibility
+  // check, which a MIME-based category (e.g. `.mkv`'s often-missing
+  // default MIME type) can't be relied on to match.
+  const isVideo = entry.type === 'file' && mediaKind(entry.name) === 'video';
   const subtitle = entry.type === 'file' ? `${formatFileSize(entry.size)} · ${relativeTime(entry.mtime)}` : null;
 
   // Web right-click -> the same action sheet as native long-press (per the
@@ -174,6 +222,8 @@ function FileRow({
     >
       {isImage ? (
         <FileThumbnail path={entry.path} name={entry.name} />
+      ) : isVideo ? (
+        <VideoThumbnail path={entry.path} name={entry.name} />
       ) : (
         <Ionicons
           name={iconName}
