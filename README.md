@@ -163,6 +163,20 @@ risk register):
 | M8 — Agent controls | Stop, edit/resend (truncate + fork), configurable human-in-the-loop approvals, and (spike-gated) model thinking | G8: stop / approve-reject / edit (truncate + fork) from a browser |
 | M9 — Chat experience | Markdown, turn activity panel with runtime, file deep links, Android keyboard fix, local HTTPS, voice input | G9: full chat experience from a phone over HTTPS + Expo Go |
 
+**Stage 3 — the agentic OS** (multi-user household platform + agent-built apps; design, decisions,
+and cross-service contracts in [`docs/PLATFORM.md`](docs/PLATFORM.md)):
+
+| Milestone | Value delivered | Gate |
+|---|---|---|
+| M10 — Identity & spaces | Accounts, sessions, bootstrap, invites, spaces + membership, auth on every route, threads owned by users | G10: two users on separate devices each see only their own threads; admin manages users and spaces |
+| M11 — Platform owns storage | Platform files API (`/personal`, `/spaces/<slug>`), delegation tokens, agent file tools + exec as the user, Postgres roles, tenancy suite | G11: cross-user isolation suite green across UI, agent tools, and exec |
+| M12 — App runtime | App package format, registry, per-instance SQLite with computed migrations, sandboxed builds, SDK, sandboxed runtime (web + Expo Go) | G12: a hand-written reference app runs in personal and shared spaces on web and phone |
+| M13 — Agent builds apps | Apps in the files tree + git, app tools, templates, model authoring eval, ask-the-agent panel | G13: "make me a grocery list app" end-to-end with the real model |
+| M14 — Sharing & system apps | Publish/install/update/fork, Home launcher, Settings/Files/Chat as system apps, cross-app exports | G14: family installs a published app; planner reads calendar exports |
+| M15 — Remote access & devices | WireGuard, domain mode, passkeys, opt-in public HTTPS, host app dev build + device pairing | G15: phone reaches the box over WireGuard off-LAN; public mode refuses enrollment |
+
+Stage 3 deliberately lifts several v1 out-of-scope items (auth, multi-user, EAS/dev builds, and — opt-in only — internet exposure); `docs/PLATFORM.md` §2 is the record of what changed and why.
+
 Track live progress on the [Milestones](../../milestones) and [Issues](../../issues) pages.
 
 ## Working with the GitHub issues
