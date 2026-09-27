@@ -69,6 +69,7 @@ async def setup(body: SetupRequest, request: Request, response: Response) -> Ses
                 username=body.username,
                 display_name=body.display_name,
                 password=body.password,
+                storage=request.app.state.storage,
                 device_label=body.device_label,
             )
     return session_response(request, response, user, token)
@@ -145,6 +146,7 @@ async def accept_invite(
                 username=body.username,
                 display_name=body.display_name,
                 password=body.password,
+                storage=request.app.state.storage,
                 device_label=body.device_label,
             )
     return session_response(request, response, user, token)

@@ -18,7 +18,8 @@
 #      `/api/platform/me` with that identity is the new member;
 #      `/api/platform/admin/users` is 403 `admin_required`.
 #   5. Logout; verify with the old cookie is 401.
-# The member is deleted on exit (EXIT trap, via psql as the superuser).
+# The member and their personal space (row and directory) are deleted on
+# exit (EXIT trap, via psql as the superuser).
 #
 # Usage: scripts/e2e/platform_auth_smoke.sh
 
@@ -42,8 +43,17 @@ fail() {
 }
 
 cleanup() {
+  local ids
+  ids="$(docker compose exec -T postgres psql -qtA -U "$POSTGRES_USER" -d homeai_platform \
+    -c "SELECT s.id FROM spaces s JOIN users u ON u.id = s.owner_user_id
+      WHERE u.username = '$USERNAME'" 2>/dev/null || true)"
   docker compose exec -T postgres psql -q -U "$POSTGRES_USER" -d homeai_platform \
-    -c "DELETE FROM users WHERE username = '$USERNAME'" >/dev/null 2>&1 || true
+    -c "DELETE FROM spaces s USING users u WHERE u.id = s.owner_user_id
+      AND u.username = '$USERNAME'; DELETE FROM users WHERE username = '$USERNAME'" \
+    >/dev/null 2>&1 || true
+  for id in $ids; do
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && docker compose exec -T platform rm -rf "/data/spaces/$id" || true
+  done
 }
 trap cleanup EXIT
 

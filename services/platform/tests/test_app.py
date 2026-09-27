@@ -9,18 +9,11 @@ from app.core.config import Settings
 from app.core.tokens import TokenService, load_or_create_signing_key
 from app.db.pool import open_pool
 from app.main import create_app
+from tests.conftest import make_settings
 
 
 def _settings(db, data_dir) -> Settings:
-    return Settings(
-        platform_db_host=db.host,
-        platform_db_port=db.port,
-        platform_db_user=db.user,
-        platform_db_password=db.password,
-        platform_db_name=db.dbname,
-        platform_data_dir=data_dir,
-        _env_file=None,
-    )
+    return make_settings(db, data_dir)
 
 
 @asynccontextmanager
@@ -39,7 +32,7 @@ async def test_startup_migrates_and_serves_health(pg_database, tmp_path):
 
     with psycopg.connect(pg_database.dsn) as conn:
         versions = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
-        assert versions == [(1,), (2,)]
+        assert versions == [(1,), (2,), (3,)]
 
 
 async def test_jwks_and_kid_stable_across_restarts(pg_database, tmp_path):

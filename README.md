@@ -248,16 +248,21 @@ docker compose exec platform python -m app.cli reset-password alice [--clear-tot
 docker compose exec platform python -m app.cli set-role alice member               # refuses to remove the last admin
 docker compose exec platform python -m app.cli disable-user alice                  # revokes their sessions
 docker compose exec platform python -m app.cli enable-user alice
+docker compose exec platform python -m app.cli list-spaces [--json]                 # every space, its GID and members
+docker compose exec platform python -m app.cli create-space family --name Family --owner alice
+docker compose exec platform python -m app.cli add-member family bob --role viewer  # owner|editor|viewer
 
 # Non-interactive (scripts): first line of stdin is the password; note -T.
 printf '%s\n' "$PW" | docker compose exec -T platform python -m app.cli create-user e2e-bob --password-stdin
 ```
 
+Every user gets a personal space when they're created; shared spaces are created in the app or with `create-space`. Each space's data lives under `SPACES_DIR` (default `/srv/homeai/spaces`) in `<space_id>/`, owned `root:<space gid>` with mode `2770`, so your host login can list `SPACES_DIR` but not look inside a space — use `docker compose exec platform ls -ln /data/spaces/<space_id>`.
+
 Users created with the CLI **don't** complete bootstrap — the setup code keeps working until someone uses it. Errors print `error: <code>` and exit 1.
 
 ## Backups
 
-**What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit), both Postgres databases (`homeai`: thread/message history; `homeai_platform`: users, sessions, invites), and the `platform-data` volume (the platform's token-signing key, plus the setup code until the first admin exists). Together these are the only genuinely irreplaceable state this stack holds.
+**What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit), both Postgres databases (`homeai`: thread/message history; `homeai_platform`: users, sessions, invites, spaces and memberships), and the `platform-data` volume (the platform's token-signing key, plus the setup code until the first admin exists). Together these are the only genuinely irreplaceable state this stack holds.
 
 **What's not covered**: model weights (`services/model-runner/models/*.gguf` — multi-GB, re-downloadable any time via `./services/model-runner/fetch-model.sh`, not user data) and `.env` (holds `POSTGRES_PASSWORD` — a secret, deliberately not swept into a backup dir; back it up yourself, out of band, if you want to). v1 backup is a full local mirror only — no off-site/cloud copy, no encryption, no incremental snapshots (see `infra/host/backup-files.sh`'s docstring and M6-03's ticket for the explicit out-of-scope list).
 

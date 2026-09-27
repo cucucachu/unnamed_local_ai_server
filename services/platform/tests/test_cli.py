@@ -117,3 +117,37 @@ def test_roles_disable_and_last_admin(run, settings):
     assert _users(settings)["boss"]["disabled_at"] is not None
     assert run("enable-user", "boss")[1] == "boss is now active\n"
     assert _users(settings)["boss"]["disabled_at"] is None
+
+
+def test_spaces_commands(run, settings, chowns):
+    for name in ("e2e-alice", "e2e-bob"):
+        assert run("create-user", name, "--password-stdin", stdin="long enough\n")[0] == 0
+
+    code, out, _ = run("create-space", "E2E-Family", "--name", "Family", "--owner", "e2e-alice")
+    assert code == 0 and "created space e2e-family" in out
+    code, out, _ = run("add-member", "e2e-family", "e2e-bob", "--role", "viewer")
+    assert (code, out) == (0, "added e2e-bob to e2e-family as viewer\n")
+
+    code, out, _ = run("list-spaces", "--json")
+    listed = {s["slug"]: s for s in json.loads(out)}
+    assert set(listed) == {"e2e-alice", "e2e-bob", "e2e-family"}
+    assert listed["e2e-alice"]["kind"] == "personal"
+    assert listed["e2e-family"]["members"] == [
+        {"username": "e2e-alice", "role": "owner"},
+        {"username": "e2e-bob", "role": "viewer"},
+    ]
+    family = listed["e2e-family"]
+    space_dir = settings.platform_spaces_dir / family["id"]
+    assert (space_dir / "files").is_dir() and (space_dir / "apps").is_dir()
+    assert chowns[space_dir] == (0, family["gid"])
+    code, out, _ = run("list-spaces")
+    assert "e2e-bob:viewer" in out
+
+    assert run("add-member", "e2e-family", "e2e-bob")[::2] == (1, "error: already_member\n")
+    assert run("add-member", "e2e-alice", "e2e-bob")[::2] == (1, "error: personal_space\n")
+    assert run("add-member", "nope", "e2e-bob")[::2] == (1, "error: not_found\n")
+    assert run("create-space", "e2e-family", "--owner", "e2e-bob")[::2] == (
+        1,
+        "error: slug_taken\n",
+    )
+    assert run("create-space", "x", "--owner", "ghost")[::2] == (1, "error: not_found\n")

@@ -10,6 +10,7 @@ from psycopg import AsyncConnection
 
 from app.core import sessions, users
 from app.core.errors import InvalidInput, NotFound, Unauthorized
+from app.core.storage import SpaceStorage
 
 TOKEN_PREFIX = "hi_"
 INVITE_TTL = timedelta(days=7)
@@ -68,6 +69,7 @@ async def accept_invite(
     username: str,
     display_name: str,
     password: str,
+    storage: SpaceStorage,
     device_label: str | None = None,
 ) -> tuple[Row, str]:
     """Create a member from a pending invite and log them in; returns (user, session token).
@@ -85,7 +87,7 @@ async def accept_invite(
         invite = await cur.fetchone()
         if invite is None:
             raise Unauthorized("invalid_invite")
-        user = await users.insert_user(conn, new_user)
+        user = await users.insert_user(conn, new_user, storage)
         await conn.execute(
             "UPDATE invites SET used_by = %s WHERE id = %s", (user["id"], invite["id"])
         )
