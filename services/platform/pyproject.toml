@@ -1,0 +1,37 @@
+[project]
+name = "homeai-platform"
+version = "0.1.0"
+description = "M10-02: platform service - auth, spaces, app registry, user storage (docs/PLATFORM.md)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "psycopg-pool>=3.3.3",
+    "psycopg[binary]>=3.3.6",
+    "pydantic-settings>=2.15.0",
+    "pyjwt[crypto]>=2.15.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+# Same as agent-server: app/ is run directly via `uvicorn app.main:app`,
+# not built/installed as a wheel.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.9",
+]

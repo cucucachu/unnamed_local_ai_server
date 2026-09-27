@@ -9,6 +9,8 @@
 #   egress-proxy       -> M7-02 (mitmproxy filtering forward proxy) [added]
 #   web-fetch          -> M7-03 (fetch + readable-text extraction, behind egress-proxy) [added]
 #   searxng            -> M7-04 (self-hosted metasearch engine, GET-only engines) [added]
+#   db-init            -> M10-02 (one-shot: platform role + homeai_platform DB) [added]
+#   platform           -> M10-02 (auth, spaces, app registry, user storage) [added]
 #
 # Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
 # `caddy` publishes host ports (80 and, as of M9-05, 443). M7-01 splits the single bridge that
@@ -57,6 +59,10 @@ volumes:
   # `mitmproxy-ca-cert.pem` from it (docs/ARCHITECTURE.md §5 has the exact
   # steps).
   egress-proxy-ca:
+  # M10-02: the platform service's own state - Ed25519 signing keys
+  # (`keys/`, 0600) today, the bootstrap setup code later. Losing it rotates
+  # the signing key, invalidating every outstanding token.
+  platform-data:
 
 services:
   caddy:
@@ -254,6 +260,71 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # M10-02: one-shot that idempotently creates the `platform` role and
+  # `homeai_platform` database using the superuser creds above - needed
+  # because the postgres image only runs its own init scripts on an empty
+  # volume, and `pgdata` predates Stage 3. Re-runs on every `docker compose
+  # up` and exits 0 when there's nothing to do; `platform` waits for it.
+  # Manual re-run: `docker compose run --rm db-init`.
+  db-init:
+    image: postgres:17
+    restart: "no"
+    networks: [homeai-internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: postgres
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    entrypoint: ["bash", "/db-init.sh"]
+    volumes:
+      - ./infra/postgres/db-init.sh:/db-init.sh:ro
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD}
+
+  # M10-02: auth, sessions, spaces, app registry, and (from M11) all user
+  # storage - docs/PLATFORM.md §3. Internal port 8100, never routed by
+  # Caddy under `/internal/*`. Runs as root so it can assign per-user/
+  # per-space file ownership under /data/spaces, but with every capability
+  # dropped except the three that needs, and a read-only root filesystem.
+  platform:
+    build: ./services/platform
+    restart: unless-stopped
+    # internal-only (M7-01) - no route to the public internet.
+    networks: [homeai-internal]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - platform-data:/data/platform
+      - ${SPACES_DIR}:/data/spaces
+    environment:
+      PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD}
+      PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
+      PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
+    healthcheck:
+      # python:3.12-slim has no curl.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8100/internal/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # The *only* service with docker.sock mounted (README.md "Isolation
   # boundary" / "Documented future hardening (not v1)": a docker-socket-proxy

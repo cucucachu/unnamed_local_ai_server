@@ -41,7 +41,9 @@ flowchart TB
             agent["Agent Server\nFastAPI + deepagents\napp code at /app\nFilesystemBackend at /data/files"]
             execmgr[Code-Exec Manager\nFastAPI + docker SDK\nno app-code or secret access]
             model[Model Runner\nllama.cpp server-vulkan]
-            pg[(Postgres\ncheckpoints + metadata)]
+            pg[(Postgres\nhomeai: checkpoints + metadata\nhomeai_platform: platform)]
+            platform["Platform (M10-02 skeleton)\nFastAPI, :8100\nsigning keys + JWKS, migrations"]
+            dbinit[db-init\none-shot: platform role + DB]
         end
 
         subgraph execpool [Code-exec containers, session-scoped, network none]
@@ -57,6 +59,8 @@ flowchart TB
     proxy -->|"/api, /ws"| agent
     agent --> model
     agent --> pg
+    platform --> pg
+    dbinit -.->|"CREATE ROLE/DATABASE if missing"| pg
     agent -->|"read/write/edit/ls (direct, in-process, virtual root /)"| filesdir
     agent -->|"execute_code tool: create/exec/destroy"| execmgr
     execmgr -->|docker API| exec1
@@ -84,8 +88,9 @@ operations" below for why Vulkan over ROCm).
 `homeai-internal` (`internal: true` — Docker attaches no default
 route/NAT, so nothing on it can reach the public internet at the network
 layer) and `homeai-net` (the ordinary bridge network with default Docker
-egress). `agent-server`, `model-runner`, `code-exec-manager`, and
-`postgres` are on `homeai-internal` **only**. `caddy` is the sole service
+egress). `agent-server`, `model-runner`, `code-exec-manager`,
+`postgres`, and (M10-02) `platform` and `db-init` are on
+`homeai-internal` **only**. `caddy` is the sole service
 on both: it needs `homeai-internal` to reach `agent-server`, and
 `homeai-net` to keep its published port (and thus a route out, for
 whatever it itself needs). `homeai-net` is reserved exclusively for
@@ -624,7 +629,9 @@ what another doc says it should be.
 ### `postgres`
 
 - **Purpose**: stores LangGraph checkpoints (thread/message state) and
-  thread metadata.
+  thread metadata (database `homeai`, superuser `POSTGRES_USER`), plus
+  the platform service's own database `homeai_platform` (owned by role
+  `platform`, created by `db-init` below — M10-02).
 - **Image/base**: `postgres:17`, official/unmodified.
 - **Published port**: none.
 - **Internal port**: `5432`.
@@ -639,6 +646,90 @@ what another doc says it should be.
   `test_checkpointer_pg.py` / `test_threads_pg.py` (`-m integration`, needs
   `TEST_PG_DSN`) and the `scripts/e2e/gate_m3.sh` / `persistence_smoke.sh`
   scripts.
+
+### `db-init`
+
+- **Purpose** (M10-02): one-shot that idempotently creates the Postgres
+  roles/databases later services need, using the existing superuser
+  credentials. Exists because the `postgres` image only runs its own
+  `/docker-entrypoint-initdb.d` hook on an empty volume, and `pgdata`
+  predates Stage 3. Today it creates role `platform` (LOGIN, no other
+  attributes) and database `homeai_platform` owned by it, with `CONNECT`
+  revoked from `PUBLIC`. Every run re-sets the role's password from
+  `PLATFORM_DB_PASSWORD` (so rotating it in `.env` + re-running is enough)
+  and re-asserts the database owner. `CREATE DATABASE` can't run inside a
+  transaction/`DO` block, so the script uses psql's `\gexec`.
+- **Image/base**: `postgres:17` (same as `postgres`, so `psql` matches the
+  server), entrypoint overridden to `bash /db-init.sh`. Script:
+  `infra/postgres/db-init.sh`, bind-mounted read-only.
+- **Lifecycle**: `restart: "no"`; `depends_on: postgres (service_healthy)`.
+  Runs (and exits 0) on every `docker compose up`; `platform` waits for it
+  via `service_completed_successfully`. Manual re-run: `docker compose run
+  --rm db-init`.
+- **Network**: `homeai-internal` only.
+- **Runs as**: `user: postgres`, `read_only: true` + `tmpfs: /tmp`,
+  `cap_drop: [ALL]`, `no-new-privileges`.
+- **Env vars consumed**: `PGHOST=postgres`, `PGUSER`/`PGPASSWORD`/
+  `PGDATABASE` (from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
+  `PLATFORM_DB_PASSWORD`. Fails loudly if `PLATFORM_DB_PASSWORD` is empty.
+- **Tests**: `services/platform/tests/test_db_init.py` runs the script
+  exactly as compose does (same image, read-only, no caps, `user: postgres`)
+  against the test session's throwaway Postgres (superuser `homeai`, already
+  initialized): repeat runs, role attributes, DB owner, `PUBLIC` can't
+  connect, password rotation, migrations as the `platform` role.
+
+### `platform`
+
+- **Purpose** (M10-02 skeleton; design: `docs/PLATFORM.md`): will own auth,
+  sessions, spaces, the app registry, and all user storage. Today it
+  applies its database migrations, holds the Ed25519 signing key every
+  platform token is signed with, and serves the public half as a JWKS.
+- **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
+  `services/platform/Dockerfile`. Runtime deps only (`uv sync --frozen
+  --no-dev`) with bytecode compiled at build time; `CMD` runs
+  `/app/.venv/bin/uvicorn` directly (not `uv run`), so nothing writes under
+  the read-only root at runtime.
+- **Published port**: none.
+- **Internal port**: `8100`. Caddy routing (`/api/auth/*`,
+  `/api/platform/*`) lands in M10-04; `/internal/*` is never routed.
+- **Network**: `homeai-internal` only.
+- **Mounts**: named volume `platform-data:/data/platform` (signing key at
+  `keys/signing-key.pem`, dir `0700`, file `0600`; losing the volume
+  rotates the key and invalidates every outstanding token), and
+  `${SPACES_DIR}:/data/spaces` (rw bind, host default
+  `/srv/homeai/spaces`; not read until M10-05). Docker creates a missing
+  `SPACES_DIR` as `root:root 0755` on first `up`.
+- **Runs as**: root, with `cap_drop: [ALL]` + `cap_add: [CHOWN,
+  DAC_OVERRIDE, FOWNER]` (it's the component that will assign per-user/
+  per-space ownership), `read_only: true` + `tmpfs: /tmp`,
+  `no-new-privileges`.
+- **Startup**: opens a psycopg pool to `homeai_platform` as role
+  `platform`, applies pending migrations, loads (or on first start
+  generates) the signing key. Any failure fails startup.
+- **Migrations**: `services/platform/app/db/migrations/NNNN_name.sql`,
+  forward-only, applied by `app/db/migrate.py` in one transaction after
+  `pg_advisory_xact_lock`, so concurrent starters serialize and a failing
+  file rolls back the whole batch. `schema_migrations` records version,
+  name, and a SHA-256 of each file; editing an already-applied file is a
+  startup error. `0001_init` creates `schema_migrations` and
+  `platform_state` (key → JSONB).
+- **Healthcheck**: `GET /internal/health` via the image's `python`
+  (`SELECT 1` against the pool; `503` if the database is unreachable).
+- **Env vars consumed** (cross-checked against `app/core/config.py`):
+  `PLATFORM_DB_PASSWORD`, `PLATFORM_AGENT_TOKEN`, `PLATFORM_EXEC_TOKEN`
+  (the two service tokens are loaded but not enforced until an endpoint
+  that needs them exists). DB host/port/user/name default to
+  `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
+  `/data/platform`/`/data/spaces`.
+- **Tests**: `services/platform/tests/` — `test_tokens.py` (RFC 7638 /
+  RFC 8037 thumbprint vector, key persistence + permissions, tampered
+  signature/payload, expired, wrong `aud`/`iss`, unknown/missing `kid`,
+  alg confusion, `act` checks), `test_migrations.py`, `test_db_init.py`,
+  `test_app.py` (lifespan, health, JWKS, `kid` stable across restarts).
+  Run: `cd services/platform && uv run ruff check . && uv run pytest`.
+  Needs a reachable Docker daemon: `tests/conftest.py` starts one
+  `postgres:17` container per session on a random loopback port (removed
+  afterwards) and gives each test a fresh database.
 
 ### Host-level pieces (not containers)
 
@@ -963,6 +1054,25 @@ service over `homeai-internal` — neither tool ever talks to
   the boundary directly) and any transport-level failure (`web-fetch`
   itself unreachable, timed out, etc. → `Error: web_search failed: ...`/
   `Error: web_fetch failed: ...` with the underlying exception's `repr`).
+
+### `platform` API (internal, port 8100)
+
+M10-02 skeleton; the full surface is designed in `docs/PLATFORM.md` §3–§4.
+
+- `GET /internal/health` → `200 {"status":"ok"}`, or `503
+  {"status":"degraded","database":"unreachable"}`.
+- `GET /internal/jwks` → RFC 7517 JWK Set, unauthenticated: `{"keys":
+  [{"kty":"OKP","crv":"Ed25519","x":…,"kid":…,"use":"sig","alg":"EdDSA"}]}`.
+  `kid` is the key's RFC 7638 thumbprint.
+- `/api/auth/*`, `/api/platform/*`: routers exist, no routes yet.
+
+**Token format** (`app/core/tokens.py`, `TokenService`): EdDSA JWTs with
+header `kid`, `iss="homeai-platform"`, `aud="homeai"`, `iat`, `exp`, plus
+caller claims that must include `sub` and `act`. `verify_token(token,
+act=...)` rejects an unknown `kid`, any algorithm other than EdDSA, a bad
+signature, wrong `iss`/`aud`, expiry, missing required claims, or an `act`
+not in the allowed set. Downstream services verify the same way from the
+JWKS alone, re-fetching on an unknown `kid`.
 
 ### `code-exec-manager` API (internal, port 8090)
 
