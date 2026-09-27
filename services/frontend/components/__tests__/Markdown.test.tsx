@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { Linking, Text as RNText } from 'react-native';
+import { Linking, Platform, StyleSheet, Text as RNText, View as RNView } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { Markdown } from '../Markdown';
@@ -173,5 +173,54 @@ describe('Markdown', () => {
     expect(text).toContain('☑');
     expect(text).toContain('unchecked task');
     expect(text).toContain('checked task');
+  });
+
+  describe('long plain-prose paragraph wrapping (issue #123)', () => {
+    // The `textgroup` wrapper (see `Markdown.tsx`'s own docstring on it) is
+    // the only `View` in this tree styled with both `flexWrap: 'wrap'` and
+    // `alignItems: 'center'` — a reliable fingerprint for finding it
+    // without depending on render order.
+    function findTextGroupView(renderer: ReactTestRenderer) {
+      return renderer.root.findAllByType(RNView).find((node) => {
+        const style = StyleSheet.flatten(node.props.style);
+        return style?.flexWrap === 'wrap' && style?.alignItems === 'center';
+      });
+    }
+
+    const LONG_PROSE =
+      'This is a long unbroken run of plain prose text with no links or ' +
+      'formatting that must wrap onto multiple lines within the chat ' +
+      'bubble instead of overflowing off the right edge of the screen.';
+
+    it('shrinks the textgroup wrapper on web (minWidth: 0, flexShrink: 1)', () => {
+      Platform.OS = 'web';
+      try {
+        const renderer = renderMarkdown(LONG_PROSE);
+        const textGroup = findTextGroupView(renderer);
+        expect(textGroup).toBeTruthy();
+        const style = StyleSheet.flatten(textGroup?.props.style);
+        // This is the actual fix: without it, RNW's `View` (flexShrink: 0
+        // by default, unlike the browser's CSS default of 1) combined with
+        // a flex-container flex-item's automatic `min-width: auto` keeps
+        // this box pinned to its unwrapped content width, so the paragraph
+        // overflows the bubble instead of wrapping.
+        expect(style?.minWidth).toBe(0);
+        expect(style?.flexShrink).toBe(1);
+      } finally {
+        Platform.OS = 'ios';
+      }
+    });
+
+    it('leaves the textgroup wrapper unshrunk on native (Yoga already wraps correctly)', () => {
+      // Platform.OS defaults to 'ios' under jest-expo; assert explicitly so
+      // this test's intent survives a future default change.
+      Platform.OS = 'ios';
+      const renderer = renderMarkdown(LONG_PROSE);
+      const textGroup = findTextGroupView(renderer);
+      expect(textGroup).toBeTruthy();
+      const style = StyleSheet.flatten(textGroup?.props.style);
+      expect(style?.minWidth).toBeUndefined();
+      expect(style?.flexShrink).toBeUndefined();
+    });
   });
 });

@@ -58,6 +58,12 @@
 // `https://homeai.local` the composer mic is visible and a transcript
 // lands in the draft (never auto-sent). Over `http://` the button is
 // absent (`isSecureContext` is false).
+//
+// Issue #123: right after the M9-01 markdown check, a long plain-prose
+// reply (no links/lists/formatting) is asserted to wrap within a narrow
+// (390px, phone-like) viewport instead of overflowing horizontally —
+// regression coverage for the `Markdown.tsx` `textgroup` wrapper bug (see
+// that file's `textGroupWeb` style comment for the root cause).
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
@@ -145,6 +151,16 @@ const EDIT_TURN_2_EDITED = 'Say exactly: BRAVO-EDITED';
 // not trip write_file / execute_code).
 const MARKDOWN_MESSAGE =
   'Reply with a markdown table of 3 planets and a python code block printing hello';
+// Issue #123: "Say exactly:" (same reliable-echo convention as
+// FIRST_MESSAGE etc.) with a long unbroken plain-prose sentence — no
+// links/lists/formatting — so the reply exercises exactly the
+// `Markdown.tsx` `textgroup` wrapper case that overflowed the bubble
+// instead of wrapping on web.
+const LONG_PROSE_MESSAGE =
+  'Say exactly: This is a long unbroken sentence of plain prose text with no links, ' +
+  'lists, or special formatting that must wrap onto multiple lines inside the narrow ' +
+  'chat bubble instead of overflowing off the right edge of the screen, because a ' +
+  'single unformatted paragraph is exactly the case this regression covers.';
 // M9-02: read_file is not a mutating tool (HITL-safe). The file is written
 // into FILES_DIR just before the step so the model has something real
 // to open.
@@ -967,6 +983,26 @@ async function main() {
       throw new Error(`Step 13: expected a <pre>/code block in the assistant bubble; reply was: ${markdownReply}`);
     }
     console.log(`Step 13 OK — assistant bubble has <table> (${tableCount}) and <pre>/code (${preCount}/${codeCount})`);
+
+    // --- Step 13b: long plain-prose reply wraps, no horizontal overflow
+    // (issue #123) --------------------------------------------------------
+    // A narrow, phone-like viewport is what actually exercises the bug
+    // (see issue #123's own repro: "narrow viewport width"). Restored to
+    // Playwright's 1280x720 default afterward so later steps' layout
+    // assumptions (e.g. the mic button, branch switcher) aren't affected.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const longProsePrior = await page.locator('[data-testid="chat-item-assistant"]').count();
+    const longProseReply = await sendMessageAndAwaitReply(page, LONG_PROSE_MESSAGE, longProsePrior);
+    const longProseOverflows = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    );
+    await page.setViewportSize({ width: 1280, height: 720 });
+    if (longProseOverflows) {
+      throw new Error(
+        `Step 13b: long plain-prose reply overflowed a 390px-wide viewport horizontally instead of wrapping (reply: ${longProseReply})`,
+      );
+    }
+    console.log('Step 13b OK — long plain-prose reply wrapped with no horizontal overflow at a 390px viewport');
 
     // --- Step 14: turn activity panel (M9-02) ---------------------------
     // HITL is still off from step 11; read_file is not mutating anyway.
