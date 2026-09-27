@@ -80,3 +80,18 @@ export function previewKind(name: string): PreviewKind | null {
 export function streamUrl(path: string): string {
   return `${apiBase()}/api/media/stream?path=${encodeURIComponent(path)}`;
 }
+
+/** Issue #125: poster-frame thumbnail URL, hitting
+ * `GET /api/media/thumbnail?path=<...>` (server-side `ffmpeg`-generated,
+ * cached JPEG — see `services/agent-server/app/core/thumbnails.py`).
+ * Same `encodeURIComponent`-the-whole-path convention as `streamUrl`
+ * above. Callers are expected to have already checked `mediaKind(name)
+ * === 'video'` (this module's own extension-based check, not
+ * `fileDisplay.ts`'s MIME-based `categoryFor`) before using this — same
+ * "extension is the more reliable signal" rationale as `mediaKind`'s own
+ * docstring, and it's exactly the check the server itself uses
+ * (`is_video_file` in `app/core/thumbnails.py`) to decide whether a given
+ * path is even eligible for a thumbnail. */
+export function thumbnailUrl(path: string): string {
+  return `${apiBase()}/api/media/thumbnail?path=${encodeURIComponent(path)}`;
+}

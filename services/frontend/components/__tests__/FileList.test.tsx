@@ -24,6 +24,14 @@ const IMAGE_FILE: FileEntry = {
   mtime: '2026-08-30T19:55:00.000Z',
   mime: 'image/png',
 };
+const VIDEO_FILE: FileEntry = {
+  name: 'clip.mp4',
+  path: 'clip.mp4',
+  type: 'file',
+  size: 4096,
+  mtime: '2026-08-30T19:55:00.000Z',
+  mime: 'video/mp4',
+};
 
 // Same "walk <Text> nodes" helper as `ThreadListScreen`'s own test suite
 // (`chat/__tests__/index.test.tsx`) — a `FlatList`'s rendered output can't
@@ -202,6 +210,58 @@ describe('FileList', () => {
       });
 
       expect(onPressEntry).toHaveBeenCalledWith(IMAGE_FILE);
+    });
+  });
+
+  // Issue #125: video entries get a poster-frame thumbnail (server-side
+  // `ffmpeg`-generated, `GET /api/media/thumbnail`) instead of the generic
+  // `videocam-outline` icon — same shape as issue #124's image thumbnails
+  // above, just a separate `testID` (`video-thumbnail`) since it's a
+  // distinct `<Image>` element pointed at a different URL.
+  function findVideoThumbnail(renderer: ReactTestRenderer) {
+    const candidates = renderer.root.findAllByProps({ testID: 'video-thumbnail' });
+    const thumbnail = candidates.find((node) => typeof node.props.onLoad === 'function');
+    if (!thumbnail) throw new Error('no video thumbnail Image found');
+    return thumbnail;
+  }
+
+  describe('video thumbnails (issue #125)', () => {
+    it('renders a thumbnail for a video entry', () => {
+      const renderer = render(createElement(FileList, { entries: [VIDEO_FILE], onPressEntry: jest.fn() }));
+
+      expect(findVideoThumbnail(renderer)).toBeTruthy();
+    });
+
+    it('does not render a video thumbnail for a non-video file, an image, or a directory', () => {
+      const renderer = render(
+        createElement(FileList, { entries: [DIR_A, FILE_A, IMAGE_FILE], onPressEntry: jest.fn() }),
+      );
+
+      expect(renderer.root.findAllByProps({ testID: 'video-thumbnail' })).toHaveLength(0);
+    });
+
+    it('falls back to the generic video icon if the thumbnail fails to load', () => {
+      const renderer = render(createElement(FileList, { entries: [VIDEO_FILE], onPressEntry: jest.fn() }));
+
+      act(() => {
+        findVideoThumbnail(renderer).props.onError();
+      });
+
+      expect(renderer.root.findAllByProps({ testID: 'video-thumbnail' })).toHaveLength(0);
+      // Still a row for the entry, just rendering the fallback icon instead.
+      expect(findRow(renderer, VIDEO_FILE.name)).toBeTruthy();
+    });
+
+    it('still routes taps/long-presses through the same row Pressable as any other entry', () => {
+      const onPressEntry = jest.fn();
+      const renderer = render(createElement(FileList, { entries: [VIDEO_FILE], onPressEntry }));
+
+      const row = findRow(renderer, VIDEO_FILE.name);
+      act(() => {
+        row.props.onPress();
+      });
+
+      expect(onPressEntry).toHaveBeenCalledWith(VIDEO_FILE);
     });
   });
 });

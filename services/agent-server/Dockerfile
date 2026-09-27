@@ -4,6 +4,20 @@ FROM python:3.12-slim
 # distroless image instead of installing via pip/curl.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# Issue #125: `ffmpeg` for server-side video poster-frame thumbnail
+# generation (`app/core/thumbnails.py`) - not a Python dependency, so it
+# can't go in pyproject.toml/uv.lock; installed here instead, same as any
+# other native binary this image needs. Runs as root during the BUILD
+# (this Dockerfile has no `USER` of its own - the non-root runtime UID
+# comes from docker-compose.yml's `user:` field, applied only when the
+# CONTAINER runs, not during `docker build`), so apt works normally here.
+# `--no-install-recommends` + dropping the apt lists afterwards keeps the
+# image from growing by ffmpeg's full recommended-package closet (fonts,
+# X11 libs, etc. that a purely-CLI, no-GUI frame-extraction use never
+# touches).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Container runs as a non-root, HOME-less UID (compose sets `user:` to

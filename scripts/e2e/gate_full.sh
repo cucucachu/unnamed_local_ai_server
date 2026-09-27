@@ -7,7 +7,7 @@
 #   gate_m2.sh -> persistence_smoke.sh -> gate_m3.sh -> exec_crossview_smoke.sh
 #   -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
-#   -> chat_browser_smoke.sh
+#   -> video_thumbnail_browser_smoke.sh -> chat_browser_smoke.sh
 #   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
 #      gate_m7.sh to scripts/e2e/gate_full.sh" - the first milestone gate
 #      script appended to this chain since M6-03 first wrote it; future
@@ -28,6 +28,11 @@
 #      Inserted right after media_browser_smoke.sh, its closest sibling —
 #      same "one dedicated script per Files-tab preview feature" shape as
 #      that M5-02 script.)
+#   -> video_thumbnail_browser_smoke.sh (issue #125: seeded video -> real
+#      ffmpeg-generated poster-frame thumbnail <img> in the Files list ->
+#      still cached/loads on revisit -> direct-tap playback still works.
+#      Inserted right after image_browser_smoke.sh, its closest sibling —
+#      same "one dedicated script per Files-tab preview feature" shape.)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -42,7 +47,7 @@
 # on its own failure and does its own health-waiting/cleanup (several also
 # do their own internal `docker compose up -d --build` — left in place
 # deliberately, per the ticket: after this script's own initial `up`, those
-# calls are just fast no-ops). This script's only job is to run all 14 in
+# calls are just fast no-ops). This script's only job is to run all 15 in
 # order, capture PASS/FAIL + wall-clock seconds for each, and CONTINUE to
 # the next one even if a step fails — so a single run gives the full
 # picture instead of stopping at the first red — then print a summary table
@@ -186,6 +191,7 @@ main() {
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "image_browser_smoke.sh"  bash "${SCRIPT_DIR}/image_browser_smoke.sh"
+  run_step "video_thumbnail_browser_smoke.sh" bash "${SCRIPT_DIR}/video_thumbnail_browser_smoke.sh"
   run_step "chat_browser_smoke.sh"   bash "${SCRIPT_DIR}/chat_browser_smoke.sh"
   # M7-07: gate_m7.sh already re-runs verify_network.sh/verify_isolation.sh
   # itself as part of its own chain (see that script's own header comment)

@@ -51,9 +51,14 @@ from typing import BinaryIO
 
 import anyio.to_thread
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.paths import resolve_files_path
+from app.core.thumbnails import (
+    ThumbnailGenerationError,
+    get_cached_thumbnail,
+    is_video_file,
+)
 
 router = APIRouter()
 
@@ -203,3 +208,43 @@ async def stream_media_get(request: Request, path: str) -> StreamingResponse:
 @router.head("/media/stream")
 async def stream_media_head(request: Request, path: str) -> StreamingResponse:
     return await _stream(request, path, head=True)
+
+
+@router.get("/media/thumbnail")
+async def media_thumbnail(request: Request, path: str) -> FileResponse:
+    """Issue #125: poster-frame thumbnail for a video file, generated (and
+    cached — see `app/core/thumbnails.py`) on first request via `ffmpeg`.
+
+    Same traversal guard and 404 semantics as `/media/stream` above
+    (`resolve_files_path`, `is_file()` check) — deliberately NOT reusing
+    `_stream`'s Range/streaming machinery, since a thumbnail is a single
+    small already-materialized JPEG on disk, not a byte-range-seekable
+    media file; `FileResponse` (stat + `Content-Length` + a plain full-body
+    read) is the right-sized tool here, not `StreamingResponse`.
+    """
+    root = _files_root(request)
+    target = resolve_files_path(root, path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"file '{path}' not found")
+    if not is_video_file(target.name):
+        raise HTTPException(
+            status_code=415, detail=f"'{path}' is not a recognized video file"
+        )
+
+    try:
+        thumbnail_path = await anyio.to_thread.run_sync(get_cached_thumbnail, target)
+    except ThumbnailGenerationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(
+        thumbnail_path,
+        media_type="image/jpeg",
+        # Cacheable client-side: the cache key already changes if the
+        # source file changes (see `cache_key_for`'s docstring), so a
+        # stale client-cached thumbnail for the SAME `path` query value
+        # only happens if the source was overwritten — an edge case this
+        # ticket doesn't ask this endpoint to defend against (the
+        # `?path=` URL itself doesn't change on overwrite, unlike e.g. a
+        # content-hash query param would).
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
