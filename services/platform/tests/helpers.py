@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import psycopg
@@ -36,6 +37,7 @@ async def create_user(platform: Platform, username: str, role: str = "member", *
             display_name=kw.get("display_name", username.title()),
             password=kw.get("password", PASSWORD),
             role=role,
+            storage=platform.app.state.storage,
         )
 
 
@@ -83,3 +85,11 @@ async def stepped_up_admin(platform: Platform) -> dict[str, str]:
     token = await bootstrap_admin(platform)
     await step_up(platform, token)
     return await identity(platform, token)
+
+
+async def delegation(platform: Platform, token: str) -> dict[str, str]:
+    """An act=agent bearer for this session, as M11-02's delegation endpoint will mint."""
+    headers = await identity(platform, token)
+    claims = platform.app.state.tokens.verify_token(headers["X-HomeAI-Identity"], act="user")
+    payload = {k: claims[k] for k in ("sub", "sid", "role")} | {"act": "agent", "thr": "t-1"}
+    return bearer(platform.app.state.tokens.issue_token(payload, timedelta(minutes=15)))

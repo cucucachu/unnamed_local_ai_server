@@ -29,6 +29,7 @@ from httpx import ASGITransport, AsyncClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from app.core import storage
 from app.core.config import Settings
 from app.main import create_app
 
@@ -124,6 +125,9 @@ def pg_database(pg_server: PgServer) -> Iterator[PgDatabase]:
 
 
 def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
+    """`data_dir` also holds the spaces root, at `data_dir/spaces`."""
+    spaces_dir = data_dir / "spaces"
+    spaces_dir.mkdir(parents=True, exist_ok=True)
     return Settings(
         platform_db_host=db.host,
         platform_db_port=db.port,
@@ -131,9 +135,26 @@ def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
         platform_db_password=db.password,
         platform_db_name=db.dbname,
         platform_data_dir=data_dir,
+        platform_spaces_dir=spaces_dir,
         _env_file=None,
         **overrides,
     )
+
+
+@pytest.fixture(autouse=True)
+def chowns(monkeypatch) -> dict[Path, tuple[int, int]]:
+    """Space-dir chowns as {path: (uid, gid)}, recorded instead of performed.
+
+    Tests run unprivileged and can't chown to root:<space gid>;
+    `tests/test_storage.py` checks real ownership as root in a container.
+    """
+    recorded: dict[Path, tuple[int, int]] = {}
+
+    def fake_fchown(fd: int, uid: int, gid: int) -> None:
+        recorded[Path(os.readlink(f"/proc/self/fd/{fd}"))] = (uid, gid)
+
+    monkeypatch.setattr(storage, "_fchown", fake_fchown)
+    return recorded
 
 
 @asynccontextmanager

@@ -14,8 +14,9 @@ from uuid import UUID
 from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 
-from app.core import passwords, sessions
+from app.core import passwords, sessions, spaces
 from app.core.errors import Conflict, InvalidInput, NotFound
+from app.core.storage import SpaceStorage
 
 ROLES = ("admin", "member")
 
@@ -50,7 +51,8 @@ async def prepare_user(username: str, display_name: str, password: str, role: st
     return NewUser(username, display_name, role, password_hash)
 
 
-async def insert_user(conn: AsyncConnection, new_user: NewUser) -> Row:
+async def insert_user(conn: AsyncConnection, new_user: NewUser, storage: SpaceStorage) -> Row:
+    """Insert the user and their personal space, atomically. The only way users are created."""
     try:
         async with conn.transaction():
             cur = await conn.execute(
@@ -58,15 +60,26 @@ async def insert_user(conn: AsyncConnection, new_user: NewUser) -> Row:
                 f"VALUES (%s, %s, %s, %s) RETURNING {USER_COLUMNS}",
                 (new_user.username, new_user.display_name, new_user.role, new_user.password_hash),
             )
-            return await cur.fetchone()
+            user = await cur.fetchone()
+            await spaces.create_personal_space(conn, user, storage)
+            return user
     except UniqueViolation as exc:
+        if exc.diag.constraint_name != "users_username_key":
+            raise
         raise Conflict("username_taken") from exc
 
 
 async def create_user(
-    conn: AsyncConnection, *, username: str, display_name: str, password: str, role: str
+    conn: AsyncConnection,
+    *,
+    username: str,
+    display_name: str,
+    password: str,
+    role: str,
+    storage: SpaceStorage,
 ) -> Row:
-    return await insert_user(conn, await prepare_user(username, display_name, password, role))
+    new_user = await prepare_user(username, display_name, password, role)
+    return await insert_user(conn, new_user, storage)
 
 
 async def get_user(conn: AsyncConnection, user_id: UUID) -> Row:
@@ -89,6 +102,14 @@ async def get_user_by_username(conn: AsyncConnection, username: str) -> Row:
 
 async def list_users(conn: AsyncConnection) -> list[Row]:
     cur = await conn.execute(f"SELECT {USER_COLUMNS} FROM users ORDER BY created_at, username")
+    return await cur.fetchall()
+
+
+async def list_directory(conn: AsyncConnection) -> list[Row]:
+    """Enabled users, for member pickers: identity only."""
+    cur = await conn.execute(
+        "SELECT id, username, display_name FROM users WHERE disabled_at IS NULL ORDER BY username"
+    )
     return await cur.fetchall()
 
 

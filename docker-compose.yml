@@ -305,7 +305,8 @@ services:
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    # FSETID: set the setgid bit on space dirs whose group root isn't in.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID]
     security_opt: ["no-new-privileges:true"]
     volumes:
       - platform-data:/data/platform

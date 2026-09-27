@@ -1,4 +1,8 @@
-"""`/api/platform/admin/*`: user management and invites. Admin, in person, stepped up."""
+"""`/api/platform/admin/*`: users, spaces, and invites. Admin, in person, stepped up.
+
+Admins manage space membership through the ordinary member routes
+(`spaces.authorize_membership`); nothing here grants access to space data.
+"""
 
 from urllib.parse import urlencode
 from uuid import UUID
@@ -11,11 +15,12 @@ from app.api.schemas import (
     InviteCreateRequest,
     InviteList,
     InviteOut,
+    SpaceList,
     UserList,
     UserOut,
 )
 from app.api.session_http import is_https
-from app.core import invites, users
+from app.core import invites, spaces, users
 from app.core.principal import SteppedUpAdmin, require_admin_stepped_up
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_stepped_up)])
@@ -40,6 +45,12 @@ async def list_users(request: Request):
 async def patch_user(user_id: UUID, body: AdminUserPatch, request: Request):
     async with request.app.state.db_pool.connection() as conn:
         return await users.update_user(conn, user_id, role=body.role, disabled=body.disabled)
+
+
+@router.get("/spaces", response_model=SpaceList)
+async def list_spaces(request: Request, principal: SteppedUpAdmin):
+    async with request.app.state.db_pool.connection() as conn:
+        return SpaceList(spaces=await spaces.list_all_spaces(conn, principal.user_id))
 
 
 @router.post("/invites", response_model=InviteCreated, status_code=status.HTTP_201_CREATED)

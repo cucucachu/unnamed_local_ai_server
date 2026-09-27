@@ -6,7 +6,7 @@ from psycopg.rows import dict_row
 
 from app.db.migrate import MIGRATIONS_DIR, MigrationError, load_migrations, run_migrations
 
-SHIPPED = [(1, "init"), (2, "accounts")]
+SHIPPED = [(1, "init"), (2, "accounts"), (3, "spaces")]
 
 
 async def _connect(dsn: str) -> psycopg.AsyncConnection:
@@ -42,10 +42,13 @@ def _with_init(tmp_path, **extra: str):
 async def test_fresh_database_gets_initial_schema(pg_database):
     async with await _connect(pg_database.dsn) as conn:
         applied = await run_migrations(conn)
-        assert [m.filename for m in applied] == ["0001_init.sql", "0002_accounts.sql"]
-        assert {"schema_migrations", "platform_state", "users", "sessions", "invites"} <= (
-            await _tables(conn)
-        )
+        assert [m.filename for m in applied] == [
+            "0001_init.sql",
+            "0002_accounts.sql",
+            "0003_spaces.sql",
+        ]
+        tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
+        assert tables | {"spaces", "space_members"} <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
 
 

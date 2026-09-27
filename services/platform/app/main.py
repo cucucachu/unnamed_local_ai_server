@@ -15,10 +15,12 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.api import internal
 from app.api.external import auth, platform
+from app.core import spaces
 from app.core.bootstrap import Bootstrap
 from app.core.config import Settings
 from app.core.errors import Conflict, Forbidden, InvalidInput, NotFound, PlatformError, Unauthorized
 from app.core.ratelimit import RateLimited, RateLimiter
+from app.core.storage import SpaceStorage, StorageError
 from app.core.tokens import TokenService, load_or_create_signing_key
 from app.db.migrate import run_migrations
 from app.db.pool import open_pool
@@ -68,8 +70,10 @@ def create_app(
 
     Startup (in `lifespan`, so it reads `app.state.settings` at start time):
     open the Postgres pool, apply pending migrations, load or generate the
-    signing key, and (until the first admin exists) prepare the bootstrap
-    setup code. A failure in any step fails startup; compose restarts it.
+    signing key, give any user without one a personal space, reconcile every
+    space's directory tree (per-space failures are logged, not fatal), and
+    (until the first admin exists) prepare the bootstrap setup code. A
+    failure in any other step fails startup; compose restarts it.
 
     `db_pool_override` is an already-open pool the caller owns (the app
     migrates it but never closes it). `token_service_override` skips key
@@ -89,11 +93,24 @@ def create_app(
             tokens = token_service_override or TokenService(load_or_create_signing_key(s.keys_dir))
             logger.info("signing key kid=%s", tokens.kid)
 
+            storage = SpaceStorage(s.platform_spaces_dir)
+            if not storage.root.is_dir():
+                raise StorageError(f"{storage.root}: spaces root is not a directory")
+            async with pool.connection() as conn:
+                backfilled = await spaces.backfill_personal_spaces(conn, storage)
+                space_dirs = await spaces.all_space_dirs(conn)
+            ok, failed = storage.reconcile(space_dirs)
+            logger.info(
+                "spaces: %d personal spaces backfilled; storage reconciled %d ok, %d failed",
+                backfilled, ok, failed,
+            )  # fmt: skip
+
             bootstrap = Bootstrap(s.platform_data_dir)
             async with pool.connection() as conn:
                 await bootstrap.prepare(conn)
 
             app.state.db_pool = pool
+            app.state.storage = storage
             app.state.tokens = tokens
             app.state.bootstrap = bootstrap
             app.state.limiter = RateLimiter(

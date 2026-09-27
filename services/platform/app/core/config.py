@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     # `platform-data` named volume: signing keys (`keys/`) and the bootstrap
     # `setup-code` (docs/PLATFORM.md §4).
     platform_data_dir: Path = Path("/data/platform")
-    # `${SPACES_DIR}` bind mount. Not read yet; spaces land in M10-05.
+    # `${SPACES_DIR}` bind mount: one `<space_id>/` tree per space
+    # (`app/core/storage.py`). Must exist at startup.
     platform_spaces_dir: Path = Path("/data/spaces")
 
     # Service-to-service bearer secrets for `/internal/*` (docs/PLATFORM.md §4

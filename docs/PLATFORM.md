@@ -126,8 +126,10 @@ flowchart TB
   `agent-server`; `services/platform/`; internal port `8100`;
   `homeai-internal` only). Owns the `homeai_platform` Postgres database and
   the `SPACES_DIR` host tree. Runs as root inside its container with
-  `cap_drop: [ALL]` and `cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]` (it is the
-  trusted kernel that assigns file ownership per user/space), read-only root
+  `cap_drop: [ALL]` and `cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID]`
+  (it is the trusted kernel that assigns file ownership per user/space;
+  `FSETID` lets it set the setgid bit on directories whose group it isn't
+  in — without it the kernel silently drops the bit), read-only root
   filesystem.
 - **`agent-server`**: keeps chat, threads, checkpoints, settings, the agent
   harness. Loses `${FILES_DIR}` (M11). Verifies identity JWTs; obtains
@@ -245,9 +247,20 @@ in `.env`. Each token only unlocks the internal endpoints that service needs.
 - `spaces`: `id uuid`, `slug` (unique, `^[a-z0-9][a-z0-9-]{0,39}$`),
   `name`, `kind` (`personal`|`shared`), `gid int` (unique, allocated from
   30000), `owner_user_id` (personal), `created_at`, `archived_at`.
+  Slugs are immutable and share one namespace across personal and shared
+  spaces; `personal` and `spaces` are reserved. A personal space's slug is
+  derived from the username (collision-safe) and is only an identifier —
+  its virtual path is always `/personal`.
 - `space_members`: `(space_id, user_id, role in owner|editor|viewer)`.
   Personal spaces have exactly one member (the user, `owner`), and cannot
-  gain members.
+  gain members. A shared space always keeps at least one owner. Any member
+  can see the member list; only owners change it.
+- One authorization helper, `authorize_space(principal, space, need)`
+  (`read` = viewer, `write` = editor, `manage` = owner), decides access to
+  a space and its data; non-members get `404`. Agent delegations get
+  their user's `read`/`write` but never `manage`. A stepped-up admin may
+  list every space and manage any shared space's membership, but gains no
+  access to space data.
 - Membership is the only sharing primitive. Removing a member revokes access;
   data stays with the space. Deleting a user archives their personal space.
   Moving data between spaces is an explicit copy/move action.
