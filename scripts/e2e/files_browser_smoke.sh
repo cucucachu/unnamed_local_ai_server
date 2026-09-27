@@ -2,20 +2,24 @@
 # M3-05 full-stack files-browser smoke test.
 #
 # Opens a real headless browser against the live stack (`caddy` fronting the
-# built frontend + proxying to `agent-server`), navigates to the Files tab,
-# and drives the actual file-manager UI (no mocking — real REST `/api/files*`
-# calls) through the FULL flow from the ticket's acceptance criteria:
+# built frontend + proxying to `platform`), navigates to the Files tab,
+# and drives the actual file-manager UI (no mocking — real REST
+# `/api/platform/files*` calls) through the FULL flow from the ticket's
+# acceptance criteria, inside the user's Personal space:
 #
 #   create a folder -> upload a small file into it -> rename it -> verify
-#   the rename via a raw `GET /api/files` (Python `urllib.request` — see
-#   `files_rest_smoke.sh` for the house pattern; `curl` is not installed on
-#   this host) -> delete the folder -> verify it's gone (again via REST).
+#   the rename via a raw REST GET -> delete the folder -> verify it's gone
+#   (again via REST).
 #
 # Run TWICE per the ticket: once with plain ASCII names, once with a folder/
 # file name containing a space and a non-ASCII name (`тест файл.txt`) —
 # proving the whole round trip (breadcrumb navigation, upload, rename,
-# delete, and the URL-encoded REST verification) works for both. See
-# `files_browser_smoke.mjs` for the step-by-step.
+# delete, and the URL-encoded REST verification) works for both.
+#
+# M11-01 adds the space-aware tree: the root lists Personal and a throwaway
+# shared space, the ASCII pass moves its file into that space through the
+# destination picker, and a second user who is a viewer of the space gets
+# the read-only UI. See `files_browser_smoke.mjs` for the step-by-step.
 #
 # Prerequisites (not managed by this script — same convention as
 # `chat_browser_smoke.sh`):
@@ -24,8 +28,8 @@
 #     (rebuild `caddy` first if the frontend changed:
 #       docker compose build caddy && docker compose up -d caddy)
 #   - Node.js/npm available on PATH (e.g. via nvm).
-#   - `python3` available on PATH (used for the REST verification steps,
-#     same as every other `scripts/e2e/*_rest_smoke.sh` script).
+#   - `docker` on PATH (the e2e users come from the platform recovery CLI,
+#     see `auth_helpers.mjs`).
 #
 # Usage:
 #   scripts/e2e/files_browser_smoke.sh

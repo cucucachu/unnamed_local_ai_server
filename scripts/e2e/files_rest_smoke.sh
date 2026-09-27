@@ -21,19 +21,23 @@
 #      API health (same polling helpers as `gate_m2.sh`) — the full stack
 #      (not just agent-server) is needed because step 7 below drives a real
 #      WS chat turn.
-#   2. Uploads a file via multipart `POST /api/files/upload`.
-#   3. Confirms it appears via `GET /api/files`.
-#   4. `ls`'s it on the HOST at the real `FILES_DIR` from `.env`.
-#   5. Downloads it back via `GET /api/files/download` and confirms it's
-#      byte-identical to the original with `cmp`.
-#   6. Deletes it via `DELETE /api/files`, confirms it's gone from both the
-#      list and the host filesystem.
+#   2. Uploads a file into the user's Personal space via multipart
+#      `POST /api/platform/files/upload` (M11-01: the platform files API).
+#   3. Confirms it appears via `GET /api/platform/files?path=/personal`.
+#   4. Checks it on disk inside the platform container
+#      (`/data/spaces/<personal id>/files/`): same bytes, owned
+#      `<user uid>:<personal space gid>`, mode 0660.
+#   5. Downloads it back via `GET /api/platform/files/download` and confirms
+#      it's byte-identical to the original with `cmp`.
+#   6. Deletes it via `DELETE /api/platform/files`, confirms it's gone from
+#      both the list and the disk.
 #   7. Agent-visibility cross-check: drops a SEPARATE file directly onto the
 #      host files directory (bypassing the REST API entirely), then
 #      asks the agent over WS (`scripts/ws_smoke.py`) to list the files
 #      root, and confirms the dropped-in filename appears in a `tool_end`
-#      frame's `result_preview` — proof the agent, the files REST API, and
-#      the host all see the exact same directory.
+#      frame's `result_preview` — proof the agent and the host see the same
+#      directory. Until M11-02 moves the agent onto spaces, the agent still
+#      works in `FILES_DIR`, not in the space steps 2-6 used.
 #   8. Cleans up both files it created so re-running this script is safe
 #      (idempotent, trap on EXIT — mirrors `gate_m2.sh`'s own convention).
 #
@@ -62,6 +66,11 @@ WS_TURN_TIMEOUT_S=90
 RUN_ID="$$-$(date +%s)"
 FILE_NAME="files-rest-smoke-${RUN_ID}.txt"
 FILE_CONTENT="FILES-REST-SMOKE-OK ${RUN_ID}"
+FILES_API="${API_BASE}/platform/files"
+# Set in step 2: the uploaded file's virtual path and its path in the
+# platform container.
+UPLOADED_PATH=""
+UPLOADED_DISK_PATH=""
 AGENT_VIS_FILE_NAME="agent-visibility-${RUN_ID}.txt"
 # Created in step 7.
 AGENT_VIS_THREAD_ID=""
@@ -151,14 +160,14 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: dir path (root-relative) to upload into. $2: local file to upload.
+# $1: virtual dir path to upload into. $2: local file to upload.
 # Prints status on line 1, response body on line 2. Hand-builds the
 # multipart body — `urllib.request` has no built-in multipart encoder, and
 # `requests` isn't a guaranteed-installed dependency on this host's system
 # python3 (only inside `services/agent-server`'s own `uv`-managed venv).
 upload_file() {
   local target_dir="$1" local_path="$2"
-  python3 - "${API_BASE}/files/upload" "$target_dir" "$local_path" <<'PY'
+  python3 - "${FILES_API}/upload" "$target_dir" "$local_path" <<'PY'
 import mimetypes
 import os
 import sys
@@ -216,11 +225,11 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: root-relative file path. $2: local destination path. Prints the
+# $1: virtual file path. $2: local destination path. Prints the
 # status code on line 1; writes the raw response body bytes to $2.
 download_file() {
   local remote_path="$1" local_dst="$2"
-  python3 - "${API_BASE}/files/download" "$remote_path" "$local_dst" <<'PY'
+  python3 - "${FILES_API}/download" "$remote_path" "$local_dst" <<'PY'
 import os
 import sys
 import urllib.error
@@ -240,7 +249,7 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: base REST path (e.g. "/api/files"). $2: "path" query param value.
+# $1: base REST URL (e.g. "$FILES_API"). $2: "path" query param value.
 url_with_path_param() {
   python3 -c "
 import sys, urllib.parse
@@ -273,9 +282,9 @@ step_stack_up_and_healthy() {
 }
 
 step_upload() {
-  log "Step 2/8: POST /api/files/upload (${FILE_NAME}, files root)..."
+  log "Step 2/8: POST /api/platform/files/upload (${FILE_NAME} into /personal)..."
   local resp status body
-  resp="$(upload_file "" "$LOCAL_UPLOAD_SRC")"
+  resp="$(upload_file "/personal" "$LOCAL_UPLOAD_SRC")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
 
@@ -283,20 +292,18 @@ step_upload() {
     log "ERROR: expected 201, got ${status}: ${body}"
     return 1
   fi
-  local uploaded
-  uploaded="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['uploaded'][0])" "$body")"
-  UPLOADED_NAME="$uploaded"
-  if [ "$UPLOADED_NAME" != "$FILE_NAME" ]; then
-    log "ERROR: expected uploaded name '${FILE_NAME}', got '${UPLOADED_NAME}'"
+  UPLOADED_PATH="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['uploaded'][0])" "$body")"
+  if [ "$UPLOADED_PATH" != "/personal/${FILE_NAME}" ]; then
+    log "ERROR: expected uploaded path '/personal/${FILE_NAME}', got '${UPLOADED_PATH}'"
     return 1
   fi
-  log "OK: uploaded as '${UPLOADED_NAME}'"
+  log "OK: uploaded as '${UPLOADED_PATH}'"
 }
 
 step_appears_in_list() {
-  log "Step 3/8: GET /api/files - confirm '${UPLOADED_NAME}' is present..."
+  log "Step 3/8: GET /api/platform/files?path=/personal - confirm '${FILE_NAME}' is present..."
   local resp status body present
-  resp="$(rest_request GET "${API_BASE}/files")"
+  resp="$(rest_request GET "$(url_with_path_param "$FILES_API" /personal)")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
 
@@ -304,33 +311,44 @@ step_appears_in_list() {
     log "ERROR: expected 200, got ${status}: ${body}"
     return 1
   fi
-  present="$(json_entries_contains_name "$body" "$UPLOADED_NAME")"
+  present="$(json_entries_contains_name "$body" "$FILE_NAME")"
   if [ "$present" != "true" ]; then
-    log "ERROR: '${UPLOADED_NAME}' not found in list: ${body}"
+    log "ERROR: '${FILE_NAME}' not found in list: ${body}"
     return 1
   fi
-  log "OK: '${UPLOADED_NAME}' present in the list"
+  log "OK: '${FILE_NAME}' present in the list"
 }
 
-step_visible_on_host() {
-  log "Step 4/8: ls on the host at ${FILES_DIR}/${UPLOADED_NAME}..."
-  local host_path="${FILES_DIR}/${UPLOADED_NAME}"
-  if [ ! -f "$host_path" ]; then
-    log "ERROR: ${host_path} does not exist on the host"
-    ls -la "$FILES_DIR"
+step_on_disk() {
+  log "Step 4/8: on disk in the platform container - content, owner, mode..."
+  local resp body space_id space_gid uid want got
+  resp="$(rest_request GET "${API_BASE}/platform/spaces")"
+  body="$(sed -n '2p' <<<"$resp")"
+  read -r space_id space_gid < <(python3 -c "
+import json, sys
+s = next(s for s in json.loads(sys.argv[1])['spaces'] if s['kind'] == 'personal')
+print(s['id'], s['gid'])
+" "$body")
+  uid="$(_e2e_psql homeai_platform "SELECT uid FROM users WHERE username = '${E2E_AUTH_USER}'")"
+  UPLOADED_DISK_PATH="/data/spaces/${space_id}/files/${FILE_NAME}"
+
+  if ! docker compose exec -T platform cat "$UPLOADED_DISK_PATH" | cmp -s "$LOCAL_UPLOAD_SRC" -; then
+    log "ERROR: ${UPLOADED_DISK_PATH} is missing or its content does not match what was uploaded"
     return 1
   fi
-  if ! cmp -s "$LOCAL_UPLOAD_SRC" "$host_path"; then
-    log "ERROR: ${host_path} content does not match what was uploaded"
+  want="${uid}:${space_gid} 660"
+  got="$(docker compose exec -T platform stat -c '%u:%g %a' "$UPLOADED_DISK_PATH")"
+  if [ "$got" != "$want" ]; then
+    log "ERROR: ${UPLOADED_DISK_PATH} is '${got}', expected '${want}' (uid:gid mode)"
     return 1
   fi
-  log "OK: ${host_path} exists on the host with the uploaded content"
+  log "OK: ${UPLOADED_DISK_PATH} has the uploaded content, owner ${uid}:${space_gid}, mode 0660"
 }
 
 step_download_byte_identical() {
-  log "Step 5/8: GET /api/files/download - confirm byte-identical via cmp..."
+  log "Step 5/8: GET /api/platform/files/download - confirm byte-identical via cmp..."
   local status
-  status="$(download_file "$UPLOADED_NAME" "$LOCAL_DOWNLOAD_DST")"
+  status="$(download_file "$UPLOADED_PATH" "$LOCAL_DOWNLOAD_DST")"
   if [ "$status" != "200" ]; then
     log "ERROR: expected 200 from download, got ${status}"
     return 1
@@ -343,28 +361,28 @@ step_download_byte_identical() {
 }
 
 step_delete_and_confirm_gone() {
-  log "Step 6/8: DELETE /api/files - confirm gone from list + host fs..."
+  log "Step 6/8: DELETE /api/platform/files - confirm gone from list + disk..."
   local resp status body
 
-  resp="$(rest_request DELETE "$(url_with_path_param "${API_BASE}/files" "$UPLOADED_NAME")")"
+  resp="$(rest_request DELETE "$(url_with_path_param "$FILES_API" "$UPLOADED_PATH")")"
   status="$(sed -n '1p' <<<"$resp")"
   if [ "$status" != "204" ]; then
     log "ERROR: expected 204 from DELETE, got ${status}"
     return 1
   fi
 
-  resp="$(rest_request GET "${API_BASE}/files")"
-  status="$(sed -n '1p' <<<"$resp")"
+  resp="$(rest_request GET "$(url_with_path_param "$FILES_API" /personal)")"
   body="$(sed -n '2p' <<<"$resp")"
-  if [ "$(json_entries_contains_name "$body" "$UPLOADED_NAME")" != "false" ]; then
-    log "ERROR: '${UPLOADED_NAME}' still present in list after DELETE: ${body}"
+  if [ "$(json_entries_contains_name "$body" "$FILE_NAME")" != "false" ]; then
+    log "ERROR: '${FILE_NAME}' still present in list after DELETE: ${body}"
     return 1
   fi
-  if [ -e "${FILES_DIR}/${UPLOADED_NAME}" ]; then
-    log "ERROR: ${FILES_DIR}/${UPLOADED_NAME} still exists on the host after DELETE"
+  if docker compose exec -T platform test -e "$UPLOADED_DISK_PATH"; then
+    log "ERROR: ${UPLOADED_DISK_PATH} still exists after DELETE"
     return 1
   fi
-  log "OK: '${UPLOADED_NAME}' gone from the list and from the host filesystem"
+  UPLOADED_PATH=""
+  log "OK: '${FILE_NAME}' gone from the list and from disk"
 }
 
 step_agent_visibility_cross_check() {
@@ -414,7 +432,10 @@ step_agent_visibility_cross_check() {
 
 cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
-  rm -f "${FILES_DIR}/${UPLOADED_NAME:-$FILE_NAME}" "$AGENT_VIS_HOST_PATH" 2>/dev/null || true
+  rm -f "$AGENT_VIS_HOST_PATH" 2>/dev/null || true
+  if [ -n "$UPLOADED_PATH" ] && [ -n "${E2E_AUTH_COOKIE:-}" ]; then
+    rest_request DELETE "$(url_with_path_param "$FILES_API" "$UPLOADED_PATH")" >/dev/null 2>&1 || true
+  fi
   rm -rf "$LOCAL_SCRATCH_DIR" 2>/dev/null || true
   if [ -n "$AGENT_VIS_THREAD_ID" ]; then
     rest_request DELETE "${API_BASE}/threads/${AGENT_VIS_THREAD_ID}" >/dev/null 2>&1 || true
@@ -424,12 +445,12 @@ cleanup() {
 trap cleanup EXIT
 
 main() {
-  log "=== FILES REST SMOKE (M3-03): upload -> list -> host ls -> download -> delete -> agent visibility ==="
+  log "=== FILES REST SMOKE (M3-03): upload -> list -> on disk -> download -> delete -> agent visibility ==="
   step_stack_up_and_healthy
   e2e_auth_begin files
   step_upload
   step_appears_in_list
-  step_visible_on_host
+  step_on_disk
   step_download_byte_identical
   step_delete_and_confirm_gone
   step_agent_visibility_cross_check

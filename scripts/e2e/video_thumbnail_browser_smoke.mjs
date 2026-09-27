@@ -1,13 +1,13 @@
 // Issue #125 full-stack video-thumbnail smoke test - invoked by
-// video_thumbnail_browser_smoke.sh, not run directly. That wrapper seeds
-// video-thumbnail-browser-smoke-test-video.mp4 into the files directory
-// (via `docker run` against the homeai-exec-toolbox image, same
-// convention media_browser_smoke.sh already uses for its own seeded
-// video) BEFORE calling this script, and cleans it up after - see that
-// file for the exact ffmpeg/cleanup commands.
+// video_thumbnail_browser_smoke.sh, not run directly. That wrapper
+// generates video-thumbnail-browser-smoke-test-video.mp4 into a temp dir
+// (via `docker run` against the homeai-exec-toolbox image, same convention
+// as media_browser_smoke.sh) and passes its path in
+// VIDEO_THUMBNAIL_SMOKE_FILE_PATH. This script uploads it into the e2e
+// user's Personal space through the platform files API (M11-01).
 //
-// Drives the real Files UI (no mocking - real REST /api/files list,
-// real server-side ffmpeg-generated GET /api/media/thumbnail poster
+// Drives the real Files UI (no mocking - real REST /api/platform/files list,
+// real server-side ffmpeg-generated GET /api/platform/files/thumbnail poster
 // frame) through this issue's acceptance criteria:
 //
 //   1. The Files list shows a real, decoded thumbnail <img> for the
@@ -38,11 +38,18 @@
 
 import { chromium } from 'playwright';
 
-import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+
+import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
+import { openSpace, uploadFile } from './files_helpers.mjs';
 
 const BASE_URL = process.env.VIDEO_THUMBNAIL_SMOKE_BASE_URL ?? 'http://localhost/';
-const VIDEO_FILE_NAME =
-  process.env.VIDEO_THUMBNAIL_SMOKE_FILE_NAME ?? 'video-thumbnail-browser-smoke-test-video.mp4';
+const VIDEO_FILE_PATH = process.env.VIDEO_THUMBNAIL_SMOKE_FILE_PATH;
+if (!VIDEO_FILE_PATH) {
+  throw new Error('VIDEO_THUMBNAIL_SMOKE_FILE_PATH is not set (run video_thumbnail_browser_smoke.sh)');
+}
+const VIDEO_FILE_NAME = basename(VIDEO_FILE_PATH);
 const UI_TIMEOUT_MS = 20_000;
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
@@ -73,8 +80,12 @@ async function main() {
     const page = await browser.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, e2eUser);
+    const cookie = await sessionCookie(page.context());
+    await uploadFile(cookie, '/personal', VIDEO_FILE_NAME, readFileSync(VIDEO_FILE_PATH), 'video/mp4');
+
     await page.getByRole('tab', { name: 'Files' }).click();
-    await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
+    await waitForVisibleText(page, 'Personal'); // confirms the screen mounted + the root loaded
+    await openSpace(page, 'Personal');
     await waitForVisibleText(page, VIDEO_FILE_NAME); // confirms the seeded file is listed
 
     // --- Step 1: the list row shows a real, decoded thumbnail <img> -----
@@ -86,8 +97,8 @@ async function main() {
       UI_TIMEOUT_MS,
       'thumbnail <img> decoded (naturalWidth > 0)',
     );
-    if (!thumbnailState.src.includes('/api/media/thumbnail')) {
-      throw new Error(`expected the thumbnail src to hit /api/media/thumbnail, got: ${thumbnailState.src}`);
+    if (!thumbnailState.src.includes('/api/platform/files/thumbnail')) {
+      throw new Error(`expected the thumbnail src to hit /api/platform/files/thumbnail, got: ${thumbnailState.src}`);
     }
     console.log('Step 1 OK - the file list shows a real, ffmpeg-generated, decoded thumbnail (not the generic icon)');
 

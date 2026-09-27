@@ -1,8 +1,9 @@
 // Issue #124 full-stack image-viewer + thumbnail smoke test — invoked by
 // `image_browser_smoke.sh`, not run directly.
 //
-// Drives the real Files UI (no mocking — real REST `/api/files*` upload,
-// real `/api/media/stream` byte-range serving reused as the image source)
+// Drives the real Files UI (no mocking — real REST `/api/platform/files*`
+// upload into the user's Personal space, real `/api/platform/files/stream`
+// byte-range serving reused as the image source)
 // through the issue's acceptance criteria:
 //
 //   1. Upload a tiny synthetic PNG via the existing "Upload here" button
@@ -32,6 +33,7 @@
 import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+import { openSpace } from './files_helpers.mjs';
 
 const BASE_URL = process.env.IMAGE_SMOKE_BASE_URL ?? 'http://localhost/';
 const UI_TIMEOUT_MS = 20_000;
@@ -80,7 +82,8 @@ async function main() {
 
     await loginThroughUi(page, e2eUser);
     await page.getByRole('tab', { name: 'Files' }).click();
-    await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
+    await waitForVisibleText(page, 'Personal'); // confirms the screen mounted + the root loaded
+    await openSpace(page, 'Personal');
 
     // --- Step 1: upload the seeded PNG via the real file chooser --------
     const [fileChooser] = await Promise.all([
@@ -104,8 +107,8 @@ async function main() {
       UI_TIMEOUT_MS,
       'thumbnail <img> decoded (naturalWidth > 0)',
     );
-    if (!thumbnailState.src.includes('/api/media/stream')) {
-      throw new Error(`expected the thumbnail src to hit /api/media/stream, got: ${thumbnailState.src}`);
+    if (!thumbnailState.src.includes('/api/platform/files/stream')) {
+      throw new Error(`expected the thumbnail src to hit /api/platform/files/stream, got: ${thumbnailState.src}`);
     }
     console.log('Step 2 OK — the file list shows a real, decoded thumbnail (not the generic icon)');
 
@@ -117,8 +120,8 @@ async function main() {
     const viewerImg = page.locator('[data-testid="image-viewer-image"] img').first();
     await viewerImg.waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS });
     const viewerState = await pollImageState(viewerImg, (s) => s.naturalWidth > 0, UI_TIMEOUT_MS, 'viewer <img> decoded (naturalWidth > 0)');
-    if (!viewerState.src.includes('/api/media/stream')) {
-      throw new Error(`expected the viewer src to hit /api/media/stream, got: ${viewerState.src}`);
+    if (!viewerState.src.includes('/api/platform/files/stream')) {
+      throw new Error(`expected the viewer src to hit /api/platform/files/stream, got: ${viewerState.src}`);
     }
     console.log('Step 3 OK — tapping the image opened the in-app viewer directly (no download, no action sheet) with a real decoded <img>');
 

@@ -1332,9 +1332,12 @@ async function main() {
     console.log(`Step 17 OK — answer contains a file: link (path=${fileLinkPath || '(attr unset)'}); reply: ${fileLinkReply.slice(0, 160)}`);
     await fileLinkLocator.last().click();
     await page.waitForURL(/\/files/, { timeout: 15_000 });
+    // M11-01: a bare `file:` path means the user's Personal space. The agent
+    // still writes into FILES_DIR until M11-02, so the highlight below fails
+    // until then (the Files tab toasts "File not found").
     const openedPath = new URL(page.url()).searchParams.get('path');
-    if (openedPath !== FILE_LINK_REL) {
-      throw new Error(`Step 17: expected /files?path=${FILE_LINK_REL}, got path=${openedPath} url=${page.url()}`);
+    if (openedPath !== `/personal/${FILE_LINK_REL}`) {
+      throw new Error(`Step 17: expected /files?path=/personal/${FILE_LINK_REL}, got path=${openedPath} url=${page.url()}`);
     }
     const highlighted = page.locator('[data-testid="file-entry-highlighted"]');
     await highlighted.waitFor({ state: 'visible', timeout: 15_000 });
@@ -1345,7 +1348,7 @@ async function main() {
     if (!existsSync(filesDirFilePath(FILE_LINK_REL))) {
       throw new Error(`Step 17: ${filesDirFilePath(FILE_LINK_REL)} does not exist after the approved write`);
     }
-    console.log(`Step 17 OK — clicked file: link, opened /files?path=${FILE_LINK_REL}, entry highlighted`);
+    console.log(`Step 17 OK — clicked file: link, opened /files?path=/personal/${FILE_LINK_REL}, entry highlighted`);
 
     // --- Step 18: voice-to-text mic (M9-06) -----------------------------
     // Dedicated https / http contexts so this does not depend on

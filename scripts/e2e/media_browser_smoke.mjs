@@ -1,18 +1,14 @@
 // M5-02 full-stack media-player smoke test — invoked by
-// `media_browser_smoke.sh`, not run directly. That wrapper seeds
-// `media-browser-smoke-test-video.mp4` (M6-03: renamed from the bare
-// generic `test-video.mp4` to avoid a collision surface with other
-// scripts/real-user files at the files root) into the files directory (via
-// `docker run` against the `homeai-exec-toolbox` image, since ffmpeg lives
-// there, not necessarily on this host — same tool M5-01 used for its own
-// live verification) BEFORE calling this script, and cleans it up after —
-// those steps live in the `.sh` wrapper (not here) because they need
-// `docker`/the files directory's real host path, neither of which this script
-// has any other reason to reach for itself. See that file for the exact
-// `ffmpeg`/cleanup commands.
+// `media_browser_smoke.sh`, not run directly. That wrapper generates
+// `media-browser-smoke-test-video.mp4` into a temp dir (via `docker run`
+// against the `homeai-exec-toolbox` image, since ffmpeg lives there, not
+// necessarily on this host) and passes its path in MEDIA_SMOKE_FILE_PATH.
+// This script uploads it into the e2e user's Personal space through the
+// platform files API (M11-01) after signing in; the file goes away with the
+// user.
 //
-// Drives the real Files UI (no mocking — real REST `/api/files` list, real
-// `/api/media/stream` Range-streamed playback) through M5-02's acceptance
+// Drives the real Files UI (no mocking — real REST `/api/platform/files`
+// list, real `/api/platform/files/stream` Range-streamed playback) through M5-02's acceptance
 // criteria:
 //
 //   1. Tap the seeded video file in the Files tab -> per M5-02's tap-
@@ -30,10 +26,16 @@
 
 import { chromium } from 'playwright';
 
-import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+
+import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
+import { openSpace, uploadFile } from './files_helpers.mjs';
 
 const BASE_URL = process.env.MEDIA_SMOKE_BASE_URL ?? 'http://localhost/';
-const VIDEO_FILE_NAME = process.env.MEDIA_SMOKE_FILE_NAME ?? 'media-browser-smoke-test-video.mp4';
+const VIDEO_FILE_PATH = process.env.MEDIA_SMOKE_FILE_PATH;
+if (!VIDEO_FILE_PATH) throw new Error('MEDIA_SMOKE_FILE_PATH is not set (run media_browser_smoke.sh)');
+const VIDEO_FILE_NAME = basename(VIDEO_FILE_PATH);
 const UI_TIMEOUT_MS = 20_000;
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
@@ -85,8 +87,12 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, e2eUser);
 
+    const cookie = await sessionCookie(page.context());
+    await uploadFile(cookie, '/personal', VIDEO_FILE_NAME, readFileSync(VIDEO_FILE_PATH), 'video/mp4');
+
     await page.getByRole('tab', { name: 'Files' }).click();
-    await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
+    await waitForVisibleText(page, 'Personal'); // confirms the screen mounted + the root loaded
+    await openSpace(page, 'Personal');
 
     // --- Step 1: tap the seeded video file -> media modal opens directly ---
     await page.getByText(VIDEO_FILE_NAME, { exact: true }).click();

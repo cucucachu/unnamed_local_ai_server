@@ -2,9 +2,10 @@
 # Issue #124 full-stack image-viewer + thumbnail smoke test.
 #
 # Opens a real headless browser against the live stack (`caddy` fronting
-# the built frontend + proxying to `agent-server`), navigates to the Files
-# tab, and drives the actual UI (no mocking — real REST `/api/files/upload`,
-# real `/api/media/stream` byte-range serving reused as the image source)
+# the built frontend + proxying to `platform`), navigates to the Files
+# tab's Personal space, and drives the actual UI (no mocking — real REST
+# `/api/platform/files/upload`, real `/api/platform/files/stream` byte-range
+# serving reused as the image source)
 # through: upload a tiny synthetic PNG -> assert a real thumbnail `<img>`
 # renders in the list -> tap it (bypasses the action sheet, opens the
 # in-app viewer directly, no download) -> right-click -> action sheet
