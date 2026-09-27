@@ -28,6 +28,8 @@
 # `WS_SMOKE_THREAD_ID`/`WS_SMOKE_PROMPT`, M2-07) is reused as-is for the WS
 # turn, exactly like the other two `scripts/e2e/*.sh` gates.
 #
+# Runs signed in as a throwaway `e2e-*` user (`lib/auth.sh`, M10-04).
+#
 # Usage:
 #   scripts/e2e/threads_rest_smoke.sh
 #
@@ -38,6 +40,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
+trap e2e_auth_end EXIT
 
 API_BASE="http://localhost/api"
 LONG_PROMPT="Please reply with one short friendly sentence for this end-to-end smoke test of the threads REST API."
@@ -80,6 +85,7 @@ wait_for_api_health() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -87,6 +93,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -308,6 +315,7 @@ step_delete_and_confirm_gone() {
 main() {
   log "=== THREADS REST SMOKE (M3-02): create -> list -> WS turn -> title/bump -> messages -> delete ==="
   step_stack_up_and_healthy
+  e2e_auth_begin threads
   step_create_thread
   step_appears_in_list
   step_run_ws_turn

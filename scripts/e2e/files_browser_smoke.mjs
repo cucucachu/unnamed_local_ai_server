@@ -38,7 +38,7 @@
 
 import { chromium } from 'playwright';
 
-import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
+import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 import { execFileSync } from 'node:child_process';
 
 const BASE_URL = process.env.FILES_SMOKE_BASE_URL ?? 'http://localhost/';
@@ -65,34 +65,38 @@ const UNICODE_FLOW = {
 
 /** Runs a small inline Python script (`urllib.request`) and returns stdout.
  * Same "curl is not installed on this host, urllib is the house
- * curl-equivalent" convention as `files_rest_smoke.sh`. */
+ * curl-equivalent" convention as `files_rest_smoke.sh`. The scripts send
+ * the page's session cookie (E2E_AUTH_COOKIE, set in main() after login). */
 function runPython(script, args) {
   return execFileSync('python3', ['-c', script, ...args], { encoding: 'utf-8' });
 }
 
 const LIST_SCRIPT = `
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 url = sys.argv[1] + '?' + urllib.parse.urlencode({'path': sys.argv[2]})
+req = urllib.request.Request(url, headers={'Cookie': os.environ['E2E_AUTH_COOKIE']})
 try:
-    with urllib.request.urlopen(url, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         print(resp.read().decode())
 except urllib.error.HTTPError as e:
     print(json.dumps({"entries": [], "_status": e.code}))
 `;
 
 const DELETE_SCRIPT = `
+import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 url = sys.argv[1] + '?' + urllib.parse.urlencode({'path': sys.argv[2]})
-req = urllib.request.Request(url, method='DELETE')
+req = urllib.request.Request(url, method='DELETE', headers={'Cookie': os.environ['E2E_AUTH_COOKIE']})
 try:
     urllib.request.urlopen(req, timeout=15)
 except urllib.error.HTTPError:
@@ -206,12 +210,6 @@ async function runFullFlow(page, { folderName, fileName, renamedFileName, fileCo
 async function main() {
   const startedAt = Date.now();
 
-  // Best-effort pre-clean in case a prior failed run left these behind —
-  // makes this script safely re-runnable (same convention as
-  // `files_rest_smoke.sh`'s `trap cleanup EXIT`).
-  restDeleteBestEffort(ASCII_FLOW.folderName);
-  restDeleteBestEffort(UNICODE_FLOW.folderName);
-
   const e2eUser = createE2eUser({ prefix: 'e2e-files' });
 
   const browser = await chromium.launch({ headless: true });
@@ -225,6 +223,14 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     await loginThroughUi(page, e2eUser);
+    process.env.E2E_AUTH_COOKIE = await sessionCookie(page.context());
+
+    // Best-effort pre-clean in case a prior failed run left these behind —
+    // makes this script safely re-runnable (same convention as
+    // `files_rest_smoke.sh`'s `trap cleanup EXIT`).
+    restDeleteBestEffort(ASCII_FLOW.folderName);
+    restDeleteBestEffort(UNICODE_FLOW.folderName);
+
     await page.getByRole('tab', { name: 'Files' }).click();
     await waitForVisibleText(page, 'Home'); // confirms the screen mounted + the root dir loaded
 
@@ -235,9 +241,11 @@ async function main() {
     console.log(`PASS: both flows (ASCII + space/non-ASCII) completed in ${elapsedMs}ms`);
   } finally {
     await browser.close();
+    if (process.env.E2E_AUTH_COOKIE) {
+      restDeleteBestEffort(ASCII_FLOW.folderName);
+      restDeleteBestEffort(UNICODE_FLOW.folderName);
+    }
     deleteE2eUsers(e2eUser.username);
-    restDeleteBestEffort(ASCII_FLOW.folderName);
-    restDeleteBestEffort(UNICODE_FLOW.folderName);
   }
 }
 

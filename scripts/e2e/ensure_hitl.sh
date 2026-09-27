@@ -7,6 +7,9 @@
 #
 # `curl` is not installed on this host — uses Python urllib.
 #
+# Settings are per user since M10-04: this changes the user whose session
+# cookie is in E2E_AUTH_COOKIE (see `lib/auth.sh`).
+#
 # Usage:
 #   prev="$(scripts/e2e/ensure_hitl.sh false)"
 #   scripts/e2e/ensure_hitl.sh "$prev" >/dev/null
@@ -18,11 +21,17 @@ if [ "${1:-}" != "true" ] && [ "${1:-}" != "false" ]; then
   exit 2
 fi
 
+if [ -z "${E2E_AUTH_COOKIE:-}" ]; then
+  echo "ensure_hitl: E2E_AUTH_COOKIE is not set (source lib/auth.sh and run e2e_auth_begin)" >&2
+  exit 2
+fi
+
 API_BASE="${API_BASE:-http://localhost/api}"
 WANT="$1"
 
 python3 - "$API_BASE" "$WANT" <<'PY'
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -34,6 +43,7 @@ url = api_base.rstrip("/") + "/settings"
 def request(method, body=None):
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
+    headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:

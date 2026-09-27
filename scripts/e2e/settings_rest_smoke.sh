@@ -20,6 +20,9 @@
 #      (a fresh Python process reading from a cold connection pool), not
 #      just in-process/module-level state.
 #
+# Settings are per user since M10-04; this runs as a throwaway `e2e-*` user
+# (`lib/auth.sh`), or as the calling gate's user when one is signed in.
+#
 # Usage:
 #   scripts/e2e/settings_rest_smoke.sh
 #
@@ -30,6 +33,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
+trap e2e_auth_end EXIT
 
 API_BASE="http://localhost/api"
 API_HEALTH_TIMEOUT_S=120
@@ -65,6 +71,7 @@ wait_for_api_health() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -72,6 +79,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -209,6 +217,7 @@ step_restart_and_confirm_persistence() {
 main() {
   log "=== SETTINGS REST SMOKE (M8-02): GET defaults -> PUT partial -> GET reflects -> restart -> GET still reflects ==="
   step_stack_up_and_healthy
+  e2e_auth_begin settings
   step_get_starting_document
   step_put_partial_and_confirm_merge
   step_get_confirms_change_in_process

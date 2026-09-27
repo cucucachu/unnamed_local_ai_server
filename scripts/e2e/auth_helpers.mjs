@@ -31,12 +31,21 @@ function envValue(name, fallback) {
   return match ? match[1].trim() : fallback;
 }
 
-function psql(sql) {
+function psql(sql, db = 'homeai_platform') {
   return compose(
     ['exec', '-T', 'postgres', 'psql', '-qtA', '-v', 'ON_ERROR_STOP=1', '-U', envValue('POSTGRES_USER', 'homeai'),
-      '-d', 'homeai_platform', '-c', sql],
+      '-d', db, '-c', sql],
     '',
   ).trim();
+}
+
+/** `homeai_session=...` for this browser context's signed-in user, as a
+ * `Cookie` header value — for the smokes' side-channel REST calls, which
+ * must act as the same user as the page (threads and settings are per user). */
+export async function sessionCookie(context) {
+  const cookie = (await context.cookies()).find((c) => c.name === 'homeai_session');
+  if (!cookie) throw new Error('no homeai_session cookie in this browser context');
+  return `homeai_session=${cookie.value}`;
 }
 
 /** Creates `<prefix>-<random>` via the recovery CLI; returns its credentials. */
@@ -51,14 +60,28 @@ export function createE2eUser({ prefix = 'e2e-ui', role = 'member' } = {}) {
   return { username, password };
 }
 
-/** Deletes throwaway users (sessions cascade) and, where the platform has
- * spaces, their personal space row and directory. Best effort: cleanup must
- * not mask the real failure. */
+/** Deletes throwaway users (sessions cascade), their agent-server threads,
+ * checkpoints, and settings, and, where the platform has spaces, their
+ * personal space row and directory. Best effort: cleanup must not mask the
+ * real failure. */
 export function deleteE2eUsers(...usernames) {
   const names = usernames.filter((name) => /^e2e-[a-z0-9._-]+$/.test(name ?? ''));
   if (names.length === 0) return;
   const list = names.map((n) => `'${n}'`).join(', ');
   try {
+    const userIds = psql(`SELECT id FROM users WHERE username IN (${list})`)
+      .split('\n').filter((id) => /^[0-9a-f-]{36}$/.test(id));
+    if (userIds.length > 0) {
+      const ids = userIds.map((id) => `'${id}'`).join(', ');
+      psql(`
+        CREATE TEMP TABLE doomed AS SELECT id::text AS id FROM threads WHERE owner_user_id IN (${ids});
+        DELETE FROM checkpoint_writes WHERE thread_id IN (SELECT id FROM doomed);
+        DELETE FROM checkpoint_blobs WHERE thread_id IN (SELECT id FROM doomed);
+        DELETE FROM checkpoints WHERE thread_id IN (SELECT id FROM doomed);
+        DELETE FROM turn_stats WHERE thread_id IN (SELECT id FROM doomed);
+        DELETE FROM threads WHERE owner_user_id IN (${ids});
+        DELETE FROM user_settings WHERE user_id IN (${ids});`, envValue('POSTGRES_DB', 'homeai'));
+    }
     let spaceIds = [];
     if (psql("SELECT to_regclass('public.spaces') IS NOT NULL") === 't') {
       spaceIds = psql(
@@ -82,9 +105,9 @@ export function deleteInvite(inviteId) {
   }
 }
 
-// Runs inside the platform container: `/api/platform/*` isn't routed by
-// Caddy until M10-04, so this plays Caddy's part (verify -> identity header)
-// the same way platform_auth_smoke.sh does.
+// Runs inside the platform container and plays Caddy's part (verify ->
+// identity header) the same way platform_auth_smoke.sh does, with a native
+// bearer session rather than a cookie.
 const CREATE_INVITE_PY = `
 import json, sys, urllib.request
 username, password = sys.stdin.read().split("\\n")[:2]

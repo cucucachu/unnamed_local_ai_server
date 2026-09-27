@@ -59,6 +59,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=lib/auth.sh
+source "$SCRIPT_DIR/lib/auth.sh"
 
 API_BASE="http://localhost/api"
 
@@ -144,6 +146,7 @@ wait_for_full_stack_healthy() {
 rest_request() {
   local method="$1" url="$2" json_body="${3:-}"
   python3 - "$method" "$url" "$json_body" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -151,6 +154,7 @@ import urllib.request
 method, url, json_body = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json_body.encode() if json_body else None
 headers = {"Content-Type": "application/json"} if data else {}
+headers["Cookie"] = os.environ["E2E_AUTH_COOKIE"]
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -167,6 +171,7 @@ PY
 download_file() {
   local remote_path="$1" local_dst="$2"
   python3 - "${API_BASE}/files/download" "$remote_path" "$local_dst" <<'PY'
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -174,8 +179,9 @@ import urllib.request
 
 url_base, remote_path, local_dst = sys.argv[1], sys.argv[2], sys.argv[3]
 url = f"{url_base}?{urllib.parse.urlencode({'path': remote_path})}"
+req = urllib.request.Request(url, headers={"Cookie": os.environ["E2E_AUTH_COOKIE"]})
 try:
-    with urllib.request.urlopen(url, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         with open(local_dst, "wb") as f:
             f.write(resp.read())
         print(resp.status)
@@ -456,12 +462,15 @@ except Exception:
     pass
 " "$THREAD_ID" >/dev/null 2>&1 || true
   fi
+  e2e_auth_end
 }
 trap cleanup EXIT
 
 main() {
   log "=== GATE M3 (G3): restart persistence + files round-trip ==="
   step_stack_up_and_healthy
+  # The session lives in the platform DB, so it survives the full restart.
+  e2e_auth_begin gate-m3
   # M8-03 made HITL on by default; this gate's mutating tools are not
   # wired to send approval_response, so turn HITL off for the run.
   log "Turning hitl_enabled off so write_file/execute_code are not interrupted..."
