@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     platform_db_password: str = ""
     platform_db_name: str = "homeai_platform"
 
-    # `platform-data` named volume: signing keys (`keys/`), later the
-    # bootstrap setup code (docs/PLATFORM.md §4).
+    # `platform-data` named volume: signing keys (`keys/`) and the bootstrap
+    # `setup-code` (docs/PLATFORM.md §4).
     platform_data_dir: Path = Path("/data/platform")
     # `${SPACES_DIR}` bind mount. Not read yet; spaces land in M10-05.
     platform_spaces_dir: Path = Path("/data/spaces")
@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     # them exists until the delegation / exec-grant tickets.
     platform_agent_token: str = ""
     platform_exec_token: str = ""
+
+    # Failed credential attempts allowed per bucket (username, client IP)
+    # per window on login/setup/step-up/invite accept.
+    platform_auth_rate_limit: int = 5
+    platform_auth_rate_window_s: float = 60.0
 
     @property
     def keys_dir(self) -> Path:

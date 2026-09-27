@@ -169,13 +169,23 @@ platform's `/internal/*` routes are never routed by Caddy.
   **stored hashed** (SHA-256); `user_id`, `device_label`, `created_at`,
   `last_seen_at`, `expires_at` (sliding, 30 days), `stepped_up_until`,
   `revoked_at`. Web: `homeai_session` cookie (HttpOnly, SameSite=Lax, Secure
-  on https). Native: `Authorization: Bearer hs_...` (token kept in
+  on https). Native: session-creating endpoints called with
+  `X-HomeAI-Client: native` return the token in the body instead of a
+  cookie; the client sends `Authorization: Bearer hs_...` (token kept in
   `expo-secure-store`). WebSockets from browsers use the cookie.
-- **Bootstrap**: when no users exist, the platform generates a one-time
-  **setup code**, logs it, and writes it to `/data/platform/setup-code`
-  (readable on the host via `docker compose exec platform cat ...` or the
-  log). `POST /api/auth/setup` requires it; it creates the first admin and is
-  then permanently disabled.
+- **Bootstrap**: until the bootstrap admin exists
+  (`platform_state.bootstrap_admin_id`), the platform keeps a one-time
+  **setup code** (reused across restarts until used), logs it, and writes it
+  to `/data/platform/setup-code` (readable on the host via
+  `docker compose exec platform cat ...` or the log). `POST /api/auth/setup`
+  requires it; it creates the first admin, records `bootstrap_admin_id`, and
+  is then permanently disabled. Users created by the recovery CLI don't
+  count — the setup code stays valid until someone uses it.
+- **Recovery CLI** (physical-access path; host Docker = root):
+  `docker compose exec platform python -m app.cli
+  {create-user,reset-password,set-role,disable-user,enable-user,list-users}`.
+  It uses the image's venv Python directly (not `uv run`, which needs a
+  writable root).
 - **Invites**: admins create single-use, 7-day invite tokens
   (`POST /api/platform/admin/invites` → URL/QR). Accepting creates a member
   and a session. Invite/enrollment endpoints are **LAN/VPN-only** once
@@ -199,6 +209,11 @@ session cookie/bearer and returns `200` with `X-HomeAI-Identity: <JWT>`, or
   `sid=<session_id>`, `role`, `act="user"`, `iat`, `exp` (+5 min), `kid`.
 - Downstream services **must verify** signature, `iss`, `aud`, `exp` — never
   trust the header unverified.
+- The platform's own `/api/platform/*` routes resolve the caller from
+  `X-HomeAI-Identity` (must be `act="user"`) or, only when that header is
+  absent, `Authorization: Bearer <JWT act="agent">`; opaque `hs_` tokens are
+  accepted only by `/internal/auth/verify` and `/api/auth/*`. Role and
+  step-up state are always read from the database.
 
 ### Delegation token (agent runs)
 

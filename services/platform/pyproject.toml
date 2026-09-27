@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "M10-02: platform service - auth, spaces, app registry, user storage (docs/PLATFORM.md)"
 requires-python = ">=3.12"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "fastapi>=0.141.1",
     "psycopg-pool>=3.3.3",
     "psycopg[binary]>=3.3.6",

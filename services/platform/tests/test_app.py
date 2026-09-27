@@ -38,7 +38,8 @@ async def test_startup_migrates_and_serves_health(pg_database, tmp_path):
         assert response.json() == {"status": "ok"}
 
     with psycopg.connect(pg_database.dsn) as conn:
-        assert conn.execute("SELECT version FROM schema_migrations").fetchall() == [(1,)]
+        versions = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+        assert versions == [(1,), (2,)]
 
 
 async def test_jwks_and_kid_stable_across_restarts(pg_database, tmp_path):
@@ -70,20 +71,21 @@ async def test_overrides_are_used(pg_database, tmp_path):
     tokens = TokenService(load_or_create_signing_key(tmp_path / "elsewhere"))
     try:
         app = create_app(
-            _settings(pg_database, tmp_path / "unused"),
+            _settings(pg_database, tmp_path / "data"),
             db_pool_override=pool,
             token_service_override=tokens,
         )
         async with _running(app) as client:
             assert (await client.get("/internal/jwks")).json() == tokens.jwks()
-        assert not (tmp_path / "unused").exists()
+        assert not (tmp_path / "data" / "keys").exists()
         assert not pool.closed
     finally:
         await pool.close()
 
 
-async def test_external_prefixes_have_no_routes_yet(pg_database, tmp_path):
+async def test_routes(pg_database, tmp_path):
     app = create_app(_settings(pg_database, tmp_path))
-    assert set(app.openapi()["paths"]) == {"/internal/health", "/internal/jwks"}
-    async with _running(app) as client:
-        assert (await client.get("/api/auth/status")).status_code == 404
+    paths = set(app.openapi()["paths"])
+    assert {"/internal/health", "/internal/jwks", "/internal/auth/verify"} <= paths
+    assert {p.split("/")[1] for p in paths} == {"internal", "api"}
+    assert {p.split("/")[2] for p in paths if p.startswith("/api/")} == {"auth", "platform"}

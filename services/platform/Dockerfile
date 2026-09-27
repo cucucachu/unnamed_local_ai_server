@@ -26,4 +26,6 @@ COPY app/ ./app/
 RUN python -m compileall -q app
 
 EXPOSE 8100
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]
+# Exactly one worker: the auth rate limiter and the in-memory bootstrap setup
+# code are per-process state.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]

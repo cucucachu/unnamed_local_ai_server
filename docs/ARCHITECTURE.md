@@ -680,22 +680,27 @@ what another doc says it should be.
 
 ### `platform`
 
-- **Purpose** (M10-02 skeleton; design: `docs/PLATFORM.md`): will own auth,
-  sessions, spaces, the app registry, and all user storage. Today it
-  applies its database migrations, holds the Ed25519 signing key every
-  platform token is signed with, and serves the public half as a JWKS.
+- **Purpose** (design: `docs/PLATFORM.md`): owns auth, sessions, spaces,
+  the app registry, and all user storage. As of M10-03: accounts
+  (password + optional TOTP), opaque sessions, step-up, invites, the admin
+  user API, the bootstrap setup code, `/internal/auth/verify` for Caddy,
+  and the recovery CLI; it also holds the Ed25519 signing key every
+  platform token is signed with and serves the public half as a JWKS.
+  API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
   `services/platform/Dockerfile`. Runtime deps only (`uv sync --frozen
   --no-dev`) with bytecode compiled at build time; `CMD` runs
   `/app/.venv/bin/uvicorn` directly (not `uv run`), so nothing writes under
-  the read-only root at runtime.
+  the read-only root at runtime, with `--workers 1` (the rate limiter and
+  the in-memory setup code are per-process).
 - **Published port**: none.
 - **Internal port**: `8100`. Caddy routing (`/api/auth/*`,
   `/api/platform/*`) lands in M10-04; `/internal/*` is never routed.
 - **Network**: `homeai-internal` only.
 - **Mounts**: named volume `platform-data:/data/platform` (signing key at
   `keys/signing-key.pem`, dir `0700`, file `0600`; losing the volume
-  rotates the key and invalidates every outstanding token), and
+  rotates the key and invalidates every outstanding token; `setup-code`,
+  `0600`, only until the first admin exists), and
   `${SPACES_DIR}:/data/spaces` (rw bind, host default
   `/srv/homeai/spaces`; not read until M10-05). Docker creates a missing
   `SPACES_DIR` as `root:root 0755` on first `up`.
@@ -705,14 +710,37 @@ what another doc says it should be.
   `no-new-privileges`.
 - **Startup**: opens a psycopg pool to `homeai_platform` as role
   `platform`, applies pending migrations, loads (or on first start
-  generates) the signing key. Any failure fails startup.
+  generates) the signing key, then bootstrap: while
+  `platform_state.bootstrap_admin_id` is unset it reuses
+  `/data/platform/setup-code` if present (else generates a new
+  `XXXX-XXXX-XXXX-XXXX` code, ~79 bits) and logs it in a banner
+  (`HOME AI SETUP CODE: …`); once set, it deletes any leftover file. Any
+  failure fails startup.
+- **Accounts** (`app/core/`): `users` (argon2id hashes via `argon2-cffi`
+  defaults, transparently rehashed on login if parameters change;
+  `uid` from sequence `user_uid_seq` starting at 20000), `sessions` (`hs_`
+  + 32 random bytes; only the SHA-256 is stored; 30-day sliding expiry;
+  per-session `stepped_up_until`), `invites` (`hi_` tokens, SHA-256 only,
+  single use, 7 days). TOTP is RFC 6238 SHA-1/6 digits/30 s, ±1 step,
+  with the last accepted step stored so a code can't be replayed.
+  "Never the last admin" is enforced under an advisory lock for both the
+  admin API and the CLI. Disabling a user or resetting a password revokes
+  their sessions; a self-service password change revokes all the user's
+  *other* sessions. Bootstrap is completed only by `POST /api/auth/setup`;
+  CLI- or invite-created users never complete it.
+- **Recovery CLI** (`app/cli.py`, run in the container; the image's
+  `python` is the venv's, and it needs nothing writable):
+  `docker compose exec platform python -m app.cli
+  {create-user,reset-password,set-role,disable-user,enable-user,list-users}`
+  — see `README.md` "Accounts and recovery".
 - **Migrations**: `services/platform/app/db/migrations/NNNN_name.sql`,
   forward-only, applied by `app/db/migrate.py` in one transaction after
   `pg_advisory_xact_lock`, so concurrent starters serialize and a failing
   file rolls back the whole batch. `schema_migrations` records version,
   name, and a SHA-256 of each file; editing an already-applied file is a
   startup error. `0001_init` creates `schema_migrations` and
-  `platform_state` (key → JSONB).
+  `platform_state` (key → JSONB); `0002_accounts` creates `users`,
+  `sessions`, `invites`.
 - **Healthcheck**: `GET /internal/health` via the image's `python`
   (`SELECT 1` against the pool; `503` if the database is unreachable).
 - **Env vars consumed** (cross-checked against `app/core/config.py`):
@@ -720,12 +748,19 @@ what another doc says it should be.
   (the two service tokens are loaded but not enforced until an endpoint
   that needs them exists). DB host/port/user/name default to
   `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
-  `/data/platform`/`/data/spaces`.
+  `/data/platform`/`/data/spaces`; `PLATFORM_AUTH_RATE_LIMIT` /
+  `PLATFORM_AUTH_RATE_WINDOW_S` default to `5` / `60` (not set in compose).
 - **Tests**: `services/platform/tests/` — `test_tokens.py` (RFC 7638 /
   RFC 8037 thumbprint vector, key persistence + permissions, tampered
   signature/payload, expired, wrong `aud`/`iss`, unknown/missing `kid`,
   alg confusion, `act` checks), `test_migrations.py`, `test_db_init.py`,
-  `test_app.py` (lifespan, health, JWKS, `kid` stable across restarts).
+  `test_app.py` (lifespan, health, JWKS, `kid` stable across restarts),
+  `test_auth_api.py` (setup code, login ± TOTP, cookies, logout, verify,
+  revoked/expired/disabled, sliding expiry, step-up, rate limits, no
+  plaintext tokens), `test_platform_api.py` (principal resolution incl.
+  delegation `act=agent`, self-service, admin users, last admin,
+  invites), `test_cli.py`, `test_totp.py` (RFC 6238 vectors),
+  `test_ratelimit.py`. Live: `scripts/e2e/platform_auth_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
@@ -757,7 +792,7 @@ host and are set up/verified by scripts under `infra/host/` and `scripts/`.
 ## 3. Contracts
 
 The binding API shapes for `agent-server`'s HTTP API, its WebSocket chat
-protocol, `code-exec-manager`'s internal REST API, and the files-root
+protocol, the `platform` API, `code-exec-manager`'s internal REST API, and the files-root
 path-traversal guard shared by the files and media APIs. This section is
 the single source of truth for these shapes — if any code ever disagrees
 with it, fix the code (or update this doc, if the doc is what's actually
@@ -1055,16 +1090,121 @@ service over `homeai-internal` — neither tool ever talks to
   itself unreachable, timed out, etc. → `Error: web_search failed: ...`/
   `Error: web_fetch failed: ...` with the underlying exception's `repr`).
 
-### `platform` API (internal, port 8100)
+### Platform API (`platform`, port 8100)
 
-M10-02 skeleton; the full surface is designed in `docs/PLATFORM.md` §3–§4.
+Design: `docs/PLATFORM.md` §3–§4. Implemented in M10-03 (accounts &
+sessions). Routing through Caddy lands in M10-04: until then only services
+on `homeai-internal` can reach these.
+
+**Conventions**
+
+- JSON in and out. Timestamps are ISO 8601 with offset; ids are UUIDs.
+- **Every error** body is `{"detail": "<code>"}` with a stable, lower-snake
+  `code` (the one exception: a malformed body — wrong types, missing
+  fields — is `422 {"detail": "invalid_request", "errors": [{"loc": [...],
+  "msg": "..."}]}`). Status meanings: `401` no valid credential; `403`
+  authenticated but not allowed; `404` unknown id; `409` conflicts with
+  current state; `422` a value breaks a rule; `429` rate limited (with a
+  `Retry-After: <seconds>` header).
+- **Web vs native.** Session-creating endpoints (`setup`, `login`,
+  `invite/accept`) set the `homeai_session` cookie (`HttpOnly`,
+  `SameSite=Lax`, `Path=/`, `Max-Age=2592000`, `Secure` when
+  `X-Forwarded-Proto: https`) and omit `session_token` from the body. With
+  request header `X-HomeAI-Client: native` they set no cookie and return
+  `session_token` (`hs_…`) instead; native clients then send
+  `Authorization: Bearer hs_…`.
+- **Session credential** (`/api/auth/*` and `/internal/auth/verify`):
+  `Authorization: Bearer hs_…` if present, else the `homeai_session`
+  cookie. Sessions expire 30 days after last use (sliding).
+- **Principal** (`/api/platform/*`, `app/core/principal.py`):
+  `X-HomeAI-Identity: <JWT act=user>` (set by Caddy from verify); if that
+  header is absent, `Authorization: Bearer <JWT act=agent>` (delegation,
+  M11-02). A present-but-invalid identity header is final (`401`, the
+  bearer isn't tried); `hs_` session tokens are never accepted here. The
+  named session must still be active and the user enabled; role and
+  step-up are read from the database, not the token. Guards:
+  - *user* — any principal, incl. an agent delegation.
+  - *human* — `act=user` only, else `403 agent_not_allowed`.
+  - *admin* — `act=user` (`403 agent_not_allowed`), `role=admin`
+    (`403 admin_required`), session stepped up within 5 min
+    (`403 step_up_required`).
+- **Rate limits** (in-memory, per process): at most 5 *failed* attempts per
+  60 s per bucket; success and `409`/`422` outcomes don't count. Buckets:
+  login — per username and per client IP; setup and invite accept — per
+  client IP; step-up and every current-password/TOTP check under
+  `/api/platform/me` — per user and per client IP (shared bucket). Client
+  IP = the last `X-Forwarded-For` hop (Caddy's), else the TCP peer.
+
+**Objects**
+
+- `User`: `{"id", "username", "display_name", "role": "admin"|"member",
+  "totp_enabled": bool, "disabled_at": ts|null, "created_at": ts}`.
+- `Session`: `{"id", "device_label": str|null, "created_at", "last_seen_at",
+  "expires_at", "current": bool}` (`current` = the caller's own session).
+- `Invite`: `{"id", "label": str|null, "status":
+  "pending"|"used"|"expired"|"revoked", "created_by": id|null,
+  "created_at", "expires_at", "used_at": ts|null, "used_by": id|null,
+  "revoked_at": ts|null}`.
+- `SessionResponse`: `{"user": User}` (web) or `{"user": User,
+  "session_token": "hs_…"}` (native).
+
+**Input rules** (`422` codes): `username` is trimmed and lowercased, then
+must match `^[a-z0-9][a-z0-9._-]{0,31}$` (`invalid_username`); `password`
+8–1024 characters (`weak_password`); `display_name` trimmed, 1–64
+printable characters (`invalid_display_name`); invite `label` ≤ 64
+printable characters (`invalid_label`); `device_label` is trimmed and cut
+to 64 characters. Setup codes are compared ignoring case, spaces, and
+dashes.
+
+**`/api/auth/*`** (no Caddy auth; routes read the session credential
+themselves)
+
+| Method + path | Request | Success | Errors |
+|---|---|---|---|
+| `GET /api/auth/status` | session credential optional | `200 {"setup_required": bool, "authenticated": bool, "user"?: User}` (`user` only when authenticated). Re-sends the cookie (fresh `Max-Age`) when the credential was the cookie. | — |
+| `POST /api/auth/setup` | `{"setup_code", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates the bootstrap **admin**, closes setup for good | `401 invalid_setup_code`, `409 setup_complete`, `409 username_taken`, `422` input rules, `429 rate_limited` |
+| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?}` | `200 SessionResponse` | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `429 rate_limited` |
+| `POST /api/auth/logout` | session credential optional | `204`, revokes the session, clears the cookie; idempotent | — |
+| `POST /api/auth/step-up` | session credential + `{"password"}` | `200 {"stepped_up_until": ts}` (now + 5 min, this session only) | `401 unauthenticated`, `403 invalid_password`, `429 rate_limited` |
+| `POST /api/auth/invite/accept` | `{"token", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates a **member** | `401 invalid_invite` (unknown, used, expired, or revoked — not distinguished), `409 username_taken` (invite stays usable), `422` input rules, `429 rate_limited` |
+
+**`/api/platform/*`** (behind Caddy `forward_auth`; principal as above;
+`401 unauthenticated` without a valid one)
+
+| Method + path | Guard | Request | Success | Errors |
+|---|---|---|---|---|
+| `GET /api/platform/me` | user | — | `200 User` | — |
+| `PATCH /api/platform/me` | human | `{"display_name"?, "password"?, "current_password"?}` | `200 User`. A password change revokes all the user's *other* sessions. | `422 current_password_required`, `403 invalid_password`, `422 weak_password`, `422 invalid_display_name`, `429 rate_limited` |
+| `GET /api/platform/me/sessions` | human | — | `200 {"sessions": [Session]}` (active only, most recently seen first) | — |
+| `DELETE /api/platform/me/sessions/{id}` | human | — | `204` (revoking the current session logs the caller out) | `404 not_found` (unknown, not yours, or already revoked/expired) |
+| `POST /api/platform/me/totp/enroll` | human | `{"password"}` | `200 {"secret": base32, "otpauth_uri": "otpauth://totp/HomeAI:<username>?secret=…&issuer=HomeAI&algorithm=SHA1&digits=6&period=30"}`. Pending until confirmed; re-enrolling replaces the pending secret. | `403 invalid_password`, `409 totp_already_enabled`, `429 rate_limited` |
+| `POST /api/platform/me/totp/confirm` | human | `{"code"}` | `200 User` (`totp_enabled: true`) | `403 invalid_totp`, `409 totp_not_pending`, `409 totp_already_enabled`, `429 rate_limited` |
+| `POST /api/platform/me/totp/disable` | human | `{"password"}` | `200 User` (`totp_enabled: false`) | `403 invalid_password`, `409 totp_not_enabled`, `429 rate_limited` |
+| `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | — |
+| `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). | `404 not_found`, `409 last_admin` (would leave no enabled admin) |
+| `POST /api/platform/admin/invites` | admin | `{"label"?}` | `201 Invite + {"token": "hi_…", "accept_url": "<scheme>://<host>/invite?token=<token>"}` — the only time the token is returned. Single use, expires in 7 days. `accept_url` uses `X-Forwarded-Host`/`Host` and `X-Forwarded-Proto` as seen by the platform. | `422 invalid_label` |
+| `GET /api/platform/admin/invites` | admin | — | `200 {"invites": [Invite]}` (newest first, no tokens) | — |
+| `DELETE /api/platform/admin/invites/{id}` | admin | — | `204` (revokes if pending; no-op otherwise) | `404 not_found` |
+
+Admin-guard failures (`403 agent_not_allowed` / `admin_required` /
+`step_up_required`) apply to every `/admin` route. The web app's `/invite?token=…` screen should read the token and
+`POST /api/auth/invite/accept`.
+
+**`/internal/*`** (never routed by Caddy)
 
 - `GET /internal/health` → `200 {"status":"ok"}`, or `503
   {"status":"degraded","database":"unreachable"}`.
 - `GET /internal/jwks` → RFC 7517 JWK Set, unauthenticated: `{"keys":
   [{"kty":"OKP","crv":"Ed25519","x":…,"kid":…,"use":"sig","alg":"EdDSA"}]}`.
   `kid` is the key's RFC 7638 thumbprint.
-- `/api/auth/*`, `/api/platform/*`: routers exist, no routes yet.
+- `GET /internal/auth/verify` — Caddy `forward_auth` target; reads the
+  forwarded request's session credential (bearer `hs_…` or cookie). `200`,
+  empty body, header `X-HomeAI-Identity: <JWT>` with claims `iss`, `aud`,
+  `sub` (user id), `sid` (session id), `role`, `act="user"`, `iat`, `exp`
+  (+5 min), header `kid`; slides the session expiry (`last_seen_at` is
+  bumped at most once a minute). Otherwise `401 {"detail":
+  "unauthenticated"}` (no credential, unknown/revoked/expired session,
+  disabled user). One indexed query.
 
 **Token format** (`app/core/tokens.py`, `TokenService`): EdDSA JWTs with
 header `kid`, `iss="homeai-platform"`, `aud="homeai"`, `iat`, `exp`, plus
@@ -1810,6 +1950,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |
 | `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host files directory) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
+| `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member on exit | After touching `services/platform/` auth/session code |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and
