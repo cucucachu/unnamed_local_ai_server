@@ -372,6 +372,15 @@ HTTP and HTTPS stay LAN-scoped. The sanctioned remote path is WireGuard
 and reaches Caddy at `http://homeai.local` or `http://10.13.13.1` through
 the tunnel. Do **not** forward TCP 80 or 443 on the router.
 
+**Origin policy (M15-02):** the platform classifies the last X-Forwarded-For
+hop as lan / vpn / public and refuses setup, invite accept, admin routes,
+and WireGuard device *create* from public (`403 public_origin`). Login and
+WireGuard revoke stay allowed. Caddy overwrites client-supplied XFF (no
+`trusted_proxies`). Host-published `:80`/`:443` may still look like a
+docker-bridge RFC1918 address even for a WAN client; tunnel HTTP often
+looks like the sidecar's internal address (still privileged). Real WAN
+distinction is M15-05 — until then, do not forward TCP 80/443.
+
 **As built:** compose service `wireguard` publishes UDP 51820 (`NET_ADMIN`
 only) on `homeai-wg` (not `homeai-net`; masquerade off so it is not a
 second internet path). Platform stores peers and the server key; Settings → Remote access

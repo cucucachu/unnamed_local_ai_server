@@ -193,8 +193,10 @@ platform's `/internal/*` routes are never routed by Caddy.
   writable root).
 - **Invites**: admins create single-use, 7-day invite tokens
   (`POST /api/platform/admin/invites` → URL/QR). Accepting creates a member
-  and a session. Invite/enrollment endpoints are **LAN/VPN-only** once
-  public mode exists (M15).
+  and a session. Invite accept, device enrollment (`POST` wireguard-devices),
+  bootstrap setup, and `/api/platform/admin/*` are **LAN/VPN-only**
+  (`403 public_origin`; M15-02). Public HTTPS (M15-05) does not invent a
+  second policy.
 - **Step-up**: admin endpoints require `act=user`, `role=admin`, and
   `stepped_up_until > now` (re-enter password, or passkey in domain mode;
   5-minute window).
@@ -1192,6 +1194,48 @@ with that app's context.
 - **Host app**: device pairing via hardware-backed key (Android Keystore /
   Secure Enclave); later, an embedded WireGuard tunnel.
 
+> **As built (M15-02)** — the origin classifier is in
+> `app/core/origin.py`. Client address is the last `X-Forwarded-For` hop
+> (`client_ip()` in `session_http.py`: Caddy's, else the TCP peer). Earlier
+> XFF entries are ignored. Origins: **vpn** if the address is in
+> `ORIGIN_VPN_SUBNETS` (default `10.13.13.0/24`, matched first so the
+> tunnel is not LAN despite being RFC1918), else **lan** if in
+> `ORIGIN_LAN_SUBNETS` (default RFC1918 + loopback `127.0.0.0/8` / `::1`
+> + IPv6 ULA `fc00::/7` and link-local `fe80::/10`; globally-routable v6
+> is public), else **public**. Privileged = lan or vpn. Defaults work
+> with no extra compose env.
+>
+> From **public** only, these routes answer `403 {"detail":"public_origin"}`
+> (existing `Forbidden` mapping), checked before other business errors when
+> practical so a public client cannot complete setup or consume an invite:
+> `POST /api/auth/setup`, `POST /api/auth/invite/accept`, all
+> `/api/platform/admin/*`, and `POST /api/platform/me/wireguard-devices`.
+> Login, logout, step-up, status, TOTP, GET/DELETE wireguard-devices, and
+> ordinary space/app routes are not blocked. Unauthenticated setup/accept
+> from public is still `403 public_origin` (not 401). Unauthenticated admin
+> is still `401`; an agent on admin routes is still `403 agent_not_allowed`
+> (origin runs after those guards). Passkey-only-when-public is M15-05.
+>
+> Caddy has **no** `trusted_proxies`, so it overwrites client-supplied
+> `X-Forwarded-For` with the address it actually saw. Spoofed prefixes
+> therefore cannot flip a LAN request to public (or the reverse). Do not
+> add `trusted_proxies` — that overwrite is what makes spoofing fail.
+>
+> **Docker / socat caveat (as-built, not a bug for this ticket):**
+> host-published `:80`/`:443` may show Caddy a docker-bridge IP (RFC1918)
+> even for a WAN client, so today's classifier cannot tell WAN from LAN
+> on those listeners. Distinct **vpn** vs **lan** for tunnel HTTP is also
+> imperfect: the wireguard sidecar `socat`s to Caddy, so Caddy often sees
+> the sidecar's `homeai-internal` address (RFC1918 → **lan**), not
+> `10.13.13.x`. That is still *privileged* (allowed). Do not add PROXY
+> protocol on `:80`/`:443` (clients could spoof PROXY) and do not put
+> Caddy in `network_mode: host`. Real WAN distinction is M15-05 once a
+> public listener exists; M15-02 is the policy hook + tests.
+>
+> Live check: `scripts/e2e/origin_policy_smoke.sh` (through Caddy; a LAN
+> request that also sends `X-Forwarded-For: 8.8.8.8` must not become
+> `403 public_origin`).
+>
 > **As built (M15-01)** — WireGuard is the default remote mode. A dedicated
 > `wireguard` compose service (`cap_add: NET_ADMIN` only; not privileged,
 > not `SYS_MODULE`) publishes **UDP 51820** on `homeai-wg` (return path;
@@ -1210,8 +1254,9 @@ with that app's context.
 > Settings → Remote access lists devices, creates a named profile (QR +
 > wg-quick text **once**), and revokes with confirm. Routes
 > `GET|POST|DELETE /api/platform/me/wireguard-devices` are *human* only
-> (`403 agent_not_allowed`). Create is allowed from the LAN; origin policy
-> is M15-02. Revoke deletes the peer and live config, and revokes sessions
+> (`403 agent_not_allowed`). Create is LAN/VPN-only (`403 public_origin`,
+> M15-02); GET list and DELETE revoke stay allowed from a public origin
+> so a stolen peer can be revoked off-LAN. Revoke deletes the peer and live config, and revokes sessions
 > **tagged** with that `device_id` (`POST /api/auth/login` optional
 > `device_id`). Untagged LAN sessions of the same user stay. Admin does
 > not manage other users' peers in v1.

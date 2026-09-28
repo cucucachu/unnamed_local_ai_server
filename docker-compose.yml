@@ -364,6 +364,10 @@ services:
       # default; after the human forwards UDP 51820, set this to the public
       # host:port (docs/NETWORKING.md). Never a private key.
       WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-homeai.local:51820}
+      # M15-02: origin classifier (LAN/VPN vs public). Defaults match
+      # Settings; no extra .env required. VPN is matched first.
+      ORIGIN_VPN_SUBNETS: ${ORIGIN_VPN_SUBNETS:-10.13.13.0/24}
+      ORIGIN_LAN_SUBNETS: "${ORIGIN_LAN_SUBNETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1,fc00::/7,fe80::/10}"
     healthcheck:
       # python:3.12-slim has no curl.
       test:

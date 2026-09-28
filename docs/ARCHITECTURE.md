@@ -257,8 +257,8 @@ what another doc says it should be.
   handshake and answers 403); the upgrade still reaches the upstream.
   No `trusted_proxies` is configured, so Caddy overwrites any
   client-supplied `X-Forwarded-For`/`-Proto`/`-Host` with what it
-  actually saw — the platform's per-IP rate limits (last XFF hop) can't
-  be spoofed. `/internal/*` is never routed. Range and `HEAD` requests to
+  actually saw — the platform's per-IP rate limits and origin policy
+  (last XFF hop) can't be spoofed. Do not add `trusted_proxies`. `/internal/*` is never routed. Range and `HEAD` requests to
   `/api/platform/files/stream` pass through unchanged (206 + `Content-Range`).
 - **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
   `npx expo export --platform web` against `services/frontend/`, in
@@ -1098,6 +1098,9 @@ what another doc says it should be.
   Docker daemon resolves; empty refuses every grant).
   `WIREGUARD_ENDPOINT` (M15-01; `Endpoint =` in client QR configs, default
   `homeai.local:51820`; never a private key).
+  `ORIGIN_VPN_SUBNETS` / `ORIGIN_LAN_SUBNETS` (M15-02; comma-separated
+  CIDRs for the origin classifier, defaults `10.13.13.0/24` and RFC1918 +
+  loopback + IPv6 ULA/link-local; VPN matched first).
   `PLATFORM_MIGRATE_LEGACY_FILES`
   (`0`/`1`, see above; the source dir `PLATFORM_LEGACY_FILES_DIR` defaults
   to `/data/legacy-files`). DB host/port/user/name default to
@@ -1114,7 +1117,9 @@ what another doc says it should be.
   `test_app.py` (lifespan, health, JWKS, `kid` stable across restarts),
   `test_auth_api.py` (setup code, login ± TOTP, cookies, logout, verify,
   revoked/expired/disabled, sliding expiry, step-up, rate limits, no
-  plaintext tokens), `test_platform_api.py` (principal resolution incl.
+  plaintext tokens), `test_origin.py` (LAN/VPN/public matrix, last-hop
+  XFF, `403 public_origin` on setup/invite-accept/admin/WG create),
+  `test_platform_api.py` (principal resolution incl.
   delegation `act=agent`, self-service, admin users, last admin,
   invites), `test_spaces.py` (personal-space invariants on every creation
   path, slug collisions, backfill of pre-`0003` users, dir modes +
@@ -1661,6 +1666,20 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
   client IP; step-up and every current-password/TOTP check under
   `/api/platform/me` — per user and per client IP (shared bucket). Client
   IP = the last `X-Forwarded-For` hop (Caddy's), else the TCP peer.
+- **Origin** (`app/core/origin.py`, M15-02): last-hop address classified
+  **vpn** (`ORIGIN_VPN_SUBNETS`, default `10.13.13.0/24`, matched first),
+  else **lan** (`ORIGIN_LAN_SUBNETS`, default RFC1918 + loopback + IPv6
+  ULA/link-local), else **public**. Privileged = lan or vpn. From public:
+  `POST /api/auth/setup`, `POST /api/auth/invite/accept`, all
+  `/api/platform/admin/*`, and `POST /api/platform/me/wireguard-devices`
+  answer `403 public_origin`. Login, logout, step-up, status, TOTP,
+  GET/DELETE wireguard-devices, and ordinary space/app routes are not
+  blocked. Unauthenticated setup/accept from public is still 403 (not
+  401); unauthenticated admin is still 401. Caddy overwrites XFF (no
+  `trusted_proxies`). Host-published `:80`/`:443` may still look like
+  RFC1918 to Caddy (Docker SNAT); tunnel HTTP often looks like the
+  sidecar's `homeai-internal` address (lan, still privileged). Real WAN
+  distinction is M15-05.
 
 **Objects**
 
@@ -1700,11 +1719,11 @@ themselves)
 | Method + path | Request | Success | Errors |
 |---|---|---|---|
 | `GET /api/auth/status` | session credential optional | `200 {"setup_required": bool, "authenticated": bool, "user"?: User}` (`user` only when authenticated). Re-sends the cookie (fresh `Max-Age`) when the credential was the cookie. | — |
-| `POST /api/auth/setup` | `{"setup_code", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates the bootstrap **admin**, closes setup for good | `401 invalid_setup_code`, `409 setup_complete`, `409 username_taken`, `422` input rules, `429 rate_limited` |
+| `POST /api/auth/setup` | `{"setup_code", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates the bootstrap **admin**, closes setup for good | `403 public_origin` (not LAN/VPN), `401 invalid_setup_code`, `409 setup_complete`, `409 username_taken`, `422` input rules, `429 rate_limited` |
 | `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Optional `device_id` tags the session to a WireGuard peer the user owns (M15-01). | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `422 unknown_device`, `429 rate_limited` |
 | `POST /api/auth/logout` | session credential optional | `204`, revokes the session, clears the cookie; idempotent | — |
 | `POST /api/auth/step-up` | session credential + `{"password"}` | `200 {"stepped_up_until": ts}` (now + 5 min, this session only) | `401 unauthenticated`, `403 invalid_password`, `429 rate_limited` |
-| `POST /api/auth/invite/accept` | `{"token", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates a **member** | `401 invalid_invite` (unknown, used, expired, or revoked — not distinguished), `409 username_taken` (invite stays usable), `422` input rules, `429 rate_limited` |
+| `POST /api/auth/invite/accept` | `{"token", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates a **member** | `403 public_origin` (not LAN/VPN), `401 invalid_invite` (unknown, used, expired, or revoked — not distinguished), `409 username_taken` (invite stays usable), `422` input rules, `429 rate_limited` |
 
 **`/api/platform/*`** (behind Caddy `forward_auth`; principal as above;
 `401 unauthenticated` without a valid one)
@@ -1716,7 +1735,7 @@ themselves)
 | `GET /api/platform/me/sessions` | human | — | `200 {"sessions": [Session]}` (active only, most recently seen first) | — |
 | `DELETE /api/platform/me/sessions/{id}` | human | — | `204` (revoking the current session logs the caller out) | `404 not_found` (unknown, not yours, or already revoked/expired) |
 | `GET /api/platform/me/wireguard-devices` | human | — | `200 {"devices": [WireGuardDevice]}` (id, name, address, created_at; no keys) | — |
-| `POST /api/platform/me/wireguard-devices` | human | `{"name"}` | `201 WireGuardDevice + {"config": "<wg-quick text>"}` — the only time the peer private key is returned (also the QR payload). LAN create is allowed (origin policy is M15-02). | `422 invalid_name`, `409 too_many_devices`, `409 peers_exhausted` |
+| `POST /api/platform/me/wireguard-devices` | human | `{"name"}` | `201 WireGuardDevice + {"config": "<wg-quick text>"}` — the only time the peer private key is returned (also the QR payload). LAN/VPN only (M15-02). | `403 public_origin`, `422 invalid_name`, `409 too_many_devices`, `409 peers_exhausted` |
 | `DELETE /api/platform/me/wireguard-devices/{id}` | human | — | `204` — deletes the peer, rewrites live wg0.conf, revokes sessions tagged with that `device_id` (not untagged LAN sessions) | `404 not_found` (unknown or not yours) |
 | `POST /api/platform/me/totp/enroll` | human | `{"password"}` | `200 {"secret": base32, "otpauth_uri": "otpauth://totp/HomeAI:<username>?secret=…&issuer=HomeAI&algorithm=SHA1&digits=6&period=30"}`. Pending until confirmed; re-enrolling replaces the pending secret. | `403 invalid_password`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/confirm` | human | `{"code"}` | `200 User` (`totp_enabled: true`) | `403 invalid_totp`, `409 totp_not_pending`, `409 totp_already_enabled`, `429 rate_limited` |
@@ -1731,12 +1750,12 @@ themselves)
 | `POST /api/platform/spaces/{id}/members` | membership `manage` | `{"user_id", "role": "owner"\|"editor"\|"viewer"}` | `201 Member` | space errors, `409 personal_space`, `422 unknown_user`, `409 user_disabled`, `409 already_member` |
 | `PATCH /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | `{"role"}` | `200 Member` | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` (demoting the only owner) |
 | `DELETE /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | — | `204`; the user loses access at once | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` |
-| `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | — |
-| `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). | `404 not_found`, `409 last_admin` (would leave no enabled admin) |
-| `POST /api/platform/admin/invites` | admin | `{"label"?}` | `201 Invite + {"token": "hi_…", "accept_url": "<scheme>://<host>/invite?token=<token>"}` — the only time the token is returned. Single use, expires in 7 days. `accept_url` uses `X-Forwarded-Host`/`Host` and `X-Forwarded-Proto` as seen by the platform. | `422 invalid_label` |
-| `GET /api/platform/admin/invites` | admin | — | `200 {"invites": [Invite]}` (newest first, no tokens) | — |
-| `DELETE /api/platform/admin/invites/{id}` | admin | — | `204` (revokes if pending; no-op otherwise) | `404 not_found` |
-| `GET /api/platform/admin/spaces` | admin | — | `200 {"spaces": [Space]}` — every space, personal and archived included (oldest first); `role` is the admin's own or `null` | — |
+| `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | `403 public_origin` |
+| `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). | `403 public_origin`, `404 not_found`, `409 last_admin` (would leave no enabled admin) |
+| `POST /api/platform/admin/invites` | admin | `{"label"?}` | `201 Invite + {"token": "hi_…", "accept_url": "<scheme>://<host>/invite?token=<token>"}` — the only time the token is returned. Single use, expires in 7 days. `accept_url` uses `X-Forwarded-Host`/`Host` and `X-Forwarded-Proto` as seen by the platform. | `403 public_origin`, `422 invalid_label` |
+| `GET /api/platform/admin/invites` | admin | — | `200 {"invites": [Invite]}` (newest first, no tokens) | `403 public_origin` |
+| `DELETE /api/platform/admin/invites/{id}` | admin | — | `204` (revokes if pending; no-op otherwise) | `403 public_origin`, `404 not_found` |
+| `GET /api/platform/admin/spaces` | admin | — | `200 {"spaces": [Space]}` — every space, personal and archived included (oldest first); `role` is the admin's own or `null` | `403 public_origin` |
 
 Admin-guard failures (`403 agent_not_allowed` / `admin_required` /
 `step_up_required`) apply to every `/admin` route.
@@ -3483,6 +3502,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real `/personal/research/llamacpp.md` in the user's personal space) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
+| `scripts/e2e/origin_policy_smoke.sh` | M15-02: through Caddy (not platform:8100) — a LAN `POST /api/auth/setup` that also sends `X-Forwarded-For: 8.8.8.8` must not be `403 public_origin` (Caddy overwrote the spoof); optional throwaway `POST /api/platform/me/wireguard-devices` with the same spoof, then revoke. Never completes bootstrap. Takes `/tmp/homeai-stack.lock`. Fail clearly if Caddy is down | After touching origin policy, Caddy XFF, or platform auth/admin/WG create |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/` is `0:<gid> 2770` and `apps/` `2750`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
 | `scripts/e2e/app_runner_browser_smoke.sh` | M12-06 / M13-04: through Caddy in headless Chromium — CLI-created owner and viewer of a throwaway `e2e-runner-*` shared space; the owner uploads the SDK's `runtime-check` fixture to the space's `Apps` folder, registers, installs and builds it; then in the web app: Apps tab → the instance under its space → the runner at `/apps/<id>` in an `<iframe sandbox="allow-scripts">`; a row written in the app is in the instance database (REST) and shown after a page reload; Ask the agent opens a panel seeded with app.json, AGENT.md, schema.sql, instance id and space, and a REST write while it is open appears in the app (`db_changed`); a rebuild (v2, from `app_fixture.mjs`) hot-reloads in the same frame; v2's Crash button raises the host's error overlay with the message and its Reload brings the app back in a fresh frame; the viewer sees "View only", the row, and a write refused `read_only` with the database unchanged; no sandbox-frame request got a response. Deletes the space (apps and instances cascade), bundles, users on exit. Also in `gate_full.sh`. `scripts/e2e/app_fixture.mjs` installs the same fixture as your own user for trying it by hand (`HOST-CHECKS.md` M12) | After touching the Apps tab / runner (`services/frontend`), `@homeai/sdk` `askAgent`, or the Caddy image |

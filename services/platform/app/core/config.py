@@ -3,9 +3,11 @@
 Variable names match `.env.example`, lower-cased and unprefixed.
 """
 
+from ipaddress import ip_network
 from pathlib import Path
 
 from psycopg.conninfo import make_conninfo
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,6 +73,23 @@ class Settings(BaseSettings):
     # host:port after the human forwards UDP 51820 (docs/NETWORKING.md).
     wireguard_config_dir: Path = Path("/data/wireguard")
     wireguard_endpoint: str = "homeai.local:51820"
+
+    # M15-02: comma-separated CIDRs for the origin classifier (`app/core/origin.py`).
+    # VPN is matched first so the WireGuard tunnel is not classified as LAN
+    # (10.13.13.0/24 ⊂ 10.0.0.0/8). Defaults work with no extra compose env.
+    origin_vpn_subnets: str = "10.13.13.0/24"
+    origin_lan_subnets: str = (
+        "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1,fc00::/7,fe80::/10"
+    )
+
+    @field_validator("origin_vpn_subnets", "origin_lan_subnets")
+    @classmethod
+    def _origin_cidrs(cls, value: str) -> str:
+        for part in value.split(","):
+            part = part.strip()
+            if part:
+                ip_network(part, strict=False)
+        return value
 
     @property
     def keys_dir(self) -> Path:
