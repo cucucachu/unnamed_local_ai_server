@@ -509,6 +509,7 @@ class InstanceOut(BaseModel):
     tracks: str
     installed_by: UUID | None
     granted_permissions: dict[str, Any]
+    granted_reads: list[Any] = []
     created_at: datetime
     app: InstanceAppOut
     # Newer published version of the same app, when this instance pins one.
@@ -523,6 +524,7 @@ class InstallRequest(BaseModel):
     app_id: UUID
     tracks: Short = "working"
     granted_permissions: dict[str, Any] | None = None
+    granted_reads: list[Any] | None = None
 
 
 class PublishRequest(BaseModel):
@@ -549,6 +551,7 @@ class CatalogList(BaseModel):
 class UpdateInstanceRequest(BaseModel):
     version_id: UUID
     granted_permissions: dict[str, Any] | None = None
+    granted_reads: list[Any] | None = None
 
 
 class ForkRequest(BaseModel):
@@ -615,8 +618,17 @@ class RpcAction(BaseModel):
     params: Annotated[dict[Short, SqlValue], Field(max_length=1000)] = {}
 
 
+class RpcExportAction(BaseModel):
+    op: Literal["exportAction"]
+    instance: UUID
+    export: Short
+    name: Short
+    params: Annotated[dict[Short, SqlValue], Field(max_length=1000)] = {}
+
+
 RpcRequest = Annotated[
-    RpcGetAll | RpcGetFirst | RpcRun | RpcTransaction | RpcAction, Field(discriminator="op")
+    RpcGetAll | RpcGetFirst | RpcRun | RpcTransaction | RpcAction | RpcExportAction,
+    Field(discriminator="op"),
 ]
 
 

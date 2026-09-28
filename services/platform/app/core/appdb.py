@@ -11,12 +11,15 @@ dir's path and later opens `-wal`/`-shm` by path, so it relies on `apps/`
 and below being writable by root alone (`storage.APPS_MODE`); a database or
 side file that is anything but a regular file is refused.
 
-RPC statements run on a connection that has only this file open, under an
-allow-list authorizer: reads may SELECT (plus a few introspection pragmas),
-writes may also INSERT / UPDATE / DELETE rows of the app's own tables. DDL,
+RPC statements run on a connection that has only this file open (plus
+read-only `ATTACH`es the platform adds for granted exports), under an
+allow-list authorizer: reads may SELECT from `main` and granted export
+schemas (plus a few introspection pragmas on `main`/`temp`), writes may
+INSERT / UPDATE / DELETE rows of the app's own tables on `main` only. DDL,
 ATTACH / DETACH (and so VACUUM, which SQLite authorizes as an ATTACH),
 transaction control, other pragmas and `load_extension` are refused, and
-`SQLITE_LIMIT_ATTACHED` is 0 besides. Every op has a wall-clock budget
+`SQLITE_LIMIT_ATTACHED` is 0 except for the granted ATTACHes (and the
+`VACUUM INTO` bump in `publish()`). Every op has a wall-clock budget
 (progress handler), and results are capped in rows and bytes.
 
 Standard library only.
@@ -35,6 +38,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from app.core import appschema
 
@@ -112,8 +116,17 @@ def _path(dir_fd: int, name: str) -> str:
     return f"/proc/self/fd/{dir_fd}/{name}"
 
 
+def _set_attached(con: sqlite3.Connection, n: int) -> None:
+    con.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, n)
+
+
+def _attached_cap(con: sqlite3.Connection) -> int:
+    """The compile-time maximum number of ATTACHed databases (typically 10)."""
+    con.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 125)
+    return con.getlimit(sqlite3.SQLITE_LIMIT_ATTACHED)
+
+
 def _limit(con: sqlite3.Connection) -> None:
-    con.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
     con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
     con.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)
 
@@ -142,8 +155,11 @@ def connect(inst_fd: int) -> Iterator[sqlite3.Connection]:
             con.execute("PRAGMA journal_mode = WAL")
         con.execute("PRAGMA foreign_keys = ON")
         con.execute("PRAGMA trusted_schema = OFF")
+        _set_attached(con, 0)
+        _limit(con)
         yield con
     finally:
+        _ATTACH_STATE.pop(id(con), None)
         con.close()
 
 
@@ -188,18 +204,133 @@ def _size(value: Any) -> int:
 # --- running statements ---------------------------------------------------------------
 
 
-def _authorizer(write: bool):
+# --- granted exports (M14-04) -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AttachGrant:
+    """One exporter instance the platform ATTACHes onto a reader connection."""
+
+    inst_fd: int
+    instance_id: UUID
+    app_slug: str
+    export_name: str
+    tables: tuple[str, ...]
+    space_path: str
+
+
+@dataclass(frozen=True)
+class _AttachState:
+    schemas: frozenset[str]
+    tables: dict[str, frozenset[str]]
+    views: frozenset[str]
+
+
+_ATTACH_STATE: dict[int, _AttachState] = {}
+
+
+def attach_schema_name(instance_id: UUID) -> str:
+    return "exp" + instance_id.hex
+
+
+def merged_view_name(app_slug: str, export_name: str, table: str, tables: Sequence[str]) -> str:
+    """Stable TEMP VIEW name: `{app}_{export}` when the export has one table."""
+    if len(tables) == 1:
+        return f"{app_slug}_{export_name}"
+    return f"{app_slug}_{export_name}_{table}"
+
+
+def _sql_str(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> None:
+    """ATTACH granted exporter DBs read-only and create merged TEMP views.
+
+    Missing or unreadable exporters are skipped. `SQLITE_LIMIT_ATTACHED` is
+    raised only far enough for the databases that actually attached.
+    """
+    if not grants:
+        _set_attached(con, 0)
+        return
+    cap = _attached_cap(con)
+    attached: list[tuple[AttachGrant, str]] = []
+    for grant in grants:
+        if len(attached) >= cap:
+            break
+        try:
+            for suffix in SIDE_SUFFIXES:
+                _check_regular(grant.inst_fd, DB_NAME + suffix)
+            if not _check_regular(grant.inst_fd, DB_NAME):
+                continue
+        except InstanceStorageError:
+            continue
+        schema = attach_schema_name(grant.instance_id)
+        uri = f"file:{_path(grant.inst_fd, DB_NAME)}?mode=ro"
+        try:
+            con.execute(f"ATTACH DATABASE ? AS {appschema.quote(schema)}", (uri,))
+        except sqlite3.Error:
+            continue
+        attached.append((grant, schema))
+    _set_attached(con, len(attached))
+    if not attached:
+        return
+    groups: dict[tuple[str, str], list[tuple[AttachGrant, str]]] = {}
+    tables_by_schema: dict[str, frozenset[str]] = {}
+    schemas: set[str] = set()
+    for grant, schema in attached:
+        groups.setdefault((grant.app_slug, grant.export_name), []).append((grant, schema))
+        schemas.add(schema)
+        tables_by_schema[schema] = frozenset(grant.tables)
+    views: set[str] = set()
+    for (slug, export_name), copies in groups.items():
+        tables = copies[0][0].tables
+        for table in tables:
+            view = merged_view_name(slug, export_name, table, tables)
+            selects = [
+                (
+                    f"SELECT *, {_sql_str(grant.space_path)} AS {appschema.quote('_space')} "
+                    f"FROM {appschema.quote(schema)}.{appschema.quote(table)}"
+                )
+                for grant, schema in copies
+            ]
+            sql = f"CREATE TEMP VIEW {appschema.quote(view)} AS " + " UNION ALL ".join(selects)
+            try:
+                con.execute(sql)
+            except sqlite3.Error:
+                continue
+            views.add(view)
+    _ATTACH_STATE[id(con)] = _AttachState(
+        schemas=frozenset(schemas), tables=tables_by_schema, views=frozenset(views)
+    )
+
+
+def _authorizer(write: bool, scope: _AttachState | None = None):
     allowed = _WRITE_ACTIONS if write else _READ_ACTIONS
+    extra_tables = scope.tables if scope is not None else {}
+    views = scope.views if scope is not None else frozenset()
 
     def check(action, arg1, arg2, dbname, source):
+        db = (dbname or "main").lower()
         if action == sqlite3.SQLITE_PRAGMA:
-            ok = (arg1 or "").lower() in _PRAGMAS and dbname in (None, "main")
+            ok = (arg1 or "").lower() in _PRAGMAS and db in ("main", "temp")
             return sqlite3.SQLITE_OK if ok else sqlite3.SQLITE_DENY
         if action not in allowed:
             return sqlite3.SQLITE_DENY
         if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() in _DENIED_FUNCTIONS:
             return sqlite3.SQLITE_DENY
-        if action in _ROW_WRITES and (arg1 or "").lower().startswith("sqlite_"):
+        if action in _ROW_WRITES:
+            if db != "main" or (arg1 or "").lower().startswith("sqlite_"):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_READ:
+            table = arg1 or ""
+            if db == "main":
+                return sqlite3.SQLITE_OK
+            if db == "temp" and table in views:
+                return sqlite3.SQLITE_OK
+            if table in extra_tables.get(db, ()):
+                return sqlite3.SQLITE_OK
             return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
 
@@ -251,11 +382,12 @@ class Session:
         self.write = write
         self.budget = _Budget()
         self._deadline = time.monotonic() + OP_TIMEOUT_S
+        self._scope = _ATTACH_STATE.get(id(con))
 
     @contextmanager
     def _guarded(self) -> Iterator[None]:
         self.con.set_progress_handler(lambda: int(time.monotonic() > self._deadline), 1000)
-        self.con.set_authorizer(_authorizer(self.write))
+        self.con.set_authorizer(_authorizer(self.write, self._scope))
         try:
             yield
         finally:
@@ -463,8 +595,12 @@ def publish(con: sqlite3.Connection, inst_fd: int) -> None:
             os.unlink(tmp, dir_fd=ro_fd)
         except FileNotFoundError:
             pass
-        con.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 1)
-        con.execute("VACUUM INTO ?", (_path(ro_fd, tmp),))
+        prev = con.getlimit(sqlite3.SQLITE_LIMIT_ATTACHED)
+        try:
+            con.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, max(prev, 1))
+            con.execute("VACUUM INTO ?", (_path(ro_fd, tmp),))
+        finally:
+            con.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, prev)
         _seal(ro_fd, tmp, 0o444)
         os.rename(tmp, DB_NAME, src_dir_fd=ro_fd, dst_dir_fd=ro_fd)
         os.fsync(ro_fd)

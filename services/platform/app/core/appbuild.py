@@ -490,12 +490,32 @@ async def build_app(
         app = await apps.get_visible_app(conn, principal, app_id)
         await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
         r, slug = await apps.resolve_source(conn, principal, storage, app["source_path"])
+        cur = await conn.execute(
+            "SELECT source_snapshot FROM app_versions "
+            "WHERE app_id = %s AND kind = 'published' AND source_snapshot IS NOT NULL "
+            "ORDER BY published_at DESC, id DESC LIMIT 1",
+            (app_id,),
+        )
+        snap = await cur.fetchone()
+        old_schema = None
+        if snap:
+            old_schema = await anyio.to_thread.run_sync(
+                apps.read_snapshot_schema, data_dir, snap["source_snapshot"]
+            )
     build_id, doc, found = await anyio.to_thread.run_sync(_stage, r, slug, builds)
     if build_id is None:
         return app, None, found, []
     start = time.monotonic()
     schema_sql = tree = None
     try:
+        if not found and doc is not None and app.get("working_version"):
+            new_schema = await anyio.to_thread.run_sync(_staged_schema, builds, build_id)
+            found = [
+                diagnostic("manifest", d.file, d.message, d.path)
+                for d in manifest.export_contract_diagnostics(
+                    app["working_version"]["manifest"], old_schema, doc, new_schema
+                )
+            ]
         if found:
             return app, None, found, []
         found, output = await _run(builds, builder, build_id)

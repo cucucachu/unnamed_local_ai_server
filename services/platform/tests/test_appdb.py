@@ -10,6 +10,7 @@ import os
 import sqlite3
 import stat
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -297,3 +298,61 @@ def test_publish_is_a_read_only_consistent_copy(db, inst) -> None:
     reader = sqlite3.connect(f"file:{ro}?mode=ro&immutable=1", uri=True)
     assert reader.execute("SELECT count(*) FROM items").fetchone() == (3,)
     reader.close()
+
+
+def _instance_dir(path: Path) -> Path:
+    path.mkdir()
+    for sub in ("ro", "snapshots"):
+        (path / sub).mkdir()
+    return path
+
+
+def test_platform_attach_is_read_only_and_user_attach_still_fails(tmp_path) -> None:
+    reader = _instance_dir(tmp_path / "reader")
+    exporter = _instance_dir(tmp_path / "exporter")
+    exp_fd = os.open(exporter, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with appdb.connect(exp_fd) as eco:
+            eco.executescript(
+                "CREATE TABLE events (id INTEGER PRIMARY KEY, title TEXT);\n"
+                "CREATE TABLE secrets (id INTEGER PRIMARY KEY, note TEXT);\n"
+            )
+            eco.execute("INSERT INTO events (title) VALUES ('Dentist')")
+            eco.execute("INSERT INTO secrets (note) VALUES ('hidden')")
+        rfd = os.open(reader, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with appdb.connect(rfd) as con:
+                appdb.attach_exports(
+                    con,
+                    [
+                        appdb.AttachGrant(
+                            inst_fd=exp_fd,
+                            instance_id=UUID(int=1),
+                            app_slug="calendar",
+                            export_name="events",
+                            tables=("events",),
+                            space_path="/personal",
+                        )
+                    ],
+                )
+                rows = appdb.get_all(con, "SELECT title, _space FROM calendar_events", None)
+                assert rows == [{"title": "Dentist", "_space": "/personal"}]
+                with pytest.raises(SqlError) as e:
+                    appdb.run(
+                        con, "INSERT INTO calendar_events (title, _space) VALUES ('x', '/p')", None
+                    )
+                assert e.value.code == "sql_not_allowed"
+                schema = appdb.attach_schema_name(UUID(int=1))
+                with pytest.raises(SqlError) as e:
+                    appdb.run(con, f"INSERT INTO {schema}.events (title) VALUES ('x')", None)
+                assert e.value.code == "sql_not_allowed"
+                with pytest.raises(SqlError) as e:
+                    appdb.get_all(con, f"SELECT note FROM {schema}.secrets", None)
+                assert e.value.code in ("sql_not_allowed", "sql_error")
+                appdb.Session(con, write=True)
+                with pytest.raises(sqlite3.OperationalError, match="too many attached"):
+                    con.execute("ATTACH ':memory:' AS x")
+        finally:
+            os.close(rfd)
+    finally:
+        os.close(exp_fd)

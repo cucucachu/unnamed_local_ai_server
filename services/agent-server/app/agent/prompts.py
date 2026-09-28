@@ -55,6 +55,11 @@ Package layout:
   app/index.tsx     home screen; app/<name>.tsx is /<name>; app/<name>/[id].tsx is /<name>/:id
 permissions stays {}. privileged capabilities are only for image-shipped system apps;
 user apps cannot declare them. Slugs home, chat, files, settings are reserved.
+exports/reads are optional: omit them (grocery-list does). To share tables, the
+exporter lists exports [{name, version, tables, actions?}]; a reader lists
+reads [{app: <slug>, export, version}] and is granted that list at install.
+The reader queries the merged view <app>_<export> (rows include _space).
+Bump export version when tables or columns change.
 Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk, relative files
 in this folder. No fetch, window, document, react-dom, or fs.
 @homeai/sdk:

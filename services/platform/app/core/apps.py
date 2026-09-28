@@ -41,7 +41,7 @@ from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
-from app.core import beneath, fsops, manifest, spaces, vfs
+from app.core import appschema, beneath, fsops, manifest, spaces, vfs
 from app.core.errors import Conflict, InvalidApp, InvalidInput, NotFound, ServerError
 from app.core.principal import Principal
 from app.core.storage import SpaceStorage
@@ -89,7 +89,7 @@ WHERE a.archived_at IS NULL
 _INSTANCES = """
 SELECT i.id, i.app_id, i.space_id,
        CASE WHEN i.tracks = 'working' THEN 'working' ELSE i.version_id::text END AS tracks,
-       i.installed_by, i.granted_permissions, i.created_at,
+       i.installed_by, i.granted_permissions, i.granted_reads, i.created_at,
        json_build_object('id', a.id, 'slug', a.slug, 'name', a.name, 'version', v.version,
                          'icon', v.manifest -> 'homeai' ->> 'icon') AS app,
        CASE WHEN i.tracks = 'working' THEN NULL ELSE (
@@ -207,6 +207,20 @@ def _permissions(doc: Any) -> dict[str, Any]:
     return perms if isinstance(perms, dict) else {}
 
 
+def _reads(doc: Any) -> list[Any]:
+    return manifest.homeai_reads(doc)
+
+
+def _reads_key(reads: list[Any]) -> list[tuple[Any, ...]]:
+    keys = []
+    for item in reads:
+        if isinstance(item, dict):
+            keys.append((item.get("app"), item.get("export"), item.get("version")))
+        else:
+            keys.append((item,))
+    return sorted(keys)
+
+
 def _grant(doc: Any, granted: dict[str, Any] | None, *, required: bool) -> dict[str, Any]:
     """The permissions recorded on an install or update.
 
@@ -220,6 +234,22 @@ def _grant(doc: Any, granted: dict[str, Any] | None, *, required: bool) -> dict[
         return wanted
     if granted != wanted:
         raise InvalidInput("permissions_mismatch")
+    return wanted
+
+
+def _grant_reads(doc: Any, granted: list[Any] | None, *, required: bool) -> list[Any]:
+    """The reads recorded on an install or update.
+
+    Empty `homeai.reads` is granted automatically. A non-empty list must be sent
+    back as `granted_reads` (the install/update prompt).
+    """
+    wanted = _reads(doc)
+    if granted is None:
+        if wanted and required:
+            raise InvalidInput("reads_required")
+        return wanted
+    if _reads_key(granted) != _reads_key(wanted):
+        raise InvalidInput("reads_mismatch")
     return wanted
 
 
@@ -240,6 +270,27 @@ def open_snapshot(data_dir: Path, rel: str) -> int:
     except OSError:
         os.close(fd)
         raise
+
+
+def read_snapshot_schema(data_dir: Path, rel: str) -> str | None:
+    """`schema.sql` from a published snapshot, or None if it can't be read."""
+    try:
+        fd = open_snapshot(data_dir, rel)
+    except (OSError, ServerError):
+        return None
+    try:
+        with fsops.open_regular_at(fd, "schema.sql") as f:
+            data = f.read(appschema.MAX_SCHEMA_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(data) > appschema.MAX_SCHEMA_BYTES:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _copy_entry(
@@ -437,6 +488,16 @@ async def validate_app(
     await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
     r, slug = await resolve_source(conn, principal, storage, app["source_path"])
     doc, found = await anyio.to_thread.run_sync(_validate_source, r, slug)
+    if doc is not None and app.get("working_version"):
+        fd = open_source(r)
+        try:
+            new_schema = manifest.read_schema_sql(fd) if fd is not None else None
+        finally:
+            if fd is not None:
+                os.close(fd)
+        found = list(found) + manifest.export_contract_diagnostics(
+            app["working_version"]["manifest"], None, doc, new_schema
+        )
     if not found:
         async with conn.transaction():
             await conn.execute("UPDATE apps SET name = %s WHERE id = %s", (doc["name"], app_id))
@@ -508,6 +569,7 @@ async def install_app(
     app_id: UUID,
     tracks: str,
     granted_permissions: dict[str, Any] | None = None,
+    granted_reads: list[Any] | None = None,
 ) -> Row:
     access = await spaces.authorize_space(conn, principal, space_id, "write")
     app = await get_visible_app(conn, principal, app_id)
@@ -525,15 +587,17 @@ async def install_app(
         version_id, doc = pinned["id"], pinned["manifest"]
         required = True
     granted = _grant(doc, granted_permissions, required=required)
+    reads = _grant_reads(doc, granted_reads, required=required)
     try:
         async with conn.transaction():
             cur = await conn.execute(
                 "INSERT INTO app_instances "
-                "(app_id, space_id, tracks, version_id, installed_by, granted_permissions) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                "(app_id, space_id, tracks, version_id, installed_by, "
+                "granted_permissions, granted_reads) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
                 (
                     app_id, space_id, WORKING if version_id is None else "version",
-                    version_id, principal.user_id, Jsonb(granted),
+                    version_id, principal.user_id, Jsonb(granted), Jsonb(reads),
                 ),
             )  # fmt: skip
             instance_id = (await cur.fetchone())["id"]
@@ -704,6 +768,7 @@ async def update_instance(
     instance_id: UUID,
     version_id: UUID,
     granted_permissions: dict[str, Any] | None,
+    granted_reads: list[Any] | None = None,
 ) -> Row:
     """Pin a live instance to a newer published version. Write on the space."""
     await spaces.authorize_space(conn, principal, space_id, "write")
@@ -720,12 +785,18 @@ async def update_instance(
         raise InvalidInput("permissions_mismatch")
     if wanted != inst["granted_permissions"] and granted_permissions is None:
         raise InvalidInput("permissions_changed")
+    wanted_reads = _reads(target["manifest"])
+    if granted_reads is not None and _reads_key(granted_reads) != _reads_key(wanted_reads):
+        raise InvalidInput("reads_mismatch")
+    stored_reads = inst["granted_reads"] if isinstance(inst.get("granted_reads"), list) else []
+    if _reads_key(wanted_reads) != _reads_key(stored_reads) and granted_reads is None:
+        raise InvalidInput("reads_changed")
     granted = wanted
     async with conn.transaction():
         await conn.execute(
-            "UPDATE app_instances SET version_id = %s, granted_permissions = %s "
-            "WHERE id = %s AND uninstalled_at IS NULL",
-            (version_id, Jsonb(granted), instance_id),
+            "UPDATE app_instances SET version_id = %s, granted_permissions = %s, "
+            "granted_reads = %s WHERE id = %s AND uninstalled_at IS NULL",
+            (version_id, Jsonb(granted), Jsonb(wanted_reads), instance_id),
         )
     updated = await _get_instance(conn, instance_id)
     if updated is None:

@@ -507,9 +507,11 @@ the platform publishes.
 > only one); `homeai` also takes an optional `description`, and unknown
 > `homeai` keys are rejected while other top-level (Expo) keys are ignored;
 > SDK 1 user-app permissions must be `{}` (or omitted); `permissions.privileged`
-> is only on the image-shipped schema (M14-03). `exports` and
-> `reads` are reserved as arrays that must be empty until M14-04 defines
-> them. Diagnostics are `{file, path (JSON pointer), message}`. Route names
+> is only on the image-shipped schema (M14-03). `exports` is an array of
+> `{name, version, tables, actions?}` (omit or `[]` if the app shares nothing);
+> `reads` is `{app, export, version}` targeting another app's slug. Changing an
+> export's tables or columns without bumping `version` is a validate/build
+> diagnostic. Diagnostics are `{file, path (JSON pointer), message}`. Route names
 > are `^[A-Za-z0-9][A-Za-z0-9_-]*$` segments, and a `[...rest]` catch-all
 > must be a file.
 
@@ -770,8 +772,8 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > / `reject` drive migrations, with pending ones kept in Postgres
 > (`app_migrations`). `/ws/platform/events` emits `db_changed` and
 > `app_built`. Scope is enforced by an allow-list SQLite authorizer rather
-> than a CREATE-only deny-list, plus `SQLITE_LIMIT_ATTACHED = 0` and a
-> leading-keyword check. Deviations:
+> than a CREATE-only deny-list, plus `SQLITE_LIMIT_ATTACHED = 0` (raised only
+> for granted export ATTACHes) and a leading-keyword check. Deviations:
 >
 > - **`apps/` is 2750, not 2770.** SQLite reopens a database (and its
 >   `-wal`/`-shm`) by the path it was given, and a `/proc/self/fd/N/…` path
@@ -796,6 +798,25 @@ The sandbox config (`window.__homeai_config`, in the document) is
 >   the shim needs (deferred per the M12-01 spike).
 > - Virtual tables (FTS etc.), views and triggers aren't allowed in
 >   `schema.sql` yet.
+
+> **As built (M14-04), cross-app exports:** an app may declare `homeai.exports`
+> (`{name, version, tables, actions?}`). Readers declare `homeai.reads`
+> (`{app` slug, `export`, `version}`). Empty `reads` is auto-granted (`[]`);
+> a non-empty list must be sent back as `granted_reads` on a pinned install
+> or update (`reads_required` / `reads_mismatch` / `reads_changed`, same
+> pattern as permissions). On RPC the platform ATTACHes live instances of
+> that slug whose export name+version match, in spaces the caller can read,
+> via `/proc/self/fd/…/data.sqlite?mode=ro`, then creates a TEMP VIEW
+> `{app}_{export}` (`UNION ALL` of each copy plus `_space`, e.g. `/personal`
+> or `/spaces/family`). User SQL still cannot ATTACH (`LIMIT_ATTACHED` is
+> only high enough for those copies; the authorizer denies INSERT/UPDATE/DELETE
+> off `main` and SELECT/READ off `main` plus the attached export tables and
+> views). Writes to another app go through `op: "exportAction"` (`instance`,
+> `export`, `name`) which runs that instance's `actions/<name>.sql` and needs
+> write on the owning space; ungranted exports are `404 unknown_export`.
+> Changing an export's tables or columns without bumping `version` is a
+> validate/build diagnostic. Tests: `tests/test_app_exports.py`,
+> `tests/test_appdb.py`, `tests/test_manifest.py`.
 
 > **As built (M13-02), exec read-only mounts:** `POST /internal/exec-grants`
 > adds one read-only bind per live instance in every space the user is a
