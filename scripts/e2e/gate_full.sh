@@ -74,6 +74,11 @@
 #   -> gate_m14.sh (M14-06: publish/install smoke, Home launcher, platform
 #      export/system-app/grants pytest, and the G14 calendar/planner
 #      scenario — no extra GPU run)
+#   -> gate_m15.sh (M15-07: WireGuard throwaway-client smoke, origin-policy
+#      through Caddy, Caddy domain validate, platform origin/public-https/
+#      webauthn/device-pairs pytest, passkey browser smoke with RP ID
+#      restore, and the G15 public-enrollment-refusal scenario — no extra
+#      GPU run)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -296,6 +301,10 @@ main() {
   # home_launcher_smoke.sh above, plus platform export/system-app/grants
   # pytest and the G14 calendar/planner scenario; same idempotent reasoning.
   run_step "gate_m14.sh"             bash "${SCRIPT_DIR}/gate_m14.sh"
+  # M15-07: gate_m15.sh re-runs origin/WG/passkey smokes as its own chain
+  # plus platform origin pytest and the G15 enrollment scenario; same
+  # idempotent reasoning.
+  run_step "gate_m15.sh"             bash "${SCRIPT_DIR}/gate_m15.sh"
 
   print_summary
 

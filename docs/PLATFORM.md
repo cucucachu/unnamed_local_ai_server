@@ -1459,6 +1459,32 @@ Each is enforced below the agent and covered by an automated check
 > extra GPU run (G13 already has one). `verify_tenancy.sh` stays where
 > `gate_full.sh` already runs it. Two-phone checks are Tier B
 > (`docs/HOST-CHECKS.md` M14). Also in `gate_full.sh`.
+>
+> **As built (M15-07)** — `scripts/e2e/gate_m15.sh` (GATE G15) chains the
+> M15 smokes rather than duplicating them: stack healthy (no rebuild; never
+> recreates model-runner or postgres; no extra GPU run), `wireguard_smoke.sh`
+> (throwaway L2 client; kernel module is a hard FAIL),
+> `origin_policy_smoke.sh` (Caddy overwrites spoofed XFF),
+> `verify_caddy_domain.sh` (compose/Caddyfile validate; distinct image tag;
+> never retags live caddy; does not set `HOMEAI_DOMAIN`), platform pytest
+> (`test_origin.py`, `test_public_https.py`, `test_webauthn.py`,
+> `test_device_pairs.py`), `passkey_browser_smoke.sh` (RP ID restore is
+> EXIT-trapped), then the live scenario `g15_enrollment_smoke.sh`. That
+> scenario hits `platform:8100` from a throwaway runner on
+> `homeai-internal` (Caddy would overwrite client XFF) with
+> `X-Forwarded-For: 8.8.8.8` as a throwaway `e2e-g15-*` human (never
+> completes bootstrap) and: privileged routes answer
+> `403 {"detail":"public_origin"}` before other business errors (setup,
+> invite accept, WG create, pair begin, device enroll, passkey
+> register/begin); unauthenticated admin stays 401; login / logout /
+> GET-DELETE wireguard-devices / GET-DELETE device-pairs from public are
+> not `public_origin`. It then sets `WEBAUTHN_RP_ID=localhost` (never
+> `HOMEAI_DOMAIN`), PATCHes `public_https` on as a CLI `--role admin`
+> throwaway, checks web password login from public is `403 passkey_required`
+> without checking the password (native/host still allowed; enrollment
+> still `public_origin`), and always PATCHes the flag off and restores
+> platform without the RP ID. Phone-off-LAN / APK / WAN are Tier B
+> (`docs/HOST-CHECKS.md` M15). Also in `gate_full.sh`.
 
 ## 10. Roadmap
 
