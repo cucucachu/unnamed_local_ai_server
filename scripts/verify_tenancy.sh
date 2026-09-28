@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# verify_tenancy.sh — M11-04: docs/PLATFORM.md §9 security invariants 1-6,
-# scripted against the live stack.
+# verify_tenancy.sh — M11-04: docs/PLATFORM.md §9 security invariants 1-7
+# (7 since M12-08), scripted against the live stack.
 #
 #   1. No authenticated route without a session; client-supplied
 #      `X-HomeAI-Identity` (forged, or another user's genuine token) and
@@ -19,9 +19,22 @@
 #   6. Only code-exec-manager holds docker.sock; agent-server and platform
 #      have read-only roots; an exec container has no network, no socket,
 #      and exactly the binds its grants list.                    checks 17-19
+#   7. App sandboxes hold no credentials: A's runner for the shared
+#      instance, in headless Chromium, is `sandbox="allow-scripts"` with
+#      `connect-src 'none'`, no cookie/token in its document, and nothing
+#      in it can reach cookies, storage, the parent or the network
+#      (scripts/e2e/app_sandbox_tenancy.mjs).                   check 20
+#      An instance's RPC only touches that instance's database, for its
+#      space's members at their role: another space's member gets 404, a
+#      viewer's writes 403, an `act=agent` delegation has exactly its
+#      user's rights, one instance's URL can't reach another instance's
+#      rows or file, and the bundle endpoint needs space read.  checks 21-25
 #
-# App RPC and `app_sql` (invariant 2/3's remaining paths) arrive with M12/M13
-# and get their checks then. The agent's file tools are checked here at the
+# For invariant 7, A installs the reference Grocery list app
+# (examples/apps/grocery-list) in its personal space and in the shared one,
+# builds both with the real builder, and adds a marker row to each. That is
+# also invariant 2/3 for app RPC; `app_sql` arrives with M13 and gets its
+# checks then. The agent's file tools are checked here at the
 # platform boundary (B's own delegation, the credential PlatformFilesBackend
 # sends); scripts/e2e/agent_tenancy_smoke.sh drives the same thing through
 # the real model.
@@ -36,10 +49,12 @@
 # Secrets (service tokens, cookies, tokens) are passed by environment and
 # never printed. Everything is deleted on exit: exec sessions and
 # containers, the runner, the shared space and its directory, the users,
-# their personal spaces and threads.
+# their personal spaces and threads, the apps, instances and bundles.
 #
 # Any failing check prints in red and the suite keeps going, then exits 1.
-# Needs no sudo.
+# Needs no sudo; check 20 needs Node and Playwright's Chromium (installed
+# into scripts/e2e like the browser smokes), and the builder image
+# (services/app-builder/build-builder-image.sh).
 #
 # Usage: scripts/verify_tenancy.sh
 
@@ -57,6 +72,10 @@ HEX="$(openssl rand -hex 3)"
 SPACE="e2e-ten-${HEX}"
 PMARK="ten-personal-$(openssl rand -hex 4)"
 SMARK="ten-shared-$(openssl rand -hex 4)"
+APP_PMARK="app-personal-$(openssl rand -hex 4)"
+APP_SMARK="app-shared-$(openssl rand -hex 4)"
+APP_DIR="${REPO_ROOT}/examples/apps/grocery-list"
+APP_IDS=()
 SESSION_A="tenancy-a-$$"
 SESSION_B="tenancy-b-$$"
 RUNNER_NAME="verify-tenancy-runner-$$"
@@ -91,7 +110,8 @@ finish() {
 
 # ---- HTTP ------------------------------------------------------------------
 
-# argv: method url [body]; env E2E_HEADERS (JSON object). Prints
+# argv: method url [body]; env E2E_HEADERS (JSON object), E2E_TIMEOUT
+# (seconds, default 20), E2E_BODY_MAX (default 1500 characters). Prints
 # {"status", "body", "identity"} — identity: the response carried an
 # X-HomeAI-Identity header.
 HTTP_PY="$(cat <<'EOF'
@@ -107,14 +127,14 @@ elif method in ("POST", "PUT", "PATCH"):
     data = b""
 req = urllib.request.Request(url, data=data, method=method, headers=headers)
 try:
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=float(os.environ.get("E2E_TIMEOUT") or 20)) as r:
         status, text, names = r.status, r.read().decode(errors="replace"), list(r.headers.keys())
 except urllib.error.HTTPError as e:
     status, text, names = e.code, e.read().decode(errors="replace"), list(e.headers.keys())
 except urllib.error.URLError as e:
     status, text, names = 0, str(e.reason), []
 identity = "x-homeai-identity" in {n.lower() for n in names}
-print(json.dumps({"status": status, "body": text[:1500], "identity": identity}))
+print(json.dumps({"status": status, "body": text[:int(os.environ.get("E2E_BODY_MAX") or 1500)], "identity": identity}))
 EOF
 )"
 
@@ -234,7 +254,50 @@ setup() {
   log "OK: A=${USER_A}, B=${USER_B}, admin=${USER_ADM}; A's personal slug ${SLUG_A}"
 }
 
+# ---- invariant 7 setup: the reference app in A's personal and shared space --
+
+# $1 virtual root (/personal or /spaces/<slug>), $2 space id, $3 marker row.
+# Sets APP_ID / INSTANCE_ID.
+install_grocery() {
+  local dir="$1/Apps/grocery-list" space_id="$2" marker="$3" rel body r
+  while IFS= read -r rel; do
+    body="$(python3 -c 'import json, sys; print(json.dumps({"path": sys.argv[1], "content": open(sys.argv[2]).read()}))' \
+      "${dir}/${rel}" "${APP_DIR}/${rel}")"
+    r="$(via_caddy POST /api/platform/files/write "$(cookie "$COOKIE_A")" "$body")"
+    [ "$(field "$r" status)" = 200 ] || { log "ERROR: upload ${dir}/${rel}: ${r:0:300}"; return 1; }
+  done < <(cd "$APP_DIR" && find . -type f | sed 's|^\./||' | sort)
+  r="$(via_caddy POST /api/platform/apps "$(cookie "$COOKIE_A")" "{\"source_path\": \"${dir}\"}")"
+  [ "$(field "$r" status)" = 201 ] || { log "ERROR: register ${dir}: ${r:0:300}"; return 1; }
+  APP_ID="$(jbody "$r" "d['app']['id']")"
+  APP_IDS+=("$APP_ID")
+  r="$(via_caddy POST "/api/platform/spaces/${space_id}/instances" "$(cookie "$COOKIE_A")" "{\"app_id\": \"${APP_ID}\"}")"
+  [ "$(field "$r" status)" = 201 ] || { log "ERROR: install ${dir}: ${r:0:300}"; return 1; }
+  INSTANCE_ID="$(jbody "$r" "d['id']")"
+  r="$(E2E_TIMEOUT=300 E2E_BODY_MAX=100000 via_caddy POST "/api/platform/apps/${APP_ID}/build" "$(cookie "$COOKIE_A")" '{}')"
+  [ "$(jbody "$r" "d['ok'] and d['diagnostics'] == []" 2>/dev/null)" = True ] || { log "ERROR: build ${dir}: ${r:0:500}"; return 1; }
+  r="$(via_caddy POST "/api/platform/apps/instances/${INSTANCE_ID}/rpc" "$(cookie "$COOKIE_A")" \
+    "{\"op\": \"run\", \"sql\": \"INSERT INTO items (name) VALUES (?)\", \"params\": [\"${marker}\"]}")"
+  [ "$(field "$r" status)" = 200 ] || { log "ERROR: marker row in ${dir}: ${r:0:300}"; return 1; }
+}
+
+setup_apps() {
+  log "A installs and builds ${APP_DIR#"${REPO_ROOT}/"} in /personal and ${SHARED} ..."
+  install_grocery /personal "$HOME_A" "$APP_PMARK" || return 1
+  INST_P="$INSTANCE_ID"
+  install_grocery "$SHARED" "$SPACE_ID" "$APP_SMARK" || return 1
+  APP_S="$APP_ID" INST_S="$INSTANCE_ID"
+  DELEG_A="$(internal_delegation "$COOKIE_A" "${SESSION_A}-apps")"
+  DELEG_B="$(internal_delegation "$COOKIE_B" "${SESSION_B}-apps")"
+  DELEG_ADM="$(internal_delegation "$COOKIE_ADM" "tenancy-adm-apps-$$")"
+  [ -n "$DELEG_A" ] && [ -n "$DELEG_B" ] && [ -n "$DELEG_ADM" ] || { log "ERROR: couldn't mint delegations"; return 1; }
+  log "OK: personal instance ${INST_P}, shared instance ${INST_S}"
+}
+
 cleanup() {
+  local id
+  for id in "${APP_IDS[@]}"; do
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/${id}" >/dev/null 2>&1 || true
+  done
   if [ -n "$INTERNAL_RUNNER" ]; then
     [ -n "${COOKIE_A:-}" ] && internal_exec_manager_call "$COOKIE_A" DELETE "$SESSION_A" delete delegation 10 >/dev/null
     [ -n "${COOKIE_B:-}" ] && internal_exec_manager_call "$COOKIE_B" DELETE "$SESSION_B" delete delegation 10 >/dev/null
@@ -684,6 +747,155 @@ sys.exit(1 if errors else 0)
   finish 19 "B's exec container: network none, no docker.sock, binds exactly its exec grants"
 }
 
+# ---- invariant 7: app sandboxes hold no credentials; RPC is scoped ------------
+
+check_20() {
+  local out line secrets
+  secrets="$(printf '%s\n' "${COOKIE_A#homeai_session=}" "$IDENT_A" "$DELEG_A" "$COOKIE_B" "$PLATFORM_AGENT_TOKEN")"
+  if ! (cd "${SCRIPT_DIR}/e2e" && { [ -d node_modules/playwright ] || npm install >/dev/null 2>&1; } &&
+    npx playwright install chromium >/dev/null 2>&1); then
+    ERRORS+=("couldn't install Playwright/Chromium into scripts/e2e")
+  else
+    out="$(TEN_BASE="$BASE" TEN_COOKIE="$COOKIE_A" TEN_INSTANCE="$INST_S" TEN_OTHER_INSTANCE="$INST_P" \
+      TEN_MARK="$APP_SMARK" TEN_OTHER_MARK="$APP_PMARK" TEN_SECRETS="$secrets" \
+      node "${SCRIPT_DIR}/e2e/app_sandbox_tenancy.mjs" 2>&1)" || ERRORS+=("app_sandbox_tenancy.mjs exited non-zero")
+    while IFS= read -r line; do
+      case "$line" in
+        ok*) log "  ${line}" ;;
+        FAIL*) ERRORS+=("${line#FAIL }") ;;
+        *) [ -n "$line" ] && ERRORS+=("${line:0:300}") ;;
+      esac
+    done <<<"$out"
+  fi
+  finish 20 "A's runner (Chromium): allow-scripts frame, connect-src 'none', no credential in or reachable from the sandbox"
+}
+
+# $1 transport, $2 headers, $3 label, $4 instance id, $5 wanted status, $6 wanted detail.
+rpc_all_ops() {
+  local t="$1" h="$2" who="$3" iid="$4" st="$5" detail="${6:-}" rpc="/api/platform/apps/instances/$4/rpc"
+  want "$st" "$($t POST "$rpc" "$h" '{"op": "getAll", "sql": "SELECT name FROM items"}')" "${who}: getAll" "$detail"
+  want "$st" "$($t POST "$rpc" "$h" '{"op": "getFirst", "sql": "SELECT count(*) AS n FROM items"}')" "${who}: getFirst" "$detail"
+  want "$st" "$($t POST "$rpc" "$h" '{"op": "run", "sql": "DELETE FROM items"}')" "${who}: run" "$detail"
+  want "$st" "$($t POST "$rpc" "$h" '{"op": "transaction", "statements": [{"sql": "DELETE FROM items"}]}')" "${who}: transaction" "$detail"
+  want "$st" "$($t POST "$rpc" "$h" '{"op": "action", "name": "clearChecked", "params": {}}')" "${who}: action clearChecked" "$detail"
+  want "$st" "$($t POST "$rpc" "$h" '{"op": "action", "name": "addItem", "params": {"name": "x"}}')" "${who}: action addItem" "$detail"
+  want "$st" "$($t POST "/api/platform/apps/instances/${iid}/migrate" "$h" '{}')" "${who}: migrate" "$detail"
+}
+
+# $1 instance id, $2 wanted names (python list literal).
+rows_are() {
+  local r
+  r="$(via_caddy POST "/api/platform/apps/instances/$1/rpc" "$(cookie "$COOKIE_A")" \
+    '{"op": "getAll", "sql": "SELECT name FROM items ORDER BY id"}')"
+  want_body "$r" "[x['name'] for x in d['rows']] == $2" "rows of instance $1"
+}
+apps_intact() {
+  rows_are "$INST_P" "['${APP_PMARK}']"
+  rows_are "$INST_S" "['${APP_SMARK}']"
+}
+
+check_21() {
+  rpc_all_ops via_caddy "$(cookie "$COOKIE_B")" "B (shared member) on A's personal instance" "$INST_P" 404 not_found
+  want 404 "$(via_caddy GET "/api/platform/apps/instances/${INST_P}/migrations" "$(cookie "$COOKIE_B")")" \
+    "B: A's personal instance migrations" not_found
+  rpc_all_ops via_caddy "$(cookie "$COOKIE_ADM")" "admin (member of neither) on the shared instance" "$INST_S" 404 not_found
+  rpc_all_ops via_caddy "$(cookie "$COOKIE_ADM")" "admin (member of neither) on A's personal instance" "$INST_P" 404 not_found
+  want 401 "$(via_caddy POST "/api/platform/apps/instances/${INST_S}/rpc" '{}' '{"op": "getAll", "sql": "SELECT 1"}')" \
+    "no session: RPC"
+  apps_intact
+  finish 21 "RPC with a session from outside the instance's space is 404 for every op (B on A's personal, a non-member admin)"
+}
+
+check_22() {
+  local h rpc="/api/platform/apps/instances/${INST_S}/rpc" r
+  h="$(cookie "$COOKIE_B")"
+  r="$(via_caddy POST "$rpc" "$h" '{"op": "getAll", "sql": "SELECT name FROM items"}')"
+  want 200 "$r" "viewer B: getAll (control)"
+  want_body "$r" "[x['name'] for x in d['rows']] == ['${APP_SMARK}']" "viewer B reads the shared rows"
+  want 403 "$(via_caddy POST "$rpc" "$h" '{"op": "run", "sql": "DELETE FROM items"}')" "viewer B: run" insufficient_role
+  want 403 "$(via_caddy POST "$rpc" "$h" '{"op": "run", "sql": "SELECT 1"}')" "viewer B: run (a read)" insufficient_role
+  want 403 "$(via_caddy POST "$rpc" "$h" '{"op": "transaction", "statements": [{"sql": "DELETE FROM items"}]}')" \
+    "viewer B: transaction" insufficient_role
+  want 403 "$(via_caddy POST "$rpc" "$h" '{"op": "action", "name": "clearChecked", "params": {}}')" \
+    "viewer B: action clearChecked" insufficient_role
+  want 403 "$(via_caddy POST "$rpc" "$h" '{"op": "action", "name": "addItem", "params": {"name": "v"}}')" \
+    "viewer B: action addItem" insufficient_role
+  want 422 "$(via_caddy POST "$rpc" "$h" '{"op": "getAll", "sql": "DELETE FROM items RETURNING id"}')" \
+    "viewer B: a write inside getAll" sql_not_allowed
+  want 403 "$(via_caddy POST "/api/platform/apps/instances/${INST_S}/migrate" "$h" '{}')" "viewer B: migrate" insufficient_role
+  want 403 "$(E2E_TIMEOUT=60 via_caddy POST "/api/platform/apps/${APP_S}/build" "$h" '{}')" "viewer B: build the app" insufficient_role
+  apps_intact
+  finish 22 "viewer B on the shared instance: reads work, every write (run, transaction, actions, migrate, build) is 403"
+}
+
+check_23() {
+  local r
+  r="$(via_internal POST "/api/platform/apps/instances/${INST_S}/rpc" "$(bearer "$DELEG_B")" '{"op": "getAll", "sql": "SELECT name FROM items"}')"
+  want 200 "$r" "B's delegation: getAll on the shared instance (control)"
+  want_body "$r" "[x['name'] for x in d['rows']] == ['${APP_SMARK}']" "B's delegation reads the shared rows"
+  want 403 "$(via_internal POST "/api/platform/apps/instances/${INST_S}/rpc" "$(bearer "$DELEG_B")" '{"op": "run", "sql": "DELETE FROM items"}')" \
+    "B's delegation: run on the shared instance" insufficient_role
+  want 403 "$(via_internal POST "/api/platform/apps/instances/${INST_S}/rpc" "$(bearer "$DELEG_B")" \
+    '{"op": "action", "name": "clearChecked", "params": {}}')" "B's delegation: action on the shared instance" insufficient_role
+  rpc_all_ops via_internal "$(bearer "$DELEG_B")" "B's delegation on A's personal instance" "$INST_P" 404 not_found
+  want 404 "$(via_internal GET "/api/platform/apps/instances/${INST_P}/bundle" "$(bearer "$DELEG_B")")" \
+    "B's delegation: A's personal bundle" not_found
+  rpc_all_ops via_internal "$(bearer "$DELEG_ADM")" "admin's delegation on A's personal instance" "$INST_P" 404 not_found
+  rpc_all_ops via_internal "$(bearer "$DELEG_ADM")" "admin's delegation on the shared instance" "$INST_S" 404 not_found
+  r="$(via_internal POST "/api/platform/apps/instances/${INST_P}/rpc" "$(bearer "$DELEG_A")" \
+    '{"op": "run", "sql": "UPDATE items SET note = note WHERE 0"}')"
+  want 200 "$r" "A's delegation: run on A's own personal instance (control)"
+  r="$(via_internal POST "/api/platform/apps/instances/${INST_S}/rpc" "$(bearer "$DELEG_A")" \
+    '{"op": "getAll", "sql": "SELECT name FROM items"}')"
+  want 200 "$r" "A's delegation: getAll on the shared instance (control)"
+  apps_intact
+  finish 23 "act=agent delegations carry their user's rights only: B's reads, not writes; A's personal and admin's are 404"
+}
+
+check_24() {
+  local r rpc="/api/platform/apps/instances/${INST_S}/rpc" h
+  h="$(cookie "$COOKIE_A")"
+  r="$(via_caddy POST "$rpc" "$h" "{\"op\": \"getAll\", \"sql\": \"SELECT name FROM items\", \"instance_id\": \"${INST_P}\"}")"
+  want 200 "$r" "A on the shared instance, naming the personal one in the body"
+  want_body "$r" "[x['name'] for x in d['rows']] == ['${APP_SMARK}']" "the body's instance_id is ignored"
+  r="$(via_caddy POST "$rpc" "$h" '{"op": "getAll", "sql": "SELECT name FROM pragma_database_list"}')"
+  want "200|422" "$r" "A: pragma_database_list"
+  [ "$(field "$r" status)" != 200 ] || want_body "$r" "[x['name'] for x in d['rows']] == ['main']" "only main is open"
+  want 422 "$(via_caddy POST "$rpc" "$h" "{\"op\": \"run\", \"sql\": \"ATTACH '/data/spaces/${HOME_A}/apps/${INST_P}/data.sqlite' AS p\"}")" \
+    "A: ATTACH the personal instance's database" sql_not_allowed
+  want 422 "$(via_caddy POST "$rpc" "$h" "{\"op\": \"getAll\", \"sql\": \"SELECT name FROM p.items\"}")" \
+    "A: read a schema-qualified other database"
+  want 422 "$(via_caddy POST "$rpc" "$h" "{\"op\": \"run\", \"sql\": \"VACUUM INTO '/data/spaces/${HOME_A}/apps/${INST_P}/data.sqlite'\"}")" \
+    "A: VACUUM INTO the personal instance's database" sql_not_allowed
+  want "422" "$(via_caddy POST "$rpc" "$h" "{\"op\": \"getAll\", \"sql\": \"SELECT load_extension('/data/x')\"}")" "A: load_extension"
+  want "422" "$(via_caddy POST "$rpc" "$h" "{\"op\": \"getAll\", \"sql\": \"SELECT readfile('/data/spaces/${HOME_A}/apps/${INST_P}/data.sqlite')\"}")" \
+    "A: readfile() the personal instance's database"
+  apps_intact
+  finish 24 "one instance's RPC can't reach another's rows or file (ignored body id, only main, no ATTACH/VACUUM INTO/readfile)"
+}
+
+check_25() {
+  local r iid
+  for iid in "$INST_P" "$INST_S"; do
+    r="$(E2E_BODY_MAX=100000 via_caddy GET "/api/platform/apps/instances/${iid}/bundle" "$(cookie "$COOKIE_A")")"
+    want 200 "$r" "A: bundle of ${iid} (control)"
+    want_body "$r" "d['code'].startswith('__homeai_define(')" "A: bundle of ${iid} is an app bundle"
+  done
+  want 200 "$(via_caddy GET "/api/platform/apps/instances/${INST_S}/bundle" "$(cookie "$COOKIE_B")")" "viewer B: shared bundle"
+  want 404 "$(via_caddy GET "/api/platform/apps/instances/${INST_P}/bundle" "$(cookie "$COOKIE_B")")" \
+    "B: A's personal bundle" not_found
+  want 404 "$(via_caddy GET "/api/platform/apps/instances/${INST_S}/bundle" "$(cookie "$COOKIE_ADM")")" \
+    "admin (non-member): shared bundle" not_found
+  want 404 "$(via_caddy GET "/api/platform/apps/instances/${INST_P}/bundle" "$(cookie "$COOKIE_ADM")")" \
+    "admin (non-member): A's personal bundle" not_found
+  want 404 "$(via_internal GET "/api/platform/apps/instances/${INST_S}/bundle" "$(bearer "$DELEG_ADM")")" \
+    "admin's delegation: shared bundle" not_found
+  want 401 "$(via_caddy GET "/api/platform/apps/instances/${INST_S}/bundle" '{}')" "no session: bundle"
+  want 404 "$(via_caddy GET "/api/platform/apps/instances/$(python3 -c 'import uuid; print(uuid.uuid4())')/bundle" "$(cookie "$COOKIE_A")")" \
+    "A: an unknown instance's bundle" not_found
+  finish 25 "the bundle endpoint needs read on the instance's space (viewer yes; outsider, admin, their delegations 404; no session 401)"
+}
+
 summary() {
   local total=$((PASS_COUNT + FAIL_COUNT))
   echo
@@ -696,10 +908,18 @@ summary() {
 }
 
 main() {
-  log "=== M11-04: tenancy suite (docs/PLATFORM.md §9 invariants 1-6) ==="
+  log "=== M11-04/M12-08: tenancy suite (docs/PLATFORM.md §9 invariants 1-7) ==="
   setup
   local n
   for n in $(seq 1 19); do "check_${n}"; done
+  if setup_apps; then
+    for n in $(seq 20 25); do "check_${n}"; done
+  else
+    for n in $(seq 20 25); do
+      ERRORS+=("invariant 7 setup failed (see the ERROR above)")
+      finish "$n" "invariant 7"
+    done
+  fi
   summary
 }
 

@@ -2772,7 +2772,7 @@ don't all trust each other with everything. The `platform` service is the
 trusted kernel for identity and storage, and every boundary below is
 enforced *below* the agent, so a steered model can do no more than its
 signed-in user could by hand. The contract is `docs/PLATFORM.md` §9
-("Security invariants"); `scripts/verify_tenancy.sh` checks invariants 1-6
+("Security invariants"); `scripts/verify_tenancy.sh` checks invariants 1-7
 against the live stack ("Tenancy verification (M11-04)" below).
 
 What the design defends against, and how:
@@ -2953,7 +2953,7 @@ code-exec-manager's grants handling, or the compose config of
 `agent-server`/`platform`/`db-init`. It's in `gate_full.sh`, right after
 `verify_isolation.sh`, and needs no `sudo` and no model.
 
-Three throwaway users (A owns a shared space B views; an admin) and 19
+Three throwaway users (A owns a shared space B views; an admin) and 25
 checks, grouped by `docs/PLATFORM.md` §9 invariant:
 
 1. **Sessions and identity headers** (1-4): without a session every
@@ -2990,11 +2990,41 @@ checks, grouped by `docs/PLATFORM.md` §9 invariant:
    mounts `docker.sock`; `agent-server` and `platform` have read-only
    roots in compose and live; B's exec container has `network_mode: none`,
    only `lo`, no socket, and binds exactly its exec grants.
+7. **App sandboxes and app RPC** (20-25, M12-08): A installs and builds
+   the reference Grocery list app in its personal space and in the shared
+   one, with a marker row in each. In headless Chromium
+   (`scripts/e2e/app_sandbox_tenancy.mjs`), A's runner for the shared
+   instance is `<iframe sandbox="allow-scripts">` whose document's CSP has
+   `default-src 'none'` and `connect-src 'none'` ahead of any script; the
+   srcdoc and the live sandbox document contain none of A's session
+   cookie, identity token or delegation, B's cookie, the agent service
+   token, or a marker the host page put in its localStorage; inside the
+   frame `scripts/e2e/sandbox_probe.js` finds an opaque origin, refused
+   cookies/storage/parent document, fetch/XHR/WebSocket/image/beacon/popup
+   all failing and no request getting a response, while 50 bridge
+   `db.getAll`s succeed; a bridge request naming the personal instance
+   still reads the shared rows, and non-allowlisted methods are
+   `method_not_allowed`. Over the API: B (a member of the shared space
+   only) and a non-member admin get `404` for every RPC op and `migrate`
+   on instances outside their spaces; viewer B reads the shared instance
+   but `run`, `transaction`, both actions, `migrate` and `build` are
+   `403`, and a write inside `getAll` is `422 sql_not_allowed`; B's
+   delegation has B's rights (reads, no writes, A's personal `404`), the
+   admin's delegation is `404` on both, A's works on both; an
+   `instance_id` in the RPC body is ignored, only `main` is open, and
+   `ATTACH` / `VACUUM INTO` / `readfile()` / `load_extension()` of the
+   other instance's database are refused; the bundle endpoint serves
+   members (the viewer too) and is `404` for non-members and their
+   delegations, `401` without a session. Both instances' rows are
+   unchanged throughout.
 
 Same conventions as the isolation suite: every failure is printed and the
 rest still run, the exit code is 1 if anything failed, and everything it
 creates (users, personal and shared spaces and their directories, exec
-sessions and containers, the runner container) is deleted on exit.
+sessions and containers, the runner container, apps, instances and
+bundles) is deleted on exit. Check 20 needs Node and Playwright's Chromium
+(installed into `scripts/e2e` like the browser smokes); the builds need the
+builder image.
 
 ### Network segmentation (M7-01)
 
@@ -3193,7 +3223,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`; since M11-02 it checks the agent's `ls` sees a file put into `/personal` through that API) | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 22-check code-exec hardening and per-user exec suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
-| `scripts/verify_tenancy.sh` | M11-04: 19-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-6 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants (see "Security model" above). Also in `gate_full.sh` | After touching auth routing, the platform's auth/spaces/files code, delegations, exec grants, or the agent-server/platform/db-init compose blocks |
+| `scripts/verify_tenancy.sh` | M11-04: 25-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-7 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants, and (M12-08) the app sandbox holding no credentials plus app RPC/bundle scoping (see "Security model" above). Also in `gate_full.sh` and `gate_m12.sh` | After touching auth routing, the platform's auth/spaces/files/apps code, delegations, exec grants, the app host or runtime, or the agent-server/platform/db-init compose blocks |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
