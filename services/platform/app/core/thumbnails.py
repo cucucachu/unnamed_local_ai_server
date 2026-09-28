@@ -7,12 +7,17 @@ the two in sync by hand.
 
 The cache lives on the container's `/tmp` tmpfs: it's regenerable, so
 losing it on a restart only costs a re-decode. Keys include the source's
-mtime and size, so an overwritten video gets a fresh thumbnail.
+inode, mtime and size, so an overwritten video gets a fresh thumbnail.
+
+The source is an open fd, never a path in a user's space: ffmpeg reads it
+as `/proc/self/fd/<n>` (inherited), which is exactly the file the caller
+opened.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import uuid
 from pathlib import Path
@@ -39,25 +44,27 @@ def thumbnail_cache_dir() -> Path:
     return cache_dir
 
 
-def cache_key_for(source: Path) -> str:
-    st = source.stat()
-    digest_input = f"{source}:{st.st_mtime_ns}:{st.st_size}".encode()
+def cache_key_for(source: int) -> str:
+    st = os.fstat(source)
+    digest_input = f"{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}".encode()
     return hashlib.sha256(digest_input).hexdigest()
 
 
-def _run_ffmpeg(source: Path, dest: Path, *, seek_s: float) -> None:
+def _run_ffmpeg(source: int, dest: Path, *, seek_s: float) -> None:
     """One attempt at a single scaled JPEG frame; exit 0 with an empty file also counts as failure."""
     cmd = [
         "ffmpeg", "-y",
         "-ss", str(seek_s),
-        "-i", str(source),
+        "-i", f"/proc/self/fd/{source}",
         "-frames:v", "1",
         "-vf", f"scale={_THUMBNAIL_WIDTH}:-1",
         "-f", "image2",
         str(dest),
     ]  # fmt: skip
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_S, check=False)
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_S, check=False, pass_fds=(source,)
+        )
     except FileNotFoundError as exc:
         raise ThumbnailGenerationError("ffmpeg is not installed") from exc
     except subprocess.TimeoutExpired as exc:
@@ -70,7 +77,7 @@ def _run_ffmpeg(source: Path, dest: Path, *, seek_s: float) -> None:
         )
 
 
-def generate_thumbnail(source: Path, dest: Path) -> None:
+def generate_thumbnail(source: int, dest: Path) -> None:
     """A frame 1 s in (skips black openings), else frame 0 (clips shorter than 1 s)."""
     try:
         _run_ffmpeg(source, dest, seek_s=1.0)
@@ -80,7 +87,7 @@ def generate_thumbnail(source: Path, dest: Path) -> None:
     _run_ffmpeg(source, dest, seek_s=0.0)
 
 
-def get_cached_thumbnail(source: Path) -> Path:
+def get_cached_thumbnail(source: int) -> Path:
     """Get-or-create; concurrent misses each write a temp file and atomically rename it into place."""
     cache_dir = thumbnail_cache_dir()
     dest = cache_dir / f"{cache_key_for(source)}.jpg"

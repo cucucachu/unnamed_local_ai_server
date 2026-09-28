@@ -18,6 +18,8 @@ admin or auth action.
 
 from __future__ import annotations
 
+import errno
+import os
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,7 @@ from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
-from app.core import fsops, manifest, spaces, vfs
+from app.core import beneath, fsops, manifest, spaces, vfs
 from app.core.errors import Conflict, InvalidApp, InvalidInput, NotFound
 from app.core.principal import Principal
 from app.core.storage import SpaceStorage
@@ -102,21 +104,44 @@ def parse_source_path(vpath: str) -> str:
 
 async def _resolve_source(
     conn: AsyncConnection, principal: Principal, storage: SpaceStorage, vpath: str
-) -> tuple[vfs.Resolved, str, Path]:
+) -> tuple[vfs.Resolved, str]:
     slug = parse_source_path(vpath)
     r = await vfs.resolve_virtual_path(conn, principal, storage, vpath, "write")
-    folder = r.files_root / vfs.APPS / slug
-    # A symlinked `Apps` or app folder resolves somewhere else.
-    if r.host_path != folder:
-        raise InvalidInput("invalid_source_path")
-    return r, slug, folder
+    # `Apps` and the app folder must be the real thing, not a link to one.
+    with r.open_root() as root:
+        try:
+            os.close(beneath.locate(root, r.rel, symlinks=False)[0])
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except OSError as exc:
+            if exc.errno != errno.ELOOP:
+                raise
+            raise InvalidInput("invalid_source_path") from exc
+    return r, slug
 
 
-def _ensure_apps_folder(files_root: Path, owner: fsops.Owner) -> None:
+def _ensure_apps_folder(r: vfs.Resolved, owner: fsops.Owner) -> None:
     try:
-        fsops.make_dirs(files_root, files_root / vfs.APPS, owner)
+        with r.open_root() as root:
+            fsops.make_dirs(root, (vfs.APPS,), owner)
     except (FileExistsError, NotADirectoryError) as exc:
         raise Conflict("apps_folder_not_a_directory") from exc
+
+
+def _validate_source(r: vfs.Resolved, slug: str) -> tuple[Any, list[manifest.Diagnostic]]:
+    with r.open_root() as root:
+        try:
+            fd = beneath.open(root, r.rel, os.O_RDONLY | os.O_DIRECTORY, symlinks=False)
+        except (FileNotFoundError, NotADirectoryError):
+            return manifest.validate_package(None, slug)
+        except OSError as exc:
+            if exc.errno != errno.ELOOP:
+                raise
+            raise InvalidInput("invalid_source_path") from exc
+    try:
+        return manifest.validate_package(fd, slug)
+    finally:
+        os.close(fd)
 
 
 def _diagnostics(found: list[manifest.Diagnostic]) -> list[dict[str, str]]:
@@ -147,10 +172,10 @@ async def register_app(
     conn: AsyncConnection, principal: Principal, storage: SpaceStorage, source_path: str
 ) -> Row:
     """Register the package at `source_path`, or raise `InvalidApp` with its diagnostics."""
-    r, slug, folder = await _resolve_source(conn, principal, storage, source_path)
+    r, slug = await _resolve_source(conn, principal, storage, source_path)
     owner = fsops.Owner(principal.uid, r.space["gid"])
-    await anyio.to_thread.run_sync(_ensure_apps_folder, r.files_root, owner)
-    doc, found = await anyio.to_thread.run_sync(manifest.validate_package, folder, slug)
+    await anyio.to_thread.run_sync(_ensure_apps_folder, r, owner)
+    doc, found = await anyio.to_thread.run_sync(_validate_source, r, slug)
     if found:
         raise InvalidApp(_diagnostics(found))
     try:
@@ -179,8 +204,8 @@ async def validate_app(
     """Re-validate the source; when it passes, the working version takes its manifest."""
     app = await get_visible_app(conn, principal, app_id)
     await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
-    _, slug, folder = await _resolve_source(conn, principal, storage, app["source_path"])
-    doc, found = await anyio.to_thread.run_sync(manifest.validate_package, folder, slug)
+    r, slug = await _resolve_source(conn, principal, storage, app["source_path"])
+    doc, found = await anyio.to_thread.run_sync(_validate_source, r, slug)
     if not found:
         async with conn.transaction():
             await conn.execute("UPDATE apps SET name = %s WHERE id = %s", (doc["name"], app_id))

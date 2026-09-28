@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.core import vfs
 from tests.conftest import Platform
 from tests.helpers import create_user, delegation, identity, login, sql
 
@@ -41,7 +40,7 @@ class World:
         return row
 
     def root(self, space: dict) -> Path:
-        return vfs.files_root(self.platform.app.state.storage, space["id"])
+        return self.platform.app.state.storage.space_dir(space["id"]).resolve() / "files"
 
     def home(self, username: str) -> Path:
         return self.root(self.personal(username))

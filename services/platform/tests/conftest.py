@@ -154,8 +154,8 @@ def chowns(monkeypatch) -> dict[Path, tuple[int, int]]:
     def fake_fchown(fd: int, uid: int, gid: int) -> None:
         recorded[Path(os.readlink(f"/proc/self/fd/{fd}"))] = (uid, gid)
 
-    def fake_lchown(path: Path, uid: int, gid: int) -> None:
-        recorded[Path(path)] = (uid, gid)
+    def fake_lchown(dir_fd: int, name: str, uid: int, gid: int) -> None:
+        recorded[Path(os.readlink(f"/proc/self/fd/{dir_fd}")) / name] = (uid, gid)
 
     monkeypatch.setattr(storage, "_fchown", fake_fchown)
     monkeypatch.setattr(fsops, "_fchown", fake_fchown)

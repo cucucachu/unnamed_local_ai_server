@@ -10,14 +10,18 @@ personal `files/` - renamed `name (migrated).ext`, `name (migrated 2).ext`,
 ... if that name is taken - then handed to the admin's uid and the space's
 gid. A marker in the platform data volume records completion; an
 interrupted run leaves the rest in the legacy root and continues next time.
+
+Both trees were writable by exec containers, so entries are moved by name
+between directory fds (`renameat`, or an fd-walking copy and delete across
+mounts) and adopted without following links (`app.core.fsops`).
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -26,6 +30,7 @@ import anyio.to_thread
 from psycopg import AsyncConnection
 
 from app.core import fsops, spaces, vfs
+from app.core.beneath import Root
 from app.core.bootstrap import bootstrap_admin_id
 from app.core.storage import SpaceStorage
 
@@ -34,28 +39,50 @@ logger = logging.getLogger(__name__)
 MARKER_FILENAME = "legacy-files-migrated.json"
 
 
-def _free_name(dst_dir: Path, name: str) -> Path:
-    if not os.path.lexists(dst_dir / name):
-        return dst_dir / name
+def _exists(dir_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _free_name(dir_fd: int, name: str) -> str:
+    if not _exists(dir_fd, name):
+        return name
     stem, dot, ext = name.partition(".") if not name.startswith(".") else (name, "", "")
     for n in range(1, 10_000):
         tag = " (migrated)" if n == 1 else f" (migrated {n})"
-        candidate = dst_dir / f"{stem}{tag}{dot}{ext}"
-        if not os.path.lexists(candidate):
+        candidate = f"{stem}{tag}{dot}{ext}"
+        if not _exists(dir_fd, candidate):
             return candidate
-    raise FileExistsError(f"{name}: no free name in {dst_dir}")
+    raise FileExistsError(f"{name}: no free name")
 
 
-def move_entries(src_dir: Path, dst_dir: Path, uid: int, gid: int) -> int:
-    """Move every entry of `src_dir` into `dst_dir` (across mounts too) and adopt it."""
+def _move_entry(src_dir: int, name: str, dst_dir: int, target: str, owner: fsops.Owner) -> None:
+    try:
+        os.rename(name, target, src_dir_fd=src_dir, dst_dir_fd=dst_dir)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        fsops.copy_at(src_dir, name, dst_dir, target, owner)
+        fsops.remove_at(src_dir, name)
+
+
+def move_entries(src_dir: Path, dst: Root, uid: int, gid: int) -> int:
+    """Move every entry of `src_dir` into `dst` (across mounts too) and adopt it."""
     moved = 0
-    for entry in sorted(os.scandir(src_dir), key=lambda e: e.name):
-        target = _free_name(dst_dir, entry.name)
-        if target.name != entry.name:
-            logger.warning("legacy files: %s exists, moving to %s", entry.name, target.name)
-        shutil.move(entry.path, target)
-        fsops.adopt_tree(target, gid, uid)
-        moved += 1
+    src_fd = os.open(src_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for name in sorted(os.listdir(src_fd)):
+            target = _free_name(dst.fd, name)
+            if target != name:
+                logger.warning("legacy files: %s exists, moving to %s", name, target)
+            _move_entry(src_fd, name, dst.fd, target, fsops.Owner(uid, gid))
+            fsops.adopt_at(dst.fd, target, gid, uid)
+            moved += 1
+    finally:
+        os.close(src_fd)
     return moved
 
 
@@ -78,10 +105,10 @@ async def migrate_legacy_files(
     cur = await conn.execute("SELECT username, uid FROM users WHERE id = %s", (UUID(admin_id),))
     admin = await cur.fetchone()
     space = await spaces.get_personal_space(conn, UUID(admin_id))
-    root = vfs.files_root(storage, space["id"])
-    moved = await anyio.to_thread.run_sync(
-        move_entries, legacy_dir, root, admin["uid"], space["gid"]
-    )
+    with vfs.open_files_root(storage, space["id"]) as root:
+        moved = await anyio.to_thread.run_sync(
+            move_entries, legacy_dir, root, admin["uid"], space["gid"]
+        )
 
     marker.write_text(json.dumps({
         "admin_id": admin_id, "space_id": str(space["id"]), "entries": moved,

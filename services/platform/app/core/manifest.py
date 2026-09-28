@@ -7,7 +7,7 @@
       actions/*.sql   optional; `^[a-z][a-zA-Z0-9_]*\\.sql$`, no subfolders
       app/            `_layout.tsx` + `index.tsx` required; route rules below
 
-`validate_package(root, slug)` returns every problem it finds as a
+`validate_package(pkg_fd, slug)` returns every problem it finds as a
 model-readable `Diagnostic` - `file` relative to the package, `path` a JSON
 pointer into that file (`""` for non-JSON files or the file as a whole),
 `message` a sentence saying what to change. Content (imports, types, SQL)
@@ -17,7 +17,8 @@ Routes (§7 "Routes"): only `.ts`/`.tsx` files under `app/`, segments
 `name`, `index`, `[param]` and a final `[...rest]`, and the one root
 `app/_layout.tsx`. Groups, nested layouts and `+special` files aren't in
 the router shim yet, so they're diagnostics. Dotfiles are ignored and
-symlinks are refused, never followed.
+symlinks are refused, never followed: the package is read below an open
+fd on its folder, each directory opened `O_NOFOLLOW` from its parent's fd.
 """
 
 from __future__ import annotations
@@ -27,13 +28,14 @@ import os
 import re
 import stat
 from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from app.core import fsops
+from app.core import beneath, fsops
+from app.core.beneath import Root
 
 SDK_VERSIONS = ("1",)
 MANIFEST_FILE = "app.json"
@@ -187,29 +189,31 @@ def validate_manifest(doc: Any) -> list[Diagnostic]:
     return out
 
 
-def _is_regular(path: Path) -> bool:
+_OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _lstat(pkg: int, rel: str) -> os.stat_result | None:
+    """`lstat` of `rel` in the package, or None if it (or a directory on the way) isn't there."""
     try:
-        return stat.S_ISREG(path.lstat().st_mode)
-    except FileNotFoundError:
-        return False
+        with beneath.parent(Root(pkg), rel.split("/"), symlinks=False) as (dir_fd, name):
+            return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return None
 
 
-def _is_dir(path: Path) -> bool:
-    try:
-        return stat.S_ISDIR(path.lstat().st_mode)
-    except FileNotFoundError:
-        return False
+def _is(pkg: int, rel: str, kind) -> bool:
+    st = _lstat(pkg, rel)
+    return st is not None and kind(st.st_mode)
 
 
-def read_manifest(root: Path) -> tuple[Any, list[Diagnostic]]:
+def read_manifest(pkg: int) -> tuple[Any, list[Diagnostic]]:
     """(parsed app.json or None, diagnostics about reading/parsing it)."""
-    path = root / MANIFEST_FILE
-    if os.path.islink(path):
+    if _is(pkg, MANIFEST_FILE, stat.S_ISLNK):
         return None, [Diagnostic(MANIFEST_FILE, "", "app.json must be a file, not a symlink")]
-    if not _is_regular(path):
+    if not _is(pkg, MANIFEST_FILE, stat.S_ISREG):
         return None, [Diagnostic(MANIFEST_FILE, "", "app.json is missing")]
     try:
-        with fsops.open_regular(path) as f:
+        with fsops.open_regular_at(pkg, MANIFEST_FILE) as f:
             raw = f.read(MAX_MANIFEST_BYTES + 1)
     except OSError as exc:
         return None, [Diagnostic(MANIFEST_FILE, "", f"app.json can't be read: {exc.strerror}")]
@@ -229,11 +233,10 @@ def read_manifest(root: Path) -> tuple[Any, list[Diagnostic]]:
         ]
 
 
-def _required_file(root: Path, rel: str, what: str) -> list[Diagnostic]:
-    path = root / rel
-    if os.path.islink(path):
+def _required_file(pkg: int, rel: str, what: str) -> list[Diagnostic]:
+    if _is(pkg, rel, stat.S_ISLNK):
         return [Diagnostic(rel, "", f"{rel} must be a file, not a symlink")]
-    if _is_regular(path):
+    if _is(pkg, rel, stat.S_ISREG):
         return []
     return [Diagnostic(rel, "", f"{rel} is missing: {what}")]
 
@@ -257,14 +260,14 @@ def _check_segment(segment: str, *, last: bool) -> str | None:
 class _Walk:
     """Directory walk that never follows symlinks and stops at MAX_PACKAGE_ENTRIES."""
 
-    def __init__(self, root: Path) -> None:
-        self.root = root
+    def __init__(self) -> None:
         self.seen = 0
         self.truncated = False
 
-    def entries(self, directory: Path):
+    def entries(self, dir_fd: int, rel: PurePosixPath):
         try:
-            children = sorted(os.scandir(directory), key=lambda e: e.name)
+            with os.scandir(dir_fd) as it:
+                children = sorted(it, key=lambda e: e.name)
         except OSError:
             return
         for entry in children:
@@ -274,16 +277,23 @@ class _Walk:
             if self.seen > MAX_PACKAGE_ENTRIES:
                 self.truncated = True
                 return
-            yield entry, PurePosixPath(Path(entry.path).relative_to(self.root).as_posix())
+            yield entry, rel / entry.name
 
 
-def _route_diagnostics(root: Path, walk: _Walk) -> list[Diagnostic]:
+def _open_dir(dir_fd: int, name: str) -> int | None:
+    try:
+        return os.open(name, _OPEN_DIR, dir_fd=dir_fd)
+    except OSError:
+        return None
+
+
+def _route_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
     out: list[Diagnostic] = []
     routes: dict[tuple[str, ...], str] = {}
     dynamic: dict[PurePosixPath, str] = {}
 
-    def visit(directory: Path) -> None:
-        for entry, rel in walk.entries(directory):
+    def visit(dir_fd: int, dir_rel: PurePosixPath) -> None:
+        for entry, rel in walk.entries(dir_fd, dir_rel):
             name = entry.name
             if entry.is_symlink():
                 out.append(Diagnostic(str(rel), "", f"{rel} is a symlink; apps can't use symlinks"))
@@ -293,8 +303,11 @@ def _route_diagnostics(root: Path, walk: _Walk) -> list[Diagnostic]:
                 problem = _check_segment(name, last=False)
                 if problem:
                     out.append(Diagnostic(str(rel), "", f"{rel}/: {problem}"))
-                else:
-                    visit(Path(entry.path))
+                elif (fd := _open_dir(dir_fd, name)) is not None:
+                    try:
+                        visit(fd, rel)
+                    finally:
+                        os.close(fd)
                 continue
             if not entry.is_file(follow_symlinks=False):
                 out.append(Diagnostic(str(rel), "", f"{rel} is not a regular file"))
@@ -349,60 +362,73 @@ def _route_diagnostics(root: Path, walk: _Walk) -> list[Diagnostic]:
                     )
                 dynamic.setdefault(rel.parent, str(rel))
 
-    visit(root / "app")
+    if (fd := _open_dir(pkg, "app")) is not None:
+        try:
+            visit(fd, PurePosixPath("app"))
+        finally:
+            os.close(fd)
     return out
 
 
-def _action_diagnostics(root: Path, walk: _Walk) -> list[Diagnostic]:
+def _action_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
     out: list[Diagnostic] = []
-    for entry, rel in walk.entries(root / "actions"):
-        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
-            out.append(
-                Diagnostic(
-                    str(rel), "", f"{rel}: actions/ may only contain .sql files, one per action"
+    fd = _open_dir(pkg, "actions")
+    if fd is None:
+        return out
+    try:
+        for entry, rel in walk.entries(fd, PurePosixPath("actions")):
+            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                out.append(
+                    Diagnostic(
+                        str(rel), "", f"{rel}: actions/ may only contain .sql files, one per action"
+                    )
                 )
-            )
-        elif not ACTION_RE.fullmatch(entry.name):
-            out.append(
-                Diagnostic(
-                    str(rel),
-                    "",
-                    f"{rel}: action file names must look like addItem.sql "
-                    "(a letter first, then letters, digits or '_')",
+            elif not ACTION_RE.fullmatch(entry.name):
+                out.append(
+                    Diagnostic(
+                        str(rel),
+                        "",
+                        f"{rel}: action file names must look like addItem.sql "
+                        "(a letter first, then letters, digits or '_')",
+                    )
                 )
-            )
+    finally:
+        os.close(fd)
     return out
 
 
-def validate_package(root: Path, slug: str) -> tuple[Any, list[Diagnostic]]:
-    """(parsed manifest or None, every diagnostic) for the package folder `root`."""
-    if os.path.islink(root) or not _is_dir(root):
+def validate_package(pkg: int | None, slug: str) -> tuple[Any, list[Diagnostic]]:
+    """(parsed manifest or None, every diagnostic) for the package folder open as `pkg`.
+
+    `pkg` is None when there is no such folder.
+    """
+    if pkg is None:
         return None, [
             Diagnostic("", "", f"the app folder doesn't exist (expected .../Apps/{slug}/)")
         ]
-    manifest, out = read_manifest(root)
+    manifest, out = read_manifest(pkg)
     if manifest is not None:
         out += validate_manifest(manifest)
         declared = manifest.get("slug") if isinstance(manifest, dict) else None
         if isinstance(declared, str) and declared != slug:
             message = f'slug "{declared}" must equal the app\'s folder name "{slug}"'
             out.append(Diagnostic(MANIFEST_FILE, "/slug", message))
-    out += _required_file(root, "AGENT.md", "describe what the app does and its data for the agent")
-    out += _required_file(root, "schema.sql", "the app's CREATE TABLE statements (may be empty)")
-    walk = _Walk(root)
-    if _is_dir(root / "app"):
-        out += _required_file(root, "app/_layout.tsx", "the root layout (e.g. a <Stack />)")
-        out += _required_file(root, "app/index.tsx", "the home screen")
-        out += _route_diagnostics(root, walk)
-    elif os.path.islink(root / "app"):
+    out += _required_file(pkg, "AGENT.md", "describe what the app does and its data for the agent")
+    out += _required_file(pkg, "schema.sql", "the app's CREATE TABLE statements (may be empty)")
+    walk = _Walk()
+    if _is(pkg, "app", stat.S_ISDIR):
+        out += _required_file(pkg, "app/_layout.tsx", "the root layout (e.g. a <Stack />)")
+        out += _required_file(pkg, "app/index.tsx", "the home screen")
+        out += _route_diagnostics(pkg, walk)
+    elif _is(pkg, "app", stat.S_ISLNK):
         out.append(Diagnostic("app", "", "app/ must be a folder, not a symlink"))
     else:
         out.append(
             Diagnostic("app", "", "app/ is missing: the folder of screens (_layout.tsx, index.tsx)")
         )
-    if _is_dir(root / "actions"):
-        out += _action_diagnostics(root, walk)
-    elif os.path.lexists(root / "actions"):
+    if _is(pkg, "actions", stat.S_ISDIR):
+        out += _action_diagnostics(pkg, walk)
+    elif _lstat(pkg, "actions") is not None:
         out.append(Diagnostic("actions", "", "actions must be a folder of .sql files"))
     if walk.truncated:
         out.append(

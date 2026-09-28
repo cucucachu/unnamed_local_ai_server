@@ -7,6 +7,8 @@ them through unchanged. Known differences are listed in `agentfs`'s docstring.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.core import agentfs
@@ -49,16 +51,21 @@ def test_slice_edges() -> None:
     )  # fmt: skip
 
 
+def _read(path: Path, vpath: str) -> dict:
+    with path.open("rb") as f:
+        return agentfs.read_file(f, vpath, 0, 10)
+
+
 def test_read_file_crlf_binary_and_undecodable(tmp_path) -> None:
     (tmp_path / "crlf.txt").write_bytes(b"one\r\ntwo\r\n")
-    assert agentfs.read_file(tmp_path / "crlf.txt", "/p/crlf.txt", 0, 10)["content"] == "one\ntwo\n"
+    assert _read(tmp_path / "crlf.txt", "/p/crlf.txt")["content"] == "one\ntwo\n"
     (tmp_path / "img.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
-    assert agentfs.read_file(tmp_path / "img.png", "/p/img.png", 0, 10) == {
+    assert _read(tmp_path / "img.png", "/p/img.png") == {
         "content": "iVBORw0KGgpmYWtl", "encoding": "base64",
     }  # fmt: skip
     (tmp_path / "bad.txt").write_bytes(b"hello\n\xff\xfe bad\n")
     with pytest.raises(AgentFsError) as exc:
-        agentfs.read_file(tmp_path / "bad.txt", "/p/bad.txt", 0, 10)
+        _read(tmp_path / "bad.txt", "/p/bad.txt")
     assert exc.value.message.startswith(
         "Error reading file '/p/bad.txt': 'utf-8' codec can't decode byte 0xff in position 6"
     )

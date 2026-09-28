@@ -17,13 +17,17 @@ from tests.test_storage import APP_DIR, IMAGE, PLATFORM_CAPS
 ALICE, BOB, SPACE_A, SPACE_B = 20001, 20002, 30001, 30002
 
 SCRIPT = rf"""
-import json, os, shutil, stat
+import errno, json, os, stat
 from pathlib import Path
 from app.core import fsops
+from app.core.beneath import Root
 
 def describe(path):
     st = os.lstat(path)
     return {{"uid": st.st_uid, "gid": st.st_gid, "mode": oct(stat.S_IMODE(st.st_mode))}}
+
+def open_root(d):
+    return Root(os.open(d, os.O_RDONLY | os.O_DIRECTORY), str(d))
 
 root = Path("/spaces")
 os.chmod(root, 0o755)
@@ -32,40 +36,60 @@ for d, gid in ((a, {SPACE_A}), (b, {SPACE_B})):
     d.mkdir()
     os.chown(d, 0, gid)
     os.chmod(d, 0o2770)
-alice = fsops.Owner({ALICE}, {SPACE_A})
+A, B = open_root(a), open_root(b)
+alice, bob = fsops.Owner({ALICE}, {SPACE_A}), fsops.Owner({BOB}, {SPACE_B})
 out = {{}}
 
-fsops.make_dirs(a, a / "x" / "y", alice)
-with fsops.open_for_write(a / "x" / "y" / "f.txt", alice) as f:
+fsops.make_dirs(A, ("x", "y"), alice)
+with fsops.open_for_write(A, ("x", "y", "f.txt"), alice) as f:
     f.write(b"hi")
-with fsops.open_for_write(a / "run.sh", alice, mode=fsops.EXEC_FILE_MODE) as f:
+with fsops.open_for_write(A, ("run.sh",), alice, mode=fsops.EXEC_FILE_MODE) as f:
     f.write(b"#!/bin/sh\n")
 os.symlink("x/y/f.txt", a / "link")
 out["created"] = {{p: describe(a / p) for p in ("x", "x/y", "x/y/f.txt", "run.sh")}}
 
 # Overwrite keeps the existing owner.
-with fsops.open_for_write(a / "x" / "y" / "f.txt", fsops.Owner({BOB}, {SPACE_B})) as f:
+with fsops.open_for_write(A, ("x", "y", "f.txt"), bob) as f:
     f.write(b"again")
 out["overwritten"] = describe(a / "x" / "y" / "f.txt")
 
-# Copy into space b as bob.
-fsops.copy(a, b / "copy", fsops.Owner({BOB}, {SPACE_B}))
+# Copy space a into space b as bob.
+fsops.copy(A, (), B, ("copy",), bob)
 out["copied"] = {{p: describe(b / "copy" / p) for p in ("", "x", "x/y/f.txt", "run.sh", "link")}}
 out["copied_link"] = os.readlink(b / "copy" / "link")
 
 # Cross-space move: rename, then regroup (owner kept).
-os.rename(a / "x", b / "moved")
-fsops.adopt_tree(b / "moved", {SPACE_B})
+fsops.move(A, ("x",), B, ("moved",), gid={SPACE_B})
 out["moved"] = {{p: describe(b / "moved" / p) for p in ("", "y", "y/f.txt")}}
 
-# Legacy-style adoption: a foreign tree handed to a user and a space.
+# Legacy-style adoption: a foreign tree renamed in, or copied across a mount, then adopted.
 legacy = root / "legacy"
 (legacy / "d").mkdir(parents=True)
 (legacy / "d" / "n.txt").write_text("old")
 os.chmod(legacy / "d" / "n.txt", 0o644)
-shutil.move(legacy / "d", a / "d")
-fsops.adopt_tree(a / "d", {SPACE_A}, {ALICE})
-out["adopted"] = {{p: describe(a / p) for p in ("d", "d/n.txt")}}
+(legacy / "e").mkdir()
+(legacy / "e" / "m.txt").write_text("old")
+L = open_root(legacy)
+os.rename("d", "d", src_dir_fd=L.fd, dst_dir_fd=A.fd)
+fsops.adopt_at(A.fd, "d", {SPACE_A}, {ALICE})
+fsops.copy_at(L.fd, "e", A.fd, "e", alice)
+fsops.remove_at(L.fd, "e")
+fsops.adopt_at(A.fd, "e", {SPACE_A}, {ALICE})
+out["adopted"] = {{p: describe(a / p) for p in ("d", "d/n.txt", "e", "e/m.txt")}}
+out["legacy_left"] = sorted(os.listdir(legacy))
+
+# A link into space b planted in space a redirects neither a write nor a chown.
+os.symlink(str(b), a / "evil")
+before = describe(b)
+try:
+    with fsops.open_for_write(A, ("evil", "pwn.txt"), alice) as f:
+        f.write(b"x")
+    out["planted_write"] = "written"
+except OSError as exc:
+    out["planted_write"] = errno.errorcode[exc.errno]
+fsops.adopt_at(A.fd, "evil", {SPACE_A}, {ALICE})
+out["planted_chown"] = {{"b": describe(b), "b_before": before, "link": describe(a / "evil")}}
+out["planted_listing"] = sorted(os.listdir(b))
 
 # Another member of space b (not the owner) can use what was created there.
 os.setgroups([{SPACE_B}])
@@ -143,20 +167,33 @@ def test_adopted_tree(result):
     assert result["adopted"] == {
         "d": _node(ALICE, SPACE_A, "0o2770"),
         "d/n.txt": _node(ALICE, SPACE_A, "0o660"),
+        "e": _node(ALICE, SPACE_A, "0o2770"),
+        "e/m.txt": _node(ALICE, SPACE_A, "0o660"),
     }
+    assert result["legacy_left"] == []
+
+
+def test_planted_link_to_another_space_redirects_nothing(result):
+    assert result["planted_write"] == "EXDEV"
+    chown = result["planted_chown"]
+    assert chown["b"] == chown["b_before"] == _node(0, SPACE_B, "0o2770")
+    assert (chown["link"]["uid"], chown["link"]["gid"]) == (ALICE, SPACE_A)
+    assert "pwn.txt" not in result["planted_listing"]
 
 
 def test_other_members_can_use_it(result):
     assert result["member_new"]["gid"] == SPACE_B
 
 
-def test_module_is_stdlib_only():
+@pytest.mark.parametrize("module", ["fsops", "beneath"])
+def test_module_is_stdlib_only(module):
     """The container above has no project dependencies installed."""
-    source = (APP_DIR / "core" / "fsops.py").read_text()
+    source = (APP_DIR / "core" / f"{module}.py").read_text()
     imports = {
-        line.split()[1].split(".")[0]
+        line.split()[1]
         for line in source.splitlines()
         if line.startswith(("import ", "from ")) and not line.startswith("from __future__")
     }
-    assert imports <= {"os", "shutil", "stat", "collections", "contextlib", "dataclasses",
-                       "pathlib", "typing"}, imports  # fmt: skip
+    stdlib = {"errno", "os", "shutil", "stat", "collections.abc", "contextlib", "dataclasses",
+              "typing"}  # fmt: skip
+    assert imports <= stdlib | {"app.core", "app.core.beneath"}, imports

@@ -9,10 +9,22 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from app.core import manifest
-from app.core.manifest import Diagnostic, validate_manifest, validate_package
+from app.core.manifest import Diagnostic, validate_manifest
 from tests.app_packages import FILES as PACKAGE_FILES
 from tests.app_packages import manifest as good_manifest
 from tests.app_packages import write_package
+
+
+def validate_package(folder: Path, slug: str):
+    """`manifest.validate_package` on the folder opened like `app.core.apps` opens it."""
+    try:
+        fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return manifest.validate_package(None, slug)
+    try:
+        return manifest.validate_package(fd, slug)
+    finally:
+        os.close(fd)
 
 
 def _where(diags: list[Diagnostic]) -> list[tuple[str, str]]:

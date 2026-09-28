@@ -6,8 +6,11 @@ Tests that shell out to a real `ffmpeg` are skipped when it isn't on `PATH`
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -67,6 +70,36 @@ def _isolated_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     return cache_dir
 
 
+@contextmanager
+def _opened(path: Path) -> Iterator[int]:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _cache_key(path: Path) -> str:
+    with _opened(path) as fd:
+        return cache_key_for(fd)
+
+
+def _generate(source: Path, dest: Path) -> None:
+    with _opened(source) as fd:
+        generate_thumbnail(fd, dest)
+
+
+def _thumbnail(source: Path) -> Path:
+    with _opened(source) as fd:
+        return get_cached_thumbnail(fd)
+
+
+def _placeholder(tmp_path: Path) -> Path:
+    source = tmp_path / "src.mp4"
+    source.write_bytes(b"x")
+    return source
+
+
 # ---------------------------------------------------------------------------
 # is_video_file
 # ---------------------------------------------------------------------------
@@ -97,30 +130,28 @@ def test_cache_key_stable_for_unchanged_file(tmp_path: Path) -> None:
     f = tmp_path / "a.mp4"
     f.write_bytes(b"hello")
 
-    assert cache_key_for(f) == cache_key_for(f)
+    assert _cache_key(f) == _cache_key(f)
 
 
 def test_cache_key_changes_with_size(tmp_path: Path) -> None:
     f = tmp_path / "a.mp4"
     f.write_bytes(b"hello")
-    key1 = cache_key_for(f)
+    key1 = _cache_key(f)
 
     f.write_bytes(b"hello world, this is longer now")
-    key2 = cache_key_for(f)
+    key2 = _cache_key(f)
 
     assert key1 != key2
 
 
 def test_cache_key_changes_with_mtime(tmp_path: Path) -> None:
-    import os
-
     f = tmp_path / "a.mp4"
     f.write_bytes(b"hello")
-    key1 = cache_key_for(f)
+    key1 = _cache_key(f)
 
     st = f.stat()
     os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-    key2 = cache_key_for(f)
+    key2 = _cache_key(f)
 
     assert key1 != key2
 
@@ -131,7 +162,7 @@ def test_cache_key_differs_by_path(tmp_path: Path) -> None:
     f1.write_bytes(b"hello")
     f2.write_bytes(b"hello")
 
-    assert cache_key_for(f1) != cache_key_for(f2)
+    assert _cache_key(f1) != _cache_key(f2)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +176,7 @@ def test_generate_thumbnail_produces_valid_jpeg(tmp_path: Path) -> None:
     _make_test_video(source, duration_s=2.0)
     dest = tmp_path / "out.jpg"
 
-    generate_thumbnail(source, dest)
+    _generate(source, dest)
 
     assert dest.exists()
     assert dest.stat().st_size > 0
@@ -160,7 +191,7 @@ def test_generate_thumbnail_falls_back_for_sub_second_clip(tmp_path: Path) -> No
     _make_test_video(source, duration_s=0.5)
     dest = tmp_path / "out.jpg"
 
-    generate_thumbnail(source, dest)
+    _generate(source, dest)
 
     assert dest.exists()
     assert dest.read_bytes()[:2] == _JPEG_MAGIC
@@ -173,7 +204,7 @@ def test_generate_thumbnail_raises_for_non_video_source(tmp_path: Path) -> None:
     dest = tmp_path / "out.jpg"
 
     with pytest.raises(ThumbnailGenerationError):
-        generate_thumbnail(source, dest)
+        _generate(source, dest)
 
 
 def test_run_ffmpeg_missing_binary_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,7 +214,7 @@ def test_run_ffmpeg_missing_binary_raises(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(thumbnails_module.subprocess, "run", _raise_not_found)
 
     with pytest.raises(ThumbnailGenerationError, match="not installed"):
-        generate_thumbnail(tmp_path / "src.mp4", tmp_path / "out.jpg")
+        _generate(_placeholder(tmp_path), tmp_path / "out.jpg")
 
 
 def test_run_ffmpeg_timeout_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,7 +224,7 @@ def test_run_ffmpeg_timeout_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(thumbnails_module.subprocess, "run", _raise_timeout)
 
     with pytest.raises(ThumbnailGenerationError, match="timed out"):
-        generate_thumbnail(tmp_path / "src.mp4", tmp_path / "out.jpg")
+        _generate(_placeholder(tmp_path), tmp_path / "out.jpg")
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +237,7 @@ def test_get_cached_thumbnail_creates_and_returns_path(tmp_path: Path) -> None:
     source = tmp_path / "clip.mp4"
     _make_test_video(source)
 
-    result = get_cached_thumbnail(source)
+    result = _thumbnail(source)
 
     assert result.exists()
     assert result.read_bytes()[:2] == _JPEG_MAGIC
@@ -229,8 +260,8 @@ def test_get_cached_thumbnail_reuses_cache_without_regenerating(
 
     monkeypatch.setattr(thumbnails_module, "generate_thumbnail", _counting_generate)
 
-    first = get_cached_thumbnail(source)
-    second = get_cached_thumbnail(source)
+    first = _thumbnail(source)
+    second = _thumbnail(source)
 
     assert first == second
     assert call_count == 1  # second call was a pure cache hit, no regeneration
@@ -242,12 +273,12 @@ def test_get_cached_thumbnail_regenerates_after_source_overwritten(
 ) -> None:
     source = tmp_path / "clip.mp4"
     _make_test_video(source, duration_s=2.0)
-    first = get_cached_thumbnail(source)
+    first = _thumbnail(source)
 
     # Overwrite with a different duration -> different size -> different
     # `cache_key_for` hash, regardless of how close the two mtimes land.
     _make_test_video(source, duration_s=3.0)
-    second = get_cached_thumbnail(source)
+    second = _thumbnail(source)
 
     assert second != first
     assert second.exists()

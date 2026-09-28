@@ -12,16 +12,16 @@ doesn't compute one.
 from __future__ import annotations
 
 import mimetypes
+import os
 import re
 from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import BinaryIO
 
 import anyio.to_thread
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.api.external.files import resolve_file
-from app.core import fsops
+from app.api.external.files import open_file
 from app.core.errors import ServerError, UnsupportedMedia
 from app.core.principal import CurrentUser
 from app.core.thumbnails import ThumbnailGenerationError, get_cached_thumbnail, is_video_file
@@ -75,14 +75,9 @@ async def _empty_body() -> AsyncIterator[bytes]:
         yield chunk
 
 
-async def _iter_range(path: Path, start: int, length: int) -> AsyncIterator[bytes]:
-    def _open_and_seek():
-        f = fsops.open_regular(path)
-        f.seek(start)
-        return f
-
-    file_obj = await anyio.to_thread.run_sync(_open_and_seek)
+async def _iter_range(file_obj: BinaryIO, start: int, length: int) -> AsyncIterator[bytes]:
     try:
+        await anyio.to_thread.run_sync(file_obj.seek, start)
         remaining = length
         while remaining > 0:
             chunk = await anyio.to_thread.run_sync(file_obj.read, min(_CHUNK_SIZE, remaining))
@@ -95,13 +90,14 @@ async def _iter_range(path: Path, start: int, length: int) -> AsyncIterator[byte
 
 
 async def _stream(request: Request, principal, path: str, *, head: bool) -> StreamingResponse:
-    r = await resolve_file(request, principal, path)
-    target = r.host_path
-    size = target.stat().st_size
-    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    r, f = await open_file(request, principal, path)
+    size = os.fstat(f.fileno()).st_size
+    content_type = mimetypes.guess_type(r.rel[-1])[0] or "application/octet-stream"
     base_headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-store"}
 
     parsed = _parse_range(request.headers.get("range"), size)
+    if parsed == "unsatisfiable" or head:
+        f.close()
     if parsed == "unsatisfiable":
         headers = {**base_headers, "Content-Range": f"bytes */{size}"}
         return StreamingResponse(
@@ -121,7 +117,7 @@ async def _stream(request: Request, principal, path: str, *, head: bool) -> Stre
         }
 
     length = end - start + 1 if size > 0 else 0
-    body = _empty_body() if head else _iter_range(target, start, length)
+    body = _empty_body() if head else _iter_range(f, start, length)
     return StreamingResponse(
         body, status_code=status_code, media_type=content_type, headers=headers
     )
@@ -140,13 +136,14 @@ async def stream_head(request: Request, principal: CurrentUser, path: str) -> St
 @router.get("/thumbnail")
 async def thumbnail(request: Request, principal: CurrentUser, path: str) -> FileResponse:
     """A cached JPEG poster frame for a video file (`415 unsupported_media` for anything else)."""
-    r = await resolve_file(request, principal, path)
-    if not is_video_file(r.host_path.name):
-        raise UnsupportedMedia("unsupported_media")
-    try:
-        thumbnail_path = await anyio.to_thread.run_sync(get_cached_thumbnail, r.host_path)
-    except ThumbnailGenerationError as exc:
-        raise ServerError("thumbnail_failed") from exc
+    r, f = await open_file(request, principal, path)
+    with f:
+        if not is_video_file(r.rel[-1]):
+            raise UnsupportedMedia("unsupported_media")
+        try:
+            thumbnail_path = await anyio.to_thread.run_sync(get_cached_thumbnail, f.fileno())
+        except ThumbnailGenerationError as exc:
+            raise ServerError("thumbnail_failed") from exc
     return FileResponse(
         thumbnail_path,
         media_type="image/jpeg",
