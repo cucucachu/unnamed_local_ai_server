@@ -144,3 +144,39 @@ built from `main`, the builder image built):
 - [ ] (M12-06) Expo Go, as a **viewer** of a shared space where the app is installed (`install --space <slug>` as its owner): the row says "View only", the runner shows the read-only note, and **Add** reads `refused: read_only`.
 - [ ] (M12-06) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (and `--space <slug>`); the Apps tab no longer lists it.
 
+
+**GATE G12 (M12-08)**: the reference Grocery list app in a shared space on
+a phone, live with the browser, plus the M12-01 spike's on-device checks
+(`spikes/app_runtime/README.md` → "Expo Go") re-run against the real
+runtime and host. `scripts/e2e/gate_m12.sh` covers the web side
+(`grocery_app_smoke.sh`: two users' browsers, live `db_changed`) and the
+sandbox's credentials (`verify_tenancy.sh` check 20, which runs the same
+probe script as below in Chromium). Setup:
+
+1. Finish G10 first (M10 above): you're signed in as yourself, and a shared
+   space exists with a second person in it (Settings → Spaces). Note its
+   slug.
+2. Install the app in the shared space and in your Personal space (each
+   prompts for your password):
+   `node scripts/e2e/app_fixture.mjs install --app examples/apps/grocery-list --user <you> --space <slug>`
+   and `node scripts/e2e/app_fixture.mjs install --app examples/apps/grocery-list --user <you>`.
+   For the spike checks, also the fixture app:
+   `node scripts/e2e/app_fixture.mjs install --user <you>`.
+3. Start Expo Go as in the M12-06 setup (`npx expo start` in
+   `services/frontend`, SDK 57) and sign in on the phone. On the laptop,
+   open `http://homeai.local` in a browser and sign in (as yourself, or as
+   the second person in a private window).
+
+- [ ] (M12-08) Expo Go: **Apps** lists "Grocery list" under the shared space and under Personal; opening the shared one renders the list (no blank screen or red box). **(GATE G12)**
+- [ ] (M12-08) Browser: open the shared space's Grocery list and add `Milk` — within a couple of seconds it appears on the phone without touching it. Tick it on the phone — the browser shows it ticked. **Clear checked** in the browser — it disappears on the phone. **(GATE G12)**
+- [ ] (M12-08) Phone: add `Eggs`, tap it, set a quantity on the detail screen, **Save** — back on the list it reads `× <quantity>`, and the browser shows the same. **(GATE G12)**
+- [ ] (M12-08) Phone: open Grocery list under **Personal** — it's a separate, empty list; nothing from the shared one is in it. **(GATE G12)**
+- [ ] (M12-08) If the second person is a **viewer** of the space: on their phone the app is "View only", with no add box or **Clear checked**, and their taps change nothing.
+- [ ] (M12-08, spike 1-2: render + navigate) Expo Go: open "Runtime check" (Personal): it renders `v1`; tap an item — its screen opens; **Back** returns to the list.
+- [ ] (M12-08, spike 4: hot reload keeps the route) Open an item in "Runtime check", then on the host run `node scripts/e2e/app_fixture.mjs v2 --user <you>` — you stay on the item's screen; tap **Back** — the label reads `v2` and a **Crash** button is there, with no reload. Restore with `... v1 --user <you>`.
+- [ ] (M12-08, spike 3 + 5: bench and probes) With "Runtime check" open, attach the WebView devtools (`webviewDebuggingEnabled` is on in dev; Android: USB debugging + `chrome://inspect` on the laptop; iOS: Safari → Develop → the phone), pick the sandbox page (`about:blank`), paste the whole of `scripts/e2e/sandbox_probe.js` into its console, then run `await homeaiSandboxProbe('http://<host>')`. **Pass:** `bench.failures` is 0 and `bench.p95` < 25 ms (the spike's bar; it now includes the Wi-Fi round trip to the platform, so record the numbers even if it misses); `escaped` is `[]`; every `fetch …`, `XMLHttpRequest`, `WebSocket …` and `image beacon` entry has `"ok": false`; `document.cookie` / storage are refused or empty. No external browser or other app opens (the `window.open` probe), and the app keeps running.
+- [ ] (M12-08, spike 5: navigation) In the same console: `await homeaiSandboxProbe('http://<host>', { bench: 0, navigate: true })` — no browser opens, the app stays on screen and still works (tap **Add**).
+- [ ] (M12-08) Paste both JSON reports into issue #149 with the device model, OS version and Expo Go version; Android, and iOS too if you can.
+- [ ] (M12-08) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (the fixture), and for Grocery list `--app examples/apps/grocery-list` with and without `--space <slug>` (or keep it; it's yours).
+
+> **PM sign-off: G12 passed ____**
