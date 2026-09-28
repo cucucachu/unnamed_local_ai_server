@@ -61,6 +61,10 @@ reads `req.runtime.config`. `_describe_write_file`/`_describe_edit_file`/
 description` (`app/api/chat_ws.py`'s `_pending_approval_from_state` reads it
 straight off the interrupt's own `ActionRequest.description` — no
 recomputation needed there).
+
+M13-02: the app tools (`app/agent/app_tools.py`) are not in `interrupt_on`;
+they raise their own approvals from inside the tool, since whether one is
+needed depends on what the platform says about the call (see that module).
 """
 
 from __future__ import annotations
@@ -74,6 +78,7 @@ from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolCall
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agent.app_tools import make_app_tools
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
@@ -149,6 +154,7 @@ def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
             make_execute_code_tool(settings),
             make_web_search_tool(settings),
             make_web_fetch_tool(settings),
+            *make_app_tools(settings),
         ],
         checkpointer=checkpointer,
         interrupt_on={name: _interrupt_on_config() for name in MUTATING_TOOL_NAMES},

@@ -27,6 +27,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen && rm -rf "$UV_CACHE_DIR"
 
 COPY app/ ./app/
+# `create_app`'s templates: `examples/apps/*` (compose's `templates` additional
+# build context), read from `APP_TEMPLATES_DIR` (default /app/templates).
+COPY --from=templates . ./templates/
 # tests/ is included in the runtime image (not just app/) so
 # `docker compose exec agent-server uv run pytest -m integration` (M3-01)
 # has something to collect.

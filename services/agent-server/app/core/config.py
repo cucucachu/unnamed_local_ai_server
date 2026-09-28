@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     platform_url: str = "http://platform:8100"
     platform_agent_token: str = ""
 
+    # App templates `create_app` copies (M13-02): one folder per template,
+    # `examples/apps/*` in the image (Dockerfile `COPY --from=templates`).
+    app_templates_dir: str = "/app/templates"
+
     postgres_user: str = "homeai"
     postgres_password: str = ""
     postgres_db: str = "homeai"

@@ -65,6 +65,7 @@ from app.api.chat_ws import (
     get_pending_approval,
     graph_config,
     list_state_history,
+    public_approval,
 )
 from app.core.identity import CurrentUser
 from app.db.threads import ThreadRecord, ThreadStore
@@ -269,7 +270,7 @@ async def get_thread_state(thread_id: str, request: Request, user: CurrentUser) 
         return {"pending_approval": None}
     agent = request.app.state.agent
     pending_approval = await get_pending_approval(agent, thread_id, record.active_checkpoint_id)
-    return {"pending_approval": pending_approval}
+    return {"pending_approval": public_approval(pending_approval)}
 
 
 def _build_branch_points(

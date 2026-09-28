@@ -19,7 +19,7 @@ Server -> client (in order within a turn):
     {"type": "reasoning", "content": "str"}  # M8-07: thought deltas; not persisted
     {"type": "token", "content": "str"}
     {"type": "tool_start", "tool_call_id": "str", "name": "str",
-     "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}
+     "category": "file"|"exec"|"plan"|"web"|"app"|"other", "args": {}}
     {"type": "tool_end", "tool_call_id": "str", "name": "str",
      "status": "success"|"error", "result_preview": "str"}
     {"type": "approval_request", "interrupt_id": "str",
@@ -306,9 +306,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from app.agent.app_tools import APP_TOOL_NAMES
 from app.agent.build import MUTATING_TOOL_NAMES
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, IdentityError, KeysUnavailable
@@ -340,6 +342,7 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "task": "plan",
     "web_search": "web",
     "web_fetch": "web",
+    **dict.fromkeys(APP_TOOL_NAMES, "app"),
 }
 
 _ARGS_VALUE_TRUNCATE_LEN = 500
@@ -465,38 +468,73 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
     carry a `tool_call_id`, so this zips it against the last `AIMessage`'s
     tool calls filtered to `MUTATING_TOOL_NAMES` (same subset+order the
     middleware itself used to build `action_requests`).
+
+    M13-02: an app tool raises its own interrupt from inside the tool
+    (`app/agent/app_tools.py`), carrying its `tool_call_id`, and parallel
+    calls can leave several pending at once (one per tool task). Their
+    actions are merged into one approval under the first interrupt's id;
+    `_RESUME_KEY` records which actions belong to which interrupt so
+    `_resume_command` can answer each (it's stripped by `public_approval`).
     """
-    interrupts = [i for task in state.tasks for i in task.interrupts]
+    interrupts = [
+        i
+        for task in state.tasks
+        for i in task.interrupts
+        if isinstance(i.value, dict) and i.value.get("action_requests")
+    ]
     if not interrupts:
-        return None
-    interrupt = interrupts[0]
-    value = interrupt.value or {}
-    action_requests = value.get("action_requests") or []
-    if not action_requests:
         return None
 
     messages = state.values.get("messages", [])
     last_ai_msg = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
-    tool_call_ids = (
+    middleware_ids = iter(
         [tc["id"] for tc in last_ai_msg.tool_calls if tc["name"] in MUTATING_TOOL_NAMES]
         if last_ai_msg is not None
         else []
     )
 
     actions = []
-    for idx, action_request in enumerate(action_requests):
-        name = action_request.get("name", "")
-        tool_call_id = tool_call_ids[idx] if idx < len(tool_call_ids) else ""
-        actions.append(
-            {
-                "tool_call_id": tool_call_id,
-                "name": name,
-                "category": _category_for_tool(name),
-                "args": _truncated_args(action_request.get("args")),
-                "description": action_request.get("description", ""),
-            }
-        )
-    return {"interrupt_id": str(interrupt.id), "actions": actions}
+    groups = []
+    for interrupt in interrupts:
+        action_requests = interrupt.value["action_requests"]
+        for action_request in action_requests:
+            name = action_request.get("name", "")
+            tool_call_id = action_request.get("tool_call_id") or next(middleware_ids, "")
+            actions.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "name": name,
+                    "category": _category_for_tool(name),
+                    "args": _truncated_args(action_request.get("args")),
+                    "description": action_request.get("description", ""),
+                }
+            )
+        groups.append((str(interrupt.id), len(action_requests)))
+    return {"interrupt_id": groups[0][0], "actions": actions, _RESUME_KEY: groups}
+
+
+_RESUME_KEY = "_resume"
+
+
+def public_approval(pending_approval: dict | None) -> dict | None:
+    """The pending approval as clients see it (`GET .../state`, `approval_request`)."""
+    if pending_approval is None:
+        return None
+    return {k: v for k, v in pending_approval.items() if k != _RESUME_KEY}
+
+
+def _resume_command(pending_approval: dict, decisions: list[dict]) -> Command:
+    """`decisions` (in `actions` order) as the resume for every pending interrupt."""
+    groups = pending_approval.get(_RESUME_KEY) or [
+        (pending_approval["interrupt_id"], len(decisions))
+    ]
+    if len(groups) == 1:
+        return Command(resume={"decisions": decisions})
+    resume, start = {}, 0
+    for interrupt_id, count in groups:
+        resume[interrupt_id] = {"decisions": decisions[start : start + count]}
+        start += count
+    return Command(resume=resume)
 
 
 def graph_config(
@@ -644,6 +682,11 @@ def _frames_for_event(event: dict) -> list[dict]:
     if kind == "on_tool_error":
         name = event.get("name", "")
         error = data.get("error")
+        if isinstance(error, GraphInterrupt):
+            # A tool paused itself for approval (M13-02); it reruns, with a new
+            # `tool_start`, when the run resumes. The client drops the card
+            # left running on `approval_request`.
+            return []
         return [
             {
                 "type": "tool_end",
@@ -1178,7 +1221,7 @@ async def _serve(
 
             hitl_enabled = await _current_hitl_enabled(websocket, user_id)
             thinking_enabled = await _current_thinking_enabled(websocket, user_id)
-            run_input = Command(resume={"decisions": decisions})
+            run_input = _resume_command(pending_approval, decisions)
             async with lock:
                 try:
                     resume_from = await active_checkpoint_id_for(
