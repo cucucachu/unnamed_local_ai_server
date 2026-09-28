@@ -44,5 +44,9 @@ class UnsupportedMedia(PlatformError):
     """415: the file isn't the kind this route handles (a thumbnail for a non-video, ...)."""
 
 
+class Unavailable(PlatformError):
+    """503: a service this needs can't be reached right now (the app builder, ...)."""
+
+
 class ServerError(PlatformError):
     """500: a failure the caller can't fix (ffmpeg couldn't decode a video, ...)."""

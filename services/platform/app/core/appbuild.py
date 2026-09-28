@@ -1,0 +1,478 @@
+"""App builds (docs/PLATFORM.md §7 "Build and verify"; docs/ARCHITECTURE.md §3 "App builds").
+
+`build_app` copies the app's source into a staging dir the platform owns,
+checks the copy (`manifest.validate_package`, step `manifest`), has
+code-exec-manager run the builder image over it (`compile`, then `smoke`),
+and on success stores the bundle as the working version's `bundle_path`.
+
+    <builds root>/                  root 0700 (host: ${APP_BUILDS_DIR})
+    <builds root>/<build_id>/       root 0700
+        src/                        root 0755, files 0644: the copied package
+        bundle/                     19999 0700: the compile phase's output
+        smoke/                      19999 0700: the smoke phase's output
+
+The source tree is writable by the space's members, so it is never mounted
+itself: the copy walks it by fd, `O_NOFOLLOW` all the way, and refuses
+symlinks and anything that isn't a file or folder. What gets validated and
+built is that copy, so edits made meanwhile can't slip past the checks.
+Everything under `bundle/` and `smoke/` was written by a build container and
+is read the same way, with size caps, as untrusted input.
+
+    <platform data>/app-bundles/<app_id>/<build_id>/app.js(.map)
+
+is where a successful build's bundle goes; `bundle_path` is that path
+relative to the platform data dir. A failed build leaves the previous one
+in place.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+import stat
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+from uuid import UUID
+
+import anyio.to_thread
+import httpx
+from psycopg.types.json import Jsonb
+from psycopg_pool import AsyncConnectionPool
+
+from app.core import apps, fsops, manifest, spaces, vfs
+from app.core.errors import NotFound, Unavailable
+from app.core.principal import Principal
+from app.core.storage import SpaceStorage
+
+logger = logging.getLogger(__name__)
+
+BUILDER_UID = 19999
+PHASES = ("compile", "smoke")
+STEPS = ("manifest", "files", "route", "import", "bundle", "type", "render", "sql", "build")
+
+MAX_FILE_BYTES = 2 * 1024 * 1024
+MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_RESULT_BYTES = 1024 * 1024
+MAX_BUNDLE_BYTES = 16 * 1024 * 1024
+MAX_MAP_BYTES = 32 * 1024 * 1024
+MAX_FIELD_CHARS = {"file": 500, "message": 2000, "source": 200}
+
+BUNDLES_DIR = "app-bundles"
+BUNDLE_PREFIX = b"__homeai_define("
+BUNDLE_PATH_RE = re.compile(r"^app-bundles/[0-9a-f-]{36}/[0-9a-f]{32}/app\.js$")
+
+Diagnostic = dict[str, Any]
+
+_OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_OPEN_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _fchown(fd: int, uid: int, gid: int) -> None:
+    os.fchown(fd, uid, gid)
+
+
+def diagnostic(step: str, file: str = "", message: str = "", path: str = "") -> Diagnostic:
+    """`{step, file, path, line, column, message}`, `manifest.Diagnostic` plus a step and position."""
+    return {"step": step, "file": file, "path": path, "line": None, "column": None,
+            "message": message}  # fmt: skip
+
+
+def _mb(n: int) -> str:
+    return f"{n // (1024 * 1024)} MB"
+
+
+# --- staging -----------------------------------------------------------------------
+
+
+class _TooMany(Exception):
+    pass
+
+
+@dataclass
+class _Copy:
+    entries: int = 0
+    bytes: int = 0
+    found: list[Diagnostic] = field(default_factory=list)
+
+    def refuse(self, rel: str, message: str) -> None:
+        self.found.append(diagnostic("files", rel, message))
+
+
+def _copy_file(src_dir: int, name: str, dst_dir: int, rel: str, copy: _Copy) -> None:
+    try:
+        fin = fsops.open_regular_at(src_dir, name)
+    except OSError:
+        copy.refuse(rel, f"{rel} can't be read as a regular file; remove it")
+        return
+    with fin:
+        data = fin.read(MAX_FILE_BYTES + 1)
+    if len(data) > MAX_FILE_BYTES:
+        copy.refuse(
+            rel, f"{rel} is larger than {_mb(MAX_FILE_BYTES)}; apps can't use files that big"
+        )
+        return
+    copy.bytes += len(data)
+    if copy.bytes > MAX_SOURCE_BYTES:
+        copy.refuse(rel, f"the app is larger than {_mb(MAX_SOURCE_BYTES)} in total")
+        raise _TooMany
+    with os.fdopen(os.open(name, _OPEN_NEW, 0o644, dir_fd=dst_dir), "wb") as fout:
+        fout.write(data)
+
+
+def _copy_tree(src: int, dst: int, rel: str, copy: _Copy) -> None:
+    with os.scandir(src) as it:
+        entries = sorted(it, key=lambda e: e.name)
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue
+        copy.entries += 1
+        if copy.entries > manifest.MAX_PACKAGE_ENTRIES:
+            copy.refuse("", f"the app has more than {manifest.MAX_PACKAGE_ENTRIES} files")
+            raise _TooMany
+        child = f"{rel}{entry.name}"
+        mode = entry.stat(follow_symlinks=False).st_mode
+        if stat.S_ISLNK(mode):
+            copy.refuse(child, f"{child} is a symlink; apps can't use symlinks")
+        elif stat.S_ISREG(mode):
+            _copy_file(src, entry.name, dst, child, copy)
+        elif stat.S_ISDIR(mode):
+            try:
+                fd = os.open(entry.name, _OPEN_DIR, dir_fd=src)
+            except OSError:
+                copy.refuse(child, f"{child}/ can't be read; remove it")
+                continue
+            try:
+                os.mkdir(entry.name, 0o755, dir_fd=dst)
+                sub = os.open(entry.name, _OPEN_DIR, dir_fd=dst)
+                try:
+                    os.fchmod(sub, 0o755)
+                    _copy_tree(fd, sub, f"{child}/", copy)
+                finally:
+                    os.close(sub)
+            finally:
+                os.close(fd)
+        else:
+            copy.refuse(child, f"{child} isn't a file or a folder; remove it")
+
+
+class Builds:
+    """The staging dirs under `root` (the platform's `/data/builds`)."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def prepare(self) -> None:
+        """Make the root platform-only and empty it of builds a restart interrupted."""
+        self.root.mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(self.root, _OPEN_DIR)
+        try:
+            os.fchmod(fd, 0o700)
+            with os.scandir(fd) as it:
+                stale = [entry.name for entry in it]
+            for name in stale:
+                fsops.remove_at(fd, name)
+        finally:
+            os.close(fd)
+        if stale:
+            logger.info("builds: removed %d stale staging dirs", len(stale))
+
+    def _open(self, *parts: str) -> int:
+        fd = os.open(self.root, _OPEN_DIR)
+        try:
+            for part in parts:
+                nxt = os.open(part, _OPEN_DIR, dir_fd=fd)
+                os.close(fd)
+                fd = nxt
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def stage(self, pkg_fd: int, slug: str) -> tuple[str, Any, list[Diagnostic]]:
+        """Copy the package open as `pkg_fd` into a new build dir and validate the copy.
+
+        (build_id, manifest, diagnostics); the build dir exists either way.
+        """
+        build_id = secrets.token_hex(16)
+        root = self._open()
+        try:
+            os.mkdir(build_id, 0o700, dir_fd=root)
+        finally:
+            os.close(root)
+        build = self._open(build_id)
+        try:
+            for name in ("bundle", "smoke"):
+                os.mkdir(name, 0o700, dir_fd=build)
+                fd = os.open(name, _OPEN_DIR, dir_fd=build)
+                try:
+                    _fchown(fd, BUILDER_UID, BUILDER_UID)
+                    os.fchmod(fd, 0o700)
+                finally:
+                    os.close(fd)
+            os.mkdir("src", 0o755, dir_fd=build)
+            src = os.open("src", _OPEN_DIR, dir_fd=build)
+        finally:
+            os.close(build)
+        copy = _Copy()
+        try:
+            os.fchmod(src, 0o755)
+            try:
+                _copy_tree(pkg_fd, src, "", copy)
+            except _TooMany:
+                pass
+            if copy.found:
+                return build_id, None, copy.found[: manifest.MAX_DIAGNOSTICS]
+            doc, found = manifest.validate_package(src, slug)
+        finally:
+            os.close(src)
+        return build_id, doc, [diagnostic("manifest", d.file, d.message, d.path) for d in found]
+
+    def read(self, build_id: str, out_dir: str, name: str, limit: int) -> bytes | None:
+        """`<build_id>/<out_dir>/<name>` if it is a regular file of at most `limit` bytes."""
+        try:
+            dir_fd = self._open(build_id, out_dir)
+        except OSError:
+            return None
+        try:
+            with fsops.open_regular_at(dir_fd, name) as f:
+                data = f.read(limit + 1)
+        except OSError:
+            return None
+        finally:
+            os.close(dir_fd)
+        return data if len(data) <= limit else None
+
+    def discard(self, build_id: str) -> None:
+        fd = self._open()
+        try:
+            fsops.remove_at(fd, build_id)
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(fd)
+
+
+# --- the builder ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PhaseRun:
+    exit_code: int
+    timed_out: bool
+
+
+class Builder(Protocol):
+    async def run(self, build_id: str, phase: str) -> PhaseRun: ...
+
+
+class ExecManagerBuilder:
+    """`POST {exec_manager_url}/builds/{build_id}/{phase}` with the exec service token."""
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout_s: float,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._url = base_url.rstrip("/")
+        self._token = token
+        self._timeout_s = timeout_s
+        self._transport = transport
+
+    async def run(self, build_id: str, phase: str) -> PhaseRun:
+        if not self._token:
+            raise Unavailable("builder_unavailable")
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout_s, transport=self._transport
+            ) as client:
+                response = await client.post(
+                    f"{self._url}/builds/{build_id}/{phase}",
+                    headers={"Authorization": f"Bearer {self._token}"},
+                )
+            if response.status_code != 200:
+                logger.warning("builds: code-exec-manager answered %d", response.status_code)
+                raise Unavailable("builder_unavailable")
+            body = response.json()
+            return PhaseRun(int(body["exit_code"]), bool(body["timed_out"]))
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            logger.warning("builds: code-exec-manager call failed: %s", type(exc).__name__)
+            raise Unavailable("builder_unavailable") from exc
+
+
+# --- results ---------------------------------------------------------------------------
+
+
+def _clean(raw: Any) -> Diagnostic | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("message"), str):
+        return None
+    d = diagnostic(raw["step"] if raw.get("step") in STEPS else "build")
+    for key in ("file", "message"):
+        value = raw.get(key)
+        d[key] = value[: MAX_FIELD_CHARS[key]] if isinstance(value, str) else ""
+    for key in ("line", "column"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 10_000_000:
+            d[key] = value
+    if isinstance(raw.get("source"), str) and raw["source"]:
+        d["source"] = raw["source"][: MAX_FIELD_CHARS["source"]]
+    return d
+
+
+def _result(builds: Builds, build_id: str, phase: str, run: PhaseRun) -> list[Diagnostic]:
+    """A phase's diagnostics from the `result.json` it wrote; empty if it succeeded."""
+    if run.timed_out:
+        return [diagnostic("build", message=f"the {phase} step took too long and was stopped")]
+    raw = builds.read(build_id, "bundle" if phase == "compile" else "smoke", "result.json",
+                      MAX_RESULT_BYTES)  # fmt: skip
+    try:
+        doc = json.loads(raw) if raw is not None else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict) or not isinstance(doc.get("diagnostics"), list):
+        logger.warning("builds: %s phase left no usable result (exit %d)", phase, run.exit_code)
+        return [diagnostic("build", message=f"the {phase} step failed without a result")]
+    found = [d for d in map(_clean, doc["diagnostics"][: manifest.MAX_DIAGNOSTICS]) if d]
+    if found or (doc.get("ok") is True and run.exit_code == 0):
+        return found
+    return [diagnostic("build", message=f"the {phase} step failed")]
+
+
+@dataclass(frozen=True)
+class Build:
+    id: str
+    ok: bool
+    duration_ms: int
+    bundle_path: str | None = None
+    bundle_bytes: int | None = None
+
+
+def _bundle(builds: Builds, build_id: str) -> tuple[bytes, bytes] | None:
+    bundle = builds.read(build_id, "bundle", "app.js", MAX_BUNDLE_BYTES)
+    source_map = builds.read(build_id, "bundle", "app.js.map", MAX_MAP_BYTES)
+    if bundle is None or source_map is None or not bundle.startswith(BUNDLE_PREFIX):
+        return None
+    return bundle, source_map
+
+
+async def _run(builds: Builds, builder: Builder, build_id: str):
+    """(diagnostics, (bundle, source map) or None)."""
+    for phase in PHASES:
+        run = await builder.run(build_id, phase)
+        found = await anyio.to_thread.run_sync(_result, builds, build_id, phase, run)
+        if found:
+            return found, None
+    output = await anyio.to_thread.run_sync(_bundle, builds, build_id)
+    if output is None:
+        return [diagnostic("build", message="the build produced no usable bundle")], None
+    return [], output
+
+
+# --- the build -----------------------------------------------------------------------------
+
+
+def _stage(r: vfs.Resolved, slug: str, builds: Builds) -> tuple[str | None, Any, list[Diagnostic]]:
+    fd = apps.open_source(r)
+    if fd is None:
+        _doc, found = manifest.validate_package(None, slug)
+        return None, None, [diagnostic("manifest", d.file, d.message, d.path) for d in found]
+    try:
+        return builds.stage(fd, slug)
+    finally:
+        os.close(fd)
+
+
+def _store_bundle(data_dir: Path, app_id: UUID, build_id: str, output: tuple[bytes, bytes]) -> str:
+    rel = f"{BUNDLES_DIR}/{app_id}/{build_id}"
+    target = data_dir / rel
+    target.mkdir(mode=0o755, parents=True)
+    (target / "app.js").write_bytes(output[0])
+    (target / "app.js.map").write_bytes(output[1])
+    return f"{rel}/app.js"
+
+
+def _drop_bundle(data_dir: Path, bundle_path: str | None) -> None:
+    if bundle_path and BUNDLE_PATH_RE.fullmatch(bundle_path):
+        shutil.rmtree(data_dir / bundle_path.rsplit("/", 1)[0], ignore_errors=True)
+
+
+async def build_app(
+    pool: AsyncConnectionPool,
+    principal: Principal,
+    storage: SpaceStorage,
+    builds: Builds,
+    builder: Builder,
+    data_dir: Path,
+    app_id: UUID,
+) -> tuple[dict[str, Any], Build | None, list[Diagnostic]]:
+    """(app, the build or None if the builder never ran, diagnostics).
+
+    Needs `write` on the source space. The database connection isn't held
+    while the builder runs.
+    """
+    async with pool.connection() as conn:
+        app = await apps.get_visible_app(conn, principal, app_id)
+        await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
+        r, slug = await apps.resolve_source(conn, principal, storage, app["source_path"])
+    build_id, doc, found = await anyio.to_thread.run_sync(_stage, r, slug, builds)
+    if build_id is None:
+        return app, None, found
+    start = time.monotonic()
+    try:
+        if found:
+            return app, None, found
+        found, output = await _run(builds, builder, build_id)
+    finally:
+        await anyio.to_thread.run_sync(builds.discard, build_id)
+    duration_ms = int((time.monotonic() - start) * 1000)
+    if output is None:
+        return app, Build(build_id, False, duration_ms), found
+
+    bundle_path = await anyio.to_thread.run_sync(_store_bundle, data_dir, app_id, build_id, output)
+    try:
+        async with pool.connection() as conn:
+            previous = await _record(conn, principal, app_id, doc, bundle_path)
+    except BaseException:
+        await anyio.to_thread.run_sync(_drop_bundle, data_dir, bundle_path)
+        raise
+    await anyio.to_thread.run_sync(_drop_bundle, data_dir, previous)
+    async with pool.connection() as conn:
+        app = await apps.get_visible_app(conn, principal, app_id)
+    return app, Build(build_id, True, duration_ms, bundle_path, len(output[0])), []
+
+
+async def _record(
+    conn, principal: Principal, app_id: UUID, doc: Any, bundle_path: str
+) -> str | None:
+    """Make `bundle_path` the working version's; returns the one it replaced if nothing else uses it."""
+    app = await apps.get_visible_app(conn, principal, app_id)
+    await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
+    async with conn.transaction():
+        cur = await conn.execute(
+            "SELECT id, bundle_path FROM app_versions "
+            "WHERE app_id = %s AND kind = 'working' FOR UPDATE",
+            (app_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise NotFound("not_found")
+        await conn.execute("UPDATE apps SET name = %s WHERE id = %s", (doc["name"], app_id))
+        await conn.execute(
+            "UPDATE app_versions SET version = %s, manifest = %s, bundle_path = %s WHERE id = %s",
+            (doc["version"], Jsonb(doc), bundle_path, row["id"]),
+        )
+        previous = row["bundle_path"]
+        if previous and previous != bundle_path:
+            cur = await conn.execute(
+                "SELECT 1 FROM app_versions WHERE bundle_path = %s", (previous,)
+            )
+            if await cur.fetchone() is None:
+                return previous
+    return None

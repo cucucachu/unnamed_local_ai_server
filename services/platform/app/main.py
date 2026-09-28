@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio.to_thread
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -15,7 +16,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.api import internal
 from app.api.external import auth, platform
-from app.core import legacy, spaces
+from app.core import appbuild, legacy, spaces
 from app.core.agentfs import AgentFsError
 from app.core.bootstrap import Bootstrap
 from app.core.config import Settings
@@ -28,6 +29,7 @@ from app.core.errors import (
     PlatformError,
     ServerError,
     Unauthorized,
+    Unavailable,
     UnsupportedMedia,
 )
 from app.core.ratelimit import RateLimited, RateLimiter
@@ -46,6 +48,7 @@ STATUS_BY_ERROR: dict[type[PlatformError], int] = {
     UnsupportedMedia: 415,
     InvalidInput: 422,
     ServerError: 500,
+    Unavailable: 503,
 }
 
 
@@ -81,6 +84,17 @@ def _install_error_handlers(app: FastAPI) -> None:
         return JSONResponse({"detail": "invalid_request", "errors": errors}, status_code=422)
 
 
+async def _prepare_builds(s: Settings) -> appbuild.Builds | None:
+    """The app builds staging root, or None (builds answer 503) if it can't be set up."""
+    builds = appbuild.Builds(s.platform_builds_dir)
+    try:
+        await anyio.to_thread.run_sync(builds.prepare)
+    except OSError as exc:
+        logger.error("builds: %s unusable, app builds disabled: %s", builds.root, exc)
+        return None
+    return builds
+
+
 def create_app(
     settings: Settings | None = None,
     db_pool_override: AsyncConnectionPool | None = None,
@@ -94,7 +108,8 @@ def create_app(
     Startup (in `lifespan`, so it reads `app.state.settings` at start time):
     open the Postgres pool, apply pending migrations, load or generate the
     signing key, give any user without one a personal space, reconcile every
-    space's directory tree (per-space failures are logged, not fatal), and
+    space's directory tree (per-space failures are logged, not fatal), empty
+    the app builds staging root (unusable: logged, builds disabled), and
     (until the first admin exists) prepare the bootstrap setup code, then
     run the legacy files migration if it's enabled (logged, never fatal). A
     failure in any other step fails startup; compose restarts it.
@@ -137,6 +152,10 @@ def create_app(
             app.state.storage = storage
             app.state.tokens = tokens
             app.state.bootstrap = bootstrap
+            app.state.builds = await _prepare_builds(s)
+            app.state.builder = appbuild.ExecManagerBuilder(
+                s.exec_manager_url, s.platform_exec_token, s.platform_build_timeout_s
+            )
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s
             )

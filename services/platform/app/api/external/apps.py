@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 
 from app.api.schemas import (
+    AppBuildOut,
     AppList,
     AppOut,
     AppRegisterRequest,
@@ -17,7 +18,8 @@ from app.api.schemas import (
     InstanceList,
     InstanceOut,
 )
-from app.core import apps, manifest
+from app.core import appbuild, apps, manifest
+from app.core.errors import Unavailable
 from app.core.principal import CurrentUser
 
 router = APIRouter()
@@ -55,6 +57,24 @@ async def validate_app(app_id: UUID, request: Request, principal: CurrentUser):
             conn, principal, request.app.state.storage, app_id
         )
     return AppValidationOut(app=app, valid=not diagnostics, diagnostics=diagnostics)
+
+
+@router.post("/apps/{app_id}/build", response_model=AppBuildOut)
+async def build_app(app_id: UUID, request: Request, principal: CurrentUser):
+    """Build the working version in the sandboxed builder (`app.core.appbuild`)."""
+    state = request.app.state
+    if state.builds is None:
+        raise Unavailable("builder_unavailable")
+    app, build, diagnostics = await appbuild.build_app(
+        state.db_pool, principal, state.storage, state.builds, state.builder,
+        state.settings.platform_data_dir, app_id,
+    )  # fmt: skip
+    return AppBuildOut(
+        app=app,
+        ok=build is not None and build.ok,
+        build=None if build is None else vars(build),
+        diagnostics=diagnostics,
+    )
 
 
 @router.get("/spaces/{space_id}/instances", response_model=InstanceList)

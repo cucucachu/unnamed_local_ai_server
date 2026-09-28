@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     # Empty refuses every exec grant.
     spaces_host_dir: str = ""
 
+    # App builds (`app/core/appbuild.py`): the staging root (`${APP_BUILDS_DIR}`
+    # bind mount; code-exec-manager mounts its per-build dirs into builder
+    # containers by the matching host path), and the manager that runs them,
+    # authenticated with `platform_exec_token`.
+    platform_builds_dir: Path = Path("/data/builds")
+    exec_manager_url: str = "http://code-exec-manager:8090"
+    # Per phase, including any wait for a free builder slot.
+    platform_build_timeout_s: float = 600.0
+
     # Pre-Stage-3 files root (`${FILES_DIR}` bind mount), moved into the
     # bootstrap admin's personal space when enabled (`app/core/legacy.py`).
     # Compose turns it on; off here so tests opt in.

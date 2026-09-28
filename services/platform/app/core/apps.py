@@ -102,7 +102,7 @@ def parse_source_path(vpath: str) -> str:
     return slug
 
 
-async def _resolve_source(
+async def resolve_source(
     conn: AsyncConnection, principal: Principal, storage: SpaceStorage, vpath: str
 ) -> tuple[vfs.Resolved, str]:
     slug = parse_source_path(vpath)
@@ -128,20 +128,26 @@ def _ensure_apps_folder(r: vfs.Resolved, owner: fsops.Owner) -> None:
         raise Conflict("apps_folder_not_a_directory") from exc
 
 
-def _validate_source(r: vfs.Resolved, slug: str) -> tuple[Any, list[manifest.Diagnostic]]:
+def open_source(r: vfs.Resolved) -> int | None:
+    """An fd on the app folder (the caller closes it), or None if there is none."""
     with r.open_root() as root:
         try:
-            fd = beneath.open(root, r.rel, os.O_RDONLY | os.O_DIRECTORY, symlinks=False)
+            return beneath.open(root, r.rel, os.O_RDONLY | os.O_DIRECTORY, symlinks=False)
         except (FileNotFoundError, NotADirectoryError):
-            return manifest.validate_package(None, slug)
+            return None
         except OSError as exc:
             if exc.errno != errno.ELOOP:
                 raise
             raise InvalidInput("invalid_source_path") from exc
+
+
+def _validate_source(r: vfs.Resolved, slug: str) -> tuple[Any, list[manifest.Diagnostic]]:
+    fd = open_source(r)
     try:
         return manifest.validate_package(fd, slug)
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
 
 
 def _diagnostics(found: list[manifest.Diagnostic]) -> list[dict[str, str]]:
@@ -172,7 +178,7 @@ async def register_app(
     conn: AsyncConnection, principal: Principal, storage: SpaceStorage, source_path: str
 ) -> Row:
     """Register the package at `source_path`, or raise `InvalidApp` with its diagnostics."""
-    r, slug = await _resolve_source(conn, principal, storage, source_path)
+    r, slug = await resolve_source(conn, principal, storage, source_path)
     owner = fsops.Owner(principal.uid, r.space["gid"])
     await anyio.to_thread.run_sync(_ensure_apps_folder, r, owner)
     doc, found = await anyio.to_thread.run_sync(_validate_source, r, slug)
@@ -204,7 +210,7 @@ async def validate_app(
     """Re-validate the source; when it passes, the working version takes its manifest."""
     app = await get_visible_app(conn, principal, app_id)
     await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
-    r, slug = await _resolve_source(conn, principal, storage, app["source_path"])
+    r, slug = await resolve_source(conn, principal, storage, app["source_path"])
     doc, found = await anyio.to_thread.run_sync(_validate_source, r, slug)
     if not found:
         async with conn.transaction():
