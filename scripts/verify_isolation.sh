@@ -100,7 +100,13 @@
 # which are mounted `rw` by Docker itself). What's left are real bind
 # mounts; the `rw` ones must be exactly the user's writable spaces, the `ro`
 # ones under `/files` exactly their viewer spaces (`/etc/resolv.conf`,
-# `/etc/hostname`, `/etc/hosts` are `ro` binds outside `/files`).
+# `/etc/hostname`, `/etc/hosts` are `ro` binds outside `/files`). If
+# `/app-data` is mounted at all, every such bind is read-only (check 14);
+# B has no path to A's personal app-data (check 18). Readable / not
+# writable / no-other-user coverage of installed app databases lives in
+# `scripts/verify_tenancy.sh` check 29 (M14-05) — this suite does not
+# install grocery, so it does not hitch a second full app build onto the
+# already-slow isolation run.
 #
 # ---- Needs no sudo ---------------------------------------------------------
 #
@@ -729,6 +735,34 @@ check_14() {
   else
     fail 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}" "$out"
   fi
+  # M14-05: isolation does not install apps; if /app-data exists anyway it
+  # must be read-only. Full tenancy is verify_tenancy.sh check 29.
+  if out="$(python3 -c '
+import json, re, sys
+data = json.loads(sys.argv[1])
+if data.get("exit_code") != 0:
+    print(f"mount failed: {data}")
+    sys.exit(1)
+PATTERN = re.compile(r"^(?P<source>.*) on (?P<target>.*) type (?P<fstype>\S+) \((?P<opts>[^)]*)\)$")
+bad = []
+for line in data.get("stdout", "").splitlines():
+    m = PATTERN.match(line.strip())
+    if not m:
+        continue
+    target = m.group("target")
+    if target != "/app-data" and not target.startswith("/app-data/"):
+        continue
+    opts = m.group("opts").split(",")
+    if "ro" not in opts or "rw" in opts:
+        bad.append(f"{target} opts={m.group(\"opts\")}")
+if bad:
+    print("; ".join(bad))
+    sys.exit(1)
+' "$json" 2>&1)"; then
+    pass 14 "if /app-data is mounted, it is read-only"
+  else
+    fail 14 "if /app-data is mounted, it is read-only" "$out"
+  fi
 }
 
 # ---- checks 15-17 (stack-level, directly on the host via docker) ----------
@@ -819,6 +853,18 @@ assert spaces.split() == ['${SPACE}'], f'/files/spaces lists {spaces.split()}'
 assert '${MARK}' not in personal, f'A\\'s marker in B\\'s /files/personal: {personal!r}'
 assert not hits.strip(), f'A\\'s marker found under B\\'s /files: {hits!r}'
 " b "ls /files/spaces; echo ---; ls -a /files/personal; echo ---; grep -rl ${MARK} /files 2>/dev/null; true"
+  # M14-05: B has no path to A's personal app-data (isolation installs no
+  # grocery; verify_tenancy.sh check 29 covers the installed-app case).
+  check_exec_py 18 "B has no path to A's personal app-data" "
+out = r.get('stdout', '')
+assert r.get('exit_code') == 0, f'exit_code {r.get(\"exit_code\")}: {r.get(\"stderr\")!r}'
+parts = out.split('---')
+tree = parts[0] if parts else ''
+hits = parts[1] if len(parts) > 1 else ''
+assert '${HOME_A}' not in out, f'A personal space id under B /app-data: {out!r}'
+assert '/app-data/personal' not in tree, tree
+assert '${MARK}' not in tree and not hits.strip(), f'A marker under B /app-data: {tree!r} {hits!r}'
+" b "find /app-data -print 2>/dev/null; echo ---; grep -rl ${MARK} /app-data 2>/dev/null; true"
 }
 
 check_19() {

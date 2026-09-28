@@ -8,8 +8,10 @@
 #      not routed.                                              checks 1-4
 #   2. User B can't read, list or write user A's personal space — through
 #      the files API as B, with B's delegation (what B's agent file tools
-#      carry), or from B's exec container.                      checks 5-8
-#   3. A viewer can't write to a space by the same paths.        checks 9-11
+#      carry), or from B's exec container, including A's personal app-data
+#      at /app-data/personal/<slug> (M14-05).                   checks 5-8, 29
+#   3. A viewer can't write to a space by the same paths,
+#      including the shared /app-data mount.                    checks 9-11, 29
 #   4. An agent run (an `act=agent` delegation) can't perform admin or
 #      auth/session/membership actions, even for a stepped-up admin whose
 #      own identity token can.                                  check 12
@@ -43,7 +45,13 @@
 # (examples/apps/grocery-list) in its personal space and in the shared one,
 # builds both with the real builder, and adds a marker row to each. That is
 # also invariant 2/3 for app RPC; `app_sql` arrives with M13 and gets its
-# checks then. The agent's file tools are checked here at the
+# checks then. Check 29 (M14-05) is those same markers through exec: A reads
+# /app-data/personal/grocery-list/data.sqlite and cannot write that mount;
+# B has no /app-data/personal/grocery-list and A's marker is absent under
+# B's /app-data; viewer B reads (not writes)
+# /app-data/spaces/<space>/grocery-list/data.sqlite. Grocery is installed
+# after checks 1-19 so check 7's exact two-mount assertion stays valid.
+# The agent's file tools are checked here at the
 # platform boundary (B's own delegation, the credential PlatformFilesBackend
 # sends); scripts/e2e/agent_tenancy_smoke.sh drives the same thing through
 # the real model.
@@ -202,9 +210,16 @@ sys.stdout.write(identity())"
 }
 
 exec_as() {
-  local cookie="$1" session="$2" command="$3" body
+  local cookie="$1" session="$2" command="$3" body r
   body="$(python3 -c 'import json, sys; print(json.dumps({"command": sys.argv[1], "timeout_seconds": 15}))' "$command")"
-  internal_exec_manager_call "$cookie" POST "$session" execute delegation 15 "$body"
+  r="$(internal_exec_manager_call "$cookie" POST "$session" execute delegation 15 "$body")"
+  # Grants change (e.g. after setup_apps) recreates on ensure/execute; a
+  # missing session is 404 — mint it and retry once.
+  if [[ "$r" == *'"http_error": 404'* ]]; then
+    internal_exec_manager_call "$cookie" POST "$session" ensure delegation 30 >/dev/null
+    r="$(internal_exec_manager_call "$cookie" POST "$session" execute delegation 15 "$body")"
+  fi
+  printf '%s' "$r"
 }
 
 setup() {
@@ -301,6 +316,10 @@ setup_apps() {
   DELEG_ADM="$(internal_delegation "$COOKIE_ADM" "tenancy-adm-apps-$$")"
   [ -n "$DELEG_A" ] && [ -n "$DELEG_B" ] && [ -n "$DELEG_ADM" ] || { log "ERROR: couldn't mint delegations"; return 1; }
   log "OK: personal instance ${INST_P}, shared instance ${INST_S}"
+  # ro/data.sqlite is a VACUUM INTO copy published trailing-1s after each
+  # committed write (PUBLISH_INTERVAL_S). Wait so check 29's exec mounts
+  # see the marker rows.
+  sleep 2
 }
 
 cleanup() {
@@ -1037,6 +1056,75 @@ check_25() {
   finish 25 "the bundle endpoint needs read on the instance's space (viewer yes; outsider, admin, their delegations 404; no session 401)"
 }
 
+# ---- M14-05: exec read-only /app-data (invariants 2, 3, 7) -------------------
+
+check_29() {
+  local ensure_a ensure_b r
+  ensure_a="$(internal_exec_manager_call "$COOKIE_A" POST "$SESSION_A" ensure delegation 30)"
+  [[ "$ensure_a" == *container_id* ]] || ERRORS+=("A's ensure failed: ${ensure_a:0:300}")
+  ensure_b="$(internal_exec_manager_call "$COOKIE_B" POST "$SESSION_B" ensure delegation 30)"
+  [[ "$ensure_b" == *container_id* ]] || ERRORS+=("B's ensure failed: ${ensure_b:0:300}")
+
+  r="$(exec_as "$COOKIE_A" "$SESSION_A" "$(cat <<'CMD'
+python3 -c 'import sqlite3; c=sqlite3.connect("file:/app-data/personal/grocery-list/data.sqlite?mode=ro&immutable=1", uri=True); print("row="+c.execute("SELECT name FROM items").fetchone()[0])'
+touch /app-data/personal/grocery-list/w
+echo touch_rc=$?
+CMD
+)")"
+  python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+assert 'http_error' not in r, r
+out = r.get('stdout', '')
+assert 'row=${APP_PMARK}' in out, out
+assert 'touch_rc=0' not in out, out
+err = r.get('stderr', '')
+assert 'Read-only file system' in err or 'EROFS' in err or 'Read-only' in err, r
+" "$r" 2>/dev/null || ERRORS+=("A personal /app-data: ${r:0:400}")
+
+  r="$(exec_as "$COOKIE_B" "$SESSION_B" "$(cat <<CMD
+test ! -e /app-data/personal/grocery-list; echo no_personal_grocery=\$?
+echo ---
+find /app-data -print 2>/dev/null
+echo ---
+grep -r ${APP_PMARK} /app-data 2>/dev/null
+true
+CMD
+)")"
+  python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+assert 'http_error' not in r, r
+assert r.get('exit_code') == 0, r
+parts = r.get('stdout', '').split('---')
+exists = parts[0] if parts else ''
+tree = parts[1] if len(parts) > 1 else ''
+hits = parts[2] if len(parts) > 2 else ''
+assert 'no_personal_grocery=0' in exists, exists
+assert '/app-data/personal/grocery-list' not in tree, tree
+assert '${APP_PMARK}' not in tree and not hits.strip(), f'A marker under B /app-data: {tree!r} {hits!r}'
+" "$r" 2>/dev/null || ERRORS+=("B must not see A's personal app-data: ${r:0:400}")
+
+  r="$(exec_as "$COOKIE_B" "$SESSION_B" "$(cat <<CMD
+python3 -c 'import sqlite3; c=sqlite3.connect("file:/app-data/spaces/${SPACE}/grocery-list/data.sqlite?mode=ro&immutable=1", uri=True); print("row="+c.execute("SELECT name FROM items").fetchone()[0])'
+touch /app-data/spaces/${SPACE}/grocery-list/w
+echo touch_rc=\$?
+CMD
+)")"
+  python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+assert 'http_error' not in r, r
+out = r.get('stdout', '')
+assert 'row=${APP_SMARK}' in out, out
+assert 'touch_rc=0' not in out, out
+err = r.get('stderr', '')
+assert 'Read-only file system' in err or 'EROFS' in err or 'Read-only' in err, r
+" "$r" 2>/dev/null || ERRORS+=("B shared /app-data: ${r:0:400}")
+
+  finish 29 "exec /app-data: A reads personal grocery (not writable); B cannot see it; viewer B reads shared grocery (not writable)"
+}
+
 summary() {
   local total=$((PASS_COUNT + FAIL_COUNT))
   echo
@@ -1049,14 +1137,15 @@ summary() {
 }
 
 main() {
-  log "=== M11-04/M12-08/#194: tenancy suite (docs/PLATFORM.md §9 invariants 1-7, agent-server RLS) ==="
+  log "=== M11-04/M12-08/#194/M14-05: tenancy suite (docs/PLATFORM.md §9 invariants 1-7, agent-server RLS, exec app-data) ==="
   setup
   local n
   for n in $(seq 1 19); do "check_${n}"; done
   if setup_apps; then
     for n in $(seq 20 25); do "check_${n}"; done
+    check_29
   else
-    for n in $(seq 20 25); do
+    for n in 20 21 22 23 24 25 29; do
       ERRORS+=("invariant 7 setup failed (see the ERROR above)")
       finish "$n" "invariant 7"
     done

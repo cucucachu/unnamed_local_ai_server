@@ -2389,6 +2389,8 @@ credential or an instance id.
   (`-<first 8 of the instance id>` appended for a second same-slug
   instance), skipped unless `apps/`, the instance dir and `ro/` are plain
   directories. `code-exec-manager` refuses a writable `/app-data` mount.
+  `scripts/verify_tenancy.sh` check 29 (M14-05) proves the copy is
+  readable, not writable, and does not include another user's data.
 - `POST /internal/hitl-approvals` (M13-02) — service auth with
   `PLATFORM_AGENT_TOKEN` (anything else `401`). Body `{"delegation",
   "instance_id", "migration_id"}` → `200 {"token": "hitl_…",
@@ -2479,12 +2481,17 @@ produces, and the spec `scripts/verify_isolation.sh` checks against:
 `user="<uid>:<personal space gid>"`, `group_add=[<other space gids>]`,
 `pids_limit=512`, one `--mount type=bind` per grant
 (`${SPACES_DIR}/<space_id>/files` → `/files/personal` or
-`/files/spaces/<slug>`, `read_only` for a viewer), command
+`/files/spaces/<slug>`, `read_only` for a viewer; since M13-02 also
+`${SPACES_DIR}/<space_id>/apps/<instance_id>/ro` →
+`/app-data/personal/<app-slug>` or `/app-data/spaces/<slug>/<app-slug>`,
+always read-only), command
 `sleep infinity`, labels `{"homeai.exec": "1", "homeai.session":
 session_id, "homeai.user": user_id, "homeai.grants": <sha256 of the
 grants>}`. Nothing else mounted; no env secrets passed in. The manager
 validates the grants before use: ids ≥ 1000, absolute normalized host
-paths, container paths only `/files/personal` or `/files/spaces/<slug>`,
+paths, container paths only `/files/personal`, `/files/spaces/<slug>`, or
+a read-only `/app-data/personal/<slug>` / `/app-data/spaces/<slug>/<slug>`
+(writable `/app-data` is refused),
 no duplicates.
 
 **Builds** (M12-04, platform only; `app/builds.py`):
@@ -3070,7 +3077,11 @@ exact §7 hardening spec):
 - **Filesystem isolation** — the root filesystem is read-only; `docker.sock`
   and agent-server's own `/app`/`/data` paths are absent; `/tmp` and
   `$HOME` are writable tmpfs; the user's writable spaces are the only
-  writable non-tmpfs (real bind) mounts.
+  writable non-tmpfs (real bind) mounts. If `/app-data` is present it is
+  read-only; B has no path to A's personal app-data. Readable / not
+  writable / no-other-user coverage of installed app databases is
+  `scripts/verify_tenancy.sh` check 29 (this suite does not install
+  grocery).
 - **Capability dropping** — every Linux capability is dropped (`CapEff`
   all-zero), and the container runs as the user's own uid, never root.
 - **Per-user exec (M11-03)** — two throwaway users, A owning a shared
@@ -3124,7 +3135,7 @@ code-exec-manager's grants handling, or the compose config of
 `agent-server`/`platform`/`db-init`. It's in `gate_full.sh`, right after
 `verify_isolation.sh`, and needs no `sudo` and no model.
 
-Three throwaway users (A owns a shared space B views; an admin) and 28
+Three throwaway users (A owns a shared space B views; an admin) and 29
 checks, grouped by `docs/PLATFORM.md` §9 invariant (and, last,
 agent-server's row-level security):
 
@@ -3141,7 +3152,15 @@ agent-server's row-level security):
    own delegation straight to the platform (the credential the agent's
    file tools send); A's file is unchanged. B's exec grants and container
    hold only B's personal space and the shared space (read-only), and B
-   can't ensure or execute in A's exec session.
+   can't ensure or execute in A's exec session. After grocery is
+   installed (after checks 1-19, so check 7's two-mount assertion stays
+   valid), check 29 (M14-05) re-ensures both exec containers: A reads
+   `/app-data/personal/grocery-list/data.sqlite` and sees its personal
+   marker; writes to that mount fail; B has no
+   `/app-data/personal/grocery-list` and A's marker is absent under B's
+   `/app-data`; viewer B reads the shared snapshot at
+   `/app-data/spaces/<space>/grocery-list/data.sqlite` and cannot write
+   it. `ro/data.sqlite` is a 1s-trailing `VACUUM INTO` copy (M13-02).
 3. **Viewer writes** (9-11): B's writes to the shared space are `403
    insufficient_role` through Caddy and with B's delegation, and fail on
    the read-only mount in B's exec container; the space is unchanged.
@@ -3188,7 +3207,8 @@ agent-server's row-level security):
    other instance's database are refused; the bundle endpoint serves
    members (the viewer too) and is `404` for non-members and their
    delegations, `401` without a session. Both instances' rows are
-   unchanged throughout.
+   unchanged throughout. Check 29 (M14-05, listed under invariant 2
+   above) is the same markers through exec `/app-data`.
 8. **agent-server's row-level security** (26-28, #194): every one of its
    7 tables in `homeai` has RLS enabled and forced and is owned by
    `agent` (6 with the `owner_only` policy, the legacy `settings` with
@@ -3407,7 +3427,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`; since M11-02 it checks the agent's `ls` sees a file put into `/personal` through that API) | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 22-check code-exec hardening and per-user exec suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
-| `scripts/verify_tenancy.sh` | M11-04: 28-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-7 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants, and (M12-08) the app sandbox holding no credentials plus app RPC/bundle scoping, and (#194) row-level security on agent-server's tables: enabled and forced, the roles' attributes, raw SQL as `agent` without `app.user_id` seeing nothing, and no user's setting surviving a pooled connection's return (see "Security model" above). Also in `gate_full.sh` and `gate_m12.sh` | After touching auth routing, the platform's auth/spaces/files/apps code, delegations, exec grants, the app host or runtime, or the agent-server/platform/db-init compose blocks |
+| `scripts/verify_tenancy.sh` | M11-04: 29-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-7 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants, and (M12-08) the app sandbox holding no credentials plus app RPC/bundle scoping, (#194) row-level security on agent-server's tables: enabled and forced, the roles' attributes, raw SQL as `agent` without `app.user_id` seeing nothing, and no user's setting surviving a pooled connection's return, and (M14-05) exec `/app-data` readable / not writable / no other user's data (see "Security model" above). Also in `gate_full.sh` and `gate_m12.sh` | After touching auth routing, the platform's auth/spaces/files/apps code, delegations, exec grants, the app host or runtime, or the agent-server/platform/db-init compose blocks |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
