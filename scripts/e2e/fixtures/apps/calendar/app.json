@@ -1,0 +1,19 @@
+{
+  "name": "Calendar",
+  "slug": "calendar",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "calendar-outline",
+    "description": "Fixture calendar that exports events for the G14 planner smoke.",
+    "permissions": {},
+    "exports": [
+      {
+        "name": "events",
+        "version": "1",
+        "tables": ["events"],
+        "actions": ["addEvent"]
+      }
+    ]
+  }
+}

@@ -1220,6 +1220,24 @@ Each is enforced below the agent and covered by an automated check
 > (a separate read-only bind, not `/files/.appdata`). Check 29 of
 > `scripts/verify_tenancy.sh` proves it is readable, not writable, and does
 > not include another user's data (invariants 2, 3, 7).
+>
+> **As built (M14-06)** — `scripts/e2e/gate_m14.sh` (GATE G14) chains the
+> M14 smokes rather than duplicating them: stack healthy (no rebuild; never
+> recreates model-runner or postgres), `app_publish_smoke.sh` (family
+> catalog install + update approval), `home_launcher_smoke.sh`, platform
+> pytest (`test_app_exports.py`, `test_system_apps.py`,
+> `test_exec_grants.py`, `test_manifest.py`), then the live scenario
+> `g14_exports_smoke.sh`. That scenario signs in as throwaway `e2e-g14-*`
+> owner + family editor (never completes bootstrap) and: installs calendar
+> (export `events` v1) in Personal and the family space; publishes planner
+> (reads that export) from Personal into the family catalog; the editor's
+> pinned install without `granted_reads` is `reads_required`, then succeeds
+> with the grant; planner RPC `getAll` on `calendar_events` sees both
+> `_space`s; a write to the view is `sql_not_allowed`; an ungranted app
+> cannot see the view. REST through Caddy (`lib/auth.sh`); no browser, no
+> extra GPU run (G13 already has one). `verify_tenancy.sh` stays where
+> `gate_full.sh` already runs it. Two-phone checks are Tier B
+> (`docs/HOST-CHECKS.md` M14). Also in `gate_full.sh`.
 
 ## 10. Roadmap
 

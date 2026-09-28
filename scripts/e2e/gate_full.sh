@@ -71,6 +71,9 @@
 #      with invariant 7)
 #   -> gate_m13.sh (M13-05: history, app tools pytest, Ask-the-agent
 #      runner smoke, and the G13 real-model grocery-list scenario)
+#   -> gate_m14.sh (M14-06: publish/install smoke, Home launcher, platform
+#      export/system-app/grants pytest, and the G14 calendar/planner
+#      scenario — no extra GPU run)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -289,6 +292,10 @@ main() {
   # app_runner_browser_smoke.sh above, plus app-tools pytest and the G13
   # real-model grocery-list scenario; same idempotent reasoning.
   run_step "gate_m13.sh"             bash "${SCRIPT_DIR}/gate_m13.sh"
+  # M14-06: gate_m14.sh re-runs app_publish_smoke.sh and
+  # home_launcher_smoke.sh above, plus platform export/system-app/grants
+  # pytest and the G14 calendar/planner scenario; same idempotent reasoning.
+  run_step "gate_m14.sh"             bash "${SCRIPT_DIR}/gate_m14.sh"
 
   print_summary
 
