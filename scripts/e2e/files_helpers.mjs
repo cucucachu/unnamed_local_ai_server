@@ -52,8 +52,9 @@ export async function deleteBestEffort(cookie, path) {
   }
 }
 
-/** A shared space owned by the cookie's user (removed with that user by
- * `deleteE2eUsers`). Returns the space (`id`, `slug`, `name`, ...). */
+/** A shared space owned by the cookie's user; remove it with
+ * `deleteE2eSpaces(slug)` (`deleteE2eUsers` does not). Returns the space
+ * (`id`, `slug`, `name`, ...). */
 export async function createSpace(cookie, slug, name) {
   return call(cookie, 'POST', `${API_BASE}/platform/spaces`, { json: { slug, name }, expect: [201] });
 }
