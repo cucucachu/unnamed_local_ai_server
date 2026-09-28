@@ -49,10 +49,10 @@ they use `db.runAsync` directly.
 - `useQuery(sql, params)` for anything shown on screen. It re-runs by
   itself when anyone changes the database. Don't copy query results into
   state.
-- `useDatabase()` gives `db.getAllAsync`, `db.getFirstAsync` and
-  `db.runAsync` (expo-sqlite's API). One statement per call; use `?`
-  placeholders with an array of values. Never build SQL by string
-  concatenation.
+- `useDatabase()` / `useSQLiteContext()` (the same hook; expo-sqlite's name
+  is an alias) give `db.getAllAsync`, `db.getFirstAsync` and `db.runAsync`
+  (expo-sqlite's API). One statement per call; use `?` placeholders with an
+  array of values. Never build SQL by string concatenation.
 - `runAction(name, params)` for anything that needs more than one
   statement.
 - `useSpace()?.role` is `'owner'`, `'editor'` or `'viewer'`. Viewers can't

@@ -37,6 +37,7 @@ export const modules: Record<string, unknown> = {
   'expo-sqlite': SDK.expoSqlite,
   '@homeai/sdk': {
     useDatabase: SDK.useDatabase,
+    useSQLiteContext: SDK.useSQLiteContext,
     useQuery: SDK.useQuery,
     runAction: SDK.runAction,
     useSpace: SDK.useSpace,

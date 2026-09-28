@@ -209,7 +209,8 @@ test('the runtime provides exactly modules.json, and the typings declare the non
   for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
   for (const m of ['react-dom', 'react-dom/client', 'react-native-web', 'fs']) assert.throws(() => req(m), /not available in the app sandbox/);
   const sdk = req('@homeai/sdk');
-  assert.deepEqual(Object.keys(sdk).sort(), ['runAction', 'useDatabase', 'useQuery', 'useSpace']);
+  assert.deepEqual(Object.keys(sdk).sort(), ['runAction', 'useDatabase', 'useQuery', 'useSQLiteContext', 'useSpace']);
+  assert.equal(sdk.useSQLiteContext, sdk.useDatabase);
   await assert.rejects(sdk.useDatabase().withTransactionAsync(async () => {}), /not available in SDK 1: put multi-statement writes in an action/);
   assert.deepEqual(Object.keys(req('expo-sqlite')).sort(), ['SQLiteProvider', 'openDatabaseAsync', 'useSQLiteContext']);
   const declared = [...fs.readFileSync(SDK_TYPES, 'utf8').matchAll(/declare module '([^']+)'/g)].map((m) => m[1]);
