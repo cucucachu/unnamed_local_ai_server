@@ -833,6 +833,15 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > `code-exec-manager` accepts a `/app-data/...` target only read-only.
 > The `execute_code` tool description says all this, and `list_apps` prints
 > each instance's path.
+>
+> **As built (M14-05):** those mounts stay a separate `/app-data/...` root
+> (not nested under the writable `/files` tree as `/files/.appdata`).
+> `scripts/verify_tenancy.sh` check 29 proves A can read its personal
+> grocery snapshot, cannot write the mount, B cannot see A's personal
+> app-data, and viewer B can read (not write) the shared instance's
+> snapshot. `scripts/verify_isolation.sh` does not install grocery; it
+> only asserts that if `/app-data` is mounted it is read-only, and that B
+> has no path to A's personal app-data.
 
 ### Build and verify
 
@@ -1206,6 +1215,11 @@ Each is enforced below the agent and covered by an automated check
    between check and use, and no move or rename replaces an entry created
    at its destination after the check (§5 "Race-free access";
    `services/platform/tests/test_races.py`).
+
+> **As built (M14-05):** exec app-data is the M13-02 `/app-data/...` root
+> (a separate read-only bind, not `/files/.appdata`). Check 29 of
+> `scripts/verify_tenancy.sh` proves it is readable, not writable, and does
+> not include another user's data (invariants 2, 3, 7).
 
 ## 10. Roadmap
 
