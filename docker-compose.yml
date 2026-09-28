@@ -9,7 +9,7 @@
 #   egress-proxy       -> M7-02 (mitmproxy filtering forward proxy) [added]
 #   web-fetch          -> M7-03 (fetch + readable-text extraction, behind egress-proxy) [added]
 #   searxng            -> M7-04 (self-hosted metasearch engine, GET-only engines) [added]
-#   db-init            -> M10-02 (one-shot: platform role + homeai_platform DB) [added]
+#   db-init            -> M10-02 (one-shot: platform role + homeai_platform DB; M11-04: agent role) [added]
 #   platform           -> M10-02 (auth, spaces, app registry, user storage) [added]
 #
 # Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
@@ -225,8 +225,14 @@ services:
     networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     depends_on:
-      postgres:
-        condition: service_healthy
+      # db-init hands the `homeai` tables to the `agent` role this connects as.
+      db-init:
+        condition: service_completed_successfully
+    # Only uv's cache (UV_CACHE_DIR) and Python's tempfiles are written at runtime.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # No data mounts (M11-02, docs/PLATFORM.md §6): the agent's file tools
     # go through the platform files API as the user, with a delegation.
     environment:
@@ -236,8 +242,10 @@ services:
       EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}
       WEB_FETCH_URL: ${WEB_FETCH_URL}
       WEB_FETCH_TOOL_MAX_CHARS: ${WEB_FETCH_TOOL_MAX_CHARS}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # The non-superuser `agent` role (M11-04, created by db-init): it can
+      # reach only this database, never `homeai_platform`.
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: ${AGENT_DB_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       # Service bearer for the platform's /internal/* routes: the bootstrap
       # admin lookup (M10-04, pre-Stage-3 threads are handed to them) and
@@ -247,7 +255,7 @@ services:
       # Only used by `tests/test_checkpointer_pg.py` (integration tests) so
       # `docker compose exec agent-server uv run pytest -m integration`
       # "just works" without hand-typing a DSN. Not read by the app itself.
-      TEST_PG_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TEST_PG_DSN: postgresql://agent:${AGENT_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
   postgres:
     image: postgres:17
@@ -267,7 +275,8 @@ services:
       retries: 20
 
   # M10-02: one-shot that idempotently creates the `platform` role and
-  # `homeai_platform` database using the superuser creds above - needed
+  # `homeai_platform` database, and (M11-04) the `agent` role that owns
+  # agent-server's tables, using the superuser creds above - needed
   # because the postgres image only runs its own init scripts on an empty
   # volume, and `pgdata` predates Stage 3. Re-runs on every `docker compose
   # up` and exits 0 when there's nothing to do; `platform` waits for it.
@@ -293,6 +302,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
       PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD}
 
   # M10-02: auth, sessions, spaces, app registry, and (from M11) all user
   # storage - docs/PLATFORM.md §3. Internal port 8100, never routed by

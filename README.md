@@ -294,8 +294,11 @@ sudo rsync -a --delete "$BACKUP_DIR/spaces/" "$SPACES_DIR/"
 sudo rsync -a --delete "$BACKUP_DIR/files/" "$FILES_DIR/"
 docker compose up -d
 
-# Postgres: gunzip the dump into a fresh/scratch database via psql
+# Postgres: gunzip the dump into a fresh/scratch database via psql, then
+# re-run db-init: it hands anything the restore left owned by the superuser
+# (e.g. a dump from before M11-04) to agent-server's `agent` role
 gunzip -c "$BACKUP_DIR/pg/homeai-<date>.sql.gz" | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+docker compose run --rm db-init
 
 # Platform database: same, into an empty homeai_platform (db-init recreates
 # the database and the `platform` role the dump's OWNER statements expect)

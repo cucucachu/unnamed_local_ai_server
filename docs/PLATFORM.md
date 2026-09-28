@@ -139,8 +139,9 @@ flowchart TB
   shared files dir.
 - **`caddy`**: `forward_auth` to the platform for every authenticated route.
 - **`db-init`** (new, one-shot): idempotently creates Postgres roles and
-  databases (`platform` role + `homeai_platform` DB; later a non-superuser
-  `agent` role) using the superuser credentials. Needed because the Postgres
+  databases (`platform` role + `homeai_platform` DB; since M11-04 the
+  non-superuser `agent` role that owns agent-server's tables) using the
+  superuser credentials. Needed because the Postgres
   image only runs init scripts on an empty volume.
 
 ### HTTP routing (Caddy)
@@ -425,6 +426,19 @@ Until then they're visible to nobody.
   threads are a later extension.)
 - **Postgres roles**: `agent-server` connects with a non-superuser role that
   can reach only its own database; the platform has its own role/DB.
+
+> **As built (M11-04):**
+> - The role is `agent` (`AGENT_DB_PASSWORD`). `db-init` gives it
+>   `CONNECT`/`TEMPORARY` on `homeai` and `USAGE`/`CREATE` on `public`, and
+>   hands it every object in `public` it doesn't own yet — on an existing
+>   volume, the tables agent-server and LangGraph created as the superuser.
+>   The database itself stays the superuser's. `PUBLIC` loses `CONNECT` on
+>   `homeai`, `homeai_platform`, `postgres` and `template1`. agent-server
+>   starts only after `db-init` succeeds.
+> - `agent-server` and `platform` run with read-only roots and a `/tmp`
+>   tmpfs; agent-server also drops every capability.
+> - `scripts/verify_tenancy.sh` checks §9 invariants 1-6 (`docs/ARCHITECTURE.md`
+>   §5 "Tenancy verification").
 - **Model**: all users share one `model-runner`; llama.cpp queues requests.
   No fair-share scheduling in this stage (D1).
 

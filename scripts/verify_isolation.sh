@@ -122,6 +122,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=e2e/lib/auth.sh
 source "${SCRIPT_DIR}/e2e/lib/auth.sh"
+# shellcheck source=e2e/lib/internal.sh
+source "${SCRIPT_DIR}/e2e/lib/internal.sh"
 
 SESSION_A="isolation-a-$$"
 SESSION_B="isolation-b-$$"
@@ -130,7 +132,6 @@ CONTAINER_B="homeai-exec-${SESSION_B}"
 SPACE="e2e-iso-$(openssl rand -hex 3)"
 MARK="iso-mark-$(openssl rand -hex 4)"
 RUNNER_NAME="verify-isolation-runner-$$"
-RUNNER_IMAGE="python:3.12-slim"
 RUNNER_STARTED=0
 
 RED=$'\033[0;31m'
@@ -161,68 +162,13 @@ fail() {
 
 # ---- REST helper (urllib inside the runner container - see header) --------
 
-# argv: method session_id action(ensure|execute|delete) auth timeout [json body]
-# auth: `delegation` (for session_id's own thread), `delegation-for:<thread>`,
-# `tampered` (a real delegation with a broken signature), or `none`.
-# Prints the manager's JSON response, `{"status": N}` for an empty 2xx, or
-# `{"http_error": N, "body": ...}`.
-PY_CALL="$(cat <<'EOF'
-import json, os, sys, urllib.error, urllib.request
-
-PLATFORM = "http://platform:8100"
-MANAGER = "http://code-exec-manager:8090"
-method, session_id, action, auth, timeout = sys.argv[1:6]
-body = sys.argv[6] if len(sys.argv) > 6 else ""
-timeout = int(timeout)
-
-
-def call(url, data=None, method="GET", headers=None, t=30):
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
-    return urllib.request.urlopen(req, timeout=t)
-
-
-def delegation(thread):
-    with call(f"{PLATFORM}/internal/auth/verify", headers={"Cookie": os.environ["ISO_COOKIE"]}) as r:
-        identity = r.headers["X-HomeAI-Identity"]
-    payload = json.dumps({"identity_token": identity, "thread_id": thread}).encode()
-    headers = {
-        "Authorization": f"Bearer {os.environ['PLATFORM_AGENT_TOKEN']}",
-        "Content-Type": "application/json",
-    }
-    with call(f"{PLATFORM}/internal/delegations", payload, "POST", headers) as r:
-        return json.loads(r.read())["token"]
-
-
-headers = {"Content-Type": "application/json"}
-if auth == "delegation":
-    headers["Authorization"] = f"Bearer {delegation(session_id)}"
-elif auth.startswith("delegation-for:"):
-    headers["Authorization"] = f"Bearer {delegation(auth.split(':', 1)[1])}"
-elif auth == "tampered":
-    head, claims, signature = delegation(session_id).split(".")
-    flipped = "A" if signature[0] != "A" else "B"
-    headers["Authorization"] = f"Bearer {head}.{claims}.{flipped}{signature[1:]}"
-
-path = f"/sessions/{session_id}" + ("" if action == "delete" else f"/{action}")
-data = body.encode() if body else (b"" if method == "POST" else None)
-try:
-    with call(MANAGER + path, data, method, headers, timeout + 20) as r:
-        out = r.read().decode()
-        sys.stdout.write(out if out else json.dumps({"status": r.status}))
-except urllib.error.HTTPError as e:
-    sys.stdout.write(json.dumps({"http_error": e.code, "body": e.read().decode()}))
-except urllib.error.URLError as e:
-    sys.stdout.write(json.dumps({"url_error": str(e.reason)}))
-EOF
-)"
-
-# $1: a|b (whose session cookie mints the delegation), then PY_CALL's argv.
+# $1: a|b (whose session cookie mints the delegation), then the argv of
+# `internal_exec_manager_call` (scripts/e2e/lib/internal.sh).
 manager_call() {
   local who="$1" cookie
   shift
   if [ "$who" = a ]; then cookie="$COOKIE_A"; else cookie="$COOKIE_B"; fi
-  ISO_COOKIE="$cookie" docker exec -e ISO_COOKIE -e PLATFORM_AGENT_TOKEN \
-    "$RUNNER_NAME" python3 -c "$PY_CALL" "$@" 2>/dev/null || true
+  internal_exec_manager_call "$cookie" "$@"
 }
 
 # argv: method path [json body]. Calls the platform's external API as the
@@ -538,10 +484,7 @@ cli() { _e2e_compose exec -T platform python -m app.cli "$@" >/dev/null; }
 
 preflight() {
   log "Resolving compose network name for 'homeai-internal' (M7-01 - where code-exec-manager lives) ..."
-  NETWORK_NAME="$(docker compose config --format json | python3 -c "
-import json, sys
-print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
-")"
+  NETWORK_NAME="$(internal_network)"
   if ! docker network ls --format '{{.Name}}' | grep -qx "$NETWORK_NAME"; then
     log "ERROR: resolved network '${NETWORK_NAME}' not found via 'docker network ls' - is the stack up?"
     exit 1
@@ -606,17 +549,11 @@ setup_users() {
 
 start_runner() {
   log "Starting runner container (${RUNNER_NAME}) on ${NETWORK_NAME} to drive the platform + manager REST APIs..."
-  docker run -d --rm --name "$RUNNER_NAME" --network "$NETWORK_NAME" "$RUNNER_IMAGE" sleep infinity >/dev/null
   RUNNER_STARTED=1
-  local tries=0
-  while ! docker exec "$RUNNER_NAME" true >/dev/null 2>&1; do
-    tries=$((tries + 1))
-    if [ "$tries" -ge 30 ]; then
-      log "ERROR: runner container never became exec-able"
-      exit 1
-    fi
-    sleep 0.5
-  done
+  if ! internal_runner_start "$RUNNER_NAME" "$NETWORK_NAME"; then
+    log "ERROR: runner container never became exec-able"
+    exit 1
+  fi
   log "OK: runner is exec-able"
 }
 
@@ -624,7 +561,7 @@ cleanup() {
   if [ "$RUNNER_STARTED" = "1" ]; then
     [ -n "${COOKIE_A:-}" ] && manager_call a DELETE "$SESSION_A" delete delegation 10 >/dev/null
     [ -n "${COOKIE_B:-}" ] && manager_call b DELETE "$SESSION_B" delete delegation 10 >/dev/null
-    docker rm -f "$RUNNER_NAME" >/dev/null 2>&1 || true
+    internal_runner_stop
   fi
   # Defensive: in case a DELETE never landed.
   docker rm -f "$CONTAINER_A" "$CONTAINER_B" >/dev/null 2>&1 || true

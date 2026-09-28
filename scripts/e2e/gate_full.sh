@@ -7,7 +7,10 @@
 #   gate_m2.sh -> tenancy_threads_smoke.sh (M10-04)
 #   -> agent_tenancy_smoke.sh (M11-02: the agent's file tools per user/role)
 #   -> persistence_smoke.sh
-#   -> gate_m3.sh -> exec_crossview_smoke.sh -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
+#   -> gate_m3.sh -> exec_crossview_smoke.sh -> gate_m4.sh -> verify_isolation.sh
+#   -> verify_tenancy.sh (M11-04: docs/PLATFORM.md §9 invariants 1-6 across
+#      Caddy, the files API, delegations, exec, and the compose config)
+#   -> verify_network.sh
 #   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
 #      after it signs in as a throwaway CLI user via auth_helpers.mjs)
 #   -> admin_browser_smoke.sh (M10-07: Settings invites/spaces/TOTP)
@@ -211,6 +214,7 @@ main() {
   run_step "exec_crossview_smoke.sh" bash "${SCRIPT_DIR}/exec_crossview_smoke.sh"
   run_step "gate_m4.sh"              bash "${SCRIPT_DIR}/gate_m4.sh"
   run_step "verify_isolation.sh"     bash "${REPO_ROOT}/scripts/verify_isolation.sh"
+  run_step "verify_tenancy.sh"       bash "${REPO_ROOT}/scripts/verify_tenancy.sh"
   run_step "verify_network.sh"       sudo bash "${REPO_ROOT}/scripts/verify_network.sh"
   run_step "auth_browser_smoke.sh"   bash "${SCRIPT_DIR}/auth_browser_smoke.sh"
   run_step "admin_browser_smoke.sh"  bash "${SCRIPT_DIR}/admin_browser_smoke.sh"

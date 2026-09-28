@@ -594,12 +594,22 @@ what another doc says it should be.
   model" below.
 - **Mounts**: none (M11-02; it used to bind-mount `${FILES_DIR}` at
   `/data/files`).
-- **Runs as**: `user: "${HOMEAI_UID}:${HOMEAI_GID}"` (non-root).
+- **Runs as**: `user: "${HOMEAI_UID}:${HOMEAI_GID}"` (non-root),
+  `read_only: true` with a `/tmp` tmpfs (uv's `UV_CACHE_DIR` and Python
+  tempfiles are the only runtime writes), `cap_drop: [ALL]`,
+  `no-new-privileges` (M11-04). Waits for `db-init`
+  (`service_completed_successfully`), which hands it its tables.
+- **Postgres role (M11-04)**: `agent` — not a superuser, owns every object
+  in `homeai`'s `public` schema, and can't connect to `homeai_platform`,
+  `postgres` or `template1` (see `db-init` below). Compose sets
+  `POSTGRES_USER=agent` and `POSTGRES_PASSWORD=${AGENT_DB_PASSWORD}` for
+  it; the superuser password never reaches this container.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings` class): `MODEL_BASE_URL`,
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
-  `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05), `POSTGRES_USER`,
-  `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PLATFORM_AGENT_TOKEN` (M10-04;
+  `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05), `POSTGRES_USER`
+  (`agent`), `POSTGRES_PASSWORD` (from `AGENT_DB_PASSWORD`),
+  `POSTGRES_DB`, `PLATFORM_AGENT_TOKEN` (M10-04;
   service bearer for `GET /internal/bootstrap-admin` and, since M11-02,
   `/internal/delegations*` — unset means pre-M10 threads/settings stay
   unassigned and every chat socket closes `1011`, with a startup warning;
@@ -773,9 +783,11 @@ what another doc says it should be.
 ### `postgres`
 
 - **Purpose**: stores LangGraph checkpoints (thread/message state) and
-  thread metadata (database `homeai`, superuser `POSTGRES_USER`), plus
-  the platform service's own database `homeai_platform` (owned by role
-  `platform`, created by `db-init` below — M10-02).
+  thread metadata (database `homeai`, whose objects are owned by role
+  `agent` since M11-04), plus the platform service's own database
+  `homeai_platform` (owned by role `platform` — M10-02). Both roles are
+  created by `db-init` below; the superuser `POSTGRES_USER` is used only by
+  `db-init`, backups, and the e2e scripts' cleanup.
 - **Image/base**: `postgres:17`, official/unmodified.
 - **Published port**: none.
 - **Internal port**: `5432`.
@@ -797,30 +809,50 @@ what another doc says it should be.
   roles/databases later services need, using the existing superuser
   credentials. Exists because the `postgres` image only runs its own
   `/docker-entrypoint-initdb.d` hook on an empty volume, and `pgdata`
-  predates Stage 3. Today it creates role `platform` (LOGIN, no other
+  predates Stage 3. It creates role `platform` (LOGIN, no other
   attributes) and database `homeai_platform` owned by it, with `CONNECT`
   revoked from `PUBLIC`. Every run re-sets the role's password from
   `PLATFORM_DB_PASSWORD` (so rotating it in `.env` + re-running is enough)
   and re-asserts the database owner. `CREATE DATABASE` can't run inside a
   transaction/`DO` block, so the script uses psql's `\gexec`.
+  Since M11-04 it also creates role `agent` (same attributes, password
+  from `AGENT_DB_PASSWORD`) for agent-server. The `homeai` database
+  (`POSTGRES_DB`) stays owned by the superuser, so `agent` can't drop or
+  alter it; `agent` gets `CONNECT`/`TEMPORARY` on it and `USAGE`/`CREATE`
+  on schema `public`, and every table, sequence, view, type and routine in
+  `public` not yet owned by `agent` is handed to it with `ALTER ... OWNER`
+  (rows are untouched; owned sequences and indexes follow their table).
+  On an existing volume that's everything agent-server and LangGraph's
+  migrations created as the superuser before M11-04; later runs find
+  nothing to do. `PUBLIC` also loses `CONNECT` on `homeai`, `postgres` and
+  `template1`, so `agent` and `platform` each reach only their own
+  database. The ownership changes wait at most 60 s for a lock
+  (`lock_timeout`), so a stuck lock fails the run instead of hanging it.
 - **Image/base**: `postgres:17` (same as `postgres`, so `psql` matches the
   server), entrypoint overridden to `bash /db-init.sh`. Script:
   `infra/postgres/db-init.sh`, bind-mounted read-only.
 - **Lifecycle**: `restart: "no"`; `depends_on: postgres (service_healthy)`.
-  Runs (and exits 0) on every `docker compose up`; `platform` waits for it
-  via `service_completed_successfully`. Manual re-run: `docker compose run
+  Runs (and exits 0) on every `docker compose up`; `platform` and (M11-04)
+  `agent-server` wait for it via `service_completed_successfully`. Manual re-run: `docker compose run
   --rm db-init`.
 - **Network**: `homeai-internal` only.
 - **Runs as**: `user: postgres`, `read_only: true` + `tmpfs: /tmp`,
   `cap_drop: [ALL]`, `no-new-privileges`.
 - **Env vars consumed**: `PGHOST=postgres`, `PGUSER`/`PGPASSWORD`/
   `PGDATABASE` (from `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
-  `PLATFORM_DB_PASSWORD`. Fails loudly if `PLATFORM_DB_PASSWORD` is empty.
+  `PLATFORM_DB_PASSWORD`, `AGENT_DB_PASSWORD`. Fails loudly if either
+  password is empty, or if `POSTGRES_DB` names `postgres`, a template, or
+  `homeai_platform`.
 - **Tests**: `services/platform/tests/test_db_init.py` runs the script
   exactly as compose does (same image, read-only, no caps, `user: postgres`)
   against the test session's throwaway Postgres (superuser `homeai`, already
   initialized): repeat runs, role attributes, DB owner, `PUBLIC` can't
-  connect, password rotation, migrations as the `platform` role.
+  connect, password rotation, migrations as the `platform` role; and for
+  `agent` (M11-04): attributes, each role refused by the others' databases,
+  superuser-owned tables/sequences/identity columns/types/functions with
+  rows handed over intact and usable (insert, `ALTER TABLE ... ADD
+  COLUMN`, `CREATE INDEX`, new tables), `agent` unable to drop or take
+  over a database, and the missing-password/wrong-database refusals.
 
 ### `platform`
 
@@ -2444,56 +2476,113 @@ it. Full per-configuration result tables and the client approach:
 
 ### Threat model
 
-Three real trust boundaries this system has, in order of how much this
-design actually protects against them:
+Since Stage 3 this is a multi-user system: everyone who uses the box has
+an account, and the design assumes the people sharing it (a household)
+don't all trust each other with everything. The `platform` service is the
+trusted kernel for identity and storage, and every boundary below is
+enforced *below* the agent, so a steered model can do no more than its
+signed-in user could by hand. The contract is `docs/PLATFORM.md` §9
+("Security invariants"); `scripts/verify_tenancy.sh` checks invariants 1-6
+against the live stack ("Tenancy verification (M11-04)" below).
 
-1. **Trusted LAN.** The whole product assumes it's reachable only from a
-   small, trusted home network. That's enforced by network topology (only
-   `caddy` publishes ports, `ufw` + the `DOCKER-USER` iptables rules
-   LAN-scope 80 and 443). Since M10-04 every API and WebSocket route
-   except health and the sign-in endpoints also requires a platform
-   session (Caddy `forward_auth`, identity re-verified by agent-server),
-   and threads/settings are per user — but files, media, and code
-   execution are shared by every signed-in user, and none of this is
-   hardened for internet exposure. Local HTTPS (`https://homeai.local`,
-   Caddy `tls internal`) is confidentiality on the LAN (and a browser
-   secure context); HTTP on `:80` remains available on purpose, so a
-   session cookie on `:80` crosses the LAN in the clear (see
-   `docs/NETWORKING.md`).
-2. **No outbound internet access, by default — and when Stage 2 grants it,
-   it's read-only and filtered by a proxy, not trusted client code.**
-   "No internet" is the default for every container, enforced at the
-   network layer, not by convention — see "Network segmentation (M7-01)"
-   below. The one exception, `egress-proxy` (M7-02), is a filtering MITM
-   proxy specifically so this guarantee doesn't depend on `web-fetch`'s
-   own `/fetch` (M7-03) or `searxng`'s outbound engine queries backing
-   `/search` (M7-04) being bug-free: "agent can read the public web;
-   cannot write to it; cannot reach the LAN via the proxy" — see "Egress
-   proxy (M7-02)" below for exactly how. This is also the guarantee behind
-   README.md's "Guiding principles" caveat that search depends on public
-   search engines answering SearXNG's own queries: SearXNG is not a
-   third-party *service* this stack depends on (it's self-hosted, runs
-   locally, no API key/hosted search backend involved) — but the actual
-   search results it returns necessarily come from third-party *websites*
-   answering its queries, the same trust relationship `/fetch` already has
-   with any page the agent asks it to read.
-3. **Untrusted model output.** Everything the model says — including tool
-   names, tool-call arguments, and file paths — has to be treated as
-   attacker-or-hallucination-influenced input, not as trusted instruction.
-   The path-traversal guard ("Contracts" above) exists specifically
-   because the model can be prompted (by a user, or by content it reads
-   from a file) into requesting a path that tries to escape a space.
-   Since M11-02 the agent's file tools also carry only its user's
-   delegation, so a steered model can reach no more than that user
-   could in the Files tab (and never admin or membership actions); the
-   system prompt tells it shared-space content is data, not
-   instructions.
-4. **Untrusted executed code.** The `execute_code` tool runs arbitrary
-   shell/Python/etc. the model asked for — genuinely untrusted code by
-   construction, since a user (or content the model summarized) can steer
-   what gets run. This is the boundary the isolation suite below exists
-   to verify: the exec container runs as its user and can touch only that
-   user's spaces (viewer spaces read-only), nothing else.
+What the design defends against, and how:
+
+1. **Unauthenticated clients and other signed-in users.** Every API and
+   WebSocket route except `/api/health` and `/api/auth/*` (sign-in,
+   setup, invite accept) needs a platform session: Caddy's `forward_auth`
+   asks `/internal/auth/verify`, removes any client-supplied
+   `X-HomeAI-Identity`, and sets it from the platform's answer — a
+   short-lived Ed25519 JWT (`act=user`) that `agent-server` and the
+   platform verify against the platform's JWKS (`iss`, `aud`, `exp`) and
+   never trust unverified. The platform's `/internal/*` routes are never
+   routed by Caddy. Sessions are opaque, stored hashed, revocable, and
+   sliding; logins are rate-limited per username and client IP.
+   - Threads, checkpoints, settings and turn stats belong to a user;
+     agent-server checks ownership on every REST and WebSocket call, and a
+     foreign thread looks exactly like a nonexistent one.
+   - Files live in spaces (a personal space per user, shared spaces with
+     owner/editor/viewer members). One authorization helper decides every
+     access — non-members get `404`, viewers can't write — and the
+     platform reaches space content only through directory fds, so a
+     symlink or directory swapped in by a member can't redirect it
+     (`docs/PLATFORM.md` §5 "Race-free access").
+   - Admins manage users, invites and shared-space membership only in
+     person (`act=user`) and inside a 5-minute step-up window, and gain no
+     access to space data.
+2. **The agent acting for a user (untrusted model output).** Everything
+   the model says — tool names, tool-call arguments, file paths — is
+   attacker-or-hallucination-influenced: a user, or content the model
+   read, can steer it (the system prompt tells it shared-space content is
+   data, not instructions). So an agent run carries only a *delegation*
+   (`act=agent`, bound to its thread, 15 minutes, renewed only while the
+   user's session is active), kept in the run config and never in the
+   prompt, the messages, or the checkpoints. Its file tools call the
+   platform files API with that delegation, where the same path guard and
+   role checks apply as in the Files tab (the path-traversal guard in
+   "Contracts" above exists for exactly this). `act=agent` is refused by
+   every admin, auth, session, TOTP, profile, directory and
+   membership-management endpoint, whatever the user's role.
+   `agent-server` itself holds no user data: no files mount (M11-02), a
+   read-only root filesystem, and (M11-04) a Postgres connection as the
+   non-superuser `agent` role, which owns only `homeai`'s tables and can't
+   connect to `homeai_platform` — it has no platform database credentials
+   at all.
+3. **Code the agent runs (untrusted executed code).** `execute_code` runs
+   whatever shell/Python/etc. the model asked for — genuinely untrusted by
+   construction. `code-exec-manager`, the only holder of `docker.sock`,
+   requires the run's delegation on every call and asks the platform for
+   *exec grants*; the container runs as the user's uid with their space
+   gids, binds exactly the spaces they belong to (viewer spaces
+   read-only), and keeps `network_mode: none`, every capability dropped, a
+   read-only root, resource limits and no environment. A session container
+   labelled for another user is refused, never reused. "Isolation
+   verification (M4-05)" below is the check.
+4. **The network.** LAN-only by topology: only `caddy` publishes ports
+   (80 and 443), and `ufw` plus the `DOCKER-USER` iptables rules scope
+   them to the LAN (`docs/NETWORKING.md`; checked by
+   `scripts/verify_network.sh`). Remote access is planned over WireGuard
+   (M15), not by exposing the box. Local HTTPS (`https://homeai.local`,
+   Caddy `tls internal`) is confidentiality on the LAN and a browser
+   secure context; HTTP on `:80` stays available on purpose, so a session
+   cookie used on `:80` crosses the LAN in the clear — prefer HTTPS.
+5. **No outbound internet by default — and where Stage 2 grants it,
+   read-only and filtered by a proxy, not by trusted client code.** No
+   container except `caddy` and `egress-proxy` has a route out, enforced
+   at the network layer ("Network segmentation (M7-01)" below).
+   `egress-proxy` (M7-02) is a filtering MITM proxy so the guarantee
+   doesn't depend on `web-fetch`'s `/fetch` (M7-03) or `searxng`'s
+   outbound engine queries behind `/search` (M7-04) being bug-free: "the
+   agent can read the public web, cannot write to it, and cannot reach the
+   LAN via the proxy" ("Egress proxy (M7-02)" below). Search results come
+   from third-party websites answering SearXNG's queries — the same trust
+   relationship `/fetch` has with any page it reads.
+
+**Trusted, by design**: the host and anyone with root or `docker` group
+access on it (host Docker is root; the recovery CLI is the physical-access
+path), the `platform` service (root in its container with only the
+`CHOWN`/`DAC_OVERRIDE`/`FOWNER`/`FSETID` capabilities, to assign file
+ownership), the Postgres superuser (used by `db-init`, backups and e2e
+cleanup only), `code-exec-manager` (a compromise of the `docker.sock`
+holder is host root — a socket proxy is a documented fast-follow), Caddy,
+and the model weights.
+
+**Known limits, stated rather than hidden**:
+
+- Thread tenancy is enforced by agent-server's ownership checks, not by
+  Postgres: the `agent` role can read every user's threads and
+  checkpoints in `homeai` (no row-level security), so a compromised
+  agent-server process would see all chat history — though still no
+  files, no platform database, and no admin actions.
+- All users share one `model-runner`; there's no fair-share scheduling
+  (D1), so one user can slow others down, and request timing isn't
+  isolated.
+- Apps (M12/M13): invariant 7 (sandboxed apps hold no credentials, RPC
+  touches only the instance's database) and the app RPC/`app_sql` paths
+  of invariants 2 and 3 get their checks with those milestones.
+- The egress proxy's DNS-rebinding window ("Egress proxy (M7-02)" below).
+- Nothing is hardened for public internet exposure yet (M15's opt-in
+  public mode adds passkey-only login and LAN/VPN-only enrollment and
+  admin).
 
 ### Isolation verification (M4-05)
 
@@ -2565,6 +2654,57 @@ manager's REST API (see the script's own header comment for why a runner
 container is needed at all — `code-exec-manager` publishes no host port)
 are all cleaned up in an `EXIT` trap, as are the throwaway users and
 their spaces. It needs no `sudo`.
+
+### Tenancy verification (M11-04)
+
+Run `scripts/verify_tenancy.sh` after any change to Caddy's auth routing,
+the platform's auth/spaces/files code, delegations, `PlatformFilesBackend`,
+code-exec-manager's grants handling, or the compose config of
+`agent-server`/`platform`/`db-init`. It's in `gate_full.sh`, right after
+`verify_isolation.sh`, and needs no `sudo` and no model.
+
+Three throwaway users (A owns a shared space B views; an admin) and 19
+checks, grouped by `docs/PLATFORM.md` §9 invariant:
+
+1. **Sessions and identity headers** (1-4): without a session every
+   `/api/*`, `/api/platform/*` route and the chat socket is `401` at Caddy,
+   even carrying A's genuine identity token, a forged one, or A's
+   delegation (as the header or as `Authorization: Bearer`); with B's
+   session those extras are replaced and every call is B's; the platform's
+   `/internal/*` routes aren't reachable through Caddy.
+2. **B vs A's personal space** (5-8): every files API operation on A's
+   personal space (list, stat, download, stream, read, write, edit, mkdir,
+   copy, move, delete, `..` traversal, grep, glob, the space, its members
+   and app instances) is `404` for B — through Caddy as B, and with B's
+   own delegation straight to the platform (the credential the agent's
+   file tools send); A's file is unchanged. B's exec grants and container
+   hold only B's personal space and the shared space (read-only), and B
+   can't ensure or execute in A's exec session.
+3. **Viewer writes** (9-11): B's writes to the shared space are `403
+   insufficient_role` through Caddy and with B's delegation, and fail on
+   the read-only mount in B's exec container; the space is unchanged.
+4. **Agent runs never administer** (12): the stepped-up admin's own
+   session lists users (control); the same admin's delegation gets `403
+   agent_not_allowed` from admin users/spaces/invites (including making B
+   an admin), session listing and revocation, TOTP, profile edits, space
+   creation and the user directory, and owner A's delegation from adding,
+   promoting, or renaming; step-up refuses it, a delegation can't be
+   exchanged for another, and nothing changed.
+5. **agent-server's footprint** (13-16): compose and the live container
+   show no mounts and none of the superuser, platform-database or exec
+   secrets; agent-server's own credentials are role `agent` (not a
+   superuser) and are refused by `homeai_platform`, `postgres` and
+   `template1`; every live connection from agent-server is `agent` on
+   `homeai`.
+6. **Sockets, roots, exec containers** (17-19): only code-exec-manager
+   mounts `docker.sock`; `agent-server` and `platform` have read-only
+   roots in compose and live; B's exec container has `network_mode: none`,
+   only `lo`, no socket, and binds exactly its exec grants.
+
+Same conventions as the isolation suite: every failure is printed and the
+rest still run, the exit code is 1 if anything failed, and everything it
+creates (users, personal and shared spaces and their directories, exec
+sessions and containers, the runner container) is deleted on exit.
 
 ### Network segmentation (M7-01)
 
@@ -2709,7 +2849,6 @@ M7-03; the recipe below is what it actually does, not a plan):**
 - Docker-socket-proxy in front of code-exec-manager's docker.sock access.
 - Public ACME certificates / a real domain (local HTTPS via Caddy's
   internal CA shipped in M9-05; HTTP is not redirected and HSTS is off).
-- Simple shared-password auth at the proxy if the network trust model changes.
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
 - EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).
@@ -2764,6 +2903,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`; since M11-02 it checks the agent's `ls` sees a file put into `/personal` through that API) | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 22-check code-exec hardening and per-user exec suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
+| `scripts/verify_tenancy.sh` | M11-04: 19-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-6 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants (see "Security model" above). Also in `gate_full.sh` | After touching auth routing, the platform's auth/spaces/files code, delegations, exec grants, or the agent-server/platform/db-init compose blocks |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
