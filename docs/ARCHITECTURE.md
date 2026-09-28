@@ -1272,7 +1272,7 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
   last assistant message.
 - `GET /api/threads/{id}/state` (M8-03) → `200 {"pending_approval":
   {"interrupt_id": str, "actions": [{"tool_call_id": str, "name": str,
-  "category": "file"|"exec"|"plan"|"web"|"other", "args": {},
+  "category": "file"|"exec"|"plan"|"web"|"app"|"other", "args": {},
   "description": str}]} | null}` — same payload as the live
   `approval_request` frame (minus the frame's `type` envelope). Derived
   from the checkpointer's pending interrupt (no extra storage). The
@@ -1428,12 +1428,12 @@ Server → client, in order within a turn:
 {"type": "reasoning", "content": "str"}                   // M8-07: thought delta; not persisted to history
 {"type": "token", "content": "str"}                       // one per streamed model token chunk
 {"type": "tool_start", "tool_call_id": "str", "name": "str",
- "category": "file"|"exec"|"plan"|"web"|"other", "args": {}}     // args truncated to 500 chars/value
+ "category": "file"|"exec"|"plan"|"web"|"app"|"other", "args": {}}     // args truncated to 500 chars/value
 {"type": "tool_end", "tool_call_id": "str", "name": "str",
  "status": "success"|"error", "result_preview": "str"}     // truncated to 2000 chars
 {"type": "approval_request", "interrupt_id": "str",
  "actions": [{"tool_call_id": "str", "name": "str",
-              "category": "file"|"exec"|"plan"|"web"|"other",
+              "category": "file"|"exec"|"plan"|"web"|"app"|"other",
               "args": {}, "description": "str"}]}           // args truncated like tool_start
 {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval",
  "duration_ms": int}   // M9-02: elapsed since this turn's turn_start
@@ -1449,6 +1449,17 @@ when the turn paused on one or more mutating tool calls (`write_file`,
 gated per turn by `SettingsStore.hitl_enabled` (read at the start of every
 fresh and resumed turn into `configurable.hitl_enabled`); with HITL off
 those four tools run without an interrupt, same as any other tool.
+
+App tools (M13-02, category `app`) raise their own interrupts from inside
+the call, after its `tool_start` (and no `tool_end` for the paused call);
+the resumed call sends `tool_start` again with the same `tool_call_id`.
+`approve_migration` always asks; `app_sql` writes and `app_action` in a
+shared space ask when HITL is on. Their `args` carry `space` (`/personal`
+or `/spaces/<slug>`) plus `sql`, `name` + `params`, or `migration_id` +
+`steps`. Several interrupts in one step (parallel tool calls) arrive as
+one `approval_request` with one action each, answered by one
+`approval_response`. A rejected app tool still runs to report the
+rejection, so a `tool_start`/`tool_end` does follow for it.
 
 `reasoning` frames (M8-07) are emitted from `on_chat_model_stream` chunks
 whose `additional_kwargs` carry `reasoning_content` (surfaced by
@@ -2159,7 +2170,7 @@ or `superseded`.
 |---|---|---|---|
 | `GET …/instances/{id}/migrations` | read | `200 {"migrations": [Migration]}` — newest 50 | space errors |
 | `POST …/instances/{id}/migrate` | write | `200 Migration`: `up_to_date`; `applied` when no step is destructive; else `pending` (any older pending one becomes `superseded`) | `422 invalid_schema` + `diagnostics` (missing or unreadable `schema.sql`, a statement the scratch authorizer refused, SQL errors); `422 migration_failed` + `migration` (status `failed`, `error`, the snapshot kept); `409 pinned_versions_unsupported` |
-| `POST …/migrations/{mid}/approve` | write | `200 Migration` `applied` | `404 not_found` (not this instance's); `409 migration_not_pending`; `409 plan_changed` (re-planning now gives other steps; the row becomes `superseded`, call `migrate` again); `422 migration_failed` |
+| `POST …/migrations/{mid}/approve` | write; an `act=agent` caller also sends `X-HomeAI-HITL-Approval` (M13-02) | `200 Migration` `applied` | `403 hitl_approval_required` (agent without a valid marker, checked first); `404 not_found` (not this instance's); `409 migration_not_pending`; `409 plan_changed` (re-planning now gives other steps; the row becomes `superseded`, call `migrate` again); `422 migration_failed` |
 | `POST …/migrations/{mid}/reject` | write | `200 Migration` `rejected` | `404 not_found`, `409 migration_not_pending` |
 
 Nothing migrates on install. A successful build migrates every live
@@ -2303,7 +2314,23 @@ credential or an instance id.
   that doesn't verify, has no `thr`, or whose session is revoked or user
   disabled → `401 unauthenticated`; `SPACES_HOST_DIR` unset → `500
   exec_unconfigured`. Read from the database on every call, so a
-  membership change applies to the next exec call.
+  membership change applies to the next exec call. Since M13-02 also one
+  read-only mount per live app instance in those spaces, viewers
+  included: `${SPACES_HOST_DIR}/<space_id>/apps/<instance_id>/ro` →
+  `/app-data/personal/<app-slug>` or `/app-data/spaces/<slug>/<app-slug>`
+  (`-<first 8 of the instance id>` appended for a second same-slug
+  instance), skipped unless `apps/`, the instance dir and `ro/` are plain
+  directories. `code-exec-manager` refuses a writable `/app-data` mount.
+- `POST /internal/hitl-approvals` (M13-02) — service auth with
+  `PLATFORM_AGENT_TOKEN` (anything else `401`). Body `{"delegation",
+  "instance_id", "migration_id"}` → `200 {"token": "hitl_…",
+  "expires_in_s": 60}`, a single-use marker for `POST
+  …/migrations/{mid}/approve` from that delegation's user, session and
+  thread, for that instance and migration only (PLATFORM.md §7 "Agent
+  tools for apps"). Bad delegation `401 unauthenticated`; the user can't
+  write the instance `403 insufficient_role` / `404 not_found`; unknown
+  migration `404`; not pending `409 migration_not_pending`. Held in
+  memory: a platform restart invalidates every marker.
 
 **Delegation contract** (`app/core/delegations.py`; agent-server side
 `app/core/delegation.py`). A delegation is a platform JWT (format below)

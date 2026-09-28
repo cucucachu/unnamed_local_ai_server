@@ -94,6 +94,10 @@ def make_execute_code_tool(settings: Settings):
         Nothing else under /files is writable. Symlinks you create here need relative targets
         (or none): the file tools don't follow absolute /files/... targets. The container has
         NO network access.
+        Installed apps' data is a read-only SQLite copy (refreshed about a second after each
+        change) at /app-data/personal/<app-slug>/data.sqlite and
+        /app-data/spaces/<slug>/<app-slug>/data.sqlite (list_apps shows each path); open it
+        read-only, e.g. sqlite3.connect("file:<path>?mode=ro&immutable=1", uri=True).
         Installed: Python 3 with pandas/numpy/pillow/matplotlib/openpyxl/pypdf, Node.js, git,
         ffmpeg, imagemagick, pandoc, ripgrep, jq. You cannot install packages. State in /tmp
         and $HOME is ephemeral; only the user's files persist. Long jobs: raise

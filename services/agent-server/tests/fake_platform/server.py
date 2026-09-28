@@ -1,4 +1,5 @@
-"""ASGI stand-in for the platform's `/internal/delegations*` and `/api/platform/files*`.
+"""ASGI stand-in for the platform's `/internal/delegations*`, `/api/platform/files*`,
+`/api/platform/{spaces,apps}*` and `/internal/hitl-approvals`.
 
 Scripted by a `FakePlatform` (`scripting.py`); mirrors
 `tests/fake_web_fetch/server.py`'s pattern.
@@ -7,6 +8,7 @@ Scripted by a `FakePlatform` (`scripting.py`); mirrors
 from __future__ import annotations
 
 import fnmatch
+import json
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
@@ -230,5 +232,190 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
             if fnmatch.fnmatch(rel, body["pattern"])
         ]
         return JSONResponse({"matches": matches, "truncated": False, "truncation_reason": None})
+
+    # --- apps (M13-02) ---------------------------------------------------------------
+
+    def _who(request: Request) -> Minted:
+        who = fake.principal(_bearer(request))
+        if who is None:
+            raise _error(401, "unauthenticated")
+        return who
+
+    def _space(who: Minted, space_id: str) -> dict:
+        space = next((s for s in fake.spaces_for(who.user_id) if s["id"] == space_id), None)
+        if space is None:
+            raise _error(404, "not_found")
+        return space
+
+    def _instance(who: Minted, instance_id: str) -> tuple[dict, dict]:
+        inst = next((i for i in fake.instances if i["id"] == instance_id), None)
+        if inst is None:
+            raise _error(404, "not_found")
+        return inst, _space(who, inst["space_id"])
+
+    def _app_out(app: dict) -> dict:
+        return {k: v for k, v in app.items() if k != "source_key"}
+
+    def _public_space(space: dict) -> dict:
+        return {k: v for k, v in space.items() if k != "key"}
+
+    def _public_instance(inst: dict) -> dict:
+        return {k: v for k, v in inst.items() if k != "space_key"}
+
+    @app.get("/api/platform/spaces")
+    async def list_spaces(request: Request) -> JSONResponse:
+        who = _who(request)
+        return JSONResponse({"spaces": [_public_space(s) for s in fake.spaces_for(who.user_id)]})
+
+    @app.get("/api/platform/spaces/{space_id}/instances")
+    async def list_instances(request: Request, space_id: str) -> JSONResponse:
+        _space(_who(request), space_id)
+        found = [_public_instance(i) for i in fake.instances if i["space_id"] == space_id]
+        return JSONResponse({"instances": found})
+
+    @app.post("/api/platform/spaces/{space_id}/instances")
+    async def install(request: Request, space_id: str) -> JSONResponse:
+        space = _space(_who(request), space_id)
+        if space["role"] == "viewer":
+            raise _error(403, "insufficient_role")
+        body = await request.json()
+        app_ = next((a for a in fake.apps if a["id"] == body["app_id"]), None)
+        if app_ is None:
+            raise _error(404, "not_found")
+        return JSONResponse(_public_instance(fake.install(app_, space["key"])), status_code=201)
+
+    @app.get("/api/platform/apps")
+    async def list_apps(request: Request) -> JSONResponse:
+        who = _who(request)
+        keys = {s["key"] for s in fake.spaces_for(who.user_id)}
+        installed = {i["app_id"] for i in fake.instances if i["space_key"] in keys}
+        out = []
+        for a in fake.apps:
+            if a["source_key"] in keys:
+                out.append(_app_out(a))
+            elif a["id"] in installed:
+                out.append(_app_out(a) | {"source_path": None, "working_version": None})
+        return JSONResponse({"apps": out})
+
+    @app.post("/api/platform/apps")
+    async def register(request: Request) -> JSONResponse:
+        body = await request.json()
+        place = _place(request, body["source_path"])
+        place.require_write()
+        raw = place.tree.get(f"{place.rel}/app.json")
+        if raw is None:
+            raise _error(422, "invalid_package", "app.json is missing")
+        manifest = json.loads(raw)
+        app_ = fake.add_app(place.key, body["source_path"], manifest)
+        return JSONResponse(
+            {"app": _app_out(app_), "valid": True, "diagnostics": []}, status_code=201
+        )
+
+    @app.post("/api/platform/apps/{app_id}/build")
+    async def build(request: Request, app_id: str) -> JSONResponse:
+        who = _who(request)
+        app_ = next((a for a in fake.apps if a["id"] == app_id), None)
+        if app_ is None:
+            raise _error(404, "not_found")
+        place = _Place(fake, who, app_["source_path"])
+        place.require_write()
+        prefix = place.rel + "/"
+        files = {r[len(prefix) :]: d for r, d in place.tree.items() if r.startswith(prefix)}
+        fake.builds.append(app_id)
+        diagnostics = fake.builder(app_, files)
+        if diagnostics:
+            return JSONResponse(
+                {"app": _app_out(app_), "ok": False, "build": None, "diagnostics": diagnostics}
+            )
+        manifest = json.loads(files["app.json"])
+        commit = f"{len(fake.builds):07x}" + "0" * 33
+        app_["working_version"] = {
+            "version": manifest.get("version"), "commit": commit, "manifest": manifest,
+        }  # fmt: skip
+        migrations = []
+        for inst in fake.instances:
+            if inst["app_id"] != app_id:
+                continue
+            inst["app"]["version"] = manifest.get("version")
+            planned = fake.next_migration.pop(inst["id"], None)
+            if planned is None:
+                current = fake.migration(inst["id"], "up_to_date", steps=[]) | {"id": None}
+                migrations.append({"instance_id": inst["id"], "migration": current, "error": None})
+                continue
+            for older in fake.migrations[inst["id"]]:
+                if older["status"] == "pending":
+                    older["status"] = "superseded"
+            fake.migrations[inst["id"]].append(planned)
+            migrations.append({"instance_id": inst["id"], "migration": planned, "error": None})
+        return JSONResponse(
+            {
+                "app": _app_out(app_),
+                "ok": True,
+                "build": {"id": f"b-{len(fake.builds)}", "duration_ms": 1234,
+                          "bundle_path": "bundle.js", "bundle_bytes": 10, "commit": commit},
+                "diagnostics": [],
+                "migrations": migrations,
+            }
+        )  # fmt: skip
+
+    @app.post("/api/platform/apps/instances/{instance_id}/rpc")
+    async def rpc(request: Request, instance_id: str) -> JSONResponse:
+        who = _who(request)
+        _, space = _instance(who, instance_id)
+        body = await request.json()
+        fake.rpc_calls.append((instance_id, body))
+        if body["op"] == "getAll":
+            if not body["sql"].lstrip().lower().startswith("select"):
+                raise _error(422, "sql_not_allowed", "statement not allowed: only SELECT")
+            return JSONResponse({"rows": fake.rows.get(instance_id, [])})
+        if space["role"] == "viewer":
+            raise _error(403, "insufficient_role")
+        rows = [] if body["op"] == "run" else fake.rows.get(instance_id, [])[:1]
+        return JSONResponse({"rows": rows, "changes": 1, "lastInsertRowId": 7})
+
+    @app.get("/api/platform/apps/instances/{instance_id}/migrations")
+    async def migrations(request: Request, instance_id: str) -> JSONResponse:
+        _instance(_who(request), instance_id)
+        return JSONResponse({"migrations": list(reversed(fake.migrations[instance_id]))})
+
+    def _pending(instance_id: str, migration_id: str) -> dict:
+        m = next((m for m in fake.migrations.get(instance_id, []) if m["id"] == migration_id), None)
+        if m is None:
+            raise _error(404, "not_found")
+        if m["status"] != "pending":
+            raise _error(409, "migration_not_pending")
+        return m
+
+    @app.post("/api/platform/apps/instances/{instance_id}/migrations/{migration_id}/approve")
+    async def approve(request: Request, instance_id: str, migration_id: str) -> JSONResponse:
+        who = _who(request)
+        _, space = _instance(who, instance_id)
+        marker = request.headers.get("x-homeai-hitl-approval")
+        fake.approvals.append((instance_id, migration_id, marker))
+        bound = fake.hitl_markers.pop(marker or "", None)
+        if bound != (who.thread_id, instance_id, migration_id):
+            raise _error(403, "hitl_approval_required")
+        if space["role"] == "viewer":
+            raise _error(403, "insufficient_role")
+        m = _pending(instance_id, migration_id)
+        m.update(status="applied", snapshot=f"snap-{migration_id}.sqlite")
+        return JSONResponse(m)
+
+    @app.post("/internal/hitl-approvals")
+    async def hitl_approval(request: Request) -> JSONResponse:
+        if _bearer(request) != AGENT_TOKEN:
+            raise _error(401, "unauthenticated")
+        body = await request.json()
+        fake.hitl_mints.append(body)
+        who = fake.principal(body["delegation"])
+        if who is None:
+            raise _error(401, "unauthenticated")
+        _, space = _instance(who, body["instance_id"])
+        if space["role"] == "viewer":
+            raise _error(403, "insufficient_role")
+        _pending(body["instance_id"], body["migration_id"])
+        marker = f"hitl_fake{next(fake._counter)}"
+        fake.hitl_markers[marker] = (who.thread_id, body["instance_id"], body["migration_id"])
+        return JSONResponse({"token": marker, "expires_in_s": 60})
 
     return app

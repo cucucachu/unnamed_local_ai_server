@@ -344,6 +344,17 @@ class DelegationOut(BaseModel):
     expires_at: datetime
 
 
+class HitlApprovalRequest(BaseModel):
+    delegation: Secret
+    instance_id: UUID
+    migration_id: UUID
+
+
+class HitlApprovalOut(BaseModel):
+    token: str
+    expires_in_s: float
+
+
 class ExecGrantsRequest(BaseModel):
     delegation: Secret
 

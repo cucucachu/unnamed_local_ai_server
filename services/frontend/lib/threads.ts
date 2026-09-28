@@ -41,7 +41,7 @@ export interface ThreadMessage {
 export interface PendingApprovalAction {
   tool_call_id: string;
   name: string;
-  category: 'file' | 'exec' | 'plan' | 'web' | 'other';
+  category: 'file' | 'exec' | 'plan' | 'web' | 'app' | 'other';
   args: Record<string, unknown>;
   description: string;
 }

@@ -777,13 +777,12 @@ The sandbox config (`window.__homeai_config`, in the document) is
 >   2770; tightening it to 2750 is a follow-up for M11-04.
 > - **`ro/` is published after every committed write and migration**
 >   (debounced to once a second, trailing), not when an exec grant is
->   issued. Exec grants don't mount it yet: that needs an exec mount
->   contract (`/app-data/<instance>`?), which is a follow-up with M11-04 and
->   M13.
+>   issued. Exec grants mount it since M13-02 (below).
 > - **Migrations don't run on install**; a successful build migrates each
 >   instance tracking `working` to the `schema.sql` it built (destructive
 >   plans stay `pending` and are listed in the build response). The approver of a destructive plan is any editor+ of the
->   space, agents included. HITL for agent approval is M13-02.
+>   space. An agent (`act=agent`) needs a HITL marker as well (M13-02,
+>   "Agent tools for apps" below).
 > - Pinned instances (`tracks: pinned`) get 409
 >   `pinned_versions_unsupported` for actions and migrations until published
 >   versions exist (M14).
@@ -792,6 +791,22 @@ The sandbox config (`window.__homeai_config`, in the document) is
 >   the shim needs (deferred per the M12-01 spike).
 > - Virtual tables (FTS etc.), views and triggers aren't allowed in
 >   `schema.sql` yet.
+
+> **As built (M13-02), exec read-only mounts:** `POST /internal/exec-grants`
+> adds one read-only bind per live instance in every space the user is a
+> member of, viewers included (the copy is read-only for everyone):
+> `${SPACES_HOST_DIR}/<space_id>/apps/<instance_id>/ro` →
+> `/app-data/personal/<app-slug>` or `/app-data/spaces/<space-slug>/<app-slug>`,
+> holding `data.sqlite`. A second instance with the same app slug in one
+> space gets `-<first 8 of its instance id>`. It's a separate root rather
+> than a nested bind under the writable `/files` mounts. Code opens it with
+> `sqlite3.connect("file:<path>?mode=ro&immutable=1", uri=True)`; it can be
+> up to a second behind the live database. An instance whose `apps/`,
+> instance or `ro/` dir isn't a plain directory, found by an `O_NOFOLLOW`
+> fd walk from the spaces root (`app.core.beneath`), is left out.
+> `code-exec-manager` accepts a `/app-data/...` target only read-only.
+> The `execute_code` tool description says all this, and `list_apps` prints
+> each instance's path.
 
 ### Build and verify
 
@@ -966,6 +981,75 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > (`examples/apps/README.md`). The builder's `groceries` test fixture stays
 > as a minimal, line-number-stable input for the diagnostics tests; the
 > builder suite also builds the reference app.
+
+> **As built (M13-02)** (`services/agent-server/app/agent/app_tools.py`):
+> six tools, each a client of the apps API with the run's delegation, so
+> the platform enforces every permission. Failures are strings the model
+> reads.
+>
+> - `list_apps`: every live instance in the user's spaces (id, app, space
+>   and role, source folder, last built commit, the `/app-data/...` path),
+>   plus registered apps that aren't installed.
+> - `create_app(space, slug, name, template="grocery-list")`: copies a
+>   template (a folder with `app.json` under `APP_TEMPLATES_DIR`; the image
+>   ships `examples/apps/` at `/app/templates`) to
+>   `<space>/Apps/<slug>/` with `slug`/`name` patched into `app.json`,
+>   registers it and installs it in that space tracking `working`.
+> - `build_app(app)`: `POST /apps/{id}/build`; returns the diagnostics
+>   (step, file:line:column, message, source excerpt) or success plus each
+>   instance's migration. A pending destructive migration is reported with
+>   its steps and the `approve_migration` call to make; it is not applied.
+> - `app_sql(instance, sql, params)`: one statement. It's tried as
+>   `getAll` first; if the platform says `sql_not_allowed` it's a write and
+>   goes through `run`. DDL is refused (schema changes go through
+>   `schema.sql` + `build_app`).
+> - `app_action(instance, name, params)`: `op: action`.
+> - `approve_migration(instance, migration_id)` (not in the original list:
+>   approving inside `build_app` would re-run the build when the paused
+>   call resumes).
+>
+> **Approvals.** The tools call LangGraph `interrupt()` themselves rather
+> than going through `HumanInTheLoopMiddleware`, since whether a call needs
+> one depends on the instance's space and whether the SQL writes. The
+> interrupt carries the middleware's `HITLRequest` shape plus the call's
+> `tool_call_id`, so the chat UI shows it as an ordinary approval card
+> (category `app`); parallel calls that each interrupt are merged into one
+> card and resumed together. What asks:
+>
+> - `approve_migration`: always, even with HITL off. The card lists the
+>   steps (SQL), the app and the space.
+> - `app_sql` writes and `app_action` calls in a shared space, when HITL is
+>   on. The card shows the SQL (or the action's `actions/<name>.sql`),
+>   params and the space. Personal-space writes and all reads don't ask.
+>
+> A rejected write or action isn't run. A rejected migration stays
+> `pending` (the user can still decide in the Apps screen).
+>
+> **HITL marker.** `POST …/migrations/{mid}/approve` from an `act=agent`
+> principal also needs `X-HomeAI-HITL-Approval: <marker>`, else 403
+> `hitl_approval_required` (people, `act=user`, are unaffected; reject
+> needs no marker). agent-server gets one only after the user's approve
+> decision comes back into the paused `approve_migration` call (a resume
+> value only `chat_ws` builds, from that user's `approval_response` on
+> their own socket): `POST /internal/hitl-approvals` with the agent
+> service token (`PLATFORM_AGENT_TOKEN`) and
+> `{delegation, instance_id, migration_id}`. The platform verifies the
+> delegation, checks the user can write the instance and the migration is
+> `pending`, and returns `{token: "hitl_<32 random bytes>", expires_in_s:
+> 60}`. It keeps only the token's SHA-256, bound to (user, session, thread,
+> instance, migration), in memory (the platform is one worker; a restart
+> drops every marker, which fails closed). A marker is spent on its first
+> presentation, matching or not, and accepted only if it's unexpired and
+> every binding matches the approving delegation and URL. The model never
+> sees the marker or the service token: neither is a tool argument or in a
+> tool result. The model can't mint one itself because that needs the
+> service token, and can't get agent-server to mint one without the
+> human's decision.
+>
+> Deviations: `create_app` and `build_app` never ask (the source is the
+> user's own files; a build applies only non-destructive changes).
+> `app_sql` runs a single statement; use an action for a multi-statement
+> write.
 
 ### System apps (D17)
 

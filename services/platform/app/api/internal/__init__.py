@@ -7,7 +7,7 @@ Reachable only over `homeai-internal`; Caddy never routes `/internal/*`
 
 from fastapi import APIRouter
 
-from app.api.internal import auth, bootstrap, delegations, exec_grants, health, jwks
+from app.api.internal import auth, bootstrap, delegations, exec_grants, health, hitl, jwks
 
 router = APIRouter(prefix="/internal")
 router.include_router(health.router)
@@ -16,3 +16,4 @@ router.include_router(auth.router)
 router.include_router(bootstrap.router)
 router.include_router(delegations.router)
 router.include_router(exec_grants.router)
+router.include_router(hitl.router)

@@ -388,6 +388,15 @@ class AppData:
         async with self._lock(instance_id), self.pool.connection() as conn:
             await apps.uninstall_app(conn, principal, self.storage, space_id, instance_id)
 
+    async def pending(self, principal: Principal, instance_id: UUID, migration_id: UUID) -> Row:
+        """The migration, if `principal` could approve it now (write access, still pending)."""
+        async with self.pool.connection() as conn:
+            target = await self._target(conn, principal, instance_id, "write")
+            row = await self._get_migration(conn, target.id, migration_id)
+        if row["status"] != "pending":
+            raise Conflict("migration_not_pending")
+        return row
+
     async def approve(self, principal: Principal, instance_id: UUID, migration_id: UUID) -> Row:
         async with self.pool.connection() as conn:
             target = await self._target(conn, principal, instance_id, "write")

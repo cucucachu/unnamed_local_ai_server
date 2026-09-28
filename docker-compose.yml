@@ -215,7 +215,11 @@ services:
       start_period: 300s   # model load takes minutes
 
   agent-server:
-    build: ./services/agent-server
+    build:
+      context: ./services/agent-server
+      # The app templates `create_app` copies (M13-02), baked in at /app/templates.
+      additional_contexts:
+        templates: ./examples/apps
     restart: unless-stopped
     # internal-only (M7-01) - no route to the public internet. Stage 2's
     # web access goes through `web-fetch` (M7-03, above) via the

@@ -594,6 +594,70 @@ describe('useChat — branches (M8-05)', () => {
   });
 });
 
+describe('useChat — app tool approvals (M13-02)', () => {
+  const action = {
+    tool_call_id: 'call-sql',
+    name: 'app_sql',
+    category: 'app' as const,
+    args: { instance: 'i-1', space: '/spaces/family', sql: 'DELETE FROM items' },
+    description: 'Change data in Groceries in /spaces/family',
+  };
+  const toolStart = {
+    type: 'tool_start' as const,
+    tool_call_id: 'call-sql',
+    name: 'app_sql',
+    category: 'app' as const,
+    args: action.args,
+  };
+
+  function toolItems(hook: Awaited<ReturnType<typeof renderUseChat>>) {
+    return hook.current().items.filter((item) => item.kind === 'tool');
+  }
+
+  it('drops the paused tool card when its approval_request arrives', async () => {
+    const hook = await renderUseChat();
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ ...toolStart, tool_call_id: 'call-list', name: 'list_apps', args: {} });
+      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-list', name: 'list_apps', status: 'success', result_preview: 'Apps' });
+      latestSocket().emit(toolStart);
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+    expect(toolItems(hook).map((item) => [item.toolCallId, item.status])).toEqual([['call-list', 'success']]);
+
+    act(() => {
+      hook.current().respondToApproval([{ tool_call_id: 'call-sql', decision: 'approve' }]);
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit(toolStart);
+      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-sql', name: 'app_sql', status: 'success', result_preview: 'OK' });
+    });
+    expect(toolItems(hook).map((item) => [item.toolCallId, item.status, item.category])).toEqual([
+      ['call-list', 'success', 'app'],
+      ['call-sql', 'success', 'app'],
+    ]);
+  });
+
+  it('a rejected app tool keeps one rejected card when it reports back', async () => {
+    const hook = await renderUseChat();
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit(toolStart);
+      latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+    act(() => {
+      hook.current().respondToApproval([{ tool_call_id: 'call-sql', decision: 'reject' }]);
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit(toolStart);
+      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-sql', name: 'app_sql', status: 'success', result_preview: 'The user rejected this statement' });
+    });
+    const tools = toolItems(hook);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ toolCallId: 'call-sql', status: 'rejected', resultPreview: 'The user rejected this statement' });
+  });
+});
+
 describe('useChat — HITL approvals (M8-03)', () => {
   const action = {
     tool_call_id: 'call-1',

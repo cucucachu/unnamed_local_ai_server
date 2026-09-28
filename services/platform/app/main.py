@@ -38,6 +38,7 @@ from app.core.errors import (
     UnsupportedMedia,
 )
 from app.core.events import EventHub
+from app.core.hitl import HitlApprovals
 from app.core.ratelimit import RateLimited, RateLimiter
 from app.core.storage import SpaceStorage, StorageError
 from app.core.tokens import TokenService, load_or_create_signing_key
@@ -189,6 +190,7 @@ def create_app(
             )
             app.state.events = EventHub()
             app.state.appdata = AppData(pool, storage, app.state.events)
+            app.state.hitl = HitlApprovals()
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s
             )

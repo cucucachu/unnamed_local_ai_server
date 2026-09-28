@@ -23,6 +23,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends
+from psycopg import AsyncConnection
 from starlette.requests import HTTPConnection
 
 from app.core import sessions
@@ -83,14 +84,25 @@ async def require_user(request: HTTPConnection) -> Principal:
 
     Also called directly on a WebSocket's handshake (`/ws/platform/*`).
     """
-    claims = _claims(request)
+    async with request.app.state.db_pool.connection() as conn:
+        return await _principal(conn, _claims(request))
+
+
+async def from_delegation(conn: AsyncConnection, tokens: TokenService, token: str) -> Principal:
+    """The agent principal a delegation token names (for `/internal/*` routes that take one)."""
+    try:
+        claims = tokens.verify_token(token, act="agent")
+    except TokenError as exc:
+        raise Unauthorized("unauthenticated") from exc
+    return await _principal(conn, claims)
+
+
+async def _principal(conn: AsyncConnection, claims: dict) -> Principal:
     try:
         user_id, session_id = UUID(claims["sub"]), UUID(str(claims.get("sid")))
     except ValueError as exc:
         raise Unauthorized("unauthenticated") from exc
-
-    async with request.app.state.db_pool.connection() as conn:
-        row = await sessions.load_active(conn, session_id, user_id)
+    row = await sessions.load_active(conn, session_id, user_id)
     if row is None:
         raise Unauthorized("unauthenticated")
     thread_id = claims.get("thr")
