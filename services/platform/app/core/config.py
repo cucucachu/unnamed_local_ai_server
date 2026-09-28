@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # Pre-Stage-3 files root (`${FILES_DIR}` bind mount), moved into the
     # bootstrap admin's personal space when enabled (`app/core/legacy.py`).
-    # Off until M11-02 moves the agent's file tools onto the platform.
+    # Compose turns it on; off here so tests opt in.
     platform_migrate_legacy_files: bool = False
     platform_legacy_files_dir: Path = Path("/data/legacy-files")
 

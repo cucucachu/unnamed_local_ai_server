@@ -255,6 +255,22 @@ Once past that, every turn, resume, and settings read on the connection is
 for that thread and that user (settings are per user). A later
 `DELETE`/re-own of the thread doesn't affect an already-open socket.
 
+## M11-02 delegation
+
+The agent's file tools act as the user through a delegation token
+(`app/core/delegation.py`, docs/PLATFORM.md §4). The socket exchanges the
+identity token it was opened with for one right after the thread check,
+re-mints it at the start of every turn and approval resume, and a
+background task keeps it fresh while the socket is open, since the
+identity token (5 min) is long gone by then. It rides in
+`configurable["delegation"]` as an object LangGraph doesn't persist, never
+in messages, the prompt, or tool arguments.
+
+- the platform refuses (session revoked or expired, user disabled) ->
+  close `4401`, at connect or at the next turn / resume;
+- the platform unreachable at connect -> close `1011`; at a turn start the
+  turn goes ahead on the current delegation until it expires.
+
 ## M8-05 active branch
 
 `threads.active_checkpoint_id` (null = chronological latest) is the tip
@@ -272,6 +288,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -284,8 +301,11 @@ from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.build import MUTATING_TOOL_NAMES
+from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, IdentityError, KeysUnavailable
 from app.db.turn_stats import TurnStat
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -475,6 +495,7 @@ def graph_config(
     *,
     hitl_enabled: bool | None = None,
     thinking_enabled: bool | None = None,
+    delegation: Delegation | None = None,
 ) -> dict[str, Any]:
     """RunnableConfig for this thread, optionally pinned to a checkpoint (M8-05)."""
     configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": ""}
@@ -484,6 +505,8 @@ def graph_config(
         configurable["hitl_enabled"] = hitl_enabled
     if thinking_enabled is not None:
         configurable["thinking_enabled"] = thinking_enabled
+    if delegation is not None:
+        configurable["delegation"] = delegation
     return {"configurable": configurable}
 
 
@@ -705,6 +728,7 @@ async def _run_turn(
     started_at: datetime,
     prior_assistant_id: str | None,
     checkpoint_id: str | None = None,
+    delegation: Delegation | None = None,
 ) -> tuple[str, dict | None]:
     """Run one turn (fresh `user_message` OR a resumed `Command(resume=...)`).
 
@@ -730,6 +754,7 @@ async def _run_turn(
         checkpoint_id,
         hitl_enabled=hitl_enabled,
         thinking_enabled=thinking_enabled,
+        delegation=delegation,
     )
 
     await websocket.send_json({"type": "turn_start"})
@@ -798,6 +823,7 @@ async def _run_turn_or_interrupt(
     hitl_enabled: bool,
     thinking_enabled: bool,
     checkpoint_id: str | None = None,
+    delegation: Delegation | None = None,
 ) -> tuple[str, dict | None]:
     """Run one turn (see `_run_turn`), racing it against `_watch_inbound`.
 
@@ -811,7 +837,19 @@ async def _run_turn_or_interrupt(
     socket closed mid-turn (the caller should stop processing this
     connection; no frame is sent — the socket is already gone). Propagates
     any exception the turn itself raised (unhandled model/agent error).
+
+    M11-02: the connection's delegation is re-minted first, so every turn
+    and resume starts with a fresh one and a revoked session stops here
+    (`DelegationDenied`, before `turn_start`). If the platform can't be
+    asked, the turn still runs on the current delegation while it lasts.
     """
+    if delegation is not None:
+        try:
+            await delegation.refresh()
+        except DelegationUnavailable as exc:
+            if delegation.token is None:
+                raise
+            logger.warning("delegation: refresh at turn start failed: %s", exc)
     started_mono = time.monotonic()
     started_at = datetime.now(UTC)
     prior_assistant_id = await _snapshot_last_assistant_id(
@@ -829,6 +867,7 @@ async def _run_turn_or_interrupt(
             started_at,
             prior_assistant_id,
             checkpoint_id,
+            delegation,
         )
     )
     watch_task = asyncio.create_task(_watch_inbound(websocket))
@@ -1006,6 +1045,32 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
         await websocket.close(code=WS_CLOSE_NOT_FOUND, reason="thread not found")
         return
 
+    try:
+        delegation = await Delegation.obtain(
+            websocket.app.state.delegation_client,
+            websocket.headers.get(IDENTITY_HEADER) or "",
+            thread_id,
+        )
+    except DelegationDenied:
+        await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
+        return
+    except DelegationUnavailable:
+        await websocket.close(code=1011, reason="platform unavailable")
+        return
+
+    keep_alive = asyncio.create_task(delegation.keep_alive())
+    try:
+        await _serve(websocket, thread_id, user_id, record, delegation)
+    finally:
+        keep_alive.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await keep_alive
+
+
+async def _serve(
+    websocket: WebSocket, thread_id: str, user_id: str, record: Any, delegation: Delegation
+) -> None:
+    thread_store = websocket.app.state.thread_store
     # M8-03: local routing state for this connection only — `None` while
     # idle/mid-turn, set to the dict `_run_turn` returned right after a
     # `turn_end {"status": "awaiting_approval"}`. See module docstring's
@@ -1065,12 +1130,16 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                         hitl_enabled,
                         thinking_enabled,
                         resume_from,
+                        delegation,
                     )
                     if outcome != "disconnected":
                         await persist_active_tip(
                             thread_store, websocket.app.state.agent, thread_id
                         )
                 except WebSocketDisconnect:
+                    return
+                except DelegationDenied:
+                    await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
                     return
                 except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
                     await _send_error_and_close(websocket, str(exc), code=1011)
@@ -1149,12 +1218,16 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
                     hitl_enabled,
                     thinking_enabled,
                     start_checkpoint,
+                    delegation,
                 )
                 if outcome != "disconnected":
                     await persist_active_tip(
                         thread_store, websocket.app.state.agent, thread_id
                     )
             except WebSocketDisconnect:
+                return
+            except DelegationDenied:
+                await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
                 return
             except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
                 await _send_error_and_close(websocket, str(exc), code=1011)

@@ -24,16 +24,17 @@ from app.main import create_app
 from tests.fake_exec_manager.scripting import FakeExecManager
 from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore, FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
+from tests.fake_platform.scripting import FakePlatform
 from tests.fake_web_fetch.scripting import FakeWebFetch
 
 
 def _make_client(
     fake_model: FakeModel,
-    tmp_path,
+    fake_platform: FakePlatform,
     thread_store: ThreadStore | None = None,
     settings_store: SettingsStore | None = None,
 ) -> TestClient:
-    settings = fake_model.settings(files_root=str(tmp_path))
+    settings = fake_model.settings(platform_url=fake_platform.base_url)
     # `checkpointer_override`/`thread_store_override` keep this on
     # `MemorySaver`/`InMemoryThreadStore` (fast, no real Postgres) rather
     # than the production lifespan's real Postgres connection — see
@@ -50,6 +51,7 @@ def _make_client(
         thread_store_override=thread_store or AutoCreateThreadStore(),
         settings_store_override=settings_store or InMemorySettingsStore(),
         identity_verifier_override=FixedIdentityVerifier(),
+        delegation_client_override=fake_platform.client(),
     )
     return TestClient(app)
 
@@ -86,10 +88,10 @@ def _assert_turn_end(frame: dict, status: str) -> None:
     assert frame["duration_ms"] >= 0
 
 
-async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
+async def test_plain_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     fake_model.queue(TextTurn("hello world", chunk_size=5))
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/plain-thread"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -105,7 +107,7 @@ async def test_plain_turn(fake_model: FakeModel, tmp_path) -> None:
 
 
 async def test_reasoning_frames_precede_tokens_when_thinking_on(
-    fake_model: FakeModel, tmp_path
+    fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
     """M8-07: scripted reasoning deltas become `reasoning` frames, then tokens."""
     fake_model.queue(
@@ -118,7 +120,7 @@ async def test_reasoning_frames_precede_tokens_when_thinking_on(
     )
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _thinking_settings_store(thinking_enabled=True)
+        fake_model, fake_platform, settings_store=await _thinking_settings_store(thinking_enabled=True)
     ) as client, client.websocket_connect("/ws/chat/reasoning-on") as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
         frames = _drain_turn(ws)
@@ -148,7 +150,7 @@ async def test_reasoning_frames_precede_tokens_when_thinking_on(
     assert kwargs.get("enable_thinking") is True
 
 
-async def test_no_reasoning_frames_when_thinking_off(fake_model: FakeModel, tmp_path) -> None:
+async def test_no_reasoning_frames_when_thinking_off(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-07: thinking off binds enable_thinking=false; no reasoning frames."""
     fake_model.queue(
         TextTurn(
@@ -160,7 +162,7 @@ async def test_no_reasoning_frames_when_thinking_off(fake_model: FakeModel, tmp_
     )
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _thinking_settings_store(thinking_enabled=False)
+        fake_model, fake_platform, settings_store=await _thinking_settings_store(thinking_enabled=False)
     ) as client, client.websocket_connect("/ws/chat/reasoning-off") as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
         frames = _drain_turn(ws)
@@ -178,17 +180,17 @@ async def test_no_reasoning_frames_when_thinking_off(fake_model: FakeModel, tmp_
     assert kwargs.get("enable_thinking") is False
 
 
-async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
+async def test_tool_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """`hitl_enabled: False` (M8-03): this test is about the `write_file`
     tool-call wire format, not the approval flow — see `test_hitl_*` below
     for HITL coverage of the exact same tool."""
     fake_model.queue(
-        ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}),
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}),
         TextTurn("done"),
     )
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _no_hitl_settings_store()
+        fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
     ) as client, client.websocket_connect("/ws/chat/tool-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -204,7 +206,7 @@ async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
     tool_start = frames[tool_start_idx]
     assert tool_start["name"] == "write_file"
     assert tool_start["category"] == "file"
-    assert tool_start["args"] == {"file_path": "/x.txt", "content": "y"}
+    assert tool_start["args"] == {"file_path": "/personal/x.txt", "content": "y"}
     assert isinstance(tool_start["tool_call_id"], str) and tool_start["tool_call_id"]
 
     tool_end = frames[tool_end_idx]
@@ -217,13 +219,11 @@ async def test_tool_turn(fake_model: FakeModel, tmp_path) -> None:
     assert token_frames
     assert "".join(f["content"] for f in token_frames) == "done"
 
-    written = tmp_path / "x.txt"
-    assert written.exists()
-    assert written.read_text() == "y"
+    assert fake_platform.personal() == {"x.txt": b"y"}
 
 
 async def test_execute_code_tool_turn(
-    fake_model: FakeModel, fake_exec_manager: FakeExecManager, tmp_path
+    fake_model: FakeModel, fake_exec_manager: FakeExecManager, fake_platform: FakePlatform
 ) -> None:
     """M4-04: `execute_code` reaches the fake exec-manager and its `tool_start`
     frame carries `category == "exec"` (extends M2-04's `_TOOL_CATEGORY_BY_NAME`
@@ -233,7 +233,7 @@ async def test_execute_code_tool_turn(
         TextTurn("done"),
     )
     settings = fake_model.settings(
-        files_root=str(tmp_path), exec_manager_url=fake_exec_manager.base_url
+        platform_url=fake_platform.base_url, exec_manager_url=fake_exec_manager.base_url
     )
     app = create_app(
         settings,
@@ -243,6 +243,7 @@ async def test_execute_code_tool_turn(
         # wire format, not the approval flow.
         settings_store_override=await _no_hitl_settings_store(),
         identity_verifier_override=FixedIdentityVerifier(),
+        delegation_client_override=fake_platform.client(),
     )
 
     with TestClient(app) as client, client.websocket_connect("/ws/chat/exec-thread") as ws:
@@ -273,7 +274,7 @@ async def test_execute_code_tool_turn(
 
 
 async def test_web_search_tool_turn(
-    fake_model: FakeModel, fake_web_fetch: FakeWebFetch, tmp_path
+    fake_model: FakeModel, fake_web_fetch: FakeWebFetch, fake_platform: FakePlatform
 ) -> None:
     """M7-05: `web_search` reaches the fake web-fetch and its `tool_start`
     frame carries `category == "web"` (extends M2-04's
@@ -295,13 +296,14 @@ async def test_web_search_tool_turn(
         TextTurn("found it"),
     )
     settings = fake_model.settings(
-        files_root=str(tmp_path), web_fetch_url=fake_web_fetch.base_url
+        platform_url=fake_platform.base_url, web_fetch_url=fake_web_fetch.base_url
     )
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),
         thread_store_override=AutoCreateThreadStore(),
         identity_verifier_override=FixedIdentityVerifier(),
+        delegation_client_override=fake_platform.client(),
     )
 
     with TestClient(app) as client, client.websocket_connect("/ws/chat/web-thread") as ws:
@@ -329,8 +331,8 @@ async def test_web_search_tool_turn(
     assert fake_web_fetch.search_calls[0].q == "llama.cpp github repo"
 
 
-async def test_invalid_frame(fake_model: FakeModel, tmp_path) -> None:
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+async def test_invalid_frame(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/invalid-thread"
     ) as ws:
         ws.send_json({"type": "not_a_real_type"})
@@ -343,8 +345,8 @@ async def test_invalid_frame(fake_model: FakeModel, tmp_path) -> None:
         assert exc_info.value.code == 1008
 
 
-async def test_invalid_frame_non_json_text(fake_model: FakeModel, tmp_path) -> None:
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+async def test_invalid_frame_non_json_text(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/invalid-thread-2"
     ) as ws:
         ws.send_text("this is not json")
@@ -356,10 +358,10 @@ async def test_invalid_frame_non_json_text(fake_model: FakeModel, tmp_path) -> N
         assert exc_info.value.code == 1008
 
 
-async def test_two_turns_same_socket(fake_model: FakeModel, tmp_path) -> None:
+async def test_two_turns_same_socket(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/two-turns-thread"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "message one"})
@@ -382,7 +384,7 @@ async def test_two_turns_same_socket(fake_model: FakeModel, tmp_path) -> None:
     assert any("first reply" in (c or "") for c in second_request_contents)
 
 
-def test_concurrent_turns_serialized(fake_model: FakeModel, tmp_path) -> None:
+def test_concurrent_turns_serialized(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
     thread_id = "concurrent-thread"
 
@@ -398,7 +400,7 @@ def test_concurrent_turns_serialized(fake_model: FakeModel, tmp_path) -> None:
         except BaseException as exc:  # noqa: BLE001
             errors[key] = exc
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws_a, client.websocket_connect(f"/ws/chat/{thread_id}") as ws_b:
         t_a = threading.Thread(target=drive, args=("a", ws_a, "message-a"))
@@ -430,13 +432,13 @@ def test_concurrent_turns_serialized(fake_model: FakeModel, tmp_path) -> None:
     assert any("first reply" in c for c in joined)
 
 
-async def test_cancel_mid_turn(fake_model: FakeModel, tmp_path) -> None:
+async def test_cancel_mid_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-01: `cancel` sent mid-turn ends the turn early with
     `turn_end {"status": "cancelled"}`, releases the per-thread lock, and
     leaves the socket usable for a subsequent normal turn."""
     fake_model.queue(TextTurn("one two three four five six seven eight nine ten", chunk_size=4, chunk_delay_s=0.15))
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/cancel-thread"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "count slowly from one to ten"})
@@ -462,13 +464,13 @@ async def test_cancel_mid_turn(fake_model: FakeModel, tmp_path) -> None:
     assert "".join(f["content"] for f in frames if f["type"] == "token") == "hello again"
 
 
-async def test_cancel_outside_turn_is_noop(fake_model: FakeModel, tmp_path) -> None:
+async def test_cancel_outside_turn_is_noop(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-01: `cancel` received while idle (no turn in flight) is silently
     ignored — no close, no error/turn_end frame, socket stays fully usable
     for a normal turn right after."""
     fake_model.queue(TextTurn("hello"))
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/cancel-noop-thread"
     ) as ws:
         ws.send_json({"type": "cancel"})
@@ -484,14 +486,14 @@ async def test_cancel_outside_turn_is_noop(fake_model: FakeModel, tmp_path) -> N
     assert "".join(f["content"] for f in frames if f["type"] == "token") == "hello"
 
 
-async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, tmp_path) -> None:
+async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M3-02: title auto-set from msg 1, `updated_at` bump."""
     fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
     thread_store = AutoCreateThreadStore()
     thread_id = "title-bump-thread"
     long_message = "hello world " * 10  # > 60 chars once whitespace-collapsed
 
-    with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform, thread_store=thread_store) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         # The connect-time ownership lookup created it (`AutoCreateThreadStore`).
@@ -518,14 +520,14 @@ async def test_title_autoset_and_updated_at_bump(fake_model: FakeModel, tmp_path
     assert after_turns.updated_at > created.updated_at
 
 
-async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
+async def test_truncate_then_run(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-04: replace_from_message_id + mode=truncate drops from that user
     message onward, then runs the new HumanMessage. Title is not re-derived."""
     fake_model.queue(TextTurn("reply one"), TextTurn("reply two"), TextTurn("reply three"))
     thread_store = AutoCreateThreadStore()
     thread_id = "truncate-then-run"
 
-    with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform, thread_store=thread_store) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "turn one"})
@@ -570,11 +572,11 @@ async def test_truncate_then_run(fake_model: FakeModel, tmp_path) -> None:
     assert all(isinstance(m["id"], str) and m["id"] for m in after)
 
 
-async def test_truncate_unknown_id(fake_model: FakeModel, tmp_path) -> None:
+async def test_truncate_unknown_id(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-04: replace_from_message_id that isn't in the checkpoint -> error + 1008."""
     fake_model.queue(TextTurn("hello"))
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/truncate-unknown"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -597,12 +599,12 @@ async def test_truncate_unknown_id(fake_model: FakeModel, tmp_path) -> None:
         assert exc_info.value.code == 1008
 
 
-async def test_truncate_non_user_id(fake_model: FakeModel, tmp_path) -> None:
+async def test_truncate_non_user_id(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-04: replace_from_message_id pointing at an assistant row -> error + 1008."""
     fake_model.queue(TextTurn("hello"))
     thread_id = "truncate-non-user"
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -633,7 +635,7 @@ def _user_contents(messages: list[dict]) -> list[str]:
 
 
 async def test_fork_produces_two_tips_and_switch_changes_history(
-    fake_model: FakeModel, tmp_path
+    fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
     """M8-05: fork keeps the old continuation; branches lists both tips;
     switching history + a new turn on the old branch extends that branch."""
@@ -641,7 +643,7 @@ async def test_fork_produces_two_tips_and_switch_changes_history(
     thread_store = AutoCreateThreadStore()
     thread_id = "fork-two-tips"
 
-    with _make_client(fake_model, tmp_path, thread_store=thread_store) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform, thread_store=thread_store) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "turn one"})
@@ -740,12 +742,12 @@ async def test_fork_produces_two_tips_and_switch_changes_history(
         assert record.active_checkpoint_id == sibling
 
 
-async def test_fork_unknown_and_non_user_id(fake_model: FakeModel, tmp_path) -> None:
+async def test_fork_unknown_and_non_user_id(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-05: fork uses the same 1008 errors as truncate for bad ids."""
     fake_model.queue(TextTurn("hello"))
     thread_id = "fork-bad-id"
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -769,12 +771,12 @@ async def test_fork_unknown_and_non_user_id(fake_model: FakeModel, tmp_path) -> 
         assert exc_info.value.code == 1008
 
 
-async def test_put_active_branch_404_if_not_a_tip(fake_model: FakeModel, tmp_path) -> None:
+async def test_put_active_branch_404_if_not_a_tip(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-05: PUT /active_branch 404s for an unknown checkpoint or thread."""
     fake_model.queue(TextTurn("hello"))
     thread_id = "fork-put-404"
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -795,13 +797,13 @@ async def test_put_active_branch_404_if_not_a_tip(fake_model: FakeModel, tmp_pat
         assert empty == []
 
 
-async def test_user_message_id_is_stored_langchain_id(fake_model: FakeModel, tmp_path) -> None:
+async def test_user_message_id_is_stored_langchain_id(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M8-04: an explicit `id` on user_message is the stored MessageOut.id."""
     fake_model.queue(TextTurn("hello"))
     thread_id = "stable-user-id"
     client_id = "11111111-1111-1111-1111-111111111111"
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi", "id": client_id})
@@ -812,13 +814,13 @@ async def test_user_message_id_is_stored_langchain_id(fake_model: FakeModel, tmp
     assert user["id"] == client_id
 
 
-async def test_turn_end_duration_ms_and_history_turn_metadata(fake_model: FakeModel, tmp_path) -> None:
+async def test_turn_end_duration_ms_and_history_turn_metadata(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M9-02: `turn_end` carries `duration_ms`; GET .../messages attaches it
     to the final assistant row of the turn."""
     fake_model.queue(TextTurn("hello world"))
     thread_id = "duration-thread"
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         f"/ws/chat/{thread_id}"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -838,11 +840,11 @@ async def test_turn_end_duration_ms_and_history_turn_metadata(fake_model: FakeMo
     assert users[0].get("turn") is None
 
 
-async def test_cancelled_turn_end_includes_duration_ms(fake_model: FakeModel, tmp_path) -> None:
+async def test_cancelled_turn_end_includes_duration_ms(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """M9-02: cancelled `turn_end` also carries `duration_ms`."""
     fake_model.queue(TextTurn("one two three four five six seven eight nine ten", chunk_size=4, chunk_delay_s=0.15))
 
-    with _make_client(fake_model, tmp_path) as client, client.websocket_connect(
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
         "/ws/chat/cancel-duration-thread"
     ) as ws:
         ws.send_json({"type": "user_message", "content": "count slowly"})

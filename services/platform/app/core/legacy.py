@@ -1,8 +1,7 @@
 """Pre-Stage-3 files -> the bootstrap admin's personal space (docs/PLATFORM.md §5 "Legacy migration").
 
-Off unless `PLATFORM_MIGRATE_LEGACY_FILES` is set: until M11-02 switches the
-agent's file tools to the platform, the agent still works in `FILES_DIR`, so
-moving its contents early would leave it looking at an empty directory.
+Off unless `PLATFORM_MIGRATE_LEGACY_FILES` is set (compose sets it since
+M11-02, when the agent's file tools moved onto the platform).
 
 When on, it runs at startup and right after setup completes, and only once
 `bootstrap_admin_id` exists. Each top-level entry of the legacy root

@@ -1,0 +1,161 @@
+"""Delegation tokens for agent runs (docs/PLATFORM.md §4 "Delegation token", §6).
+
+The chat socket exchanges the identity token it was opened with (5 min) for
+a delegation (`POST /internal/delegations`, 15 min, `act=agent`,
+`thr=<thread_id>`) and then refreshes it (`/internal/delegations/refresh`):
+at the start of every turn and every approval resume, and in the background
+whenever less than `REFRESH_MARGIN` is left, for as long as the socket is
+open. The platform only mints either while the user's session is active, so
+a revoked session stops the next turn and every file call in flight.
+
+`Delegation` is what a run's `config["configurable"]["delegation"]` holds.
+It's an object, not the token string, on purpose: LangGraph copies every
+`str`/`int`/`float`/`bool` in `configurable` into the checkpoint metadata it
+writes to Postgres (and langchain into tracing metadata), and skips anything
+else. The token itself is only read by `PlatformFilesBackend`, never put in
+a prompt, a message, or tool arguments.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+REFRESH_MARGIN = timedelta(minutes=5)
+RETRY_INTERVAL_S = 30.0
+
+
+class DelegationDenied(Exception):
+    """The platform refused: the session is revoked or expired, or the user is disabled."""
+
+
+class DelegationUnavailable(Exception):
+    """The platform couldn't be asked (unreachable, misconfigured, unexpected answer)."""
+
+
+@dataclass(frozen=True)
+class Grant:
+    token: str
+    expires_at: datetime
+
+
+class DelegationClient(Protocol):
+    async def exchange(self, identity_token: str, thread_id: str) -> Grant: ...
+
+    async def refresh(self, token: str) -> Grant: ...
+
+
+class HttpDelegationClient:
+    def __init__(self, platform_url: str, agent_token: str, timeout_s: float = 5.0) -> None:
+        self._platform_url = platform_url
+        self._agent_token = agent_token
+        self._timeout_s = timeout_s
+
+    async def _post(self, path: str, body: dict[str, str]) -> Grant:
+        if not self._agent_token:
+            raise DelegationUnavailable("PLATFORM_AGENT_TOKEN is not set")
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_s) as client:
+                response = await client.post(
+                    f"{self._platform_url}{path}",
+                    json=body,
+                    headers={"Authorization": f"Bearer {self._agent_token}"},
+                )
+        except httpx.HTTPError as exc:
+            raise DelegationUnavailable(repr(exc)) from exc
+        if response.status_code == 401:
+            raise DelegationDenied(response.text)
+        if response.status_code != 200:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
+        payload = response.json()
+        return Grant(payload["token"], datetime.fromisoformat(payload["expires_at"]))
+
+    async def exchange(self, identity_token: str, thread_id: str) -> Grant:
+        return await self._post(
+            "/internal/delegations", {"identity_token": identity_token, "thread_id": thread_id}
+        )
+
+    async def refresh(self, token: str) -> Grant:
+        return await self._post("/internal/delegations/refresh", {"token": token})
+
+
+class Delegation:
+    """One chat connection's delegation, kept fresh while the connection lives."""
+
+    def __init__(
+        self,
+        client: DelegationClient,
+        grant: Grant,
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._client = client
+        self._grant = grant
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = asyncio.Lock()
+        self.denied = False
+
+    @classmethod
+    async def obtain(
+        cls, client: DelegationClient, identity_token: str, thread_id: str
+    ) -> Delegation:
+        return cls(client, await client.exchange(identity_token, thread_id))
+
+    @property
+    def token(self) -> str | None:
+        """The current token, or None once refused or expired."""
+        if self.denied or self._clock() >= self._grant.expires_at:
+            return None
+        return self._grant.token
+
+    @property
+    def expires_at(self) -> datetime:
+        return self._grant.expires_at
+
+    async def refresh(self) -> None:
+        """Re-mint now; raises `DelegationDenied` (for good) or `DelegationUnavailable`."""
+        async with self._lock:
+            if self.denied:
+                raise DelegationDenied("delegation was refused")
+            try:
+                self._grant = await self._client.refresh(self._grant.token)
+            except DelegationDenied:
+                self.denied = True
+                raise
+
+    async def keep_alive(
+        self, margin: timedelta = REFRESH_MARGIN, retry_s: float = RETRY_INTERVAL_S
+    ) -> None:
+        """Refresh whenever less than `margin` is left, until refused; run as a task."""
+        while not self.denied:
+            wait = (self._grant.expires_at - margin - self._clock()).total_seconds()
+            if wait > 0:
+                await self._sleep(wait)
+                continue
+            try:
+                await self.refresh()
+            except DelegationDenied:
+                logger.info("delegation: refresh refused; the session has ended")
+                return
+            except DelegationUnavailable as exc:
+                logger.warning("delegation: refresh failed, retrying: %s", exc)
+                await self._sleep(retry_s)
+
+    def __copy__(self) -> Delegation:
+        return self
+
+    def __deepcopy__(self, memo: dict) -> Delegation:
+        return self
+
+    def __repr__(self) -> str:
+        return f"Delegation(expires_at={self._grant.expires_at.isoformat()}, denied={self.denied})"

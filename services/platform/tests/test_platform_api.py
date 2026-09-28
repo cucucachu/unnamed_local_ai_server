@@ -28,7 +28,7 @@ async def _claims(platform, token: str) -> dict:
 
 
 def _delegation(platform, claims: dict, **overrides) -> dict[str, str]:
-    """An act=agent token for the same session, as M11-02's delegation endpoint will mint."""
+    """An act=agent token for the same session, as the delegation endpoint mints."""
     payload = {
         "sub": claims["sub"],
         "sid": claims["sid"],

@@ -88,7 +88,7 @@ async def stepped_up_admin(platform: Platform) -> dict[str, str]:
 
 
 async def delegation(platform: Platform, token: str) -> dict[str, str]:
-    """An act=agent bearer for this session, as M11-02's delegation endpoint will mint."""
+    """An act=agent bearer for this session, as the delegation endpoint mints."""
     headers = await identity(platform, token)
     claims = platform.app.state.tokens.verify_token(headers["X-HomeAI-Identity"], act="user")
     payload = {k: claims[k] for k in ("sub", "sid", "role")} | {"act": "agent", "thr": "t-1"}

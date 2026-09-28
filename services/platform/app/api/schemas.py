@@ -325,3 +325,20 @@ class GlobOut(BaseModel):
     matches: list[GlobMatchOut]
     truncated: bool
     truncation_reason: Literal["budget"] | None
+
+
+# --- delegations (`/internal/delegations*`) -----------------------------------
+
+
+class DelegationRequest(BaseModel):
+    identity_token: Secret
+    thread_id: Short
+
+
+class DelegationRefreshRequest(BaseModel):
+    token: Secret
+
+
+class DelegationOut(BaseModel):
+    token: str
+    expires_at: datetime

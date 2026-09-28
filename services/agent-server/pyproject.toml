@@ -1,7 +1,7 @@
 [project]
 name = "agent-server"
 version = "0.1.0"
-description = "M2-01: FastAPI service hosting the agent, chat WS, files and media APIs"
+description = "M2-01: FastAPI service hosting the agent and the chat WS"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.10,<0.8",
@@ -13,7 +13,6 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.15.0",
     "pyjwt[crypto]>=2.15.0",
-    "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.52.4",
 ]
 

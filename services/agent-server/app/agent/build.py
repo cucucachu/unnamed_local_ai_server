@@ -1,4 +1,4 @@
-"""Assembles the deep agent: local model client + real-disk filesystem backend.
+"""Assembles the deep agent: local model client + the platform files backend.
 
 NOTE on `deepagents==0.7.11` vs. the ticket's illustrative snippet: introspection
 of the installed package (`inspect.signature(deepagents.create_deep_agent)`)
@@ -6,13 +6,13 @@ confirmed `create_deep_agent` accepts `checkpointer` directly as a keyword
 argument (typed `Checkpointer | None`, i.e. `None | bool | BaseCheckpointSaver`)
 and returns an already-compiled `CompiledStateGraph` wired up with that
 checkpointer — no separate `.compile(checkpointer=...)` call is needed, unlike
-some other langgraph-based builders. `deepagents.backends.FilesystemBackend`
-also matches the ticket's snippet exactly, including the `virtual_mode` flag
-name (confirmed via `inspect.signature(FilesystemBackend.__init__)`), which is
-the real path-traversal guard: with `virtual_mode=True`, all paths are treated
-as virtual paths anchored to `root_dir`, `..`/`~` traversal is blocked, and
-every resolved path is verified to stay within `root_dir`. This is mandatory
-for a files-root-rooted agent and is not skipped or swapped for another mode.
+some other langgraph-based builders.
+
+M11-02: the file tools run on `PlatformFilesBackend`
+(`app/agent/platform_files.py`), which acts as the user through the run's
+delegation (`configurable["delegation"]`); this service holds no files.
+Paths are the platform's virtual paths (`/personal/...`,
+`/spaces/<slug>/...`), and the platform is the path guard.
 
 ## M8-03 `interrupt_on` (human-in-the-loop approvals)
 
@@ -68,7 +68,7 @@ from __future__ import annotations
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
+from deepagents.backends.utils import validate_path
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolCall
@@ -76,6 +76,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
+from app.agent.platform_files import PlatformFilesBackend
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
 from app.core.config import Settings
@@ -101,6 +102,16 @@ def _hitl_enabled(request: ToolCallRequest) -> bool:
     return bool(configurable.get("hitl_enabled", True))
 
 
+def _virtual_path(path: Any) -> str:
+    """The path as the file tool will send it (`notes.md` -> `/notes.md`)."""
+    if not isinstance(path, str):
+        return "?"
+    try:
+        return validate_path(path)
+    except ValueError:
+        return path
+
+
 def _describe(tool_call: ToolCall, _state: Any, _runtime: Any) -> str:
     """Human-readable description for the approval card (`InterruptOnConfig.description`).
 
@@ -111,11 +122,11 @@ def _describe(tool_call: ToolCall, _state: Any, _runtime: Any) -> str:
     name = tool_call["name"]
     args = tool_call.get("args") or {}
     if name == "write_file":
-        return f"Write file `{args.get('file_path', '?')}`"
+        return f"Write file `{_virtual_path(args.get('file_path'))}`"
     if name == "edit_file":
-        return f"Edit file `{args.get('file_path', '?')}`"
+        return f"Edit file `{_virtual_path(args.get('file_path'))}`"
     if name == "delete":
-        return f"Delete `{args.get('file_path', args.get('path', '?'))}`"
+        return f"Delete `{_virtual_path(args.get('file_path', args.get('path')))}`"
     if name == "execute_code":
         return f"Run command: `{args.get('command', '?')}`"
     return f"Run tool `{name}`"
@@ -132,7 +143,7 @@ def _interrupt_on_config() -> InterruptOnConfig:
 def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
     return create_deep_agent(
         model=build_model(settings),
-        backend=FilesystemBackend(root_dir=settings.files_root, virtual_mode=True),
+        backend=PlatformFilesBackend(settings.platform_url),
         system_prompt=SYSTEM_PROMPT,
         tools=[
             make_execute_code_tool(settings),

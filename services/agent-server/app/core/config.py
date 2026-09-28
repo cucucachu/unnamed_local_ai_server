@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     # single tool result shoves into the model's own context window).
     web_fetch_tool_max_chars: int = 30000
 
-    files_root: str = "/data/files"
-
-    # Identity JWKS and the service-auth `/internal/*` routes. Without a
-    # token, pre-Stage-3 threads are never handed to the bootstrap admin.
+    # Identity JWKS, the files API the agent's file tools use, and the
+    # service-auth `/internal/*` routes (bootstrap admin, delegations).
+    # Without a token no delegation can be minted, so chat sockets close
+    # with 1011, and pre-Stage-3 threads are never handed to the admin.
     platform_url: str = "http://platform:8100"
     platform_agent_token: str = ""
 

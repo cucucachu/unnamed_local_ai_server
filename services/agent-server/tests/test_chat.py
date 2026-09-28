@@ -24,22 +24,25 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from langgraph.checkpoint.memory import MemorySaver
 
+from app.core.delegation import Delegation
 from app.db.threads import InMemoryThreadStore
 from app.main import create_app
 from tests.fake_identity import FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
+from tests.fake_platform.scripting import FakePlatform
 
 _UNKNOWN_THREAD_ID = "00000000-0000-0000-0000-000000000000"
 
 
 @pytest.fixture
-async def rest_app(fake_model: FakeModel, tmp_path) -> AsyncIterator[FastAPI]:
-    settings = fake_model.settings(files_root=str(tmp_path))
+async def rest_app(fake_model: FakeModel, fake_platform: FakePlatform) -> AsyncIterator[FastAPI]:
+    settings = fake_model.settings(platform_url=fake_platform.base_url)
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),
         thread_store_override=InMemoryThreadStore(),
         identity_verifier_override=FixedIdentityVerifier(),
+        delegation_client_override=fake_platform.client(),
     )
     async with app.router.lifespan_context(app):
         yield app
@@ -142,7 +145,7 @@ async def test_get_messages_normalizes_tool_call_turn(
     thread_id = created["id"]
 
     fake_model.queue(
-        ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}),
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}),
         TextTurn("done"),
     )
     # Drives the turn directly through the same agent/checkpointer the REST
@@ -154,7 +157,15 @@ async def test_get_messages_normalizes_tool_call_turn(
     # exercising direct tool execution like it always has.
     await rest_app.state.agent.ainvoke(
         {"messages": [{"role": "user", "content": "write a file"}]},
-        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+        config={
+            "configurable": {
+                "thread_id": thread_id,
+                "hitl_enabled": False,
+                "delegation": await Delegation.obtain(
+                    rest_app.state.delegation_client, "identity", thread_id
+                ),
+            }
+        },
     )
 
     response = await rest_client.get(f"/api/threads/{thread_id}/messages")
@@ -172,11 +183,15 @@ async def test_get_messages_normalizes_tool_call_turn(
     assert tool_call_msg["content"] == ""
     assert tool_call_msg["tool_name"] is None
     assert tool_call_msg["tool_calls"] == [
-        {"id": "call_1", "name": "write_file", "args": {"file_path": "/x.txt", "content": "y"}}
+        {
+            "id": "call_1",
+            "name": "write_file",
+            "args": {"file_path": "/personal/x.txt", "content": "y"},
+        }
     ]
 
     assert tool_result_msg["tool_name"] == "write_file"
-    assert tool_result_msg["content"] == "Updated file /x.txt"
+    assert tool_result_msg["content"] == "Updated file /personal/x.txt"
     assert tool_result_msg["tool_calls"] is None
     assert tool_result_msg["tool_call_id"] == "call_1"
 
