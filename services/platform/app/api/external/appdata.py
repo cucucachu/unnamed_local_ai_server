@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Request
 
 from app.api.schemas import InstanceBundleOut, MigrationList, MigrationOut, RpcRequest
-from app.core import appbuild
+from app.core import appbuild, hitl
 from app.core.principal import CurrentUser
 
 router = APIRouter(prefix="/apps/instances/{instance_id}")
@@ -45,6 +45,11 @@ async def migrate(instance_id: UUID, request: Request, principal: CurrentUser):
 
 @router.post("/migrations/{migration_id}/approve", response_model=MigrationOut)
 async def approve(instance_id: UUID, migration_id: UUID, request: Request, principal: CurrentUser):
+    """An agent needs the HITL marker agent-server mints after the user approved (`app.core.hitl`)."""
+    if principal.is_agent:
+        request.app.state.hitl.consume(
+            request.headers.get(hitl.HEADER), principal, instance_id, migration_id
+        )
     return await request.app.state.appdata.approve(principal, instance_id, migration_id)
 
 
