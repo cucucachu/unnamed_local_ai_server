@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
+    "@homeai/sdk": "file:../../packages/homeai-sdk",
     "@ronradtke/react-native-markdown-display": "^8.1.0",
     "expo": "~57.0.18",
     "expo-audio": "~57.0.4",
@@ -29,7 +30,8 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
-    "react-native-web": "~0.21.0"
+    "react-native-web": "~0.21.0",
+    "react-native-webview": "13.16.1"
   },
   "devDependencies": {
     "@types/jest": "29.5.14",
@@ -52,6 +54,9 @@
   "private": true,
   "jest": {
     "preset": "jest-expo",
+    "modulePaths": [
+      "<rootDir>/node_modules"
+    ],
     "setupFilesAfterEnv": [
       "<rootDir>/jest.setup.js"
     ],

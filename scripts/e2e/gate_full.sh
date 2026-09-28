@@ -20,6 +20,9 @@
 #      instance dir on disk, reserved Apps folder, uninstall to trash)
 #   -> platform_app_data_smoke.sh (M12-03: per-instance SQLite migrations,
 #      RPC role matrix, db_changed event, read-only copy for exec)
+#   -> app_runner_browser_smoke.sh (M12-06: Apps tab -> sandboxed runner,
+#      a written row survives a reload, rebuild hot-reloads, runtime error
+#      overlay + Reload, a viewer can't write)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
 #   -> video_thumbnail_browser_smoke.sh -> chat_browser_smoke.sh
 #   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
@@ -226,6 +229,7 @@ main() {
   run_step "platform_apps_smoke.sh"  bash "${SCRIPT_DIR}/platform_apps_smoke.sh"
   run_step "app_build_smoke.sh"      bash "${SCRIPT_DIR}/app_build_smoke.sh"
   run_step "platform_app_data_smoke.sh" bash "${SCRIPT_DIR}/platform_app_data_smoke.sh"
+  run_step "app_runner_browser_smoke.sh" bash "${SCRIPT_DIR}/app_runner_browser_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "image_browser_smoke.sh"  bash "${SCRIPT_DIR}/image_browser_smoke.sh"

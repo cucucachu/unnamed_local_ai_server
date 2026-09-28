@@ -2,7 +2,11 @@
 # (and were with M2-05, which replaced this stage's placeholder body with
 # the real `expo export` build) — keep both stable.
 FROM node:22-alpine AS frontend-build
-WORKDIR /app
+# The app host imports `@homeai/sdk/host` (`file:../../packages/homeai-sdk`;
+# only its sources are used). The lockfile keys that link by its path
+# relative to the frontend, so the stage keeps the repo's layout.
+WORKDIR /repo/services/frontend
+COPY packages/homeai-sdk/ /repo/packages/homeai-sdk/
 COPY services/frontend/package.json services/frontend/package-lock.json ./
 RUN npm ci
 COPY services/frontend/ ./

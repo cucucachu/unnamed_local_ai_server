@@ -652,6 +652,44 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > - Hot reload is in the host library (`app_built` for the instance's app →
 >   `fetchBundle` → `bundle.load`); wiring it into the frontend is M12-06.
 
+> **As built (M12-06)** — the app host is in `services/frontend`
+> (`ARCHITECTURE.md` §3 "App host"): an **Apps** tab (installed instances
+> grouped by space, a placeholder until the M14 Home launcher) and a runner
+> at `/apps/<instance_id>`. The runner fixes the instance id from the route
+> and uses `@homeai/sdk/host` unchanged: `platformForward(instanceId)` is the
+> only `forward` either transport gets, `readOnly` is the user's role in the
+> instance's space as the platform reports it, and the runner owns a
+> `/ws/platform/events` socket feeding `platformEventRelay` (so `db_changed`
+> re-runs live queries and `app_built` hot-reloads). A `runtime.error` covers
+> the sandbox with an error overlay (message, **Reload**, **Dismiss**);
+> `runtime.ready` clears it. Deviations:
+>
+> - **No instance lookup endpoint.** The platform lists instances per space
+>   (`GET /spaces/{id}/instances`), so the Apps tab asks every live space,
+>   and the runner finds its instance (and so its space and the user's role)
+>   the same way rather than trusting anything in the link. A
+>   `GET /apps/instances/{id}` would save the fan-out; not needed yet.
+> - **Reload is a fresh sandbox**, not `bundle.load`: it re-fetches the
+>   bundle and runtime and remounts the frame or WebView, so an app whose
+>   error left the runtime itself broken comes back too.
+> - **Native doesn't kill the WebView** on a navigation attempt:
+>   `onShouldStartLoadWithRequest` refuses it before any request is made,
+>   and the app keeps running. The web frame, which can't be stopped from
+>   navigating, is removed (library behaviour) and the overlay says so.
+> - **One events socket per open runner**, not one per app session: it
+>   reconnects with backoff (1 s → 30 s), and a rejected or `4401`-closed
+>   socket asks the platform whether the session still holds, as the chat
+>   socket does. A failed hot-reload fetch keeps the running version.
+> - **A missing role is read-only**: `readOnly` is on unless the user is an
+>   owner or editor of the space (the platform refuses writes regardless).
+> - The frontend depends on the package as `"@homeai/sdk":
+>   "file:../../packages/homeai-sdk"`; `metro.config.js` watches the package
+>   and resolves its imports from the frontend's `node_modules`, and the
+>   Caddy image's frontend stage keeps the repo layout so the lockfile's
+>   link resolves. `react-native-webview` is 13.16.1 (`npx expo install`,
+>   the version Expo Go for SDK 57 bundles). The on-device Expo Go check is
+>   in `HOST-CHECKS.md` (M12).
+
 ### Data (D10–D12)
 
 - One SQLite database per instance (WAL mode). All writes go through the
