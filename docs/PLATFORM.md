@@ -1051,6 +1051,15 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > `app_sql` runs a single statement; use an action for a multi-statement
 > write.
 
+> **As built (M13-03)** — templates in `examples/apps/` (baked into
+> agent-server at `/app/templates` the same way as M13-02): `grocery-list`
+> (default), `list`, `notes`, `tracker`. A short authoring guide
+> (`APP_AUTHORING_GUIDE` in `app/agent/prompts.py`) is appended to the
+> system prompt in `build_agent` next to `make_app_tools`. `useSQLiteContext`
+> is an alias of `useDatabase` on `@homeai/sdk`. The real-model eval is
+> `scripts/eval/app_authoring/` (≥10 prompts; pass = build + smoke + a
+> scripted data-model check; bar ≥ 7/10).
+
 ### System apps (D17)
 
 Chat, Files, Settings/Admin, and Home (launcher) ship in the host app and

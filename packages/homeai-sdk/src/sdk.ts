@@ -45,6 +45,9 @@ export function useDatabase(): Database {
   return database;
 }
 
+/** expo-sqlite's name for the same hook; kept as an alias for models that reach for it. */
+export const useSQLiteContext = useDatabase;
+
 type QueryState<T> = { data: T[] | undefined; error: Error | null; loading: boolean };
 
 export function useQuery<T = any>(sql: string, ...params: unknown[]) {

@@ -513,8 +513,11 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
 
         space: "personal" or a shared space's slug. slug: the app's folder name, lowercase
         letters, digits and dashes (e.g. "chore-chart"). name: its display name.
-        The source is copied to /personal/Apps/<slug>/ (or /spaces/<space>/Apps/<slug>/);
-        read its AGENT.md, change the files with the file tools, then call build_app.
+        template: which starter to copy. grocery-list (default) is a shopping list with
+        quantities; list is a generic checklist; notes is title+body notes; tracker is
+        habits with a daily check-in. The source is copied to /personal/Apps/<slug>/ (or
+        /spaces/<space>/Apps/<slug>/); read its AGENT.md, change the files with the file
+        tools, then call build_app.
         """
         token = _delegation_token(config)
         if token is None:

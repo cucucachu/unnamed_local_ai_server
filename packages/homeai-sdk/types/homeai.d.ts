@@ -39,6 +39,8 @@ declare module '@homeai/sdk' {
   export type Space = { id: string; slug: string; name: string; role: 'owner' | 'editor' | 'viewer' };
 
   export function useDatabase(): Database;
+  /** Alias of `useDatabase` (expo-sqlite's hook name). */
+  export function useSQLiteContext(): Database;
   /** Runs `sql` and re-runs it whenever the instance's database changes. */
   export function useQuery<T = any>(sql: string, params?: SQLParams): QueryResult<T>;
   export function useQuery<T = any>(sql: string, ...params: SQLValue[]): QueryResult<T>;

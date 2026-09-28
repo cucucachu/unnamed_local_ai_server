@@ -1,0 +1,11 @@
+{
+  "name": "Tracker",
+  "slug": "tracker",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "calendar-outline",
+    "description": "Habit tracker: add habits and check them off each day.",
+    "permissions": {}
+  }
+}

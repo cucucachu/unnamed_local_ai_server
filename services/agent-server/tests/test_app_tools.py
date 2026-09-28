@@ -131,6 +131,30 @@ async def test_create_app_copies_the_template_registers_and_installs(fake_model,
     assert f"instance id: {inst['id']}" in out and 'build_app(app="/personal/Apps/chores")' in out
 
 
+async def test_create_app_copies_a_named_template(fake_model, fake_platform):
+    fake_model.queue(
+        ToolCallTurn(
+            "create_app",
+            {"space": "personal", "slug": "journal", "name": "Journal", "template": "notes"},
+        ),
+        TextTurn("created"),
+    )
+    with (
+        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        client.websocket_connect("/ws/chat/create-notes") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "make me a journal"})
+        _assert_turn_end(_drain_turn(ws)[-1], "completed")
+    tree = fake_platform.personal()
+    assert "Apps/journal/schema.sql" in tree
+    assert b"CREATE TABLE notes" in tree["Apps/journal/schema.sql"]
+    assert "Apps/journal/actions/addNote.sql" in tree
+    assert "Apps/journal/app/note/[id].tsx" in tree
+    assert "Apps/journal/actions/addItem.sql" not in tree
+    [out] = _tool_results(fake_model)
+    assert "from the notes template" in out
+
+
 async def test_create_app_refuses_bad_input_without_writing(fake_model, fake_platform):
     _family(fake_platform, "viewer")
     fake_platform.personal()["Apps/taken/app.json"] = b"{}"
@@ -156,7 +180,9 @@ async def test_create_app_refuses_bad_input_without_writing(fake_model, fake_pla
     assert "can only view /spaces/family" in viewer
     assert "/personal/Apps/taken already exists" in taken
     assert "slug must be" in slug
-    assert "no template 'no' (available: grocery-list)" in template
+    assert "no template 'no'" in template
+    for name in ("grocery-list", "list", "notes", "tracker"):
+        assert name in template
     assert "no space 'work'" in space
     assert fake_platform.apps == [] and list(fake_platform.personal()) == ["Apps/taken/app.json"]
 

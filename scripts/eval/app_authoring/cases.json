@@ -1,0 +1,52 @@
+[
+  {
+    "id": "grocery-quantities",
+    "prompt": "Make me a grocery list app with quantities in my personal space. Use create_app with slug \"eval-grocery-quantities\" and the closest template, edit the source if it isn't already a shopping list with quantities, then call build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "item"], ["quantity", "qty", "amount"]]
+  },
+  {
+    "id": "habit-tracker",
+    "prompt": "Make me a habit tracker in my personal space. Use create_app with slug \"eval-habit-tracker\" and the closest template, edit if needed so I can add habits and check them off each day, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "habit"], ["day", "date"]]
+  },
+  {
+    "id": "notes",
+    "prompt": "Make me a notes app in my personal space: each note has a title and a body. Use create_app with slug \"eval-notes\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["title", "name"], ["body", "content", "text"]]
+  },
+  {
+    "id": "todo-list",
+    "prompt": "Make me a todo list / checklist app in my personal space. Use create_app with slug \"eval-todo-list\" and the closest template, edit if needed so I can add items and tick them off, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "item"], ["done", "checked", "completed"]]
+  },
+  {
+    "id": "shopping-list",
+    "prompt": "Make me a shopping list app in my personal space. Use create_app with slug \"eval-shopping-list\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "item"]]
+  },
+  {
+    "id": "chore-chart",
+    "prompt": "Make me a chore chart app in my personal space: a list of chores we can tick off. Use create_app with slug \"eval-chore-chart\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "chore", "item"], ["done", "checked", "completed"]]
+  },
+  {
+    "id": "packing-list",
+    "prompt": "Make me a packing list app in my personal space for a trip: add things to pack and mark them packed. Use create_app with slug \"eval-packing-list\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "item"], ["packed", "done", "checked"]]
+  },
+  {
+    "id": "recipe-notebook",
+    "prompt": "Make me a recipe notebook in my personal space: each recipe has a title and the recipe text. Use create_app with slug \"eval-recipe-notebook\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["title", "name"], ["body", "content", "text", "recipe", "ingredients"]]
+  },
+  {
+    "id": "reading-list",
+    "prompt": "Make me a reading list app in my personal space: books I want to read, with a way to mark them read. Use create_app with slug \"eval-reading-list\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["title", "name", "book"], ["read", "done", "checked", "status"]]
+  },
+  {
+    "id": "water-tracker",
+    "prompt": "Make me a daily water / habit tracker in my personal space: add a habit and check it in each day. Use create_app with slug \"eval-water-tracker\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
+    "need_column_groups": [["name", "title", "habit"], ["day", "date"]]
+  }
+]
