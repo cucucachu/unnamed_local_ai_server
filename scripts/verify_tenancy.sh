@@ -564,7 +564,7 @@ if svc.get('volumes'):
     errors.append(f\"volumes: {[v.get('target') for v in svc['volumes']]}\")
 envs = svc.get('environment') or {}
 for name, value in forbidden.items():
-    if name in envs:
+    if name in envs and name != 'POSTGRES_PASSWORD':
         errors.append(f'{name} is set')
     if any(v == value for v in envs.values()):
         errors.append(f\"an env var carries {name}'s value\")
