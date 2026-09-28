@@ -44,7 +44,13 @@ export default function AppRunnerScreen() {
         }}
       />
       {data ? (
-        <AppRunner key={data.instance.id} instanceId={data.instance.id} space={data.space} />
+        <AppRunner
+          key={data.instance.id}
+          instanceId={data.instance.id}
+          space={data.space}
+          appId={data.instance.app_id}
+          appName={data.instance.app.name}
+        />
       ) : (
         <LoadState error={error} onRetry={reload} />
       )}

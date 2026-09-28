@@ -5,6 +5,19 @@ import type { Space } from '@/lib/platform';
 import { exists, flush, press, textOf } from '../../test-utils/screen';
 
 const mockSandboxes: Record<string, any>[] = [];
+jest.mock('@/components/AppAgentPanel', () => {
+  const React = jest.requireActual('react');
+  const { Text, View } = jest.requireActual('react-native');
+  return {
+    AppAgentPanel: (props: Record<string, any>) =>
+      React.createElement(
+        View,
+        { testID: 'app-agent-panel' },
+        React.createElement(Text, { testID: 'app-agent-prompt' }, props.initialPrompt ?? ''),
+        React.createElement(Text, { testID: 'app-agent-app' }, `${props.appName} ${props.appId} ${props.instanceId}`),
+      ),
+  };
+});
 jest.mock('@/components/AppSandbox', () => {
   const React = jest.requireActual('react');
   const { View } = jest.requireActual('react-native');
@@ -59,7 +72,7 @@ let renderer: ReactTestRenderer | null = null;
 async function mount(role: Space['role'] = 'owner') {
   const s = space(role);
   await act(async () => {
-    renderer = create(<AppRunner instanceId={INSTANCE} space={s} />);
+    renderer = create(<AppRunner instanceId={INSTANCE} space={s} appId="app-1" appName="Runtime check" />);
   });
   await flush();
   return renderer!;
@@ -146,5 +159,17 @@ describe('AppRunner', () => {
     expect(mockSandboxes).toHaveLength(0);
     await press(r, 'app-runner-retry');
     expect(mockSandboxes).toHaveLength(1);
+  });
+
+  it('opens the agent panel with context ids, and askAgent from the sandbox fills the prompt', async () => {
+    const r = await mount();
+    expect(exists(r, 'app-agent-panel')).toBe(false);
+    await press(r, 'app-ask-agent');
+    expect(exists(r, 'app-agent-panel')).toBe(true);
+    expect(textOf(r)).toContain(`Runtime check app-1 ${INSTANCE}`);
+
+    await act(async () => mockSandboxes[0].onAskAgent('Add Milk via app_sql'));
+    expect(exists(r, 'app-agent-panel')).toBe(true);
+    expect(textOf(r)).toContain('Add Milk via app_sql');
   });
 });

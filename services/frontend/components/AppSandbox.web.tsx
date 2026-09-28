@@ -10,7 +10,7 @@ import { instanceForward, type AppSandboxProps } from '@/lib/appHost';
  * node. The library checks `event.source` and removes a frame that
  * navigates itself (`onKilled`).
  */
-export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKilled }: AppSandboxProps) {
+export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKilled, onAskAgent }: AppSandboxProps) {
   const container = useRef<View>(null);
 
   useEffect(() => {
@@ -21,6 +21,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKill
       forward: instanceForward(instanceId),
       readOnly,
       onEvent,
+      onAskAgent,
       onKilled: () => {
         onHost(null);
         onKilled();
@@ -31,7 +32,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKill
       sandbox.destroy();
       onHost(null);
     };
-  }, [instanceId, html, readOnly, onEvent, onHost, onKilled]);
+  }, [instanceId, html, readOnly, onEvent, onAskAgent, onHost, onKilled]);
 
   return <View ref={container} testID="app-sandbox" style={styles.container} />;
 }

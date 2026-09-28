@@ -97,6 +97,26 @@ export async function statPath(path: string): Promise<FileStat> {
   return apiFetch<FileStat>(`${FILES_API}/stat?${query(path)}`);
 }
 
+/** `GET /api/platform/files/stream?path=` as UTF-8 text (full file, not the
+ * agent `files/read` slice). `401` signs out like `apiFetch`. */
+export async function readTextFile(path: string): Promise<string> {
+  const response = await fetch(`${apiBase()}${FILES_API}/stream?${query(path)}`, {
+    credentials: 'include',
+    headers: authHeaders(),
+  });
+  if (response.status === 401) notifyUnauthorized();
+  if (!response.ok) {
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    throw new ApiError(response.status, detailFromBody(body, response.statusText || 'Request failed'));
+  }
+  return response.text();
+}
+
 /** `POST /api/platform/files/mkdir`: `mkdir -p`, `201 {"path"}`; `409` if a
  * file is in the way. */
 export async function mkdir(path: string): Promise<{ path: string }> {

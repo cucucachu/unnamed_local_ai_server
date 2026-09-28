@@ -98,6 +98,18 @@ describe('instanceBridge: forwarding is bound to the instance the host opened', 
     expect(calls).toEqual([]);
   });
 
+  it('handles agent.ask locally and never names an instance on the platform', async () => {
+    const calls = mockPlatform();
+    const asked: string[] = [];
+    const sent: string[] = [];
+    const host = instanceBridge(FIXED, { send: (wire) => sent.push(wire), onAskAgent: (prompt) => asked.push(prompt) });
+    host.receive(req(1, 'agent.ask', { prompt: 'Add milk', instance_id: OTHER, url: `${BASE}/api/platform/apps/instances/${OTHER}/rpc` }));
+    for (let i = 0; i < 50 && sent.length < 1; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(asked).toEqual(['Add milk']);
+    expect(JSON.parse(sent[0])).toMatchObject({ kind: 'res', id: 1, ok: true, result: {} });
+    expect(calls).toEqual([]);
+  });
+
   it('never hands the sandbox the host’s credentials', async () => {
     mockPlatform(() => ({ status: 403, body: { detail: 'insufficient_role' } }));
     const { host, sent, answered } = openBridge();

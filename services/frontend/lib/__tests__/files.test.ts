@@ -8,6 +8,7 @@ import {
   mkdir,
   movePath,
   parentPath,
+  readTextFile,
   statPath,
   uploadToDir,
   type UploadPart,
@@ -146,6 +147,22 @@ describe('statPath', () => {
     const [calledUrl] = fetchMock.mock.calls[0];
     expect(calledUrl).toContain(`/api/platform/files/stat?path=${encodeURIComponent('/personal/a b.txt')}`);
     expect(result.entry.type).toBe('file');
+  });
+});
+
+describe('readTextFile', () => {
+  it('GETs /api/platform/files/stream as text', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '# Runtime check\n',
+      json: async () => ({}),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(readTextFile('/spaces/family/Apps/runtime-check/AGENT.md')).resolves.toBe('# Runtime check\n');
+    const [calledUrl] = fetchMock.mock.calls[0];
+    expect(calledUrl).toContain(`/api/platform/files/stream?path=${encodeURIComponent('/spaces/family/Apps/runtime-check/AGENT.md')}`);
   });
 });
 
