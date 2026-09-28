@@ -31,7 +31,8 @@
 // M8-03: after the existing steps (which need HITL *off* so `execute_code`
 // in step 6 still runs without an approval card), this script toggles
 // `hitl_enabled` via `PUT /api/settings` and drives the three Playwright
-// scenarios from that ticket: Approve writes `${FILES_DIR}/hello.txt`,
+// scenarios from that ticket: Approve writes `/personal/hello.txt` (the
+// e2e user's personal space, checked through the platform files API),
 // Reject leaves the reject-target file absent, HITL-off writes with no
 // approval card. Original settings are restored in `finally`.
 //
@@ -66,7 +67,7 @@
 // that file's `textGroupWeb` style comment for the root cause).
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -77,7 +78,6 @@ const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE =
   process.env.CHAT_SMOKE_API_BASE ?? new URL('/api', BASE_URL).href.replace(/\/$/, '');
 const CA_PATH = process.env.CHAT_SMOKE_CA ?? '';
-const FILES_DIR = process.env.FILES_DIR ?? '';
 const TIMEOUT_MS = 120_000;
 
 /** Import Caddy's local CA into a throwaway NSS db so Chromium trusts
@@ -135,9 +135,9 @@ const STOP_FOLLOW_UP_MESSAGE = 'Say exactly: PONG once more, after being stopped
 // WEB_SEARCH_MESSAGE) so the real model actually calls `write_file`
 // rather than describing the file. The ticket's prompt text is the
 // "Create <name> containing hi" clause.
-const HITL_APPROVE_MESSAGE = 'Create hello.txt containing hi. Use write_file.';
-const HITL_REJECT_MESSAGE = 'Create hello-reject.txt containing hi. Use write_file.';
-const HITL_OFF_MESSAGE = 'Create hello-off.txt containing hi. Use write_file.';
+const HITL_APPROVE_MESSAGE = 'Create /personal/hello.txt containing hi. Use write_file.';
+const HITL_REJECT_MESSAGE = 'Create /personal/hello-reject.txt containing hi. Use write_file.';
+const HITL_OFF_MESSAGE = 'Create /personal/hello-off.txt containing hi. Use write_file.';
 const HITL_APPROVE_FILE = 'hello.txt';
 const HITL_REJECT_FILE = 'hello-reject.txt';
 const HITL_OFF_FILE = 'hello-off.txt';
@@ -163,12 +163,12 @@ const LONG_PROSE_MESSAGE =
   'lists, or special formatting that must wrap onto multiple lines inside the narrow ' +
   'chat bubble instead of overflowing off the right edge of the screen, because a ' +
   'single unformatted paragraph is exactly the case this regression covers.';
-// M9-02: read_file is not a mutating tool (HITL-safe). The file is written
-// into FILES_DIR just before the step so the model has something real
-// to open.
+// M9-02: read_file is not a mutating tool (HITL-safe). The file is put in
+// the user's personal space just before the step so the model has
+// something real to open.
 const ACTIVITY_PANEL_FILE = 'activity-panel-smoke.txt';
 const ACTIVITY_PANEL_MESSAGE =
-  'Use read_file to read activity-panel-smoke.txt, then say exactly: READ-OK';
+  'Use read_file to read /personal/activity-panel-smoke.txt, then say exactly: READ-OK';
 // M8-07: a non-trivial prompt that reliably produces thought tokens when
 // thinking_enabled is on (Gemma 4 + --reasoning-format deepseek).
 const THINKING_ON_MESSAGE =
@@ -181,7 +181,7 @@ const FORK_TURN_2 = 'Say exactly: ECHO';
 const FORK_TURN_3 = 'Say exactly: FOXTROT';
 const FORK_TURN_2_EDITED = 'Say exactly: ECHO-FORKED';
 const FILE_LINK_MESSAGE =
-  'Create notes/link-test.md with one line, then tell me where you saved it';
+  'Create /personal/notes/link-test.md with one line, then tell me where you saved it';
 const FILE_LINK_REL = 'notes/link-test.md';
 const HTTPS_VOICE_URL = process.env.CHAT_SMOKE_HTTPS_URL ?? 'https://homeai.local/';
 const HTTP_VOICE_URL = process.env.CHAT_SMOKE_HTTP_URL ?? 'http://homeai.local/';
@@ -377,20 +377,34 @@ with urlopen(req, timeout=15) as resp:
   return JSON.parse(raw);
 }
 
-function filesDirFilePath(name) {
-  if (!FILES_DIR) {
-    throw new Error('FILES_DIR is not set (chat_browser_smoke.sh exports it from .env)');
-  }
-  return path.join(FILES_DIR, name);
+/** HTTP status of the platform files API as the page's user (M11-02: the
+ * agent's file tools write there): `GET` stats `/personal/<name>`, `PUT`
+ * writes `content` to it, `DELETE` removes it. The throwaway user's
+ * personal space goes away with the user, so nothing else cleans up. */
+function personalFileStatus(method, name, content = '') {
+  const script = `${pythonSslPreamble()}
+import sys, urllib.error, urllib.parse
+base, method, vpath, content = sys.argv[1:5]
+route = {'GET': '/stat', 'PUT': '/content', 'DELETE': ''}[method]
+req = urllib.request.Request(
+    f"{base}/platform/files{route}?" + urllib.parse.urlencode({'path': vpath}), method=method)
+if method == 'PUT':
+    req.data = content.encode()
+    req.add_header('Content-Type', 'application/octet-stream')
+try:
+    with urlopen(req, timeout=15) as resp:
+        print(resp.status)
+except urllib.error.HTTPError as e:
+    print(e.code)
+`;
+  const out = execFileSync('python3', ['-c', script, API_BASE, method, personalPath(name), content], {
+    encoding: 'utf8',
+  });
+  return Number(out.trim());
 }
 
-function removeFilesDirFileBestEffort(name) {
-  try {
-    rmSync(filesDirFilePath(name), { force: true });
-  } catch {
-    // best-effort
-  }
-}
+const personalPath = (name) => `/personal/${name}`;
+const personalFileExists = (name) => personalFileStatus('GET', name) === 200;
 
 function fetchThreadMessages(threadId) {
   const script = `${pythonSslPreamble()}
@@ -784,7 +798,6 @@ async function main() {
 
     // --- Step 9: HITL approve (M8-03) -----------------------------------
     settingsRequest('PUT', { hitl_enabled: true });
-    removeFilesDirFileBestEffort(HITL_APPROVE_FILE);
 
     const approvePriorTools = await toolCardLocator.count();
     await sendAndAwaitApprovalCard(page, HITL_APPROVE_MESSAGE);
@@ -799,17 +812,16 @@ async function main() {
       throw new Error('Step 9: approved write_file rendered a rejected chip');
     }
     const approveFileDeadline = Date.now() + TIMEOUT_MS;
-    while (Date.now() < approveFileDeadline && !existsSync(filesDirFilePath(HITL_APPROVE_FILE))) {
+    while (Date.now() < approveFileDeadline && !personalFileExists(HITL_APPROVE_FILE)) {
       await page.waitForTimeout(300);
     }
-    if (!existsSync(filesDirFilePath(HITL_APPROVE_FILE))) {
-      throw new Error(`Step 9: ${filesDirFilePath(HITL_APPROVE_FILE)} does not exist after Approve`);
+    if (!personalFileExists(HITL_APPROVE_FILE)) {
+      throw new Error(`Step 9: ${personalPath(HITL_APPROVE_FILE)} does not exist after Approve`);
     }
-    console.log(`Step 9 OK — Approve wrote ${filesDirFilePath(HITL_APPROVE_FILE)}`);
+    console.log(`Step 9 OK — Approve wrote ${personalPath(HITL_APPROVE_FILE)}`);
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
 
     // --- Step 10: HITL reject (M8-03) -----------------------------------
-    removeFilesDirFileBestEffort(HITL_REJECT_FILE);
     const rejectPriorAssistantCount = await assistantBubbleLocator.count();
     await sendAndAwaitApprovalCard(page, HITL_REJECT_MESSAGE);
     console.log('Step 10 OK — approval card appeared (reject scenario)');
@@ -819,8 +831,8 @@ async function main() {
     await expandLastActivityPanel(page);
     const rejectedChip = page.locator('[data-testid="chat-item-tool-rejected-chip"]');
     await rejectedChip.first().waitFor({ state: 'visible', timeout: TIMEOUT_MS });
-    if (existsSync(filesDirFilePath(HITL_REJECT_FILE))) {
-      throw new Error(`Step 10: ${filesDirFilePath(HITL_REJECT_FILE)} exists after Reject`);
+    if (personalFileExists(HITL_REJECT_FILE)) {
+      throw new Error(`Step 10: ${personalPath(HITL_REJECT_FILE)} exists after Reject`);
     }
     const rejectDeadline = Date.now() + TIMEOUT_MS;
     let rejectAck = '';
@@ -839,15 +851,14 @@ async function main() {
     if (!rejectAck) {
       throw new Error('Step 10: assistant did not acknowledge the rejected write');
     }
-    if (existsSync(filesDirFilePath(HITL_REJECT_FILE))) {
-      throw new Error(`Step 10: ${filesDirFilePath(HITL_REJECT_FILE)} appeared after the assistant replied`);
+    if (personalFileExists(HITL_REJECT_FILE)) {
+      throw new Error(`Step 10: ${personalPath(HITL_REJECT_FILE)} appeared after the assistant replied`);
     }
     console.log(`Step 10 OK — Reject left file absent; assistant: ${rejectAck}`);
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
 
     // --- Step 11: HITL off — no approval card (M8-03) -------------------
     settingsRequest('PUT', { hitl_enabled: false });
-    removeFilesDirFileBestEffort(HITL_OFF_FILE);
     const offPriorTools = await toolCardLocator.count();
     await input.fill(HITL_OFF_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -873,11 +884,11 @@ async function main() {
     const offCard = toolCardLocator.nth(offPriorTools);
     await waitForAnyText(offCard, [/write_file/], TIMEOUT_MS);
     const offFileDeadline = Date.now() + 30_000;
-    while (Date.now() < offFileDeadline && !existsSync(filesDirFilePath(HITL_OFF_FILE))) {
+    while (Date.now() < offFileDeadline && !personalFileExists(HITL_OFF_FILE)) {
       await page.waitForTimeout(300);
     }
-    if (!existsSync(filesDirFilePath(HITL_OFF_FILE))) {
-      throw new Error(`Step 11: ${filesDirFilePath(HITL_OFF_FILE)} does not exist with HITL off`);
+    if (!personalFileExists(HITL_OFF_FILE)) {
+      throw new Error(`Step 11: ${personalPath(HITL_OFF_FILE)} does not exist with HITL off`);
     }
     console.log('Step 11 OK — HITL off wrote the file with no approval card');
 
@@ -1020,7 +1031,9 @@ async function main() {
 
     // --- Step 14: turn activity panel (M9-02) ---------------------------
     // HITL is still off from step 11; read_file is not mutating anyway.
-    writeFileSync(filesDirFilePath(ACTIVITY_PANEL_FILE), 'activity-panel smoke marker\n', 'utf8');
+    if (personalFileStatus('PUT', ACTIVITY_PANEL_FILE, 'activity-panel smoke marker\n') !== 200) {
+      throw new Error(`Step 14: could not write ${personalPath(ACTIVITY_PANEL_FILE)}`);
+    }
     const activityPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     await input.fill(ACTIVITY_PANEL_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -1273,11 +1286,6 @@ async function main() {
     // HITL defaults on and is restored in finally; force it on here so the
     // write shows an approval card (same Approve pattern as step 9).
     settingsRequest('PUT', { hitl_enabled: true, thinking_enabled: false });
-    try {
-      rmSync(filesDirFilePath(FILE_LINK_REL), { force: true });
-    } catch {
-      // best-effort
-    }
 
     const fileLinkPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     await sendAndAwaitApprovalCard(page, FILE_LINK_MESSAGE);
@@ -1296,11 +1304,11 @@ async function main() {
 
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
     const fileDeadline = Date.now() + TIMEOUT_MS;
-    while (Date.now() < fileDeadline && !existsSync(filesDirFilePath(FILE_LINK_REL))) {
+    while (Date.now() < fileDeadline && !personalFileExists(FILE_LINK_REL)) {
       await page.waitForTimeout(300);
     }
-    if (!existsSync(filesDirFilePath(FILE_LINK_REL))) {
-      throw new Error(`Step 17: ${filesDirFilePath(FILE_LINK_REL)} was not created after Approve`);
+    if (!personalFileExists(FILE_LINK_REL)) {
+      throw new Error(`Step 17: ${personalPath(FILE_LINK_REL)} was not created after Approve`);
     }
 
     const fileLinkLocator = page.locator('[data-testid="file-link"]');
@@ -1332,9 +1340,8 @@ async function main() {
     console.log(`Step 17 OK — answer contains a file: link (path=${fileLinkPath || '(attr unset)'}); reply: ${fileLinkReply.slice(0, 160)}`);
     await fileLinkLocator.last().click();
     await page.waitForURL(/\/files/, { timeout: 15_000 });
-    // M11-01: a bare `file:` path means the user's Personal space. The agent
-    // still writes into FILES_DIR until M11-02, so the highlight below fails
-    // until then (the Files tab toasts "File not found").
+    // The agent links the virtual path it wrote (M11-02); a bare `file:`
+    // path would mean the Personal space too (M11-01).
     const openedPath = new URL(page.url()).searchParams.get('path');
     if (openedPath !== `/personal/${FILE_LINK_REL}`) {
       throw new Error(`Step 17: expected /files?path=/personal/${FILE_LINK_REL}, got path=${openedPath} url=${page.url()}`);
@@ -1345,8 +1352,8 @@ async function main() {
     if (highlightedLabel && highlightedLabel !== 'link-test.md') {
       throw new Error(`Step 17: highlighted entry was "${highlightedLabel}", expected link-test.md`);
     }
-    if (!existsSync(filesDirFilePath(FILE_LINK_REL))) {
-      throw new Error(`Step 17: ${filesDirFilePath(FILE_LINK_REL)} does not exist after the approved write`);
+    if (!personalFileExists(FILE_LINK_REL)) {
+      throw new Error(`Step 17: ${personalPath(FILE_LINK_REL)} does not exist after the approved write`);
     }
     console.log(`Step 17 OK — clicked file: link, opened /files?path=/personal/${FILE_LINK_REL}, entry highlighted`);
 
@@ -1362,16 +1369,6 @@ async function main() {
     cleanupThreadBestEffort(threadId);
     cleanupThreadBestEffort(editThreadId);
     cleanupThreadBestEffort(forkThreadId);
-    removeFilesDirFileBestEffort(HITL_APPROVE_FILE);
-    removeFilesDirFileBestEffort(HITL_REJECT_FILE);
-    removeFilesDirFileBestEffort(HITL_OFF_FILE);
-    removeFilesDirFileBestEffort(ACTIVITY_PANEL_FILE);
-    removeFilesDirFileBestEffort(FILE_LINK_REL);
-    try {
-      rmdirSync(filesDirFilePath('notes'));
-    } catch {
-      // best-effort — leave notes/ alone if it already had other files
-    }
     if (savedSettings !== null) {
       try {
         settingsRequest('PUT', {

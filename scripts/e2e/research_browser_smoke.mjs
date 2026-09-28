@@ -10,9 +10,9 @@
 //
 //   node research_browser_smoke.mjs positive   -> the "research a question"
 //     happy path: one prompt, one turn, web_search + web_fetch (both
-//     strictly required) plus a file landing on the host files directory
-//     (via `write_file` normally, but `execute_code` is also accepted —
-//     see `attemptPositiveScenario`'s own comment). One retry allowed (LLM
+//     strictly required) plus a file landing in the user's personal space
+//     (via the file tools — see `attemptPositiveScenario`'s own comment).
+//     One retry allowed (LLM
 //     nondeterminism allowance, same 2-attempts-total policy as
 //     gate_m2.sh/gate_m3.sh/gate_m4.sh/exec_crossview_smoke.sh) — real runs
 //     show attempt 1 can also fail a third way: the model narrates having
@@ -39,24 +39,17 @@
 //      asks the agent to fetch a github.com URL, so matched via a
 //      "github.com" substring in the header text.
 //
-// Positive-scenario filesystem assertion reads `${FILES_DIR}/research/
-// llamacpp.md` directly off the host (passed through by `gate_m7.sh`, which
-// itself reads `FILES_DIR` from `.env` the same way every other
-// `scripts/e2e/*.sh` script in this repo does) — this script does NOT go
-// through any container exec for that check, since (per `docker-compose.yml`)
-// `FILES_DIR` is a plain host bind mount agent-server's `write_file`
-// tool writes into directly.
+// Positive-scenario file assertion reads `/personal/research/llamacpp.md`
+// through the platform files API as the smoke's user (M11-02: the agent's
+// file tools write into the user's spaces, not a host directory).
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
-import path from 'node:path';
 import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 
 const BASE_URL = process.env.RESEARCH_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE = process.env.RESEARCH_SMOKE_API_BASE ?? 'http://localhost/api';
-const FILES_DIR = process.env.FILES_DIR ?? '';
 
 const TURN_TIMEOUT_MS = 280_000; // same measured budget as gate_m4.sh's WS_TURN_TIMEOUT_S=280s for its own multi-tool-call turn (real runs show a search -> fetch -> write turn needs the same order of magnitude on this hardware).
 const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
@@ -71,7 +64,7 @@ const STREAMING_CURSOR = '▍'; // see `STREAMING_CURSOR` in chat/[threadId].tsx
 // reduces (does not claim to eliminate - see `runPositiveScenario`'s own
 // retry-once comment) that failure mode by directly naming it.
 const POSITIVE_PROMPT =
-  'Search the web for the llama.cpp GitHub repository (use your web_search and web_fetch tools for this - even though you already know about the project, I need the actual current page content, not your prior knowledge), read its page, and save a one-paragraph summary with the source URL to research/llamacpp.md';
+  'Search the web for the llama.cpp GitHub repository (use your web_search and web_fetch tools for this - even though you already know about the project, I need the actual current page content, not your prior knowledge), read its page, and save a one-paragraph summary with the source URL to /personal/research/llamacpp.md';
 const NEGATIVE_PROMPT = 'Post a comment saying hello on https://github.com/ggml-org/llama.cpp/issues/1';
 
 const EXPECTED_FILE_RELATIVE_PATH = 'research/llamacpp.md';
@@ -230,10 +223,35 @@ urllib.request.urlopen(req, timeout=15)
   });
 }
 
+/** `[status, body]` of a platform files API call on the smoke user's
+ * `/personal/<relPath>` (`GET` downloads, `DELETE` removes). */
+function personalFile(method, relPath) {
+  const script = `
+import os, sys, urllib.error, urllib.parse, urllib.request
+api, method, vpath = sys.argv[1:4]
+route = '/download' if method == 'GET' else ''
+url = f"{api}/platform/files{route}?" + urllib.parse.urlencode({'path': vpath})
+req = urllib.request.Request(url, method=method, headers={'Cookie': os.environ['E2E_AUTH_COOKIE']})
+try:
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        status, body = resp.status, resp.read()
+except urllib.error.HTTPError as e:
+    status, body = e.code, b''
+sys.stdout.write(f"{status}\\n" + body.decode('utf-8', 'replace'))
+`;
+  const out = execFileSync('python3', ['-c', script, API_BASE, method, `/personal/${relPath}`], {
+    env: { ...process.env, E2E_AUTH_COOKIE: smokeCookie ?? '' },
+    encoding: 'utf8',
+  });
+  const newline = out.indexOf('\n');
+  return [Number(out.slice(0, newline)), out.slice(newline + 1)];
+}
+
 // Single attempt at the positive scenario: new thread, one turn, tool-card
-// classification, host-filesystem assertion. Throws on any failure; caller
+// classification, file assertion. Throws on any failure; caller
 // (`runPositiveScenario`) is responsible for the retry-once policy.
-async function attemptPositiveScenario(browser, filePath, attemptNumber) {
+async function attemptPositiveScenario(browser, attemptNumber) {
+  const filePath = `/personal/${EXPECTED_FILE_RELATIVE_PATH}`;
   let threadId;
   const page = await browser.newPage();
   try {
@@ -265,35 +283,28 @@ async function attemptPositiveScenario(browser, filePath, attemptNumber) {
     }
     console.log('[positive] OK — web_fetch tool card found');
 
-    // NOT a hard requirement (unlike web_search/web_fetch above): real runs
-    // show the model sometimes satisfies "save a summary to research/
-    // llamacpp.md" via `execute_code` (a shell `mkdir -p && echo >` one-
-    // liner) instead of calling `write_file` — same end result on disk,
-    // just a different tool choice. The host-filesystem assertion right
-    // below is the actual, tool-agnostic proof the file landed correctly;
-    // failing the whole gate over which tool wrote it would be asserting
-    // implementation detail the ticket doesn't actually require. Logged
-    // either way for visibility into which path the model took.
-    console.log(`[positive] ${foundWriteFile ? 'OK — write_file tool card found' : 'INFO — no write_file tool card found (model likely used execute_code instead; host-filesystem check below is the authoritative assertion)'}`);
+    // NOT a hard requirement (unlike web_search/web_fetch above): the file
+    // check below is the authoritative proof, whichever file tool wrote it
+    // (`write_file` or `edit_file`). Until M11-03 `execute_code` can't reach
+    // `/personal`, so a shell-redirect write fails the check below.
+    console.log(`[positive] ${foundWriteFile ? 'OK — write_file tool card found' : 'INFO — no write_file tool card found (the file check below is the authoritative assertion)'}`);
 
-    // Host-filesystem assertion. `write_file`'s own tool_end happens before
-    // `turn_end` (same ordering `gate_m4.sh` relies on) so the file should
-    // already be on disk by the time the turn completed above — a short
-    // poll covers any last write-flush lag.
+    // `write_file`'s own tool_end happens before `turn_end`, so the file
+    // should already exist — a short poll covers any lag.
     const deadline = Date.now() + 20_000;
     let content = null;
     while (Date.now() < deadline) {
-      try {
-        content = readFileSync(filePath, 'utf8');
+      const [status, body] = personalFile('GET', EXPECTED_FILE_RELATIVE_PATH);
+      if (status === 200) {
+        content = body;
         break;
-      } catch {
-        await page.waitForTimeout(1_000);
       }
+      await page.waitForTimeout(1_000);
     }
     if (content === null) {
-      throw new Error(`${filePath} does not exist on the host within 20s of turn completion`);
+      throw new Error(`${filePath} does not exist in the user's personal space within 20s of turn completion`);
     }
-    console.log(`[positive] OK — ${filePath} exists on the host`);
+    console.log(`[positive] OK — ${filePath} exists`);
 
     if (!content.includes(EXPECTED_URL_IN_FILE)) {
       throw new Error(`${filePath} does not contain "${EXPECTED_URL_IN_FILE}" — content:\n${content}`);
@@ -302,32 +313,20 @@ async function attemptPositiveScenario(browser, filePath, attemptNumber) {
   } finally {
     await page.close();
     deleteThreadBestEffort(threadId);
-    try {
-      rmSync(filePath, { force: true });
-    } catch {
-      // best-effort
-    }
   }
 }
 
 async function runPositiveScenario(browser) {
-  if (!FILES_DIR) {
-    throw new Error('FILES_DIR env var not set — gate_m7.sh must export it before invoking this script');
-  }
-
-  // Idempotency (this script may be run twice in a row, same as every
-  // other e2e gate script in this repo): remove any leftover file from a
-  // prior run before asking the agent to (re)create it, so a stale file
-  // from a previous attempt can never masquerade as this run's own proof.
-  const filePath = path.join(FILES_DIR, EXPECTED_FILE_RELATIVE_PATH);
+  // The user is fresh, so attempt 1 starts with no file; a failed attempt's
+  // file is removed so it can't masquerade as attempt 2's proof.
   const resetFile = () => {
+    if (!smokeCookie) return;
     try {
-      rmSync(filePath, { force: true });
+      personalFile('DELETE', EXPECTED_FILE_RELATIVE_PATH);
     } catch {
       // best-effort
     }
   };
-  resetFile();
 
   // One retry allowed (LLM nondeterminism allowance, same 2-attempts-total
   // policy as gate_m2.sh/gate_m3.sh/gate_m4.sh/exec_crossview_smoke.sh —
@@ -340,7 +339,7 @@ async function runPositiveScenario(browser) {
   // exactly the class of flakiness the other multi-tool-call gates already
   // retry past; this scenario just didn't have that safety net until now.
   try {
-    await attemptPositiveScenario(browser, filePath, 1);
+    await attemptPositiveScenario(browser, 1);
     return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -348,7 +347,7 @@ async function runPositiveScenario(browser) {
     resetFile();
   }
 
-  await attemptPositiveScenario(browser, filePath, 2);
+  await attemptPositiveScenario(browser, 2);
 }
 
 /** Tolerant (per the ticket: "use your judgement on a robust-but-not-flaky

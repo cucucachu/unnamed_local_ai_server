@@ -17,8 +17,6 @@
 # Requires (same as chat_browser_smoke.sh):
 #   - The full docker-compose stack up and healthy.
 #   - Node.js/npm on PATH.
-#   - FILES_DIR exported in the environment (gate_m7.sh does this,
-#     read from .env, same convention as every other scripts/e2e/*.sh script).
 
 set -euo pipefail
 

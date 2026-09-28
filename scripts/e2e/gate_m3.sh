@@ -10,31 +10,29 @@
 #   1. Brings up the full stack, waits for model-runner + agent-server API
 #      health (same polling helpers as `gate_m2.sh`/`files_rest_smoke.sh`).
 #   2. Creates a thread via `POST /api/threads`, then over the real WS asks
-#      the agent (same thread) to create `reports/gate-m3.md` with content
-#      `persistent`, polling the REAL HOST PATH for it with one retry on
-#      failure (LLM nondeterminism allowance - `gate_m2.sh`'s own policy).
-#   3. Confirms `GET /api/files?path=reports` lists it, and a real download
-#      matches the expected content.
+#      the agent (same thread) to create `/personal/reports/gate-m3.md` with
+#      content `persistent`, polling the user's personal space for it with
+#      one retry on failure (LLM nondeterminism allowance - `gate_m2.sh`'s
+#      own policy).
+#   3. Confirms `GET /api/platform/files?path=/personal/reports` lists it,
+#      and a real download matches the expected content.
 #   4. FULL restart: `docker compose down && docker compose up -d` - NOT
 #      just `docker compose restart agent-server` like `persistence_smoke.sh`
 #      - deliberately WITHOUT `-v`/`--volumes`, so the `pgdata` named volume
-#      (Postgres - threads + checkpoints, M3-01) and the `FILES_DIR` bind
-#      mount (files, always host-backed) both survive; only the containers
-#      and the bridge network are torn down and recreated.
+#      (Postgres - threads + checkpoints, M3-01) and the `SPACES_DIR` bind
+#      mount (the platform's spaces, host-backed) both survive; only the
+#      containers are torn down and recreated.
 #   5. After the restart: the thread is still listed via REST, its messages
-#      still show the turn, and the file still exists both via the files API
-#      and directly on the host path.
+#      still show the turn, and the file still exists via the files API.
 #   6. Continues the SAME thread ("what file did you just create?") and
 #      confirms the reply loosely mentions "gate-m3" (case-insensitive
 #      substring, one retry - same nondeterminism allowance as step 2).
 #   7. Cleans up (delete thread + file) via an EXIT trap, so re-running this
 #      script twice in a row (the Tier A acceptance criterion) is safe.
 #
-# M6-03: cleanup now also removes the now-empty "reports/" dir this script
-# creates (the file-delete alone left an empty directory behind - confirmed
-# it was still sitting in the real files dir from earlier runs) via a plain
-# `rmdir`, which only succeeds on an empty directory - never touches a real
-# user "reports" dir that happens to have other content in it. Cleanup also
+# M6-03: cleanup now also removes the "reports/" dir this script creates
+# (the file-delete alone left an empty directory behind), only if it's
+# empty afterwards - never a "reports" dir with other content. Cleanup also
 # best-effort deletes any code-exec-manager session keyed by THREAD_ID:
 # although this script's prompt says "Use your file tools", running it
 # inside `gate_full.sh` showed the real LLM sometimes chooses `execute_code`
@@ -61,6 +59,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=lib/auth.sh
 source "$SCRIPT_DIR/lib/auth.sh"
+# shellcheck source=lib/files.sh
+source "$SCRIPT_DIR/lib/files.sh"
 
 API_BASE="http://localhost/api"
 
@@ -76,12 +76,6 @@ FILE_WRITE_TIMEOUT_S=90
 WS_TURN_TIMEOUT_S=90
 RESTART_GRACE_S=5
 
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[gate-m3] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-HOST_FILE_PATH="${FILES_DIR}/${FILE_PATH}"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
 
@@ -166,11 +160,11 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: root-relative file path. $2: local destination path. Prints the
+# $1: virtual file path. $2: local destination path. Prints the
 # status code on line 1; writes the raw response body bytes to $2.
 download_file() {
   local remote_path="$1" local_dst="$2"
-  python3 - "${API_BASE}/files/download" "$remote_path" "$local_dst" <<'PY'
+  python3 - "${API_BASE}/platform/files/download" "$remote_path" "$local_dst" <<'PY'
 import os
 import sys
 import urllib.error
@@ -190,7 +184,7 @@ except urllib.error.HTTPError as e:
 PY
 }
 
-# $1: base REST path (e.g. "/api/files"). $2: "path" query param value.
+# $1: base REST path (e.g. "/api/platform/files"). $2: "path" query param value.
 url_with_path_param() {
   python3 -c "
 import sys, urllib.parse
@@ -227,16 +221,9 @@ step_stack_up_and_healthy() {
 }
 
 check_file_content() {
-  [ -f "$HOST_FILE_PATH" ] || return 1
-  python3 -c "
-import sys
-expected = sys.argv[2]
-try:
-    content = open(sys.argv[1], encoding='utf-8').read().strip()
-except OSError:
-    sys.exit(1)
-sys.exit(0 if content == expected else 1)
-" "$HOST_FILE_PATH" "$EXPECTED_CONTENT"
+  local content
+  content="$(e2e_personal_cat "$FILE_PATH" 2>/dev/null)" || return 1
+  [ "$(printf '%s' "$content" | xargs)" = "$EXPECTED_CONTENT" ]
 }
 
 poll_file_content() {
@@ -264,9 +251,9 @@ step_create_thread_and_write_file() {
   THREAD_ID="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$body")"
   log "OK: created thread ${THREAD_ID}"
 
-  rm -f "$HOST_FILE_PATH"
+  e2e_personal_rm "$FILE_PATH"
 
-  local prompt="Create a file named ${FILE_PATH} containing exactly the text ${EXPECTED_CONTENT}. Use your file tools."
+  local prompt="Create the file /personal/${FILE_PATH} containing exactly the text ${EXPECTED_CONTENT}. Use your file tools."
   log "Sending file-write prompt (attempt 1/2)..."
   WS_SMOKE_THREAD_ID="$THREAD_ID" WS_SMOKE_PROMPT="$prompt" \
     timeout "$WS_TURN_TIMEOUT_S" uvx --from websockets python3 "$SCRIPT_DIR/../ws_smoke.py" >/tmp/gate-m3-write-attempt-1.log 2>&1 || true
@@ -292,9 +279,9 @@ step_create_thread_and_write_file() {
 }
 
 step_files_api_round_trip() {
-  log "Step 3/7: GET /api/files?path=${FILE_DIR} lists it; download matches..."
+  log "Step 3/7: GET /api/platform/files?path=/personal/${FILE_DIR} lists it; download matches..."
   local resp status body
-  resp="$(rest_request GET "$(url_with_path_param "${API_BASE}/files" "$FILE_DIR")")"
+  resp="$(rest_request GET "$(url_with_path_param "${API_BASE}/platform/files" "/personal/${FILE_DIR}")")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
   if [ "$status" != "200" ]; then
@@ -308,7 +295,7 @@ step_files_api_round_trip() {
 
   local dst
   dst="$(mktemp)"
-  status="$(download_file "$FILE_PATH" "$dst")"
+  status="$(download_file "/personal/${FILE_PATH}" "$dst")"
   if [ "$status" != "200" ]; then
     log "ERROR: expected 200 from download, got ${status}"
     rm -f "$dst"
@@ -367,7 +354,7 @@ assert any(m['role'] == 'assistant' and m['content'] for m in messages[1:]), mes
   log "OK: the turn is still present in the thread's message history"
 
   if ! check_file_content; then
-    log "ERROR: ${HOST_FILE_PATH} missing or content changed after the full restart"
+    log "ERROR: /personal/${FILE_PATH} missing or content changed after the full restart"
     return 1
   fi
   resp="$(rest_request GET "$(url_with_path_param "${API_BASE}/files" "$FILE_DIR")")"
@@ -447,8 +434,10 @@ cleanup() {
   if [ -n "$SAVED_HITL" ]; then
     bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
-  rm -f "$HOST_FILE_PATH" 2>/dev/null || true
-  rmdir "${FILES_DIR}/${FILE_DIR}" 2>/dev/null || true
+  e2e_personal_rm "$FILE_PATH"
+  if [ -n "${E2E_AUTH_COOKIE:-}" ] && [ -z "$(e2e_personal_ls "$FILE_DIR" 2>/dev/null)" ]; then
+    e2e_personal_rm "$FILE_DIR"
+  fi
   if [ -n "${THREAD_ID:-}" ]; then
     rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
     # Best-effort: the LLM may have used execute_code (not just file tools)

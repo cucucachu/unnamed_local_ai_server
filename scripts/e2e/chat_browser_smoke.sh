@@ -47,16 +47,8 @@ echo "==> Ensuring the Chromium browser binary is installed..."
 npx playwright install chromium
 
 repo_root="$(cd "$script_dir/../.." && pwd)"
-if [ -f "$repo_root/.env" ]; then
-  FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
-  export FILES_DIR
-  if [ -z "${BACKUP_DIR:-}" ]; then
-    BACKUP_DIR="$(sed -n 's/^BACKUP_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
-  fi
-fi
-if [ -z "${FILES_DIR:-}" ]; then
-  echo "ERROR: FILES_DIR is not set (needed for M8-03 hello.txt assertions)" >&2
-  exit 1
+if [ -f "$repo_root/.env" ] && [ -z "${BACKUP_DIR:-}" ]; then
+  BACKUP_DIR="$(sed -n 's/^BACKUP_DIR=\(.*\)$/\1/p' "$repo_root/.env" | head -n1 | xargs)"
 fi
 
 # HTTPS smoke (M9-05): trust Caddy's local CA. HTTP invocations are
@@ -81,7 +73,6 @@ if [[ "${base_url}" == https://* ]]; then
 fi
 
 echo "==> Running the smoke test against ${base_url}..."
-echo "    FILES_DIR=${FILES_DIR}"
 if [ -n "${CHAT_SMOKE_CA:-}" ]; then
   echo "    CHAT_SMOKE_CA=${CHAT_SMOKE_CA}"
 fi

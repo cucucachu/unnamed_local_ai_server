@@ -60,13 +60,6 @@ API_BASE="http://localhost/api"
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
 
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[gate-m9] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-export FILES_DIR
-
 BACKUP_DIR="$(sed -n 's/^BACKUP_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
 BACKUP_DIR="${BACKUP_DIR:-/srv/homeai/backups}"
 
