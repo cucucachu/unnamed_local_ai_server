@@ -1,0 +1,11 @@
+{
+  "name": "List",
+  "slug": "list",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "checkbox-outline",
+    "description": "A shared checklist: add items, tick them off, clear what's done.",
+    "permissions": {}
+  }
+}

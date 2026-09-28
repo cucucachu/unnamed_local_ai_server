@@ -77,28 +77,39 @@ test('a valid app compiles, type-checks and renders every route', async () => {
   );
 });
 
-// The reference app (M12-07). Not in the image, which copies only tests/.
-const GROCERY_LIST = path.resolve(here, '../../../examples/apps/grocery-list');
+// The reference app (M12-07) and the M13-03 templates. Not in the image,
+// which copies only tests/.
+const TEMPLATES = path.resolve(here, '../../../examples/apps');
+const TEMPLATE_ROUTES = {
+  'grocery-list': { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
+  list: { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
+  notes: { names: ['index', 'note/[id]'], paths: ['/', '/note/1'] },
+  tracker: { names: ['habit/[id]', 'index'], paths: ['/habit/1', '/'] },
+};
 
-test('the reference grocery-list app builds with no diagnostics', { skip: !fs.existsSync(GROCERY_LIST) && 'examples/ is not here' }, async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'homeai-builder-out-'));
-  const compiled = await compilePhase(GROCERY_LIST, out);
-  assert.deepEqual(compiled.diagnostics, []);
-  assert.deepEqual(
-    compiled.routes.map((r) => r.name),
-    ['index', 'item/[id]'],
+for (const [slug, expect] of Object.entries(TEMPLATE_ROUTES)) {
+  const dir = path.join(TEMPLATES, slug);
+  test(
+    `template ${slug} builds with no diagnostics`,
+    { skip: !fs.existsSync(dir) && 'examples/ is not here' },
+    async () => {
+      const out = fs.mkdtempSync(path.join(os.tmpdir(), 'homeai-builder-out-'));
+      const compiled = await compilePhase(dir, out);
+      assert.deepEqual(compiled.diagnostics, []);
+      assert.deepEqual(
+        compiled.routes.map((r) => r.name),
+        expect.names,
+      );
+      writeResult(out, compiled);
+      const smoke = await smokePhase(dir, out);
+      assert.deepEqual(smoke.diagnostics, []);
+      assert.deepEqual(
+        smoke.routes.map((r) => [r.path, r.timed_out]),
+        expect.paths.map((p) => [p, false]),
+      );
+    },
   );
-  writeResult(out, compiled);
-  const smoke = await smokePhase(GROCERY_LIST, out);
-  assert.deepEqual(smoke.diagnostics, []);
-  assert.deepEqual(
-    smoke.routes.map((r) => [r.path, r.timed_out]),
-    [
-      ['/', false],
-      ['/item/1', false],
-    ],
-  );
-});
+}
 
 test('a forbidden import is an import diagnostic at the import, even if unused', async () => {
   const r = await compileOnly({ 'app/index.tsx': prepend("import { createPortal } from 'react-dom';") });

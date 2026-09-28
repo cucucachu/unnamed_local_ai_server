@@ -8,7 +8,10 @@ expo-sqlite-shaped API from `@homeai/sdk`.
 
 | App | What it shows |
 |---|---|
-| [`grocery-list/`](grocery-list/) | One table, two actions (`addItem`, `clearChecked`), a list screen with live data (`useQuery`), a detail screen (`app/item/[id].tsx`) that edits one row, and read-only UI for viewers. Start with its `AGENT.md`. |
+| [`grocery-list/`](grocery-list/) | Default `create_app` template. One `items` table with quantity/note, two actions (`addItem`, `clearChecked`), a list screen with live data (`useQuery`), a detail screen (`app/item/[id].tsx`), and read-only UI for viewers. Start with its `AGENT.md`. |
+| [`list/`](list/) | Generic checklist: `items` with `done`, `addItem` / `clearDone`, list + detail. |
+| [`notes/`](notes/) | Notes: `title` / `body` / `pinned`, `addNote`, list + `app/note/[id].tsx`. |
+| [`tracker/`](tracker/) | Habit tracker: `habits` + `checkins` (one row per habit per day), `addHabit` / `checkIn`, list + `app/habit/[id].tsx`. |
 
 ## Install one into a space
 
@@ -55,8 +58,9 @@ build command, so build it with the script above or
 
 ## Checks
 
-- `cd services/app-builder && npm test` builds `grocery-list` with the
-  builder (zero diagnostics, every route renders).
+- `cd services/app-builder && npm test` builds `grocery-list`, `list`,
+  `notes` and `tracker` with the builder (zero diagnostics, every route
+  renders).
 - `scripts/e2e/grocery_app_smoke.sh` installs it in a personal and a
   shared space on the live stack and drives it in a browser (add, check,
   detail screen, clear checked, reload, live updates between members, a

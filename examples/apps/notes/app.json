@@ -1,0 +1,11 @@
+{
+  "name": "Notes",
+  "slug": "notes",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "document-text-outline",
+    "description": "Shared notes: a title and a body, pin the ones you need at the top.",
+    "permissions": {}
+  }
+}
