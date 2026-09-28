@@ -6,6 +6,8 @@ import {
   clearSession,
   getAuthStatus,
   login as loginRequest,
+  beginPasskeyLogin,
+  finishPasskeyLogin,
   logout as logoutRequest,
   restoreSession,
   setup as setupRequest,
@@ -14,6 +16,7 @@ import {
   type SetupInput,
   type User,
 } from '@/lib/auth';
+import { getCredential } from '@/lib/webauthn';
 import { onUnauthorized, sessionToken } from '@/lib/session';
 
 /**
@@ -33,6 +36,7 @@ export interface AuthContextValue {
   /** Re-reads `/api/auth/status` (e.g. Retry after the server was down). */
   refresh: () => Promise<void>;
   login: (input: LoginInput) => Promise<void>;
+  loginWithPasskey: (input: { username: string; totpCode?: string }) => Promise<void>;
   setup: (input: SetupInput) => Promise<void>;
   acceptInvite: (input: InviteAcceptInput) => Promise<void>;
   logout: () => Promise<void>;
@@ -92,6 +96,15 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
     [signedIn],
   );
 
+  const loginWithPasskey = useCallback(
+    async ({ username, totpCode }: { username: string; totpCode?: string }) => {
+      const options = await beginPasskeyLogin(username);
+      const credential = await getCredential(options);
+      signedIn(await finishPasskeyLogin({ username, credential, totpCode }));
+    },
+    [signedIn],
+  );
+
   const setup = useCallback(
     async (input: SetupInput) => signedIn(await setupRequest(input), true),
     [signedIn],
@@ -114,8 +127,8 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ state, refresh, login, setup, acceptInvite, logout, updateUser }),
-    [state, refresh, login, setup, acceptInvite, logout, updateUser],
+    () => ({ state, refresh, login, loginWithPasskey, setup, acceptInvite, logout, updateUser }),
+    [state, refresh, login, loginWithPasskey, setup, acceptInvite, logout, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

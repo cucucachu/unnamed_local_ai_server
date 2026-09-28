@@ -26,6 +26,7 @@ class UserOut(BaseModel):
     display_name: str
     role: Literal["admin", "member"]
     totp_enabled: bool
+    require_passkeys: bool = False
     disabled_at: datetime | None
     created_at: datetime
 
@@ -35,10 +36,18 @@ class SessionResponse(BaseModel):
     session_token: str | None = None
 
 
+class WebAuthnStatus(BaseModel):
+    """Enough for the UI to offer passkeys. No secrets."""
+
+    rp_id: str | None = None
+    origin_ok: bool = False
+
+
 class StatusResponse(BaseModel):
     setup_required: bool
     authenticated: bool
     user: UserOut | None = None
+    webauthn: WebAuthnStatus = WebAuthnStatus()
 
 
 class SetupRequest(BaseModel):
@@ -136,6 +145,38 @@ class UserList(BaseModel):
 class AdminUserPatch(BaseModel):
     role: Literal["admin", "member"] | None = None
     disabled: bool | None = None
+    require_passkeys: bool | None = None
+
+
+class PasskeyLoginBeginRequest(BaseModel):
+    username: Short
+
+
+class PasskeyCredentialRequest(BaseModel):
+    credential: dict[str, Any]
+
+
+class PasskeyLoginFinishRequest(PasskeyCredentialRequest):
+    username: Short
+    totp_code: Short | None = None
+    device_label: Short | None = None
+    device_id: UUID | None = None
+
+
+class PasskeyRegisterFinishRequest(PasskeyCredentialRequest):
+    name: Short | None = None
+
+
+class PasskeyOut(BaseModel):
+    id: UUID
+    name: str | None
+    transports: list[str] | None
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class PasskeyList(BaseModel):
+    passkeys: list[PasskeyOut]
 
 
 class InviteCreateRequest(BaseModel):

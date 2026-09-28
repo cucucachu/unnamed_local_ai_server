@@ -21,7 +21,8 @@ from app.api.schemas import (
     UserOut,
 )
 from app.api.session_http import is_https
-from app.core import invites, spaces, users
+from app.core import invites, spaces, users, webauthn
+from app.core.errors import InvalidInput
 from app.core.origin import require_privileged_origin
 from app.core.principal import Principal, SteppedUpAdmin, require_admin_stepped_up
 
@@ -55,8 +56,16 @@ async def list_users(request: Request):
 
 @router.patch("/users/{user_id}", response_model=UserOut)
 async def patch_user(user_id: UUID, body: AdminUserPatch, request: Request):
+    if body.require_passkeys is True and webauthn.rp_id(request.app.state.settings) is None:
+        raise InvalidInput("domain_required")
     async with request.app.state.db_pool.connection() as conn:
-        return await users.update_user(conn, user_id, role=body.role, disabled=body.disabled)
+        return await users.update_user(
+            conn,
+            user_id,
+            role=body.role,
+            disabled=body.disabled,
+            require_passkeys=body.require_passkeys,
+        )
 
 
 @router.get("/spaces", response_model=SpaceList)

@@ -7,6 +7,8 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.core.origin import classify, parse_cidrs, privileged
+from app.main import create_app
+from tests.conftest import make_settings, running
 from tests.helpers import (
     NATIVE,
     PASSWORD,
@@ -255,3 +257,20 @@ async def test_wireguard_post_from_agent_is_still_agent_not_allowed(platform):
         headers={**agent, **PUBLIC},
     )
     assert (response.status_code, response.json()) == (403, {"detail": "agent_not_allowed"})
+
+
+async def test_passkey_register_from_public_is_public_origin(pg_database, tmp_path):
+    """Passkey enrollment is device enrollment: LAN/VPN only (M15-04)."""
+    app = create_app(make_settings(pg_database, tmp_path, webauthn_rp_id="localhost"))
+    async with running(app, base_url="http://localhost") as client:
+        from tests.conftest import Platform
+
+        platform = Platform(app, client, pg_database, tmp_path)
+        await create_user(platform, "alice")
+        headers = await identity(platform, await login(platform, "alice"))
+        refused = await client.post(
+            "/api/platform/me/passkeys/register/begin", headers={**headers, **PUBLIC}
+        )
+        assert (refused.status_code, refused.json()) == (403, {"detail": "public_origin"})
+        ok = await client.post("/api/platform/me/passkeys/register/begin", headers=headers)
+        assert ok.status_code == 200, ok.text

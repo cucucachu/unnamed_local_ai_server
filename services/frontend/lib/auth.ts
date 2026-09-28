@@ -18,14 +18,21 @@ export interface User {
   display_name: string;
   role: 'admin' | 'member';
   totp_enabled: boolean;
+  require_passkeys?: boolean;
   disabled_at: string | null;
   created_at: string;
+}
+
+export interface WebAuthnStatus {
+  rp_id?: string | null;
+  origin_ok: boolean;
 }
 
 export interface AuthStatus {
   setup_required: boolean;
   authenticated: boolean;
   user?: User;
+  webauthn?: WebAuthnStatus;
 }
 
 interface SessionResponse {
@@ -92,10 +99,32 @@ export function getAuthStatus(): Promise<AuthStatus> {
   return authFetch<AuthStatus>('/api/auth/status');
 }
 
+export function passkeysAvailable(status?: WebAuthnStatus | null): boolean {
+  return Boolean(status?.rp_id && status.origin_ok);
+}
+
 export async function login({ username, password, totpCode }: LoginInput): Promise<User> {
   const body: Record<string, string> = { username, password, device_label: DEVICE_LABEL };
   if (totpCode) body.totp_code = totpCode;
   return adoptSession(await postJson<SessionResponse>('/api/auth/login', body));
+}
+
+export async function beginPasskeyLogin(username: string): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>('/api/auth/passkey/login/begin', { username });
+}
+
+export async function finishPasskeyLogin(input: {
+  username: string;
+  credential: Record<string, unknown>;
+  totpCode?: string;
+}): Promise<User> {
+  const body: Record<string, unknown> = {
+    username: input.username,
+    credential: input.credential,
+    device_label: DEVICE_LABEL,
+  };
+  if (input.totpCode) body.totp_code = input.totpCode;
+  return adoptSession(await postJson<SessionResponse>('/api/auth/passkey/login/finish', body));
 }
 
 export async function setup({ setupCode, username, displayName, password }: SetupInput): Promise<User> {
@@ -133,6 +162,14 @@ export function stepUp(password: string): Promise<{ stepped_up_until: string }> 
   return postJson<{ stepped_up_until: string }>('/api/auth/step-up', { password });
 }
 
+export function beginPasskeyStepUp(): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>('/api/auth/passkey/step-up/begin', {});
+}
+
+export function finishPasskeyStepUp(credential: Record<string, unknown>): Promise<{ stepped_up_until: string }> {
+  return postJson<{ stepped_up_until: string }>('/api/auth/passkey/step-up/finish', { credential });
+}
+
 /** Revokes the session server-side (best effort) and always clears it
  * locally — a dead network shouldn't strand the user in a session they
  * asked to leave. */
@@ -159,6 +196,11 @@ const MESSAGES: Record<string, string> = {
   invalid_display_name: 'Display names must be 1–64 printable characters.',
   invalid_invite: 'This invite link is invalid, used, expired, or revoked. Ask for a new one.',
   invalid_request: 'Please fill in every field.',
+  passkey_required: 'This account requires a passkey to sign in.',
+  domain_required: 'Passkeys need a domain.',
+  passkey_rp_mismatch: 'This page does not match the passkey domain.',
+  invalid_passkey: "That passkey didn't work. Try again.",
+  no_passkey: 'No passkey is registered on this account.',
 };
 
 /** Human-readable text for an auth failure (a platform error code, a

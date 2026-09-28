@@ -137,6 +137,30 @@ export function disableTotp(password: string): Promise<User> {
   return send<User>('POST', '/api/platform/me/totp/disable', { password });
 }
 
+export interface Passkey {
+  id: string;
+  name: string | null;
+  transports: string[] | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export async function listPasskeys(): Promise<Passkey[]> {
+  return (await apiFetch<{ passkeys: Passkey[] }>('/api/platform/me/passkeys')).passkeys;
+}
+
+export function beginPasskeyRegister(): Promise<Record<string, unknown>> {
+  return send<Record<string, unknown>>('POST', '/api/platform/me/passkeys/register/begin');
+}
+
+export function finishPasskeyRegister(credential: Record<string, unknown>, name?: string): Promise<Passkey> {
+  return send<Passkey>('POST', '/api/platform/me/passkeys/register/finish', { credential, name });
+}
+
+export function revokePasskey(id: string): Promise<void> {
+  return send<void>('DELETE', `/api/platform/me/passkeys/${encodeURIComponent(id)}`);
+}
+
 export async function listDirectory(): Promise<DirectoryUser[]> {
   return (await apiFetch<{ users: DirectoryUser[] }>('/api/platform/users/directory')).users;
 }
@@ -184,7 +208,10 @@ export async function adminListUsers(): Promise<User[]> {
   return (await apiFetch<{ users: User[] }>('/api/platform/admin/users')).users;
 }
 
-export function adminUpdateUser(id: string, changes: { role?: User['role']; disabled?: boolean }): Promise<User> {
+export function adminUpdateUser(
+  id: string,
+  changes: { role?: User['role']; disabled?: boolean; require_passkeys?: boolean },
+): Promise<User> {
   return send<User>('PATCH', `/api/platform/admin/users/${encodeURIComponent(id)}`, changes);
 }
 
@@ -263,6 +290,13 @@ const MESSAGES: Record<string, string> = {
   too_many_devices: 'This account already has the maximum number of WireGuard devices.',
   peers_exhausted: 'The VPN has no free addresses left. Revoke an unused device and try again.',
   unknown_device: "That VPN device isn't on this account.",
+  passkey_required: 'This account requires a passkey.',
+  domain_required: 'Passkeys need a domain.',
+  passkey_rp_mismatch: 'This page does not match the passkey domain.',
+  invalid_passkey: "That passkey didn't work. Try again.",
+  no_passkey: 'No passkey is registered on this account.',
+  passkey_exists: 'That passkey is already registered.',
+  public_origin: 'Add a passkey from the LAN or VPN.',
 };
 
 /** Human-readable text for a failed platform call. */

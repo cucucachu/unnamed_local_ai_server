@@ -178,10 +178,10 @@ def chowns(monkeypatch) -> dict[Path, tuple[int, int]]:
 
 
 @asynccontextmanager
-async def running(app: FastAPI) -> AsyncIterator[AsyncClient]:
+async def running(app: FastAPI, base_url: str = "http://platform") -> AsyncIterator[AsyncClient]:
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://platform") as client:
+        async with AsyncClient(transport=transport, base_url=base_url) as client:
             yield client
 
 

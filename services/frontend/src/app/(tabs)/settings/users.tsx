@@ -22,7 +22,7 @@ export default function UsersScreen() {
   const { data: users, error, reload, setData } = useLoad(load);
   const { busyKey, run } = useAction(showToast);
 
-  async function update(user: User, changes: { role?: User['role']; disabled?: boolean }) {
+  async function update(user: User, changes: { role?: User['role']; disabled?: boolean; require_passkeys?: boolean }) {
     await run(user.id, async () => {
       const updated = await withStepUp(() => adminUpdateUser(user.id, changes));
       setData((previous) => previous?.map((u) => (u.id === updated.id ? updated : u)) ?? null);
@@ -54,6 +54,7 @@ export default function UsersScreen() {
                       <Text style={settingsStyles.muted}>{user.username}</Text>
                     </View>
                     {user.totp_enabled ? <Badge label="2FA" /> : null}
+                    {user.require_passkeys ? <Badge label="Passkey" testID={`admin-user-passkey-required-${user.username}`} /> : null}
                     {disabled ? <Badge label="Disabled" tone="danger" testID={`admin-user-disabled-${user.username}`} /> : null}
                     {self ? <Badge label={user.role} tone={user.role === 'admin' ? 'accent' : 'muted'} /> : null}
                   </View>
@@ -76,6 +77,14 @@ export default function UsersScreen() {
                         busy={busyKey === user.id}
                         disabled={busyKey !== null && busyKey !== user.id}
                         testID={`admin-user-disable-${user.username}`}
+                      />
+                      <ActionButton
+                        label={user.require_passkeys ? 'Passkeys optional' : 'Require passkeys'}
+                        compact
+                        onPress={() => update(user, { require_passkeys: !user.require_passkeys })}
+                        busy={busyKey === user.id}
+                        disabled={busyKey !== null && busyKey !== user.id}
+                        testID={`admin-user-passkeys-${user.username}`}
                       />
                     </View>
                   )}
