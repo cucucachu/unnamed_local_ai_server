@@ -167,6 +167,24 @@ async def _install_app(conn: AsyncConnection, args: argparse.Namespace) -> None:
     print(f"installed {row['app']['slug']} in {space['slug']} (instance {row['id']})")
 
 
+async def _publish_app(conn: AsyncConnection, args: argparse.Namespace) -> None:
+    principal = await _acting_as(conn, args.username)
+    try:
+        app_id = UUID(args.app_id)
+    except ValueError as exc:
+        raise InvalidInput("invalid_app_id") from exc
+    space_ids = []
+    for slug in args.space:
+        space = await spaces.get_space_by_slug(conn, slug)
+        space_ids.append(space["id"])
+    app, version, listed = await apps.publish_app(
+        conn, principal, args.storage, args.data_dir, app_id, space_ids
+    )
+    print(
+        f"published {app['slug']} {version['version']} ({version['id']}) to {len(listed)} space(s)"
+    )
+
+
 async def _list_apps(conn: AsyncConnection, args: argparse.Namespace) -> None:
     rows = await apps.list_all_apps(conn)
     if args.json:
@@ -249,6 +267,18 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--tracks", default="working", help="working (default) or a version id")
     p.set_defaults(run=_install_app)
 
+    p = sub.add_parser("publish-app", help="publish the working version into space catalogs")
+    p.add_argument("username")
+    p.add_argument("app_id", metavar="APP_ID")
+    p.add_argument(
+        "--space",
+        metavar="SLUG",
+        action="append",
+        required=True,
+        help="shared space slug to list in (repeatable)",
+    )
+    p.set_defaults(run=_publish_app)
+
     p = sub.add_parser("list-apps", help="list every registered app")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=_list_apps)
@@ -268,6 +298,7 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
     args = _parser().parse_args(argv)
     settings = settings or Settings()
     args.storage = SpaceStorage(settings.platform_spaces_dir)
+    args.data_dir = settings.platform_data_dir
     try:
         asyncio.run(_main(args.run, args, settings.database_dsn))
     except PlatformError as exc:
