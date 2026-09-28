@@ -959,7 +959,10 @@ what another doc says it should be.
   build staging root, made `0700` at startup; stored bundles live in
   `platform-data` under `app-bundles/`. Archiving a space (#192) unsets
   and deletes the working bundles of the apps sourced in it, in the same
-  transaction as the archive (files removed after commit).
+  transaction as the archive (files removed after commit). M13-01 keeps
+  each app's source history in `platform-data` under `app-git/` (bare
+  repos, `0700`; kept when the space is archived), written by the image's
+  `git` (§3 "App source history").
 - **Runs as**: root, with `cap_drop: [ALL]` + `cap_add: [CHOWN,
   DAC_OVERRIDE, FOWNER, FSETID]` (it assigns per-user/per-space ownership;
   `FSETID` because the kernel clears the setgid bit on a `chmod` by a
@@ -1909,6 +1912,8 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `GET /api/platform/apps/{id}` | visible | — | `200 App` | `404 not_found` |
 | `POST /api/platform/apps/{id}/validate` | write on the source space | — | `200 {"app": App, "valid": bool, "diagnostics": [Diagnostic]}`. When valid, the working version takes the current `app.json` (and the app its `name`); when not, nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors |
 | `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |
+| `GET /api/platform/apps/{id}/history` | read on the source space | query `offset` (≥ 0, default 0), `limit` (1-100, default 50) | `200 {"commits": [AppCommit], "next_offset": int\|null}` — newest first; see "App source history" below | `404 not_found` (not visible, or visible only through an install), space errors, `422 invalid_request` (bad `offset`/`limit`), `503 history_unavailable`, `500 history_failed` |
+| `POST /api/platform/apps/{id}/revert` | write on the source space | `{"commit": 7-40 lowercase hex}` | `200` the build response plus `"commit"`: the history's head after the revert (a commit with the target's tree). The source folder is rewritten to that tree, then the app is rebuilt as by `…/build`. | `404 not_found`, space errors, `422 invalid_request` (not hex), `422 unknown_commit` (not on this app's branch), `503 builder_unavailable`, `503 history_unavailable`, `500 history_failed` |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
 | `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
 | `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine), after any running write or migration of the instance finishes; later ones are `404`. The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
@@ -1954,11 +1959,14 @@ in `docs/PLATFORM.md` §7 "Build and verify").
    positions only positive ints), at most 50. A phase that timed out, or
    left no usable `result.json`, or failed without diagnostics, is one
    `build` diagnostic.
-6. **Store** (success only): `app.js` and `app.js.map` to
+6. **Store** (success only): the staged `src/` goes into the app's
+   history repo as a tree (M13-01, "App source history" below) before the
+   build dir is removed; `app.js` and `app.js.map` go to
    `/data/platform/app-bundles/<app_id>/<build_id>/`; under `FOR UPDATE`
-   of the working version row, set `bundle_path` =
+   of the working version row, the tree is committed (unless it is the
+   head's) and `bundle_path` =
    `app-bundles/<app_id>/<build_id>/app.js` (relative to the platform data
-   dir), `version` and `manifest`, and the app's `name`. The previous
+   dir), `version`, `manifest` and `commit` are set, and the app's `name`. The previous
    working bundle's dir is removed unless another version row uses it.
    The source space is re-checked after that row lock, so a build can't
    land a bundle in a space archived meanwhile.
@@ -1982,8 +1990,9 @@ in `docs/PLATFORM.md` §7 "Build and verify").
   app/index.tsx 4:9 TS2322: Type 'string' is not assignable to type
   'number'.`
 - `Build`: `{"id": build_id, "duration_ms", "bundle_path": str|null,
-  "bundle_bytes": int|null}` (null unless it succeeded). The response's
-  `build` is null when it stopped at staging or validation.
+  "bundle_bytes": int|null, "commit": str|null}` (null unless it
+  succeeded; `commit` is also null without a usable history). The
+  response's `build` is null when it stopped at staging or validation.
 - `migrations` (M12-03): after a successful build, one `{"instance_id",
   "migration": Migration|null, "error": code|null}` per live instance
   tracking the app's `working` version (oldest first; `[]` otherwise). Each
@@ -1994,6 +2003,44 @@ in `docs/PLATFORM.md` §7 "Build and verify").
   (`invalid_schema`, `migration_failed` with its `failed` migration,
   `not_found` if it was uninstalled meanwhile, …) and the build is still
   `ok`. Then `app_built` goes to the source space's members.
+
+**App source history** (`app/core/apphistory.py`, `appbuild.revert_app`;
+M13-01; design and the security amendment in `docs/PLATFORM.md` §7
+"Source history").
+
+- *Storage*: `/data/platform/app-git/` (root `0700`) holds `.home/` (an
+  empty `HOME` for git) and one bare repo `<app_id>.git` per built app,
+  branch `main`, created on its first successful build (`git init --bare
+  --template=`). Nothing in a space tree is ever a git dir or work tree.
+- *Git calls*: `git -c core.hooksPath=/dev/null -c core.fsmonitor=false
+  -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null
+  -c protocol.allow=never -c gc.auto=0 -c safe.directory=<repo> …` (plus
+  a few more `-c` offs) with only `PATH`, `HOME`, `GIT_CONFIG_NOSYSTEM=1`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`,
+  `GIT_ALLOW_PROTOCOL=`, `GIT_DIR`, the fixed identity and (for `add`)
+  `GIT_WORK_TREE` = the build's staged `src/` and a throwaway
+  `GIT_INDEX_FILE`, 60 s timeout.
+- *Commit*: `write-tree` of the staged copy, then under the working row
+  lock `commit-tree` (parent = head) and `update-ref refs/heads/main new
+  old`. A tree equal to the head's records the head instead. Message:
+  subject, blank line, trailers `Version:`, `User:`, `Thread:` (act=agent
+  only), `Reverts:` (reverts only).
+- *Revert*: resolve the id (`rev-parse <hex>^{commit}` and `merge-base
+  --is-ancestor` with the head), read its files (`ls-tree -r -z`, `cat-file
+  --batch`, at most 1000 files / 16 MB like staging), commit its tree on
+  top of the head under the row lock, then sync the source folder by fd:
+  entries not in the tree removed (`fsops.remove_at`; a folder is emptied
+  of non-dotfiles and removed only if empty), folders opened or made with
+  `fsops.open_dir_at`, files written with `fsops.replace_file_at` (a
+  temporary `.homeai-<hex>` file renamed over the name), all as `<caller
+  uid>:<space gid>`. Then `build_app`.
+- `AppCommit`: `{"id": 40 hex, "parent": str|null, "kind": "build"|"revert",
+  "subject", "version": str|null, "user": username|null, "thread_id":
+  str|null, "reverts": str|null, "created_at", "current": bool}` —
+  `current` is the commit the working version was built from.
+- Startup: no `git` on `PATH` or an unusable dir disables history (logged):
+  builds still succeed with `commit` null, history and revert are `503
+  history_unavailable`.
 
 *Type-check* (`services/app-builder/src/typecheck.mjs`): TS `strict`
 except `noImplicitAny`, `lib: ["es2020"]` (no DOM), JSX `react-jsx`,
@@ -2194,6 +2241,16 @@ credential or an instance id.
   `runtime.ready` clears it; a web frame removed for navigating itself shows
   it too. A bundle that can't load shows `no_bundle` / `not_found` text and
   Retry.
+- **App info** (M13-01; `/apps/info/<app_id>`,
+  `src/app/(tabs)/apps/info/[appId].tsx`, from the runner header's info
+  button `app-info-button`): `GET /api/platform/apps/{id}`, the user's
+  spaces (for their role in the source space) and the first history page;
+  each commit shows subject, version, user, time and short id, badges
+  Current / Agent, and "Show older" pages on. Owners and editors get
+  Revert on every non-current commit: a confirm (`window.confirm` on web,
+  `Alert` natively), `POST …/revert`, then a notice (rebuilt; a pending
+  data change; or the rebuild's first diagnostic) and a reload. Someone
+  who sees the app only through an install gets no history.
 - **Packaging**: `"@homeai/sdk": "file:../../packages/homeai-sdk"`
   (`metro.config.js` adds the package to `watchFolders`, keeps its own
   `node_modules` out, and resolves from the frontend's; jest's `modulePaths`
@@ -3236,6 +3293,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/app_runner_browser_smoke.sh` | M12-06: through Caddy in headless Chromium — CLI-created owner and viewer of a throwaway `e2e-runner-*` shared space; the owner uploads the SDK's `runtime-check` fixture to the space's `Apps` folder, registers, installs and builds it; then in the web app: Apps tab → the instance under its space → the runner at `/apps/<id>` in an `<iframe sandbox="allow-scripts">`; a row written in the app is in the instance database (REST) and shown after a page reload; a rebuild (v2, from `app_fixture.mjs`) hot-reloads in the same frame; v2's Crash button raises the host's error overlay with the message and its Reload brings the app back in a fresh frame; the viewer sees "View only", the row, and a write refused `read_only` with the database unchanged; no sandbox-frame request got a response. Deletes the space (apps and instances cascade), bundles, users on exit. Also in `gate_full.sh`. `scripts/e2e/app_fixture.mjs` installs the same fixture as your own user for trying it by hand (`HOST-CHECKS.md` M12) | After touching the Apps tab / runner (`services/frontend`), `@homeai/sdk/host`, or the Caddy image |
 | `scripts/e2e/grocery_app_smoke.sh` | M12-07: the reference app `examples/apps/grocery-list` through Caddy in headless Chromium — CLI-created owner, editor and viewer of a throwaway `e2e-grocery-*` shared space; the owner uploads, registers, installs and builds the app in their Personal space and in the shared space (zero diagnostics each). Personal: Apps tab → the app; add three items (button and Enter), re-adding "milk" doesn't duplicate it (`addItem` action), check/uncheck (`aria-checked` and the database), open Bread's detail screen and save a quantity, Clear checked (`clearChecked` action) deletes only the checked item, the list is the same after a reload. Shared: the owner's new item and the editor's check / new item each appear in the other's open app without a reload (`db_changed`); the personal list is untouched. The viewer sees the list, no add / clear controls and a disabled checkbox, and RPC `run` and `action` as the viewer are `403` with the database unchanged; no sandbox-frame request got a response. Deletes the shared space, bundles and users (with their personal spaces) on exit. Also in `gate_full.sh`. `app_fixture.mjs install --app examples/apps/grocery-list` installs it as your own user (`examples/apps/README.md`) | After touching `examples/apps/grocery-list`, the SDK, the runner, or the platform's app data path |
 | `scripts/e2e/app_build_smoke.sh` | M12-04: (re)builds `homeai-app-builder:latest`, then with the same transport a CLI-created owner uploads and registers the fixture `hello` and builds it: `ok`, `bundle_path` = `app-bundles/<app>/<build>/app.js` in the API and an `__homeai_define(` bundle + map on disk, staging dir and builder containers gone. A missing import, a disallowed import (`fs`), a type error and a render throw in `app/index.tsx` each give exactly one diagnostic with the expected step, file, line and column and leave the bundle as it was; a bad `app.json` gives one `manifest` diagnostic and never reaches the builder; an outsider's build is `404`; a rebuild replaces the bundle and deletes the old one; deletes its rows, dirs and bundles on exit. Also in `gate_full.sh` | After touching `services/app-builder/`, `app/builds.py` or the platform's `appbuild.py` |
+| `scripts/e2e/app_history_smoke.sh` | M13-01: same transport as `app_build_smoke.sh` — a CLI-created owner uploads the fixture `hello` to `/personal/Apps/hello` plus a planted git repo (`.git/config` with an fsmonitor, hooks path and `evil` filter, `.git/hooks/*`, `.gitattributes`) whose every trigger would `touch` a marker; control: plain `git add` over a copy of the folder in a throwaway `--network none` platform-image container does fire it. Register, build, change `app/index.tsx`, build: two commits, newest current, repo under `/data/platform/app-git`; the outsider's history is `404`. Revert to the first: a third commit (`revert`, reverting the first, parent the second) is the head and current, `app/index.tsx` reads back as the original, a new bundle; the revert's tree equals the first's. The marker never appears in the platform container, `.git/config` is unchanged, no commit has a dotfile. Deletes rows, dirs, bundles and the repo on exit. Also in `gate_full.sh` | After touching app builds or history (`app/core/appbuild.py`, `apphistory.py`, `fsops.py`) or the platform image |
 | `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; then (builder image rebuilt first) a column added in the source's `schema.sql` → `POST /apps/{id}/build` → the build's `migrations` show it applied, the column exists and the viewer's socket gets `app_built`; dropping it → build → `pending` in the build response and the migration list, column kept; deletes its rows, bundles and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2750` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |

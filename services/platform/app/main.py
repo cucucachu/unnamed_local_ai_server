@@ -20,6 +20,7 @@ from app.api.external import auth, events, platform
 from app.core import appbuild, legacy, spaces
 from app.core.agentfs import AgentFsError
 from app.core.appdata import AppData
+from app.core.apphistory import HISTORY_DIR, AppHistory, HistoryError
 from app.core.bootstrap import Bootstrap
 from app.core.config import Settings
 from app.core.errors import (
@@ -112,6 +113,17 @@ async def _prepare_builds(s: Settings) -> appbuild.Builds | None:
     return builds
 
 
+async def _prepare_history(s: Settings) -> AppHistory | None:
+    """The app source history root, or None (history answers 503, builds commit nothing)."""
+    history = AppHistory(s.platform_data_dir / HISTORY_DIR)
+    try:
+        await anyio.to_thread.run_sync(history.prepare)
+    except (OSError, HistoryError) as exc:
+        logger.error("history: %s unusable, app history disabled: %s", history.root, exc)
+        return None
+    return history
+
+
 def create_app(
     settings: Settings | None = None,
     db_pool_override: AsyncConnectionPool | None = None,
@@ -126,7 +138,8 @@ def create_app(
     open the Postgres pool, apply pending migrations, load or generate the
     signing key, give any user without one a personal space, reconcile every
     space's directory tree (per-space failures are logged, not fatal), empty
-    the app builds staging root (unusable: logged, builds disabled), and
+    the app builds staging root (unusable: logged, builds disabled), prepare
+    the app history root (unusable or no git: logged, history disabled), and
     (until the first admin exists) prepare the bootstrap setup code, then
     run the legacy files migration if it's enabled (logged, never fatal). A
     failure in any other step fails startup; compose restarts it.
@@ -170,6 +183,7 @@ def create_app(
             app.state.tokens = tokens
             app.state.bootstrap = bootstrap
             app.state.builds = await _prepare_builds(s)
+            app.state.history = await _prepare_history(s)
             app.state.builder = appbuild.ExecManagerBuilder(
                 s.exec_manager_url, s.platform_build_token, s.platform_build_timeout_s
             )

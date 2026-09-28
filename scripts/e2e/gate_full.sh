@@ -19,6 +19,10 @@
 #      move, Range, ownership, straight against `platform`)
 #   -> platform_apps_smoke.sh (M12-02: register + install a fixture app,
 #      instance dir on disk, reserved Apps folder, uninstall to trash)
+#   -> app_build_smoke.sh (M12-04: real builds and their diagnostics)
+#   -> app_history_smoke.sh (M13-01: a commit per build, history, revert
+#      restores the files and rebuilds; a planted .git in the source stays
+#      inert)
 #   -> platform_app_data_smoke.sh (M12-03: per-instance SQLite migrations,
 #      RPC role matrix, db_changed event, read-only copy for exec)
 #   -> app_runner_browser_smoke.sh (M12-06: Apps tab -> sandboxed runner,
@@ -235,6 +239,7 @@ main() {
   run_step "platform_files_smoke.sh" bash "${SCRIPT_DIR}/platform_files_smoke.sh"
   run_step "platform_apps_smoke.sh"  bash "${SCRIPT_DIR}/platform_apps_smoke.sh"
   run_step "app_build_smoke.sh"      bash "${SCRIPT_DIR}/app_build_smoke.sh"
+  run_step "app_history_smoke.sh"    bash "${SCRIPT_DIR}/app_history_smoke.sh"
   run_step "platform_app_data_smoke.sh" bash "${SCRIPT_DIR}/platform_app_data_smoke.sh"
   run_step "app_runner_browser_smoke.sh" bash "${SCRIPT_DIR}/app_runner_browser_smoke.sh"
   run_step "grocery_app_smoke.sh"    bash "${SCRIPT_DIR}/grocery_app_smoke.sh"

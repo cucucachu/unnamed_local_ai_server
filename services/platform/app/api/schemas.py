@@ -431,6 +431,8 @@ class BuildOut(BaseModel):
     duration_ms: int
     bundle_path: str | None
     bundle_bytes: int | None
+    # The history commit of what was built; None for a failed build (or no usable history).
+    commit: str | None = None
 
 
 class AppBuildOut(BaseModel):
@@ -441,6 +443,37 @@ class AppBuildOut(BaseModel):
     diagnostics: list[BuildDiagnosticOut]
     # One per live instance tracking the working version, after a successful build.
     migrations: list[InstanceMigrationOut] = []
+
+
+class AppCommitOut(BaseModel):
+    id: str
+    parent: str | None
+    kind: Literal["build", "revert"]
+    subject: str
+    version: str | None
+    # Username of who built or reverted; the thread when it was their agent.
+    user: str | None
+    thread_id: str | None
+    # For a revert: the commit whose tree it restored.
+    reverts: str | None
+    created_at: datetime
+    # The working version was built from this commit.
+    current: bool
+
+
+class AppHistoryOut(BaseModel):
+    commits: list[AppCommitOut]
+    # Pass as `offset` for the next (older) page; None on the last one.
+    next_offset: int | None
+
+
+class AppRevertRequest(BaseModel):
+    commit: Annotated[str, Field(pattern=r"^[0-9a-f]{7,40}$")]
+
+
+class AppRevertOut(AppBuildOut):
+    # The history's head after the revert: a commit with the target's tree.
+    commit: str
 
 
 class InstanceAppOut(BaseModel):

@@ -46,6 +46,60 @@ export async function listInstalledApps(): Promise<SpaceApps[]> {
   return Promise.all(spaces.map(async (space) => ({ space, instances: await listInstances(space.id) })));
 }
 
+/** `GET /api/platform/apps/{id}`; `source_path`/`working_version` are null
+ * when the user sees the app only through an install. */
+export interface App {
+  id: string;
+  slug: string;
+  name: string;
+  source_space_id: string;
+  source_path: string | null;
+  working_version: { version: string; commit: string | null } | null;
+}
+
+/** One entry of an app's source history: a successful build, or a revert. */
+export interface AppCommit {
+  id: string;
+  parent: string | null;
+  kind: 'build' | 'revert';
+  subject: string;
+  version: string | null;
+  user: string | null;
+  thread_id: string | null;
+  reverts: string | null;
+  created_at: string;
+  current: boolean;
+}
+
+export interface AppHistoryPage {
+  commits: AppCommit[];
+  next_offset: number | null;
+}
+
+export interface RevertResult {
+  commit: string;
+  ok: boolean;
+  diagnostics: { message: string }[];
+  migrations: { migration: { status: string } | null; error: string | null }[];
+}
+
+export function getApp(appId: string): Promise<App> {
+  return apiFetch<App>(`/api/platform/apps/${encodeURIComponent(appId)}`);
+}
+
+export function getAppHistory(appId: string, offset = 0): Promise<AppHistoryPage> {
+  return apiFetch<AppHistoryPage>(`/api/platform/apps/${encodeURIComponent(appId)}/history?offset=${offset}`);
+}
+
+/** Restores the source as of `commit` (a new commit) and rebuilds; `ok` is the rebuild's. */
+export function revertApp(appId: string, commit: string): Promise<RevertResult> {
+  return apiFetch<RevertResult>(`/api/platform/apps/${encodeURIComponent(appId)}/revert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commit }),
+  });
+}
+
 /** The instance and the space it's installed in (for the user's role there);
  * `ApiError 404 not_found` when the user can't see it. */
 export async function findInstance(instanceId: string): Promise<{ space: Space; instance: Instance }> {
