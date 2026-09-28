@@ -62,9 +62,6 @@ function AppStack() {
               Router modal presentation" spec — a sibling of the implicit
               `(tabs)` group route, not nested inside it. */}
           <Stack.Screen name="media" options={{ presentation: 'modal', headerShown: false }} />
-          {/* M8-02: same modal-stack-screen pattern as `media` above, for
-              the new settings screen. */}
-          <Stack.Screen name="settings" options={{ presentation: 'modal', headerShown: false }} />
         </Stack.Protected>
         <Stack.Protected guard={user === null}>
           <Stack.Screen name="login" />

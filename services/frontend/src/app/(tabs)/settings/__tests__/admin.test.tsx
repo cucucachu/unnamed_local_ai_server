@@ -4,7 +4,7 @@ import type { User } from '@/lib/auth';
 import type { Invite } from '@/lib/platform';
 import { StepUpCancelledError } from '@/lib/stepUp';
 
-import { exists, mockFetchRoutes, press, render, requestsTo, textOf, type } from '../../../../test-utils/screen';
+import { exists, mockFetchRoutes, press, render, requestsTo, textOf, type } from '../../../../../test-utils/screen';
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ back: jest.fn(), push: jest.fn(), replace: jest.fn(), canGoBack: () => true }),

@@ -4,7 +4,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { StepUpProvider } from '@/components/StepUpProvider';
 import { theme } from '@/lib/theme';
 
-/** The Settings modal's own stack: the hub (`index`) plus its sub-screens.
+/** The Settings tab's own stack: the hub (`index`) plus its sub-screens.
  * Admin screens exist only for admins; the rest of the guard (signed in)
  * is the root layout's. */
 export default function SettingsLayout() {

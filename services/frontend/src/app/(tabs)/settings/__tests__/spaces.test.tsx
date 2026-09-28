@@ -2,7 +2,7 @@ import { act, type ReactTestRenderer } from 'react-test-renderer';
 
 import type { Member, Space } from '@/lib/platform';
 
-import { exists, isDisabled, mockFetchRoutes, press, render, requestsTo, textOf, type } from '../../../../test-utils/screen';
+import { exists, isDisabled, mockFetchRoutes, press, render, requestsTo, textOf, type } from '../../../../../test-utils/screen';
 
 const mockPush = jest.fn();
 const mockBack = jest.fn();

@@ -4,7 +4,7 @@ import { listSpaces, type Space } from './platform';
 /**
  * Installed app instances (`GET /api/platform/spaces/{id}/instances`,
  * `docs/ARCHITECTURE.md` §3 "Apps"). The platform lists instances per space,
- * so the Apps tab asks every space the user belongs to.
+ * so the Home launcher asks every space the user belongs to.
  */
 
 export interface InstanceApp {

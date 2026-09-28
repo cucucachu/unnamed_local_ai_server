@@ -4,9 +4,21 @@ import { Tabs } from 'expo-router';
 export default function TabsLayout() {
   return (
     <Tabs>
-      {/* Hidden redirect-only route so `/` resolves to the `chat` tab — see
-          src/app/(tabs)/index.tsx. */}
+      {/* Hidden redirect-only route so `/` resolves to Home (`/apps`) —
+          see src/app/(tabs)/index.tsx. */}
       <Tabs.Screen name="index" options={{ href: null }} />
+      {/* M14-02: Home is the default tab (the former Apps list plus system
+          app tiles and a space switcher). Nested stack owns headers. */}
+      <Tabs.Screen
+        name="apps"
+        options={{
+          title: 'Home',
+          headerShown: false,
+          tabBarIcon: ({ color, focused, size }) => (
+            <Ionicons name={focused ? 'home' : 'home-outline'} color={color} size={size} />
+          ),
+        }}
+      />
       <Tabs.Screen
         name="chat"
         options={{
@@ -33,16 +45,15 @@ export default function TabsLayout() {
           ),
         }}
       />
-      {/* M12-06: installed apps and the app runner, a nested Stack like
-          `chat` (so no outer header here). A placeholder until the M14
-          Home launcher. */}
+      {/* M14-02: Settings is a tab (Home, Chat, Files, Settings). The stack
+          that used to be a sibling modal still lives at `/settings`. */}
       <Tabs.Screen
-        name="apps"
+        name="settings"
         options={{
-          title: 'Apps',
+          title: 'Settings',
           headerShown: false,
           tabBarIcon: ({ color, focused, size }) => (
-            <Ionicons name={focused ? 'apps' : 'apps-outline'} color={color} size={size} />
+            <Ionicons name={focused ? 'settings' : 'settings-outline'} color={color} size={size} />
           ),
         }}
       />

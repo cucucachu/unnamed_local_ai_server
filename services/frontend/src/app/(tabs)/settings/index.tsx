@@ -12,12 +12,11 @@ import type { EditModeDefault } from '@/lib/settings';
 import { theme } from '@/lib/theme';
 
 /**
- * M8-02 — modal settings screen, registered as a `presentation: 'modal'`
- * `Stack.Screen` in `_layout.tsx` (a sibling of the `(tabs)` group route,
- * same pattern as `media.tsx`). Reachable from the chat thread-list
- * header's gear icon (see `chat/index.tsx`). M10-07 made it the hub of the
- * Settings stack (`settings/_layout.tsx`): links to Account, Sessions,
- * Spaces, and (admins) Users and Invites, then the chat settings.
+ * Settings hub (M8-02, a tab since M14-02). Reachable from the Settings
+ * tab, the Home launcher tile, and the chat thread-list gear (see
+ * `chat/index.tsx`). M10-07 made it the hub of the Settings stack
+ * (`settings/_layout.tsx`): links to Account, Sessions, Spaces, and
+ * (admins) Users and Invites, then the chat settings.
  *
  * Every chat control here reads `useSettings()`'s current document and calls
  * its `updateSettings` action on change — that hook already does the
