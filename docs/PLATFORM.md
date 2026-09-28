@@ -290,7 +290,9 @@ their `/files` is still the old shared `FILES_DIR`, which the agent's file
 tools no longer see. The `file:` link
 convention (M9-03) uses the same virtual paths. Resolution of every virtual
 path goes through one guard (the successor of `resolve_files_path`), which
-maps to a host path *and* checks membership and role (`viewer` = read-only).
+maps it into a space *and* checks membership and role (`viewer` = read-only);
+the filesystem is then reached only below that space's open `files/` fd
+(see "Race-free access").
 
 ### Host layout
 
@@ -321,6 +323,37 @@ files created on behalf of a user are owned `user_uid:space_gid`, mode
 `0660`/`0770` (exec containers run with `umask 002`). Users/spaces have no
 `/etc/passwd` entries on the host — numeric IDs only. Mounts are the primary
 boundary; UID/GID permissions are defense in depth.
+
+### Race-free access
+
+Everything below `<space_id>/` is writable by the space's members (and, from
+M11-03, by their exec containers), while the platform acts on it as root.
+So **no platform operation on space content may be redirected by a symlink
+or directory swapped in between a check and a use**: not a read, write,
+mkdir, move/rename (within or across spaces), copy, delete, chown/chmod,
+listing, search, media stream, legacy migration step, or app-package walk.
+
+As built (M11-03a), the platform never hands the kernel a path inside a
+space. The virtual-path guard only authorizes and gives an escape its early
+`422`; every operation then opens the space's `files/` fd (`<root>` is
+root-owned and not group-writable; `<space_id>` and `files` are opened
+`O_NOFOLLOW` relative to it) and resolves the rest with a component walk on
+directory fds (`app/core/beneath.py`): each component opened `O_PATH |
+O_NOFOLLOW` relative to its parent's fd, symlinks expanded by the walk
+itself — a relative target from the link's directory with `..` popping the
+walk's own fd stack (never past the root), an absolute target only if it
+names that `files/` dir's own path or below it — and anything that leaves
+the root is `EXDEV` (`422 invalid_path`). The operation is then an `*at`
+call on the resulting directory fd with `O_NOFOLLOW` on the final name
+(`openat`, `mkdirat`, `renameat`, `unlinkat`, `fchownat(AT_SYMLINK_NOFOLLOW)`),
+or `fchown`/`fchmod`/`fstat`/`futimens` on the opened fd; recursive copy,
+delete and regroup descend by opening each child `O_NOFOLLOW` relative to
+its parent's fd, and links inside a tree are recreated or re-owned as links,
+never followed. Downloads and thumbnails are served from the opened fd
+(`/proc/self/fd/<n>`), never by path. A walk (not `openat2(RESOLVE_BENEATH)`)
+because `RESOLVE_BENEATH` refuses all absolute symlinks, which the files API
+follows while they stay inside the space, and it would need a second code
+path wherever `openat2` is unavailable or filtered by seccomp.
 
 ### Legacy migration
 
@@ -599,6 +632,10 @@ Each is enforced below the agent and covered by an automated check
 7. App sandboxes hold no credentials; an app instance's RPC can only touch
    that instance's database (and granted exports, read-only).
 8. Nothing in `SPACES_DIR` is ever imported or executed by a core service.
+9. No platform operation on space content can be redirected outside that
+   space's `files/` (or `apps/`) dir by a symlink or directory swapped in
+   between check and use (§5 "Race-free access";
+   `services/platform/tests/test_races.py`).
 
 ## 10. Roadmap
 

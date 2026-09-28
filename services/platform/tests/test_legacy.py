@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 from pathlib import Path
 
 import pytest
 
-from app.core import legacy, vfs
+from app.core import legacy
 from app.main import create_app
 from tests.conftest import make_settings, running
 from tests.helpers import bootstrap_admin, create_user, sql
@@ -41,7 +41,8 @@ def _admin_home(platform) -> tuple[Path, dict, dict]:
         "SELECT id, gid FROM spaces WHERE kind = 'personal' AND owner_user_id = %s",
         (admin["id"],),
     )
-    return vfs.files_root(platform.app.state.storage, space["id"]), admin, space
+    home = platform.app.state.storage.space_dir(space["id"]).resolve() / "files"
+    return home, admin, space
 
 
 class _P:
@@ -155,23 +156,23 @@ async def test_interrupted_run_resumes(pg_database, tmp_path, legacy_dir, monkey
         await bootstrap_admin(p)
         home, _, _ = _admin_home(p)
 
-    real_move = shutil.move
+    real_move = legacy._move_entry
     calls = []
 
-    def flaky_move(src, dst):
-        calls.append(src)
+    def flaky_move(*args):
+        calls.append(args)
         if len(calls) == 3:
             raise OSError("disk full")
-        return real_move(src, dst)
+        return real_move(*args)
 
-    monkeypatch.setattr(legacy.shutil, "move", flaky_move)
+    monkeypatch.setattr(legacy, "_move_entry", flaky_move)
     app = _app(pg_database, data, legacy_dir)
     async with running(app):  # failure is logged, startup continues
         pass
     assert not (data / legacy.MARKER_FILENAME).exists()
     assert len(list(home.iterdir())) == 2
 
-    monkeypatch.setattr(legacy.shutil, "move", real_move)
+    monkeypatch.setattr(legacy, "_move_entry", real_move)
     app = _app(pg_database, data, legacy_dir)
     async with running(app):
         pass
@@ -190,6 +191,10 @@ async def test_missing_legacy_dir_is_a_no_op(pg_database, tmp_path) -> None:
 def test_free_name(tmp_path) -> None:
     (tmp_path / "a.tar.gz").write_text("")
     (tmp_path / "Makefile").write_text("")
-    assert legacy._free_name(tmp_path, "a.tar.gz").name == "a (migrated).tar.gz"
-    assert legacy._free_name(tmp_path, "Makefile").name == "Makefile (migrated)"
-    assert legacy._free_name(tmp_path, "new.txt").name == "new.txt"
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert legacy._free_name(fd, "a.tar.gz") == "a (migrated).tar.gz"
+        assert legacy._free_name(fd, "Makefile") == "Makefile (migrated)"
+        assert legacy._free_name(fd, "new.txt") == "new.txt"
+    finally:
+        os.close(fd)

@@ -5,6 +5,8 @@ role, traversal, symlink escape) before the filesystem is touched; reads
 need `read` (viewer), anything that changes a space needs `write` (editor),
 a cross-space move/copy needs `write` on both. Files and directories created
 here belong to the caller's uid and the space's gid (`app.core.fsops`).
+The filesystem itself is only ever reached below the space's open `files/`
+fd (`Resolved.open_root`, `app.core.beneath`), never by host path.
 
 Two groups of routes, one contract (docs/ARCHITECTURE.md §3 "Files"):
 the file manager's (list, stat, upload, download, mkdir, move, copy,
@@ -23,11 +25,12 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import BinaryIO
 
 import anyio.to_thread
 from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app.api.schemas import (
     EditBody,
@@ -49,14 +52,16 @@ from app.api.schemas import (
     UploadOut,
     WriteBody,
 )
-from app.core import agentfs, fsops, spaces, vfs
+from app.core import agentfs, beneath, fsops, spaces, vfs
 from app.core.agentfs import AgentFsError
+from app.core.beneath import Root
 from app.core.errors import Conflict, Forbidden, InvalidInput, NotFound
 from app.core.principal import CurrentUser, Principal
 
 router = APIRouter(prefix="/files")
 
 _CHUNK_SIZE = 1024 * 1024
+_MISSING = (FileNotFoundError, NotADirectoryError)
 
 
 async def resolve(
@@ -68,12 +73,27 @@ async def resolve(
         )
 
 
-async def resolve_file(request: Request, principal: Principal, path: str) -> vfs.Resolved:
-    """A readable regular file, or `404 not_found`."""
-    r = await resolve(request, principal, path, "read")
-    if r.kind != "space" or not r.host_path.is_file():
+async def open_file(
+    request: Request, principal: Principal, path: str, *, writable: bool = False
+) -> tuple[vfs.Resolved, BinaryIO]:
+    """A regular file, open (`writable` needs `write`), or `404 not_found`."""
+    r = await resolve(request, principal, path, "write" if writable else "read")
+    if r.kind != "space":
         raise NotFound("not_found")
-    return r
+
+    def _open() -> BinaryIO:
+        with r.open_root() as root, _fs_errors():
+            try:
+                return fsops.open_regular(root, r.rel, writable=writable)
+            except (*_MISSING, IsADirectoryError) as exc:
+                raise NotFound("not_found") from exc
+
+    return r, await anyio.to_thread.run_sync(_open)
+
+
+def fd_path(f: BinaryIO) -> str:
+    """A path that reopens exactly the file `f` has open, whatever its name now points at."""
+    return f"/proc/self/fd/{f.fileno()}"
 
 
 def _owner(principal: Principal, r: vfs.Resolved) -> fsops.Owner:
@@ -93,7 +113,8 @@ def _fs_errors() -> Iterator[None]:
     except FileNotFoundError as exc:
         raise NotFound("not_found") from exc
     except OSError as exc:
-        if exc.errno == errno.ELOOP:
+        # EXDEV: a symlink leading out of the space, planted after the path was checked.
+        if exc.errno in (errno.ELOOP, errno.EXDEV):
             raise InvalidInput("invalid_path") from exc
         raise
 
@@ -102,11 +123,9 @@ def _mtime(ts: float) -> datetime:
     return datetime.fromtimestamp(ts, tz=UTC)
 
 
-def _entry(vpath: str, host: Path, name: str | None = None) -> FileEntryOut:
-    # lstat: a symlink is listed as a file and never followed or sized through.
-    st = host.lstat()
+def _entry(vpath: str, name: str, st: os.stat_result) -> FileEntryOut:
+    # From lstat: a symlink is listed as a file and never followed or sized through.
     is_dir = stat.S_ISDIR(st.st_mode)
-    name = name if name is not None else host.name
     return FileEntryOut(
         name=name,
         path=vpath,
@@ -128,7 +147,8 @@ def _space_label(space: spaces.Row) -> str:
 def _space_entry(storage, space: spaces.Row, role: str | None) -> FileEntryOut:
     personal = space["kind"] == "personal"
     try:
-        mtime = _mtime(vfs.files_root(storage, space["id"]).stat().st_mtime)
+        with vfs.open_files_root(storage, space["id"]) as root:
+            mtime = _mtime(os.fstat(root.fd).st_mtime)
     except (OSError, NotFound):
         mtime = space["created_at"]
     return FileEntryOut(
@@ -159,13 +179,32 @@ async def _synthetic_entries(request: Request, principal: Principal, kind: str):
     return _sorted([*personal, spaces_entry])
 
 
+def _require_dir(root: Root, parts: tuple[str, ...]) -> None:
+    try:
+        is_dir = stat.S_ISDIR(beneath.stat_at(root, parts).st_mode)
+    except _MISSING as exc:
+        raise NotFound("not_found") from exc
+    if not is_dir:
+        raise NotFound("not_found")
+
+
 def _list_space_dir(r: vfs.Resolved) -> list[FileEntryOut]:
-    entries = []
-    for child in r.host_path.iterdir():
+    with r.open_root() as root, _fs_errors():
         try:
-            entries.append(_entry(r.child(child.name), child))
-        except FileNotFoundError:
-            continue
+            fd = beneath.open(root, r.rel, os.O_RDONLY | os.O_DIRECTORY)
+        except _MISSING as exc:
+            raise NotFound("not_found") from exc
+    try:
+        entries = []
+        with os.scandir(fd) as it:
+            for child in it:
+                try:
+                    st = child.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                entries.append(_entry(r.child(child.name), child.name, st))
+    finally:
+        os.close(fd)
     return _sorted(entries)
 
 
@@ -178,8 +217,6 @@ async def list_dir(request: Request, principal: CurrentUser, path: str = "") -> 
     if r.kind != "space":
         entries = await _synthetic_entries(request, principal, r.kind)
         return FileListOut(path=r.vpath, entries=entries, role=None, writable=False)
-    if not r.host_path.is_dir():
-        raise NotFound("not_found")
     entries = await anyio.to_thread.run_sync(_list_space_dir, r)
     return FileListOut(
         path=r.vpath,
@@ -201,10 +238,16 @@ async def stat_path(request: Request, principal: CurrentUser, path: str) -> File
         return FileStatOut(entry=entry, role=None, writable=False)
     if r.is_space_root:
         entry = _space_entry(request.app.state.storage, r.space, r.role)
-    elif os.path.lexists(r.host_path):
-        entry = _entry(r.vpath, r.host_path)
     else:
-        raise NotFound("not_found")
+
+        def _lstat() -> os.stat_result:
+            with r.open_root() as root, _fs_errors():
+                try:
+                    return beneath.lstat_at(root, r.rel)
+                except _MISSING as exc:
+                    raise NotFound("not_found") from exc
+
+        entry = _entry(r.vpath, r.rel[-1], await anyio.to_thread.run_sync(_lstat))
     return FileStatOut(entry=entry, role=r.role, writable=r.writable)
 
 
@@ -217,67 +260,94 @@ async def upload(
 ) -> UploadOut:
     """Overwrites existing files. Chunks are written as they arrive (no full buffering)."""
     r = await resolve(request, principal, path, "write")
-    if not r.host_path.is_dir():
-        raise NotFound("not_found")
     owner = _owner(principal, r)
     uploaded = []
-    for part in file:
-        # basename strips client-supplied directories; "." and ".." survive it.
-        name = os.path.basename(part.filename or "")
-        if not name or name in (".", ".."):
-            raise InvalidInput("invalid_filename")
-        dest = vfs.contain(r.files_root, str((r.host_path / name).relative_to(r.files_root)))
-        with _fs_errors(), fsops.open_for_write(dest, owner) as f:
-            while chunk := await part.read(_CHUNK_SIZE):
-                f.write(chunk)
-        uploaded.append(r.child(name))
+    with r.open_root() as root:
+        with _fs_errors():
+            _require_dir(root, r.rel)
+        for part in file:
+            # basename strips client-supplied directories; "." and ".." survive it.
+            name = os.path.basename(part.filename or "")
+            if not name or name in (".", ".."):
+                raise InvalidInput("invalid_filename")
+            with _fs_errors(), fsops.open_for_write(root, (*r.rel, name), owner) as f:
+                while chunk := await part.read(_CHUNK_SIZE):
+                    f.write(chunk)
+            uploaded.append(r.child(name))
     return UploadOut(uploaded=uploaded)
 
 
 @router.get("/download")
 async def download(request: Request, principal: CurrentUser, path: str) -> FileResponse:
-    r = await resolve_file(request, principal, path)
-    return FileResponse(r.host_path, filename=vfs.parse(r.vpath)[-1])
+    r, f = await open_file(request, principal, path)
+    return FileResponse(
+        fd_path(f),
+        filename=r.rel[-1],
+        stat_result=os.fstat(f.fileno()),
+        background=BackgroundTask(f.close),
+    )
 
 
 @router.post("/mkdir", status_code=status.HTTP_201_CREATED, response_model=PathOut)
 async def mkdir(body: PathBody, request: Request, principal: CurrentUser) -> PathOut:
     """`mkdir -p`: parents are created, an existing directory is fine, a file in the way is 409."""
     r = await resolve(request, principal, body.path, "write")
-    with _fs_errors():
-        await anyio.to_thread.run_sync(
-            fsops.make_dirs, r.files_root, r.host_path, _owner(principal, r)
-        )
+
+    def _run() -> None:
+        with r.open_root() as root, _fs_errors():
+            fsops.make_dirs(root, r.rel, _owner(principal, r))
+
+    await anyio.to_thread.run_sync(_run)
     return PathOut(path=r.vpath)
 
 
-def _check_destination(src: vfs.Resolved, dst: vfs.Resolved, *, moving: bool) -> None:
+def _check_destination(
+    src: vfs.Resolved, src_root: Root, dst: vfs.Resolved, dst_root: Root, *, moving: bool
+) -> None:
     if dst.is_space_root or (moving and src.is_space_root):
         raise Forbidden("read_only")
-    if moving and src.is_apps_folder:
+    if moving and src.is_apps_folder(src_root):
         raise Forbidden("reserved")
-    if not os.path.lexists(src.host_path):
-        raise NotFound("not_found")
-    if os.path.lexists(dst.host_path):
+    try:
+        # A move takes a final symlink itself; a copy copies what it points at.
+        src_st = (beneath.lstat_at if moving else beneath.stat_at)(src_root, src.rel)
+    except _MISSING as exc:
+        raise NotFound("not_found") from exc
+    try:
+        beneath.lstat_at(dst_root, dst.rel)
+    except _MISSING:
+        pass
+    else:
         raise Conflict("already_exists")
-    if not dst.host_path.parent.is_dir():
+    try:
+        parent_is_dir = stat.S_ISDIR(beneath.stat_at(dst_root, dst.rel[:-1]).st_mode)
+    except _MISSING as exc:
+        raise NotFound("parent_not_found") from exc
+    if not parent_is_dir:
         raise NotFound("parent_not_found")
-    if dst.host_path == src.host_path or src.host_path in dst.host_path.parents:
+    if stat.S_ISDIR(src_st.st_mode) and beneath.is_inside(dst_root, dst.rel[:-1], src_st):
         raise InvalidInput("invalid_destination")
 
 
 async def _move(request: Request, principal: Principal, src_path: str, dst_path: str):
     src = await resolve(request, principal, src_path, "write", follow=False)
     dst = await resolve(request, principal, dst_path, "write", follow=False)
-    _check_destination(src, dst, moving=True)
+    cross_space = src.space["id"] != dst.space["id"]
 
     def _run() -> None:
-        os.rename(src.host_path, dst.host_path)
-        if src.space["id"] != dst.space["id"]:
-            fsops.adopt_tree(dst.host_path, dst.space["gid"])
+        with src.open_root() as src_root, dst.open_root() as dst_root, _fs_errors():
+            _check_destination(src, src_root, dst, dst_root, moving=True)
+            try:
+                fsops.move(
+                    src_root, src.rel, dst_root, dst.rel,
+                    gid=dst.space["gid"] if cross_space else None,
+                )  # fmt: skip
+            except OSError as exc:
+                if exc.errno == errno.EINVAL:  # into its own subtree
+                    raise InvalidInput("invalid_destination") from exc
+                raise
 
-    with _fs_errors():
-        await anyio.to_thread.run_sync(_run)
+    await anyio.to_thread.run_sync(_run)
     return MoveCopyOut(src=src.vpath, dst=dst.vpath)
 
 
@@ -301,11 +371,13 @@ async def copy(body: MoveCopyBody, request: Request, principal: CurrentUser) -> 
     """Directories are copied recursively; the copies belong to the caller and `dst`'s space."""
     src = await resolve(request, principal, body.src, "write")
     dst = await resolve(request, principal, body.dst, "write", follow=False)
-    _check_destination(src, dst, moving=False)
-    with _fs_errors():
-        await anyio.to_thread.run_sync(
-            fsops.copy, src.host_path, dst.host_path, _owner(principal, dst)
-        )
+
+    def _run() -> None:
+        with src.open_root() as src_root, dst.open_root() as dst_root, _fs_errors():
+            _check_destination(src, src_root, dst, dst_root, moving=False)
+            fsops.copy(src_root, src.rel, dst_root, dst.rel, _owner(principal, dst))
+
+    await anyio.to_thread.run_sync(_run)
     return MoveCopyOut(src=src.vpath, dst=dst.vpath)
 
 
@@ -315,12 +387,17 @@ async def delete(request: Request, principal: CurrentUser, path: str) -> None:
     r = await resolve(request, principal, path, "write", follow=False)
     if r.is_space_root:
         raise Forbidden("read_only")
-    if r.is_apps_folder:
-        raise Forbidden("reserved")
-    if not os.path.lexists(r.host_path):
-        raise NotFound("not_found")
-    with _fs_errors():
-        await anyio.to_thread.run_sync(fsops.remove, r.host_path)
+
+    def _run() -> None:
+        with r.open_root() as root, _fs_errors():
+            if r.is_apps_folder(root):
+                raise Forbidden("reserved")
+            try:
+                fsops.remove(root, r.rel)
+            except _MISSING as exc:
+                raise NotFound("not_found") from exc
+
+    await anyio.to_thread.run_sync(_run)
 
 
 # --- agent file tools ----------------------------------------------------------------
@@ -328,18 +405,19 @@ async def delete(request: Request, principal: CurrentUser, path: str) -> None:
 
 @router.post("/read", response_model=ReadOut, response_model_exclude_none=True)
 async def read(body: ReadBody, request: Request, principal: CurrentUser) -> ReadOut:
-    r = await resolve_file(request, principal, body.path)
+    r, f = await open_file(request, principal, body.path)
     with _fs_errors():
         result = await anyio.to_thread.run_sync(
-            agentfs.read_file, r.host_path, r.vpath, body.offset, body.limit
+            agentfs.read_file, f, r.vpath, body.offset, body.limit
         )
     return ReadOut(path=r.vpath, **result)
 
 
 def _write_text(r: vfs.Resolved, owner: fsops.Owner, content: bytes) -> None:
-    fsops.make_dirs(r.files_root, r.host_path.parent, owner)
-    with fsops.open_for_write(r.host_path, owner) as f:
-        f.write(content)
+    with r.open_root() as root, _fs_errors():
+        fsops.make_dirs(root, r.rel[:-1], owner)
+        with fsops.open_for_write(root, r.rel, owner) as f:
+            f.write(content)
 
 
 @router.post("/write", response_model=PathOut)
@@ -348,10 +426,9 @@ async def write(body: WriteBody, request: Request, principal: CurrentUser) -> Pa
     r = await resolve(request, principal, body.path, "write")
     if r.is_space_root:
         raise Conflict("is_a_directory")
-    with _fs_errors():
-        await anyio.to_thread.run_sync(
-            _write_text, r, _owner(principal, r), body.content.encode("utf-8")
-        )
+    await anyio.to_thread.run_sync(
+        _write_text, r, _owner(principal, r), body.content.encode("utf-8")
+    )
     return PathOut(path=r.vpath)
 
 
@@ -362,57 +439,51 @@ async def put_content(request: Request, principal: CurrentUser, path: str) -> Pa
     if r.is_space_root:
         raise Conflict("is_a_directory")
     owner = _owner(principal, r)
-    with _fs_errors():
-        await anyio.to_thread.run_sync(fsops.make_dirs, r.files_root, r.host_path.parent, owner)
-        with fsops.open_for_write(r.host_path, owner) as f:
+    with r.open_root() as root, _fs_errors():
+        await anyio.to_thread.run_sync(fsops.make_dirs, root, r.rel[:-1], owner)
+        with fsops.open_for_write(root, r.rel, owner) as f:
             async for chunk in request.stream():
                 f.write(chunk)
     return PathOut(path=r.vpath)
 
 
-def _edit(r: vfs.Resolved, owner: fsops.Owner, body: EditBody) -> int:
-    with fsops.open_regular(r.host_path) as f:
+def _edit(r: vfs.Resolved, f: BinaryIO, body: EditBody) -> int:
+    with f:
         raw = f.read()
-    try:
-        content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    except UnicodeDecodeError as exc:
-        raise AgentFsError("not_text", f"Error editing file '{r.vpath}': {exc}") from exc
-    new_content, occurrences = agentfs.edit_text(
-        content, body.old_string, body.new_string, body.replace_all
-    )
-    with fsops.open_for_write(r.host_path, owner) as f:
+        try:
+            content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError as exc:
+            raise AgentFsError("not_text", f"Error editing file '{r.vpath}': {exc}") from exc
+        new_content, occurrences = agentfs.edit_text(
+            content, body.old_string, body.new_string, body.replace_all
+        )
+        f.seek(0)
+        f.truncate()
         f.write(new_content.encode("utf-8"))
     return occurrences
 
 
 @router.post("/edit", response_model=EditOut)
 async def edit(body: EditBody, request: Request, principal: CurrentUser) -> EditOut:
-    r = await resolve(request, principal, body.path, "write")
-    if not r.host_path.is_file():
-        raise NotFound("not_found")
+    r, f = await open_file(request, principal, body.path, writable=True)
     with _fs_errors():
-        occurrences = await anyio.to_thread.run_sync(_edit, r, _owner(principal, r), body)
+        occurrences = await anyio.to_thread.run_sync(_edit, r, f, body)
     return EditOut(path=r.vpath, occurrences=occurrences)
 
 
 async def _trees(request: Request, principal: Principal, path: str | None):
     """(search base, trees): one tree inside a space, or every readable space for `/`/`/spaces`."""
+    storage = request.app.state.storage
     r = await resolve(request, principal, path or "/", "read")
     if r.kind == "space":
-        if not os.path.lexists(r.host_path):
-            return r.vpath, []
-        return r.vpath, [agentfs.Tree(r.files_root, r.host_path, r.prefix)]
+        return r.vpath, [agentfs.Tree(storage, r.space["id"], r.rel, r.prefix)]
     async with request.app.state.db_pool.connection() as conn:
         rows = await spaces.list_user_spaces(conn, principal.user_id)
-    trees = []
-    for row in rows:
-        if r.kind == "spaces" and row["kind"] != "shared":
-            continue
-        try:
-            root = vfs.files_root(request.app.state.storage, row["id"])
-        except NotFound:
-            continue
-        trees.append(agentfs.Tree(root, root, vfs.space_prefix(row)))
+    trees = [
+        agentfs.Tree(storage, row["id"], (), vfs.space_prefix(row))
+        for row in rows
+        if r.kind != "spaces" or row["kind"] == "shared"
+    ]
     return r.vpath, trees
 
 

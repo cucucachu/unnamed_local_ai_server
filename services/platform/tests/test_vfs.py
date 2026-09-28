@@ -1,37 +1,60 @@
-"""`app.core.vfs`: the virtual-path guard.
+"""`app.core.vfs`: the virtual-path guard, and `app.core.beneath` under it.
 
 The first half ports agent-server's `tests/test_paths.py` (the
-`resolve_files_path` suite) onto `contain`, the containment step; the rest
-exercises `resolve_virtual_path` end to end - spaces, membership, roles, and
-symlinks that point into another space.
+`resolve_files_path` suite) onto `beneath.locate`, the containment step;
+the rest exercises `resolve_virtual_path` end to end - spaces, membership,
+roles, and symlinks that point into another space.
 """
 
 from __future__ import annotations
 
+import errno
+import os
 from pathlib import Path
 
 import pytest
 
-from app.core import vfs
+from app.core import beneath, vfs
 from app.core.errors import Forbidden, InvalidInput, NotFound
 from app.core.principal import Principal
 from tests.files_world import World
 
-# --- parse / contain (ported from agent-server's resolve_files_path suite) --------
+# --- parse / locate (ported from agent-server's resolve_files_path suite) ---------
+
+
+def _where(root: Path, path: str) -> Path:
+    """The real location `path` names below `root`, through `beneath.locate`."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        dir_fd, name = beneath.locate(beneath.Root(fd, str(root)), path.split("/"))
+    finally:
+        os.close(fd)
+    try:
+        where = Path(os.readlink(f"/proc/self/fd/{dir_fd}"))
+    finally:
+        os.close(dir_fd)
+    return where if name is None else where / name
+
+
+def _refused(root: Path, path: str, code: int = errno.EXDEV) -> None:
+    with pytest.raises(OSError) as exc:
+        _where(root, path)
+    assert exc.value.errno == code
 
 
 def test_empty_string_resolves_to_root(tmp_path: Path) -> None:
-    assert vfs.contain(tmp_path.resolve(), "") == tmp_path.resolve()
+    assert _where(tmp_path.resolve(), "") == tmp_path.resolve()
 
 
 def test_plain_relative_path_resolves_under_root(tmp_path: Path) -> None:
     root = tmp_path.resolve()
-    assert vfs.contain(root, "a/b.txt") == root / "a" / "b.txt"
+    (root / "a").mkdir()
+    assert _where(root, "a/b.txt") == root / "a" / "b.txt"
 
 
-def test_nonexistent_nested_path_still_resolves(tmp_path: Path) -> None:
-    root = tmp_path.resolve()
-    assert vfs.contain(root, "does/not/exist/yet.txt") == root / "does/not/exist/yet.txt"
+def test_missing_nested_path_is_not_an_escape(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        _where(tmp_path.resolve(), "does/not/exist/yet.txt")
 
 
 @pytest.mark.parametrize("path", ["../x", "a/../../x", "/personal/../x", "a/.."])
@@ -40,41 +63,73 @@ def test_dotdot_is_rejected(path: str) -> None:
         vfs.parse(path)
 
 
-def test_absolute_path_is_rejected_by_containment(tmp_path: Path) -> None:
-    with pytest.raises(InvalidInput):
-        vfs.contain(tmp_path.resolve(), "/etc/passwd")
+def test_absolute_path_stays_relative_to_the_root(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        _where(tmp_path.resolve(), "/etc/passwd")
 
 
-def test_nested_dotdot_escape_is_rejected_by_containment(tmp_path: Path) -> None:
-    with pytest.raises(InvalidInput):
-        vfs.contain(tmp_path.resolve(), "a/../../x")
+def test_nested_dotdot_escape_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    _refused(tmp_path.resolve(), "a/../../x")
 
 
 def test_symlink_escaping_root_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "escape_link").symlink_to("/tmp")
-    with pytest.raises(InvalidInput):
-        vfs.contain(tmp_path.resolve(), "escape_link/x")
+    _refused(tmp_path.resolve(), "escape_link/x")
 
 
 def test_symlink_to_the_link_itself_is_also_rejected(tmp_path: Path) -> None:
     (tmp_path / "escape_link").symlink_to("/tmp")
-    with pytest.raises(InvalidInput):
-        vfs.contain(tmp_path.resolve(), "escape_link")
+    _refused(tmp_path.resolve(), "escape_link")
+
+
+def test_relative_symlink_climbing_out_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path.resolve() / "root"
+    (root / "a").mkdir(parents=True)
+    (tmp_path / "outside").mkdir()
+    (root / "a" / "up").symlink_to("../../outside")
+    _refused(root, "a/up/x")
 
 
 def test_symlink_staying_inside_root_is_allowed(tmp_path: Path) -> None:
     root = tmp_path.resolve()
     (root / "real").mkdir()
     (root / "link").symlink_to(root / "real")
-    assert vfs.contain(root, "link/x.txt") == root / "real" / "x.txt"
+    (root / "rel").symlink_to("real/../real")
+    assert _where(root, "link/x.txt") == root / "real" / "x.txt"
+    assert _where(root, "rel/x.txt") == root / "real" / "x.txt"
+
+
+def test_absolute_symlink_must_name_the_root_exactly(tmp_path: Path) -> None:
+    root = tmp_path.resolve() / "root"
+    root.mkdir()
+    (tmp_path / "root-other").mkdir()
+    (root / "sibling").symlink_to(tmp_path.resolve() / "root-other")
+    (root / "spelled").symlink_to(f"{tmp_path.resolve()}/root/../root-other")
+    _refused(root, "sibling/x")
+    _refused(root, "spelled/x")
 
 
 def test_symlink_loop_is_rejected(tmp_path: Path) -> None:
     root = tmp_path.resolve()
     (root / "a").symlink_to(root / "b")
     (root / "b").symlink_to(root / "a")
-    with pytest.raises(InvalidInput):
-        vfs.contain(root, "a/x")
+    _refused(root, "a/x", errno.ELOOP)
+
+
+def test_follow_false_names_a_final_link_but_checks_the_rest(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    (root / "out").symlink_to("/etc")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        r = beneath.Root(fd, str(root))
+        with beneath.parent(r, ["out"]) as (_, name):
+            assert name == "out"
+        with pytest.raises(OSError) as exc, beneath.parent(r, ["out", "passwd"]):
+            pass
+        assert exc.value.errno == errno.EXDEV
+    finally:
+        os.close(fd)
 
 
 @pytest.mark.parametrize("path", ["a\x00b", "/personal/a\x00b"])
@@ -129,7 +184,7 @@ async def test_synthetic_roots_are_read_only(world: World) -> None:
 async def test_personal_is_the_callers_own(world: World) -> None:
     for username in ("alice", "dave"):
         r = await _resolve(world, username, "/personal/notes/a.txt")
-        assert r.host_path == world.home(username) / "notes" / "a.txt"
+        assert r.rel == ("notes", "a.txt")
         assert (r.vpath, r.role, r.writable) == ("/personal/notes/a.txt", "owner", True)
         assert r.space["id"] == world.personal(username)["id"]
 
@@ -138,7 +193,7 @@ async def test_shared_space_by_slug_and_role(world: World) -> None:
     for username, role in (("alice", "owner"), ("bob", "editor"), ("carol", "viewer")):
         r = await _resolve(world, username, "/spaces/Family/x")
         assert r.vpath == "/spaces/family/x"
-        assert r.host_path == world.family_root / "x"
+        assert (r.rel, str(r.space["id"])) == (("x",), world.family["id"])
         assert (r.role, r.writable) == (role, role != "viewer")
     with pytest.raises(Forbidden, match="insufficient_role"):
         await _resolve(world, "carol", "/spaces/family/x", "write")
@@ -193,7 +248,7 @@ async def test_no_follow_names_the_link_itself(world: World) -> None:
     home = world.home("alice")
     (home / "out").symlink_to("/etc")
     r = await _resolve(world, "alice", "/personal/out", "write", follow=False)
-    assert r.host_path == home / "out" and r.host_path.is_symlink()
+    assert r.rel == ("out",)
     with pytest.raises(InvalidInput):
         await _resolve(world, "alice", "/personal/out/passwd", "write", follow=False)
 
