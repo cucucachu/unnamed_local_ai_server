@@ -44,7 +44,12 @@ pending (#181: the client can answer `approval_request` before its
 `turn_end`); every other frame received mid-turn, including a held
 `approval_response` for any other interrupt, is ignored (looped past),
 matching v1's existing "a well-behaved client never sends another frame
-before turn_end/error" assumption. While AWAITING APPROVAL (i.e.
+before turn_end/error" assumption. A `cancel` that lands after the turn
+already paused (between `approval_request` and `turn_end`) can't un-pause
+it: after the cancelled `turn_end` the still-pending approval is
+re-announced (`approval_request` + `turn_end {"status":
+"awaiting_approval"}`) unless the client already answered it (#189).
+While AWAITING APPROVAL (i.e.
 the previous `turn_end` had `status: "awaiting_approval"`), the only two
 valid inbound frames are `approval_response` (matching the pending
 `interrupt_id`, with one decision per pending `tool_call_id`) and `cancel`
@@ -722,6 +727,26 @@ async def _send_turn_end(
     return duration_ms
 
 
+async def _announce_pending_approval(
+    websocket: WebSocket,
+    thread_id: str,
+    pending_approval: dict,
+    started_mono: float,
+    started_at: datetime,
+    prior_assistant_id: str | None,
+) -> None:
+    await websocket.send_json(
+        {
+            "type": "approval_request",
+            "interrupt_id": pending_approval["interrupt_id"],
+            "actions": pending_approval["actions"],
+        }
+    )
+    await _send_turn_end(
+        websocket, thread_id, "awaiting_approval", started_mono, started_at, prior_assistant_id
+    )
+
+
 async def _run_turn(
     websocket: WebSocket,
     thread_id: str,
@@ -769,20 +794,8 @@ async def _run_turn(
     state = await agent.aget_state(graph_config(thread_id))
     pending_approval = _pending_approval_from_state(state)
     if pending_approval is not None:
-        await websocket.send_json(
-            {
-                "type": "approval_request",
-                "interrupt_id": pending_approval["interrupt_id"],
-                "actions": pending_approval["actions"],
-            }
-        )
-        await _send_turn_end(
-            websocket,
-            thread_id,
-            "awaiting_approval",
-            started_mono,
-            started_at,
-            prior_assistant_id,
+        await _announce_pending_approval(
+            websocket, thread_id, pending_approval, started_mono, started_at, prior_assistant_id
         )
         return "awaiting_approval", pending_approval
 
@@ -857,11 +870,15 @@ async def _run_turn_or_interrupt(
 
     Returns `(status, pending_approval)`. `status` is `"completed"` or
     `"awaiting_approval"` if the turn ran to completion (see `_run_turn`),
-    `"cancelled"` if a `cancel` frame arrived while the turn was ACTIVELY
-    STREAMING (a `turn_end {"status": "cancelled"}` frame has already been
-    sent and the connection is still open — `pending_approval` is always
-    `None` in this case, since a cancelled-mid-stream turn can't also have
-    produced a pending interrupt), or `"disconnected"` if the client's
+    `"cancelled"` if a `cancel` frame arrived while the turn was in flight
+    (a `turn_end {"status": "cancelled"}` frame has already been sent and
+    the connection is still open). #189: the cancel can land after the turn
+    already paused on an interrupt (between `approval_request` and its
+    `turn_end`), so the checkpointer is re-read: if an approval is still
+    pending it's returned as `pending_approval` and re-announced
+    (`approval_request` + `turn_end {"status": "awaiting_approval"}`)
+    unless the client already answered it mid-turn, in which case the
+    caller applies that held answer instead. Or `"disconnected"` if the client's
     socket closed mid-turn (the caller should stop processing this
     connection; no frame is sent — the socket is already gone). Propagates
     any exception the turn itself raised (unhandled model/agent error).
@@ -886,6 +903,8 @@ async def _run_turn_or_interrupt(
         websocket.app.state.agent, thread_id, checkpoint_id
     )
 
+    if deferred_approvals is None:
+        deferred_approvals = []
     turn_task = asyncio.create_task(
         _run_turn(
             websocket,
@@ -900,9 +919,7 @@ async def _run_turn_or_interrupt(
             delegation,
         )
     )
-    watch_task = asyncio.create_task(
-        _watch_inbound(websocket, deferred_approvals if deferred_approvals is not None else [])
-    )
+    watch_task = asyncio.create_task(_watch_inbound(websocket, deferred_approvals))
     try:
         done, _pending = await asyncio.wait(
             {turn_task, watch_task}, return_when=asyncio.FIRST_COMPLETED
@@ -927,7 +944,14 @@ async def _run_turn_or_interrupt(
                 started_at,
                 prior_assistant_id,
             )
-            return "cancelled", None
+            pending_approval = await get_pending_approval(websocket.app.state.agent, thread_id)
+            if pending_approval is not None and not any(
+                f.get("interrupt_id") == pending_approval["interrupt_id"] for f in deferred_approvals
+            ):
+                await _announce_pending_approval(
+                    websocket, thread_id, pending_approval, started_mono, started_at, prior_assistant_id
+                )
+            return "cancelled", pending_approval
         return "disconnected", None
     finally:
         if not watch_task.done():
