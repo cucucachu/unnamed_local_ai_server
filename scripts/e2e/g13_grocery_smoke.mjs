@@ -50,7 +50,7 @@ function api(context) {
 const ui = (page) => page.frameLocator(APP_FRAME);
 
 async function openFromAppsTab(page, spaceSlug, slug) {
-  await page.getByRole('tab', { name: 'Apps' }).click();
+  await page.getByRole('tab', { name: 'Home' }).click();
   const section = page.getByTestId(`apps-space-${spaceSlug}`);
   await section.waitFor({ timeout: UI_TIMEOUT });
   await section.getByTestId(`apps-open-${slug}`).click();

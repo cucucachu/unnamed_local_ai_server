@@ -40,7 +40,7 @@ function byId(page, testID) {
 }
 
 async function openSettings(page, navTestID) {
-  await byId(page, 'settings-header-button').click();
+  await page.getByRole('tab', { name: 'Settings' }).click();
   await byId(page, navTestID).click();
 }
 

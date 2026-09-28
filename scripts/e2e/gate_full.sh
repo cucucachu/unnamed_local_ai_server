@@ -35,6 +35,8 @@
 #   -> app_publish_smoke.sh (M14-01: author publishes from app info into a
 #      family catalog; a family editor installs from Catalog, then
 #      approves an update)
+#   -> home_launcher_smoke.sh (M14-02: Home is the default tab; system
+#      tiles, space switcher, catalog, Chat/Files/Settings tabs)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
 #   -> video_thumbnail_browser_smoke.sh -> chat_browser_smoke.sh
 #   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
@@ -251,6 +253,7 @@ main() {
   # M13-04: the same smoke also opens Ask the agent (context + db_changed).
   run_step "grocery_app_smoke.sh"    bash "${SCRIPT_DIR}/grocery_app_smoke.sh"
   run_step "app_publish_smoke.sh"    bash "${SCRIPT_DIR}/app_publish_smoke.sh"
+  run_step "home_launcher_smoke.sh"  bash "${SCRIPT_DIR}/home_launcher_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "image_browser_smoke.sh"  bash "${SCRIPT_DIR}/image_browser_smoke.sh"

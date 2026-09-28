@@ -57,7 +57,7 @@ const APP_FRAME = 'iframe[title="app"]';
 
 /** Apps tab -> the space's section -> the app -> its runner, rendered. */
 async function openFromAppsTab(page) {
-  await page.getByRole('tab', { name: 'Apps' }).click();
+  await page.getByRole('tab', { name: 'Home' }).click();
   const section = page.getByTestId(`apps-space-${SLUG}`);
   await section.waitFor({ timeout: UI_TIMEOUT });
   await section.getByTestId('apps-open-runtime-check').click();

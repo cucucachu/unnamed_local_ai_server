@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # M10-06 web auth smoke: setup screen renders (never submitted), CLI user
-# logs in -> chat, logout -> login, invite accept — see
+# logs in -> Home, logout -> login, invite accept — see
 # `auth_browser_smoke.mjs` for the steps.
 #
 # Prerequisites (not managed by this script):
