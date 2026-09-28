@@ -11,6 +11,7 @@ blocking, thread-safe portal — safe to drive from worker threads for the
 concurrency test below.
 """
 
+import json
 import threading
 
 import pytest
@@ -271,6 +272,12 @@ async def test_execute_code_tool_turn(
     assert len(fake_exec_manager.execute_calls) == 1
     assert fake_exec_manager.execute_calls[0].command == "echo hi"
     assert fake_exec_manager.execute_calls[0].session_id == "exec-thread"
+
+    (bearer,) = fake_exec_manager.ensure_authorizations
+    token = bearer.removeprefix("Bearer ")
+    assert fake_platform.grants[token].thread_id == "exec-thread"
+    assert fake_exec_manager.execute_calls[0].authorization == bearer
+    assert token not in json.dumps(frames)
 
 
 async def test_web_search_tool_turn(

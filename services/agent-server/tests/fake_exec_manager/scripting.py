@@ -18,6 +18,7 @@ class ExecuteCall:
     session_id: str
     command: str
     timeout_seconds: int
+    authorization: str | None = None
 
 
 class FakeExecManager:
@@ -25,6 +26,8 @@ class FakeExecManager:
         self.base_url: str = ""  # filled in by the `fake_exec_manager` fixture
         self.ensure_calls: list[str] = []
         self.execute_calls: list[ExecuteCall] = []
+        # The `Authorization` header of every ensure call, in order.
+        self.ensure_authorizations: list[str | None] = []
 
         # Matches `services/code-exec-manager/app/api.py`'s `ExecuteResponse`
         # shape exactly. Tests mutate this directly to script a response.
@@ -38,8 +41,11 @@ class FakeExecManager:
         }
         self.execute_status_code: int = 200
 
-    def record_ensure(self, session_id: str) -> None:
+    def record_ensure(self, session_id: str, authorization: str | None = None) -> None:
         self.ensure_calls.append(session_id)
+        self.ensure_authorizations.append(authorization)
 
-    def record_execute(self, session_id: str, command: str, timeout_seconds: int) -> None:
-        self.execute_calls.append(ExecuteCall(session_id, command, timeout_seconds))
+    def record_execute(
+        self, session_id: str, command: str, timeout_seconds: int, authorization: str | None = None
+    ) -> None:
+        self.execute_calls.append(ExecuteCall(session_id, command, timeout_seconds, authorization))
