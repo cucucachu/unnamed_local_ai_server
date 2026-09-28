@@ -8,13 +8,11 @@
 // (default http://localhost/).
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
+import { FIXTURE, fixtureFiles, fixtureV2 } from './app_fixture.mjs';
 import { loginThroughUi } from './auth_helpers.mjs';
 
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.resolve(SCRIPT_DIR, '../../packages/homeai-sdk/tests/fixtures/runtime-check');
 const BASE = (process.env.RUNNER_SMOKE_BASE_URL ?? 'http://localhost/').replace(/\/$/, '');
 const OWNER = { username: process.env.RUNNER_SMOKE_USER, password: process.env.RUNNER_SMOKE_PASSWORD };
 const VIEWER = { username: process.env.RUNNER_SMOKE_VIEWER, password: process.env.RUNNER_SMOKE_VIEWER_PASSWORD };
@@ -32,12 +30,6 @@ function check(cond, what, detail) {
   if (!cond) throw new Error(`FAIL: ${what}${detail === undefined ? '' : `: ${JSON.stringify(detail)}`}`);
   ok(what);
 }
-
-const files = (dir, prefix = '') =>
-  fs.readdirSync(path.join(dir, prefix), { withFileTypes: true }).flatMap((d) => {
-    const rel = path.posix.join(prefix, d.name);
-    return d.isDirectory() ? files(dir, rel) : [rel];
-  });
 
 /** REST as the context's signed-in user (the page's own cookie). */
 function api(context) {
@@ -106,8 +98,7 @@ try {
   const directory = await owner.call('GET', '/api/platform/users/directory');
   const viewerUser = directory.users.find((u) => u.username === VIEWER.username);
   await owner.call('POST', `/api/platform/spaces/${space.id}/members`, { json: { user_id: viewerUser.id, role: 'viewer' } });
-  const index = fs.readFileSync(path.join(FIXTURE, 'app/index.tsx'), 'utf8');
-  for (const rel of files(FIXTURE)) {
+  for (const rel of fixtureFiles()) {
     await owner.call('PUT', `/api/platform/files/content?path=${encodeURIComponent(`${APP_DIR}/${rel}`)}`, { raw: fs.readFileSync(path.join(FIXTURE, rel)) });
   }
   const { app } = await owner.call('POST', '/api/platform/apps', { json: { source_path: APP_DIR } });
@@ -146,12 +137,7 @@ try {
 
   // --- 3. a rebuild hot-reloads the running app ----------------------------
   await page.locator(APP_FRAME).evaluate((f) => (f.dataset.e2e = 'first-frame'));
-  const v2 = index
-    .replace("export const BUILD = 'v1';", "export const BUILD = 'v2';")
-    .replace("const [status, setStatus] = useState('');", "const [status, setStatus] = useState('');\n  const [crashed, setCrashed] = useState(false);\n  if (crashed) throw new Error('e2e runner crash');")
-    .replace('<Text testID="status">', '<Pressable testID="crash" onPress={() => setCrashed(true)}>\n        <Text>Crash</Text>\n      </Pressable>\n      <Text testID="status">');
-  if (!v2.includes("'v2'") || !v2.includes('testID="crash"') || !v2.includes('e2e runner crash')) throw new Error('the fixture changed; update the v2 edit');
-  await owner.call('PUT', `/api/platform/files/content?path=${encodeURIComponent(`${APP_DIR}/app/index.tsx`)}`, { raw: Buffer.from(v2) });
+  await owner.call('PUT', `/api/platform/files/content?path=${encodeURIComponent(`${APP_DIR}/app/index.tsx`)}`, { raw: Buffer.from(fixtureV2()) });
   const t0 = Date.now();
   await build();
   await waitForFrameText(page, 'build', (t) => t === 'v2', 'the rebuild hot-reloaded the app to v2');
