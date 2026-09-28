@@ -672,7 +672,9 @@ what another doc says it should be.
 
 - **Purpose**: the sole `docker.sock` holder — creates, execs into, and
   destroys session-scoped sandboxed exec containers on behalf of
-  `agent-server`'s `execute_code` tool, and idle-reaps them.
+  `agent-server`'s `execute_code` tool, and idle-reaps them. Since M12-04
+  it also runs the platform's app builds: one short-lived builder
+  container per build phase (`app/builds.py`).
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
   `services/code-exec-manager/Dockerfile`. Runs as the image's default
   **root** user (deliberately, unlike `agent-server`) — it's the one
@@ -691,23 +693,62 @@ what another doc says it should be.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings`): `PLATFORM_EXEC_TOKEN` (its
   service token for `POST /internal/exec-grants`), `EXEC_IDLE_MINUTES`,
-  `EXEC_DEFAULT_TIMEOUT_S`. `PLATFORM_URL` defaults to
-  `http://platform:8100`. It mounts no files at all: the bind sources come
-  from the platform's grants (M11-03).
+  `EXEC_DEFAULT_TIMEOUT_S`, `APP_BUILDS_HOST_DIR` (M12-04: the host path
+  of the platform's `/data/builds`, `${APP_BUILDS_DIR:-/srv/homeai/builds}`;
+  empty refuses every build). `PLATFORM_URL` defaults to
+  `http://platform:8100`; `BUILDER_IMAGE` (`homeai-app-builder:latest`),
+  `BUILD_TIMEOUT_S` (`120`, per phase) and `BUILD_CONCURRENCY` (`2`) are
+  not set in compose. It mounts no files at all: the bind sources come
+  from the platform's grants (M11-03) or, for builds, from
+  `APP_BUILDS_HOST_DIR` and the build id.
 - **Auth (M11-03)**: ensure, execute and delete need `Authorization:
   Bearer <delegation>`, verified against the platform JWKS
   (`app/delegation.py`); grants are fetched per call (`app/grants.py`).
-  See "`code-exec-manager` API" below.
+  `POST /builds/...` (M12-04) takes the platform's service token
+  (`PLATFORM_EXEC_TOKEN`) instead, compared in constant time. See
+  "`code-exec-manager` API" below.
 - **Tests**: `services/code-exec-manager/tests/` — `test_api_unit.py`,
-  `test_sessions_unit.py`, `test_hardening_spec.py`, `test_reaper_unit.py`
-  (all use the `fake_docker.py` test double, no real Docker needed), plus
-  `test_sessions_integration.py` (marked `integration` — needs a real
-  `docker.sock` and the `homeai-exec-toolbox:latest` image built). Run:
+  `test_sessions_unit.py`, `test_hardening_spec.py`, `test_reaper_unit.py`,
+  `test_builds.py` (the builder container spec field by field, the service
+  token, timeouts, cleanup; all use the `fake_docker.py` test double, no
+  real Docker needed), plus `test_sessions_integration.py` and
+  `test_builds_integration.py` (marked `integration` — need a real
+  `docker.sock` and the `homeai-exec-toolbox:latest` /
+  `homeai-app-builder:latest` images built). Run:
   `cd services/code-exec-manager && uv run ruff check . && uv run pytest`
   for the deterministic suite, `uv run pytest -m integration` for the
   real-Docker tests. `scripts/verify_isolation.sh` (from the repo root,
-  against the live stack) is the full 22-check hardening-spec suite — see
-  "Security model" below.
+  against the live stack) is the full hardening-spec suite (checks 1-22
+  exec, 23-27 builds) — see "Security model" below.
+
+### app-builder image (`services/app-builder/`, M12-04)
+
+- **Purpose**: the image every app build container runs (§3 "App
+  builds"). Not a compose service: `code-exec-manager` runs it once per
+  build phase, like the exec toolbox.
+- **Image/base**: `node:22-alpine` with pinned, build-time-installed
+  (`npm ci --omit=dev --ignore-scripts`) esbuild 0.25.12, TypeScript 6.0.3,
+  jsdom 26.1.0, React / react-dom 19.2.3, react-native-web 0.21.2,
+  `@types/react` and react-native 0.86.3 (typings only), and the SDK 1
+  runtime prebuilt into `dist/` (`runtime.js`, the ≈468 KB IIFE the app
+  host will serve, and `runtime.dev.js` for the smoke render). Nothing is
+  fetched at build time of an app; the containers have no network. Runs as
+  uid `19999`. Dockerfile: `services/app-builder/Dockerfile`.
+- **Layout**: `src/cli.mjs` (`compile` / `smoke` entry points; always
+  writes `result.json`), `compile.mjs` (route table, import-allowlist
+  plugin, esbuild `__homeai_define` bundle, prod + dev), `typecheck.mjs`
+  (TS API against `types/homeai.d.ts` and the React / RN typings),
+  `smoke.mjs` (jsdom + `react-dom/client` + node:sqlite behind the real
+  bridge transport), `routes.mjs`, `diagnostics.mjs`, `build-runtime.mjs`;
+  `runtime/` (runtime, router shim, SDK, bridge — from the M12-01 spike).
+- **Build**: `./services/app-builder/build-builder-image.sh` →
+  `homeai-app-builder:latest` (≈120 MB content, 561 MB on disk).
+- **Tests**: `cd services/app-builder && npm ci --ignore-scripts && npm run
+  lint && npm test` (node:test over fixture apps in `tests/`: the valid
+  groceries app, each diagnostic kind with its exact position, the
+  runtime/allowlist/typings agreeing). The same suite runs inside the
+  image offline: `docker run --rm --network none --read-only --tmpfs /tmp
+  homeai-app-builder:latest node --test tests/builder.test.mjs`.
 
 ### exec-toolbox image (`services/code-exec-manager/exec-image/`)
 
@@ -795,7 +836,9 @@ what another doc says it should be.
   agent's file tools present on that same API. As of M12-02: the app
   registry — the `app.json` schema and package check, apps / versions /
   instances, and each instance's `apps/<instance_id>/` dir (§3 "Apps").
-  It also holds the Ed25519 signing key every
+  As of M12-04: app builds, run by code-exec-manager in the builder image
+  over a staging copy the platform makes (§3 "App builds"). It also holds
+  the Ed25519 signing key every
   platform token is signed with and serves the public half as a JWKS.
   API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
@@ -822,7 +865,10 @@ what another doc says it should be.
   `SPACES_DIR` as `root:root 0755` on first `up`; keep it that way (only
   root may create entries in it — see "Spaces" below). M11-01 also
   mounts `${FILES_DIR}:/data/legacy-files` (rw) as the source of the
-  legacy migration; nothing else reads it.
+  legacy migration; nothing else reads it. M12-04 adds
+  `${APP_BUILDS_DIR:-/srv/homeai/builds}:/data/builds` (rw bind), the app
+  build staging root, made `0700` at startup; stored bundles live in
+  `platform-data` under `app-bundles/`.
 - **Runs as**: root, with `cap_drop: [ALL]` + `cap_add: [CHOWN,
   DAC_OVERRIDE, FOWNER, FSETID]` (it assigns per-user/per-space ownership;
   `FSETID` because the kernel clears the setgid bit on a `chmod` by a
@@ -840,7 +886,11 @@ what another doc says it should be.
   `/data/platform/setup-code` if present (else generates a new
   `XXXX-XXXX-XXXX-XXXX` code, ~79 bits) and logs it in a banner
   (`HOME AI SETUP CODE: …`); once set, it deletes any leftover file. Any
-  failure fails startup. Last, the legacy migration (below) if enabled.
+  failure fails startup. Then the builds root is made `0700` and emptied
+  of staging dirs an interrupted build left (`builds: removed N stale
+  staging dirs`; if it can't be used, `builds: … unusable, app builds
+  disabled` and builds answer `503`, startup continues). Last, the legacy
+  migration (below) if enabled.
 - **Legacy files migration** (`app/core/legacy.py`, M11-01; only when
   `PLATFORM_MIGRATE_LEGACY_FILES=1`, which compose defaults to since
   M11-02 moved the agent onto spaces): while no bootstrap admin exists it
@@ -923,7 +973,9 @@ what another doc says it should be.
   compared in constant time — `app/api/internal/service_auth.py`; an
   empty token matches nothing. `PLATFORM_AGENT_TOKEN` guards
   `GET /internal/bootstrap-admin` and `/internal/delegations*`,
-  `PLATFORM_EXEC_TOKEN` guards `POST /internal/exec-grants`).
+  `PLATFORM_EXEC_TOKEN` guards `POST /internal/exec-grants`, and since
+  M12-04 is also what the platform presents on code-exec-manager's
+  `POST /builds/...`).
   `SPACES_HOST_DIR` (M11-03; compose sets it to `SPACES_DIR`, the host
   path behind `/data/spaces`, so exec-grants can name bind sources the
   Docker daemon resolves; empty refuses every grant).
@@ -933,6 +985,9 @@ what another doc says it should be.
   `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
   `/data/platform`/`/data/spaces`; `PLATFORM_AUTH_RATE_LIMIT` /
   `PLATFORM_AUTH_RATE_WINDOW_S` default to `5` / `60` (not set in compose).
+  M12-04 (not set in compose): `PLATFORM_BUILDS_DIR` (`/data/builds`),
+  `EXEC_MANAGER_URL` (`http://code-exec-manager:8090`),
+  `PLATFORM_BUILD_TIMEOUT_S` (`600`, per phase call, queueing included).
 - **Tests**: `services/platform/tests/` — `test_tokens.py` (RFC 7638 /
   RFC 8037 thumbprint vector, key persistence + permissions, tampered
   signature/payload, expired, wrong `aud`/`iss`, unknown/missing `kid`,
@@ -988,11 +1043,19 @@ what another doc says it should be.
   non-member × user/agent, source-path rules, diagnostics, visibility,
   validate, one instance per app and space, instance dir + trash, the
   reserved `Apps` folder); `test_storage.py` also checks instance and trash
-  dirs as root. Unprivileged
+  dirs as root. M12-04: `test_app_build.py` (against a fake builder that
+  plays the container's part on the staging dir: the stored bundle and
+  `bundle_path`, the staged copy's modes and owners, rebuild replacing the
+  old bundle, manifest / symlink / size refusals never reaching the
+  builder, builder diagnostics passed on, normalized and capped, hostile
+  outputs — bad or oversized JSON, symlinked results and bundles, a
+  non-bundle `app.js` — refused, timeouts, the role × agent matrix, `503`s,
+  and `ExecManagerBuilder`'s HTTP contract). Unprivileged
   tests record space-dir chowns via the autouse `chowns` fixture instead
   of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
   `scripts/e2e/platform_spaces_smoke.sh`,
-  `scripts/e2e/platform_files_smoke.sh`, `scripts/e2e/platform_apps_smoke.sh`.
+  `scripts/e2e/platform_files_smoke.sh`, `scripts/e2e/platform_apps_smoke.sh`,
+  `scripts/e2e/app_build_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
@@ -1721,6 +1784,7 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `POST /api/platform/apps` | write on the source space | `{"source_path"}` — exactly `/personal/Apps/<slug>` or `/spaces/<s>/Apps/<slug>` (trailing slash optional) | `201 {"app": App, "valid": true, "diagnostics": []}`; creates the app and its `working` version from `app.json`. The space's `Apps` folder is created first if missing (`<caller uid>:<gid>` `2770`). | `422 invalid_source_path` (any other shape, a slug that isn't a valid slug, or a symlinked `Apps`/app folder), space errors, `409 apps_folder_not_a_directory`, `422 invalid_app` + `diagnostics` (incl. a missing folder), `409 app_exists` (that slug is already registered in that space) |
 | `GET /api/platform/apps/{id}` | visible | — | `200 App` | `404 not_found` |
 | `POST /api/platform/apps/{id}/validate` | write on the source space | — | `200 {"app": App, "valid": bool, "diagnostics": [Diagnostic]}`. When valid, the working version takes the current `app.json` (and the app its `name`); when not, nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors |
+| `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
 | `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` (`root:<gid>` `2770`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
 | `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine). The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
@@ -1732,6 +1796,86 @@ per `(app_id, version)`; `published_at` set iff `published`),
 `version`; `uninstalled_at`; unique `(app_id, space_id)` among live
 rows). Nothing is hard-deleted by the product; the `ON DELETE CASCADE`s
 from spaces and apps exist for test and e2e cleanup.
+
+**App builds** (`app/core/appbuild.py`; M12-04; the builder is
+`services/app-builder`, run by code-exec-manager's `POST /builds`; design
+in `docs/PLATFORM.md` §7 "Build and verify").
+
+*Flow* of `POST /api/platform/apps/{id}/build`:
+
+1. **Stage.** A new build dir `/data/builds/<build_id>/` (`build_id` =
+   32 hex; host `${APP_BUILDS_DIR}`, root `0700`) gets `src/` (root
+   `0755`, files `0644`), a copy of the app folder made by an fd walk
+   (`O_NOFOLLOW` below an fd from `beneath`), and `bundle/`, `smoke/`
+   (`19999:19999 0700`). Dotfiles are skipped. A symlink, a FIFO or other
+   non-file, more than 1000 entries, a file over 2 MB or over 16 MB in
+   total is a `files` diagnostic, and the build stops there.
+2. **Validate the copy** with `manifest.validate_package` (step
+   `manifest`); a failure stops the build. So what is built is what was
+   checked, whatever a member edits meanwhile.
+3. **`compile`** (code-exec-manager, `/src` ro, `/out` = `bundle/`): route
+   table (step `route`), esbuild with the import-allowlist plugin
+   (`import`, `bundle`), then the type-check (`type`). Writes
+   `result.json` and, when ok, `app.js` / `app.js.map` (the production
+   bundle) and `app.dev.js` / `.map` (for the smoke render).
+4. **`smoke`** (`/src` ro, `/bundle` = `bundle/` ro, `/out` = `smoke/`):
+   `schema.sql` into node:sqlite (`sql`), then every route in a fresh jsdom
+   window with the dev runtime and bundle (`render`, `sql`). Writes
+   `result.json`.
+5. **Read the outputs as untrusted**: each file opened `O_NOFOLLOW |
+   O_NONBLOCK` below fds on the build dir, regular files only, capped
+   (`result.json` 1 MB, `app.js` 16 MB, map 32 MB); `app.js` must start
+   `__homeai_define(`. Diagnostics are re-built field by field (unknown
+   step → `build`, `file` ≤ 500, `message` ≤ 2000, `source` ≤ 200 chars,
+   positions only positive ints), at most 50. A phase that timed out, or
+   left no usable `result.json`, or failed without diagnostics, is one
+   `build` diagnostic.
+6. **Store** (success only): `app.js` and `app.js.map` to
+   `/data/platform/app-bundles/<app_id>/<build_id>/`; under `FOR UPDATE`
+   of the working version row, set `bundle_path` =
+   `app-bundles/<app_id>/<build_id>/app.js` (relative to the platform data
+   dir), `version` and `manifest`, and the app's `name`. The previous
+   working bundle's dir is removed unless another version row uses it.
+7. The build dir is always removed. No database connection is held while
+   the builder runs.
+
+*Objects*:
+
+- `BuildDiagnostic`: `{"step": "manifest"|"files"|"route"|"import"|
+  "bundle"|"type"|"render"|"sql"|"build", "file": str (relative to the
+  app folder, "" for the app as a whole), "path": JSON pointer (manifest
+  diagnostics) or "", "line": int|null, "column": int|null (1-based),
+  "message": str, "source": str|null (the offending line)}` —
+  `Diagnostic` plus a step and a position. Import messages name the
+  allowlist; type messages are `TS<code>: …`; render messages end with
+  `(on screen <path>, in <Component> (<file>:<line>:<col>) < …)`; SQL
+  messages quote the statement. Examples (from
+  `scripts/e2e/app_build_smoke.sh`): `import app/index.tsx 2:30 Import
+  "fs" is not allowed in apps. Allowed modules: react, react-native,
+  expo-router, expo-sqlite, @homeai/sdk, and the app's own files`; `type
+  app/index.tsx 4:9 TS2322: Type 'string' is not assignable to type
+  'number'.`
+- `Build`: `{"id": build_id, "duration_ms", "bundle_path": str|null,
+  "bundle_bytes": int|null}` (null unless it succeeded). The response's
+  `build` is null when it stopped at staging or validation.
+
+*Type-check* (`services/app-builder/src/typecheck.mjs`): TS `strict`
+except `noImplicitAny`, `lib: ["es2020"]` (no DOM), JSX `react-jsx`,
+resolution to the builder's React / React Native typings and
+`types/homeai.d.ts` (`@homeai/sdk`, `expo-sqlite`, `expo-router` — exactly
+what the runtime provides). React Native's typings declare `fetch`,
+`XMLHttpRequest`, `WebSocket`, `require` and friends as globals, so a
+checker pass refuses any reference that resolves to a global declaration
+of those names or of `window`, `document`, `navigator`, `location`,
+`localStorage`, `sessionStorage` (with an "is not available in apps"
+message in place of tsc's "add the dom lib"); triple-slash directives are
+refused. `globalThis.x` is not caught; the sandbox CSP is the boundary.
+
+*Import allowlist* (esbuild plugin, `verbatimModuleSyntax` so unused
+imports are still checked): `react`, `react/jsx-runtime`, `react-native`,
+`expo-router`, `expo-sqlite`, `@homeai/sdk`, and relative imports of
+`.ts`/`.tsx`/`.js`/`.jsx`/`.json` files that resolve (symlinks included)
+inside the app folder.
 
 **`/internal/*`** (never routed by Caddy)
 
@@ -1858,6 +2002,37 @@ grants>}`. Nothing else mounted; no env secrets passed in. The manager
 validates the grants before use: ids ≥ 1000, absolute normalized host
 paths, container paths only `/files/personal` or `/files/spaces/<slug>`,
 no duplicates.
+
+**Builds** (M12-04, platform only; `app/builds.py`):
+
+- `POST /builds/{build_id}/{phase}` with `Authorization: Bearer
+  <PLATFORM_EXEC_TOKEN>` (constant-time compare; a delegation is not
+  accepted) → `200 {"exit_code": int, "timed_out": bool, "duration_ms":
+  int, "stdout": str, "stderr": str, "truncated": bool}` (each stream's
+  last 64,000 bytes). `build_id` must match `^[a-f0-9]{32}$` and `phase`
+  `^(compile|smoke)$` (`422` otherwise); wrong or missing token `401`;
+  `PLATFORM_EXEC_TOKEN` or `APP_BUILDS_HOST_DIR` unset `503`; build dirs
+  not staged `404`; the builder image missing `503`; that phase of that
+  build already running `409`. Runs the phase's container to completion
+  (at most `BUILD_CONCURRENCY` at once, the rest wait), kills it after
+  `BUILD_TIMEOUT_S`, then removes it. The phase's real output is the
+  `result.json` it writes into the build dir, which the platform reads.
+  Stale `homeai.build` containers are removed at startup.
+
+**Builder-container hardening spec** — `build_run_kwargs(build_id, phase)`,
+asserted field by field in `tests/test_builds.py` and checked live by
+`verify_isolation.sh` 23-27: image `homeai-app-builder:latest`, name
+`homeai-build-<build_id>-<phase>`, command `["node",
+"/builder/src/cli.mjs", phase]`, `network_mode="none"`,
+`cap_drop=["ALL"]`, `security_opt=["no-new-privileges"]`,
+`read_only=True`, `tmpfs={"/tmp": "size=256m"}`, `mem_limit="2g"`,
+`nano_cpus=2_000_000_000`, `user="19999:19999"`, `pids_limit=256`, labels
+`{"homeai.build": build_id, "homeai.build.phase": phase}`, and exactly
+these `--mount type=bind`s below `<APP_BUILDS_HOST_DIR>/<build_id>/`:
+`compile` — `src` → `/src` ro, `bundle` → `/out` rw; `smoke` — `src` →
+`/src` ro, `bundle` → `/bundle` ro, `smoke` → `/out` rw. No env, no
+socket, nothing else. The caller names only the id: the paths are the
+manager's own config, and the platform keeps that root `0700`.
 
 ### `web-fetch` API (internal, port 8000)
 
@@ -2322,13 +2497,14 @@ design actually protects against them:
 
 ### Isolation verification (M4-05)
 
-Run `scripts/verify_isolation.sh` after any change to `code-exec-manager`
-or the toolbox image (`services/code-exec-manager/exec-image/Dockerfile`)
+Run `scripts/verify_isolation.sh` after any change to `code-exec-manager`,
+the toolbox image (`services/code-exec-manager/exec-image/Dockerfile`), the
+builder image (`services/app-builder/`) or the platform's build staging
 — it is the scripted, repeatable check for the product's core safety
 promise ("safe to let it run code"), so it needs re-running whenever
 anything in that promise's implementation moves.
 
-It drives 22 checks against the live stack: 14 run commands **inside a
+It drives 27 checks against the live stack: 14 run commands **inside a
 real exec container through the manager's own `POST
 /sessions/{id}/execute` endpoint** (never via `docker exec` straight into
 the container, which would bypass exactly what's being tested — an agent
@@ -2365,6 +2541,21 @@ exact §7 hardening spec):
   container's own `docker inspect` confirms `NetworkMode`/`ReadonlyRootfs`/
   `CapDrop`/`Privileged`/bind-mount all match spec, and no compose service
   other than `caddy` publishes a host port.
+- **App builds (M12-04, checks 23-27)** — A builds a probe app through
+  `POST /api/platform/apps/{id}/build`. Its screen escapes jsdom into the
+  smoke container's Node (on purpose: that's the residual jsdom leaves)
+  and reports, in the render error that comes back as the diagnostic: only
+  `lo`, no routes, `platform:8100` unreachable, no `docker.sock`, no
+  `/data` `/files` `/srv` `/app`, uid `19999`, `CapEff` 0, no secret env
+  (23); `/src`, `/bundle`, `/builder` and `/` `EROFS`, `/out` writable
+  and the only rw bind (24). Both phases' containers are `docker
+  inspect`ed mid-build: network none, read-only root, `CapDrop ALL`, not
+  privileged, `no-new-privileges`, `19999:19999`, and binds exactly the
+  build's own staging dirs under `APP_BUILDS_DIR` (25). `POST /builds`
+  refuses no token, a wrong one and a user's delegation (`401`) and
+  malformed ids/phases (26). Afterwards the staging dir and containers
+  are gone and nothing was stored (27). Preflight (re)builds the builder
+  image.
 
 Any failing check prints in red and the suite keeps running the rest (so a
 single run shows every failure at once, not just the first), then exits 1
@@ -2583,6 +2774,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2770` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
+| `scripts/e2e/app_build_smoke.sh` | M12-04: (re)builds `homeai-app-builder:latest`, then with the same transport a CLI-created owner uploads and registers the fixture `hello` and builds it: `ok`, `bundle_path` = `app-bundles/<app>/<build>/app.js` in the API and an `__homeai_define(` bundle + map on disk, staging dir and builder containers gone. A missing import, a disallowed import (`fs`), a type error and a render throw in `app/index.tsx` each give exactly one diagnostic with the expected step, file, line and column and leave the bundle as it was; a bad `app.json` gives one `manifest` diagnostic and never reaches the builder; an outsider's build is `404`; a rebuild replaces the bundle and deletes the old one; deletes its rows, dirs and bundles on exit. Also in `gate_full.sh` | After touching `services/app-builder/`, `app/builds.py` or the platform's `appbuild.py` |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with HITL off — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |

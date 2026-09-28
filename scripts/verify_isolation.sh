@@ -39,6 +39,18 @@
 #   A (session `isolation-a-<pid>`): checks 1-17, 20, 21
 #   B (session `isolation-b-<pid>`): checks 18, 19, 22
 #
+# ---- App builds (M12-04): checks 23-27 --------------------------------------
+#
+# A writes a probe app into /personal/Apps/isoprobe (through its exec
+# container), registers it and builds it through the platform API, the path
+# an agent uses. The probe's screen escapes jsdom into the smoke phase's Node
+# process (jsdom is not a sandbox: `globalThis.ReactNativeWebView.postMessage`
+# comes from the outer realm), looks around, and reports what it found in
+# the render error it throws, which comes back as the build's diagnostic.
+# While the build runs, both builder containers are `docker inspect`ed.
+# Needs `homeai-app-builder:latest` (services/app-builder/build-builder-image.sh,
+# run by preflight).
+#
 # ---- The "no published port" problem -------------------------------------
 #
 # `code-exec-manager` has no published port (M4-03's intentional compose
@@ -211,6 +223,70 @@ manager_call() {
   if [ "$who" = a ]; then cookie="$COOKIE_A"; else cookie="$COOKIE_B"; fi
   ISO_COOKIE="$cookie" docker exec -e ISO_COOKIE -e PLATFORM_AGENT_TOKEN \
     "$RUNNER_NAME" python3 -c "$PY_CALL" "$@" 2>/dev/null || true
+}
+
+# argv: method path [json body]. Calls the platform's external API as the
+# cookie's user (verify -> X-HomeAI-Identity, Caddy's part). Prints the JSON
+# response, or `{"http_error": N, "body": ...}`.
+PY_PLATFORM="$(cat <<'EOF'
+import json, os, sys, urllib.error, urllib.request
+
+PLATFORM = "http://platform:8100"
+method, path = sys.argv[1:3]
+body = sys.argv[3].encode() if len(sys.argv) > 3 else None
+req = urllib.request.Request(f"{PLATFORM}/internal/auth/verify", headers={"Cookie": os.environ["ISO_COOKIE"]})
+with urllib.request.urlopen(req, timeout=30) as r:
+    identity = r.headers["X-HomeAI-Identity"]
+headers = {"X-HomeAI-Identity": identity, "Content-Type": "application/json"}
+req = urllib.request.Request(f"{PLATFORM}/api/platform{path}", body, headers, method=method)
+try:
+    with urllib.request.urlopen(req, timeout=300) as r:
+        sys.stdout.write(r.read().decode())
+except urllib.error.HTTPError as e:
+    sys.stdout.write(json.dumps({"http_error": e.code, "body": e.read().decode()}))
+EOF
+)"
+
+platform_call() {
+  ISO_COOKIE="$COOKIE_A" docker exec -e ISO_COOKIE "$RUNNER_NAME" python3 -c "$PY_PLATFORM" "$@" 2>/dev/null || true
+}
+
+# argv: build_id phase auth(none|wrong|delegation). Prints the HTTP status of
+# code-exec-manager's POST /builds/{build_id}/{phase}.
+PY_BUILDS="$(cat <<'EOF'
+import json, os, sys, urllib.error, urllib.request
+
+PLATFORM = "http://platform:8100"
+build_id, phase, auth = sys.argv[1:4]
+headers = {}
+if auth == "wrong":
+    headers["Authorization"] = "Bearer not-the-service-token"
+elif auth == "delegation":
+    req = urllib.request.Request(f"{PLATFORM}/internal/auth/verify", headers={"Cookie": os.environ["ISO_COOKIE"]})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        identity = r.headers["X-HomeAI-Identity"]
+    req = urllib.request.Request(
+        f"{PLATFORM}/internal/delegations",
+        json.dumps({"identity_token": identity, "thread_id": "iso-build"}).encode(),
+        {"Authorization": f"Bearer {os.environ['PLATFORM_AGENT_TOKEN']}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        headers["Authorization"] = f"Bearer {json.loads(r.read())['token']}"
+req = urllib.request.Request(
+    f"http://code-exec-manager:8090/builds/{build_id}/{phase}", b"", headers, method="POST"
+)
+try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+        print(r.status)
+except urllib.error.HTTPError as e:
+    print(e.code)
+EOF
+)"
+
+builds_status() {
+  ISO_COOKIE="$COOKIE_A" docker exec -e ISO_COOKIE -e PLATFORM_AGENT_TOKEN "$RUNNER_NAME" \
+    python3 -c "$PY_BUILDS" "$@" 2>/dev/null || echo "runner-error"
 }
 
 session_of() {
@@ -480,6 +556,13 @@ print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
     exit 1
   fi
   log "OK: SPACES_DIR=${SPACES_DIR}; PLATFORM_AGENT_TOKEN is set"
+  APP_BUILDS_DIR="$(_e2e_env_value APP_BUILDS_DIR /srv/homeai/builds)"
+
+  log "Building homeai-app-builder:latest (cached) for checks 23-27 ..."
+  if ! bash "${REPO_ROOT}/services/app-builder/build-builder-image.sh" >/dev/null; then
+    log "ERROR: services/app-builder/build-builder-image.sh failed"
+    exit 1
+  fi
 
   HOST_LAN_IP="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
   if [ -z "$HOST_LAN_IP" ]; then
@@ -902,6 +985,242 @@ if not before.endswith(" true") or after != before:
   fi
 }
 
+# ---- checks 23-27 (app builds, M12-04) --------------------------------------
+
+PROBE_SLUG="isoprobe"
+
+probe_files() {
+  cat <<EOF
+app.json	{"name": "Iso probe", "slug": "${PROBE_SLUG}", "version": "1.0.0", "homeai": {"sdk": "1", "icon": "bug-outline"}}
+AGENT.md	# Isolation probe
+schema.sql	
+app/_layout.tsx	import { Stack } from 'expo-router'; export default function Layout() { return <Stack />; }
+EOF
+}
+
+PROBE_INDEX="$(cat <<'EOF'
+import { Text } from 'react-native';
+
+function probe(): string {
+  const outer = (globalThis as any).ReactNativeWebView.postMessage;
+  const proc = outer.constructor.constructor('return process')();
+  const fs = proc.getBuiltinModule('fs');
+  const cp = proc.getBuiltinModule('child_process');
+  const attempt = (f: () => unknown) => {
+    try {
+      f();
+      return 'ok';
+    } catch (e: any) {
+      return e.code || String(e.message).slice(0, 40);
+    }
+  };
+  const pseudo = ['proc', 'sysfs', 'cgroup', 'cgroup2', 'devpts', 'mqueue', 'tmpfs', 'overlay'];
+  const rw = fs.readFileSync('/proc/self/mounts', 'utf8').split('\n')
+    .map((l: string) => l.split(' '))
+    .filter((m: string[]) => m.length > 3 && m[3].split(',')[0] === 'rw' && !pseudo.includes(m[2]))
+    .map((m: string[]) => m[1]);
+  let net = 'reached';
+  try {
+    cp.execSync('wget -q -T 3 -O /dev/null http://platform:8100/internal/health', { stdio: 'ignore', timeout: 8000 });
+  } catch {
+    net = 'blocked';
+  }
+  cp.execSync('sleep 2');
+  const report = {
+    uid: `${proc.getuid()}:${proc.getgid()}`,
+    cap: /CapEff:\s*(\w+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))?.[1],
+    ifaces: fs.readdirSync('/sys/class/net'),
+    routes: fs.readFileSync('/proc/net/route', 'utf8').trim().split('\n').length - 1,
+    sock: ['/var/run/docker.sock', '/run/docker.sock'].filter((p: string) => fs.existsSync(p)),
+    data: ['/data', '/files', '/srv', '/app'].filter((p: string) => fs.existsSync(p)),
+    write: Object.fromEntries(['/src/x', '/bundle/x', '/builder/x', '/x', '/out/x'].map((p: string) => [p, attempt(() => fs.writeFileSync(p, 'x'))])),
+    rw,
+    net,
+    env: Object.keys(proc.env).filter((k: string) => /TOKEN|SECRET|PASSWORD|KEY|POSTGRES/i.test(k)),
+  };
+  throw new Error('PROBE ' + JSON.stringify(report));
+}
+
+export default function Index() {
+  return <Text>{probe()}</Text>;
+}
+EOF
+)"
+
+# Sets PROBE_RESULT (the build response), PROBE_REPORT (the probe's JSON) and
+# PROBE_INSPECT_DIR (one `docker inspect` JSON per builder container seen).
+run_probe_build() {
+  local dir="/files/personal/Apps/${PROBE_SLUG}" cmd rel content
+  cmd="set -e; mkdir -p ${dir}/app"
+  while IFS=$'\t' read -r rel content; do
+    cmd+="; echo $(printf '%s\n' "$content" | base64 -w0) | base64 -d > ${dir}/${rel}"
+  done < <(probe_files)
+  cmd+="; echo $(printf '%s\n' "$PROBE_INDEX" | base64 -w0) | base64 -d > ${dir}/app/index.tsx"
+  manager_execute_as a "$cmd" 20 >/dev/null
+
+  local registered app_id watcher
+  registered="$(platform_call POST /apps "{\"source_path\": \"/personal/Apps/${PROBE_SLUG}\"}")"
+  app_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["app"]["id"])' "$registered" 2>/dev/null || true)"
+  if ! [[ "$app_id" =~ ^[0-9a-f-]{36}$ ]]; then
+    PROBE_RESULT="registering the probe app failed: ${registered}"
+    return
+  fi
+  PROBE_INSPECT_DIR="$(mktemp -d)"
+  (
+    end=$((SECONDS + 300))
+    while [ "$SECONDS" -lt "$end" ] && [ ! -e "${PROBE_INSPECT_DIR}/stop" ]; do
+      for c in $(docker ps -q --filter label=homeai.build); do
+        [ -s "${PROBE_INSPECT_DIR}/${c}.json" ] || docker inspect "$c" >"${PROBE_INSPECT_DIR}/${c}.json" 2>/dev/null || true
+      done
+      sleep 0.1
+    done
+  ) &
+  watcher=$!
+  PROBE_RESULT="$(platform_call POST "/apps/${app_id}/build" '{}')"
+  touch "${PROBE_INSPECT_DIR}/stop"
+  wait "$watcher" 2>/dev/null || true
+  PROBE_BUILD_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["build"]["id"])' "$PROBE_RESULT" 2>/dev/null || true)"
+  PROBE_REPORT="$(python3 -c '
+import json, sys
+r = json.loads(sys.argv[1])
+for d in r.get("diagnostics", []):
+    m = d.get("message", "")
+    if m.startswith("PROBE "):
+        print(json.dumps(json.JSONDecoder().raw_decode(m[6:])[0]))
+        break
+' "$PROBE_RESULT" 2>/dev/null || true)"
+}
+
+# $1 check number, $2 description, $3 python assertion over `p` (the probe's report).
+check_probe() {
+  local out
+  if [ -z "$PROBE_REPORT" ]; then
+    fail "$1" "$2" "no probe report in the build's diagnostics: ${PROBE_RESULT}"
+    return
+  fi
+  if out="$(python3 -c "
+import json, sys
+p = json.loads(sys.argv[1])
+$3
+" "$PROBE_REPORT" 2>&1)"; then
+    pass "$1" "$2"
+  else
+    fail "$1" "$2" "${out} (report: ${PROBE_REPORT})"
+  fi
+}
+
+check_23() {
+  check_probe 23 "builder (smoke, running app code in Node): only lo, no routes, platform unreachable, no docker.sock, no /data /files /srv /app, uid 19999, CapEff 0, no secret env" "
+assert p['ifaces'] == ['lo'] and p['routes'] == 0, f'network: {p[\"ifaces\"]}, {p[\"routes\"]} routes'
+assert p['net'] == 'blocked', 'reached platform:8100'
+assert p['sock'] == [], f'docker.sock present: {p[\"sock\"]}'
+assert p['data'] == [], f'host paths present: {p[\"data\"]}'
+assert p['uid'] == '19999:19999', f'uid {p[\"uid\"]}'
+assert int(p['cap'], 16) == 0, f'CapEff {p[\"cap\"]}'
+assert p['env'] == [], f'secret-shaped env: {p[\"env\"]}'
+"
+}
+
+check_24() {
+  check_probe 24 "builder (smoke): /src, /bundle, /builder and / are read-only; /out is the only rw bind" "
+w = p['write']
+bad = {k: v for k, v in w.items() if k != '/out/x' and v != 'EROFS'}
+assert not bad, f'writable (or not EROFS): {bad}'
+assert w['/out/x'] == 'ok', f'/out not writable: {w[\"/out/x\"]}'
+assert p['rw'] == ['/out'], f'rw binds {p[\"rw\"]}'
+"
+}
+
+check_25() {
+  local desc="docker inspect of both builder containers: NetworkMode none, read-only root, CapDrop ALL, User 19999:19999, binds only the build's staging dirs under APP_BUILDS_DIR"
+  local out
+  if [ -z "${PROBE_BUILD_ID:-}" ]; then
+    fail 25 "$desc" "no build id in the build response: ${PROBE_RESULT}"
+    return
+  fi
+  if out="$(python3 - "$PROBE_INSPECT_DIR" "$PROBE_BUILD_ID" "$APP_BUILDS_DIR" <<'EOF' 2>&1
+import glob, json, sys
+folder, build_id, root = sys.argv[1:4]
+base = f"{root.rstrip('/')}/{build_id}"
+want = {
+    "compile": {f"{base}/src": ["/src", False], f"{base}/bundle": ["/out", True]},
+    "smoke": {f"{base}/src": ["/src", False], f"{base}/bundle": ["/bundle", False], f"{base}/smoke": ["/out", True]},
+}
+seen = {}
+for path in glob.glob(f"{folder}/*.json"):
+    (c,) = json.load(open(path))
+    labels = c["Config"].get("Labels") or {}
+    if labels.get("homeai.build") == build_id:
+        seen[labels["homeai.build.phase"]] = c
+errors = []
+if sorted(seen) != ["compile", "smoke"]:
+    errors.append(f"saw phases {sorted(seen)}, expected compile and smoke")
+for phase, c in seen.items():
+    hc = c["HostConfig"]
+    for key, value in (("NetworkMode", "none"), ("ReadonlyRootfs", True), ("CapDrop", ["ALL"]), ("Privileged", False)):
+        if hc.get(key) != value:
+            errors.append(f"{phase}: {key}={hc.get(key)!r}")
+    if "no-new-privileges" not in (hc.get("SecurityOpt") or []):
+        errors.append(f"{phase}: SecurityOpt={hc.get('SecurityOpt')!r}")
+    if c["Config"].get("User") != "19999:19999":
+        errors.append(f"{phase}: User={c['Config'].get('User')!r}")
+    binds = {m["Source"]: [m["Destination"], m["RW"]] for m in c.get("Mounts", []) if m.get("Type") == "bind"}
+    if binds != want[phase]:
+        errors.append(f"{phase}: binds {binds} != {want[phase]}")
+    if any("docker.sock" in json.dumps(m) for m in c.get("Mounts", [])):
+        errors.append(f"{phase}: docker.sock mounted")
+if errors:
+    print("; ".join(errors))
+    sys.exit(1)
+EOF
+)"; then
+    pass 25 "$desc"
+  else
+    fail 25 "$desc" "$out"
+  fi
+}
+
+check_26() {
+  local desc="POST /builds is service-token only: none/wrong token/a user's delegation are 401; bad ids and phases are refused"
+  local id got
+  id="$(openssl rand -hex 16)"
+  got="$(printf '%s ' \
+    "$(builds_status "$id" compile none)" \
+    "$(builds_status "$id" compile wrong)" \
+    "$(builds_status "$id" smoke delegation)")"
+  if [ "${got% }" != "401 401 401" ]; then
+    fail 26 "$desc" "got '${got% }', expected '401 401 401'"
+    return
+  fi
+  for bad in "..%2F..%2Fetc compile" "${id} shell" "${id}/x compile" "${id^^} compile"; do
+    # shellcheck disable=SC2086 # "<id> <phase>" split on purpose.
+    got="$(builds_status $bad wrong)"
+    if ! [[ "$got" =~ ^(401|404|422)$ ]]; then
+      fail 26 "$desc" "'${bad}' gave ${got}"
+      return
+    fi
+  done
+  pass 26 "$desc"
+}
+
+check_27() {
+  local desc="after the build: its staging dir and builder containers are gone, and nothing was stored for the failed build"
+  local left stored
+  left="$(docker ps -aq --filter "label=homeai.build=${PROBE_BUILD_ID:-none}")"
+  if [ -z "${PROBE_BUILD_ID:-}" ]; then
+    fail 27 "$desc" "no build id"
+  elif _e2e_compose exec -T platform test -e "/data/builds/${PROBE_BUILD_ID}"; then
+    fail 27 "$desc" "/data/builds/${PROBE_BUILD_ID} still exists"
+  elif [ -n "$left" ]; then
+    fail 27 "$desc" "builder containers left: ${left}"
+  elif stored="$(python3 -c 'import json,sys; r=json.loads(sys.argv[1]); print(r["ok"], r["build"]["bundle_path"], r["app"]["working_version"]["bundle_path"])' "$PROBE_RESULT")" \
+    && [ "$stored" = "False None None" ]; then
+    pass 27 "$desc"
+  else
+    fail 27 "$desc" "ok/bundle_path: ${stored:-?}"
+  fi
+}
+
 summary() {
   local total=$((PASS_COUNT + FAIL_COUNT))
   echo
@@ -944,6 +1263,15 @@ main() {
   check_20
   check_21
   check_22
+
+  log "Building the probe app through the platform (checks 23-27) ..."
+  run_probe_build
+  check_23
+  check_24
+  check_25
+  check_26
+  check_27
+  [ -n "${PROBE_INSPECT_DIR:-}" ] && rm -rf "$PROBE_INSPECT_DIR"
 
   summary
 }

@@ -588,6 +588,38 @@ reported. Errors come back as structured, model-readable diagnostics
 component stack or SQL). A successful build is committed to the app's git
 repo, stored as a version artifact, and pushed as a hot-reload event.
 
+> **As built (M12-04)** (contract: `ARCHITECTURE.md` §3 "App builds").
+> `POST /api/platform/apps/{id}/build` (write on the source space; agents
+> too) copies the source by fd walk into a platform-owned staging dir,
+> never mounting the space itself, and calls code-exec-manager's
+> additive, platform-only `POST /builds/{build_id}/{compile|smoke}`
+> (`PLATFORM_EXEC_TOKEN`; the caller names only the id, the manager
+> derives the mounts). The builder image (`services/app-builder`) carries
+> the whole toolchain offline. Diagnostics are `manifest.Diagnostic`
+> plus `step`, `line`, `column` and optional `source`, capped at 50. The
+> bundle and its map go to the platform data volume
+> (`app-bundles/<app>/<build>/`), recorded as the working version's
+> `bundle_path`; a failed build keeps the previous one. Deviations:
+> - `app.json` is validated platform-side (`manifest.validate_package`,
+>   step `manifest`) on the staged copy, before any container starts.
+> - Two containers per build instead of one: `compile` (esbuild + tsc;
+>   no app code runs) writes the bundle; `smoke` runs app code and
+>   sees the bundle read-only. jsdom is not a sandbox (app code can reach
+>   Node through outer-realm objects), so the container is the boundary.
+> - The diagnostic field is `step` (manifest, files, route, import,
+>   bundle, type, render, sql, build), not `kind`; the component stack is
+>   in the render message.
+> - No migrate, `app_built` event or hot reload yet (M12-03's migrations
+>   and `/ws/platform/events` aren't in); no git commit (M13), so
+>   `commit` stays null.
+> - The runtime and SDK/shim typings live in the builder
+>   (`services/app-builder/runtime`, `types/homeai.d.ts`) until M12-05's
+>   `packages/homeai-sdk/`.
+> - Typing is `strict` minus `noImplicitAny`. RN's typings declare
+>   `fetch`, `XMLHttpRequest`, `WebSocket` and `require` as globals, so a
+>   checker pass refuses references to those (and the DOM names);
+>   `globalThis.x` stays reachable, and the CSP remains the boundary.
+
 ### Registry, lifecycle, sharing
 
 - Tables: `apps` (id, slug, name, source space, source path, created_by),
@@ -702,6 +734,13 @@ The full dependency graph and ordered backlog are on the
   leak data it can already read, once per open. WebRTC-based egress was not
   tested. Native blocks navigation before any request
   (`onShouldStartLoadWithRequest`).
+- **App code in the smoke render** (M12-04): jsdom/`vm` doesn't contain
+  it, so a build's `smoke` container runs untrusted code with Node's full
+  API. It has no network, no socket, a read-only root and source, 2 GB /
+  2 CPUs / 256 pids and a timeout, writes only its own result dir, and the
+  platform reads that as untrusted (`scripts/verify_isolation.sh` checks
+  23-27 escape on purpose and look around). A kernel escape would be
+  the same exposure as an exec container's.
 - **SQLite read-only access from exec containers**: resolved by M12-01 —
   published snapshots, never the live WAL file (§7 Data).
 - **`withTransactionAsync`** is not in SDK v1 (needs a server-side
