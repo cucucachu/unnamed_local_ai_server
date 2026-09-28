@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# `base` (python, uv, ffmpeg) is also where scripts/platform_image_tests.sh
+# runs the tests that need ffmpeg, which the host doesn't have.
+FROM python:3.12-slim AS base
 
 # Same uv-in-Docker pattern as agent-server.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -8,6 +10,8 @@ WORKDIR /app
 # ffmpeg: video poster frames for /api/platform/files/thumbnail.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+FROM base
 
 # The container runs with `read_only: true` (docker-compose.yml), so nothing
 # may need to write under /app at runtime: deps are installed here at build
@@ -23,7 +27,8 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 COPY pyproject.toml uv.lock ./
 # Runtime deps only: unlike agent-server, the test suite needs Docker (to
-# start its own throwaway Postgres) and runs on the host, not in here.
+# start its own throwaway Postgres) and runs on the host, not in here
+# (except the ffmpeg tests, in `base`).
 RUN uv sync --frozen --no-dev && rm -rf "$UV_CACHE_DIR"
 
 COPY app/ ./app/

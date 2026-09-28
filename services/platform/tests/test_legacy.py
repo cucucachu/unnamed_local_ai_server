@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.core import legacy
+from app.core.beneath import Root
 from app.main import create_app
 from tests.conftest import make_settings, running
 from tests.helpers import bootstrap_admin, create_user, sql
@@ -186,6 +187,29 @@ async def test_missing_legacy_dir_is_a_no_op(pg_database, tmp_path) -> None:
     async with running(app) as client:
         await bootstrap_admin(_P(app, client, pg_database, data))
     assert not (data / legacy.MARKER_FILENAME).exists()
+
+
+def test_name_taken_after_it_was_picked_is_not_replaced(tmp_path, monkeypatch, chowns) -> None:
+    legacy_root = _legacy_tree(tmp_path / "legacy-files")
+    home = tmp_path / "home"
+    home.mkdir()
+    real_free_name = legacy._free_name
+
+    def free_name_then_taken(dir_fd: int, name: str) -> str:
+        picked = real_free_name(dir_fd, name)
+        if name == "photo.jpg" and picked == name:
+            (home / picked).write_bytes(b"theirs")
+        return picked
+
+    monkeypatch.setattr(legacy, "_free_name", free_name_then_taken)
+    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert legacy.move_entries(legacy_root, Root(fd, str(home)), 20001, 30001) == 4
+    finally:
+        os.close(fd)
+    assert (home / "photo.jpg").read_bytes() == b"theirs"
+    assert (home / "photo (migrated).jpg").read_bytes() == b"jpg"
+    assert list(legacy_root.iterdir()) == []
 
 
 def test_free_name(tmp_path) -> None:

@@ -7,7 +7,8 @@ one from `pg_database`, dropped afterwards, so tests never share state.
 
 Requires a reachable Docker daemon; the session errors out (rather than
 silently skipping) if there isn't one, because the migration tests are only
-meaningful against a real Postgres.
+meaningful against a real Postgres. With `TEST_PG_HOST` set, the server
+already listening there on 5432 is used instead.
 """
 
 from __future__ import annotations
@@ -74,8 +75,28 @@ def _docker(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _wait_until_up(server: PgServer) -> None:
+    # The image's initdb phase only listens on a unix socket, so the first
+    # successful TCP connection is to the final server.
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            psycopg.connect(server.database("postgres").dsn, connect_timeout=2).close()
+            return
+        except psycopg.OperationalError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.3)
+
+
 @pytest.fixture(scope="session")
 def pg_server() -> Iterator[PgServer]:
+    if host := os.environ.get("TEST_PG_HOST"):
+        # Already running, with this file's superuser (scripts/platform_image_tests.sh).
+        server = PgServer("", host, 5432)
+        _wait_until_up(server)
+        yield server
+        return
     if shutil.which("docker") is None:
         pytest.fail("tests need the `docker` CLI to start an ephemeral Postgres")
     container_id = _docker(
@@ -89,17 +110,7 @@ def pg_server() -> Iterator[PgServer]:
     try:
         host, _, port = _docker("port", container_id, "5432/tcp").splitlines()[0].rpartition(":")
         server = PgServer(container_id, host, int(port))
-        # The image's initdb phase only listens on a unix socket, so the first
-        # successful TCP connection is to the final server.
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                psycopg.connect(server.database("postgres").dsn, connect_timeout=2).close()
-                break
-            except psycopg.OperationalError:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(0.3)
+        _wait_until_up(server)
         yield server
     finally:
         subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, check=False)

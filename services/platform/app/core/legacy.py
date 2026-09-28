@@ -12,7 +12,8 @@ gid. A marker in the platform data volume records completion; an
 interrupted run leaves the rest in the legacy root and continues next time.
 
 Both trees were writable by exec containers, so entries are moved by name
-between directory fds (`renameat`, or an fd-walking copy and delete across
+between directory fds (`renameat2(RENAME_NOREPLACE)`, so a name taken after
+it was picked is never replaced, or an fd-walking copy and delete across
 mounts) and adopted without following links (`app.core.fsops`).
 """
 
@@ -59,14 +60,18 @@ def _free_name(dir_fd: int, name: str) -> str:
     raise FileExistsError(f"{name}: no free name")
 
 
-def _move_entry(src_dir: int, name: str, dst_dir: int, target: str, owner: fsops.Owner) -> None:
+def _move_entry(src_dir: int, name: str, dst_dir: int, target: str, owner: fsops.Owner) -> bool:
+    """False if `target` appeared since it was picked: nothing was moved or replaced."""
     try:
-        os.rename(name, target, src_dir_fd=src_dir, dst_dir_fd=dst_dir)
+        fsops.rename_noreplace(src_dir, name, dst_dir, target)
+    except FileExistsError:
+        return False
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
         fsops.copy_at(src_dir, name, dst_dir, target, owner)
         fsops.remove_at(src_dir, name)
+    return True
 
 
 def move_entries(src_dir: Path, dst: Root, uid: int, gid: int) -> int:
@@ -75,10 +80,12 @@ def move_entries(src_dir: Path, dst: Root, uid: int, gid: int) -> int:
     src_fd = os.open(src_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         for name in sorted(os.listdir(src_fd)):
-            target = _free_name(dst.fd, name)
-            if target != name:
-                logger.warning("legacy files: %s exists, moving to %s", name, target)
-            _move_entry(src_fd, name, dst.fd, target, fsops.Owner(uid, gid))
+            while True:
+                target = _free_name(dst.fd, name)
+                if target != name:
+                    logger.warning("legacy files: %s exists, moving to %s", name, target)
+                if _move_entry(src_fd, name, dst.fd, target, fsops.Owner(uid, gid)):
+                    break
             fsops.adopt_at(dst.fd, target, gid, uid)
             moved += 1
     finally:

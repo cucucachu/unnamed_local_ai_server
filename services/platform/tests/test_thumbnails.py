@@ -1,7 +1,8 @@
 """`app/core/thumbnails.py`: ported from agent-server's `tests/test_thumbnails.py`.
 
 Tests that shell out to a real `ffmpeg` are skipped when it isn't on `PATH`
-(it is in the platform image); the rest exercise pure-Python logic.
+(it is in the platform image: `scripts/platform_image_tests.sh`); the rest
+exercise pure-Python logic.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from app.core.thumbnails import (
 
 _HAS_FFMPEG = shutil.which("ffmpeg") is not None
 _requires_ffmpeg = pytest.mark.skipif(
-    not _HAS_FFMPEG, reason="ffmpeg not on PATH - no real binary to test against"
+    not _HAS_FFMPEG, reason="ffmpeg not on PATH: scripts/platform_image_tests.sh"
 )
 
 _JPEG_MAGIC = b"\xff\xd8"

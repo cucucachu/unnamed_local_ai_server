@@ -18,6 +18,7 @@ bare `python` container to check real ownership on disk.
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import shutil
@@ -249,13 +250,44 @@ def copy_at(src_dir: int, src_name: str, dir_fd: int, name: str, owner: Owner) -
         os.close(fd)
 
 
+def _load_renameat2():
+    try:
+        fn = ctypes.CDLL(None, use_errno=True).renameat2
+    except (OSError, AttributeError):
+        return None
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    return fn
+
+
+_renameat2 = _load_renameat2()
+_RENAME_NOREPLACE = 1
+
+
+def rename_noreplace(src_dir: int, src_name: str, dst_dir: int, dst_name: str) -> None:
+    """`renameat` that fails with `FileExistsError` instead of replacing an existing `dst_name`.
+
+    There is no fallback to a plain rename: without `renameat2` (glibc >= 2.28,
+    Linux >= 3.15, a filesystem that supports `RENAME_NOREPLACE`) this raises.
+    """
+    if _renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is not in this libc (needs glibc >= 2.28)")
+    src, dst = os.fsencode(src_name), os.fsencode(dst_name)
+    if _renameat2(src_dir, src, dst_dir, dst, _RENAME_NOREPLACE):
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), src_name, None, dst_name)
+
+
 def move(src_root: Root, src: Parts, dst_root: Root, dst: Parts, *, gid: int | None = None) -> None:
-    """Rename `src` (not followed) to the new path `dst`; with `gid`, regroup the moved tree."""
+    """Rename `src` (not followed) to the new path `dst`, never replacing what is there.
+
+    With `gid`, regroup the moved tree.
+    """
     with (
         beneath.parent(src_root, src) as (src_dir, src_name),
         beneath.parent(dst_root, dst) as (dir_fd, name),
     ):
-        os.rename(src_name, name, src_dir_fd=src_dir, dst_dir_fd=dir_fd)
+        rename_noreplace(src_dir, src_name, dir_fd, name)
         if gid is not None:
             adopt_at(dir_fd, name, gid)
 
