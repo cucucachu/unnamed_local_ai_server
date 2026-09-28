@@ -88,7 +88,8 @@ def make_execute_code_tool(settings: Settings):
     async def execute_code(command: str, config: RunnableConfig, timeout_seconds: int = 120) -> str:
         """Run a shell command in a sandboxed Linux container, as the user.
 
-        The user's files are mounted at /files/personal (= /personal in your file tools) and
+        For running programs, not for creating, reading, editing or listing files (use the
+        file tools for those). The user's files are mounted at /files/personal (= /personal in your file tools) and
         /files/spaces/<slug> (= /spaces/<slug>); a space the user only views is read-only.
         Nothing else under /files is writable. The container has NO network access.
         Installed: Python 3 with pandas/numpy/pillow/matplotlib/openpyxl/pypdf, Node.js, git,
