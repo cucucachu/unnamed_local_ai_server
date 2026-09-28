@@ -30,6 +30,15 @@
 #      user's rights, one instance's URL can't reach another instance's
 #      rows or file, and the bundle endpoint needs space read.  checks 21-25
 #
+# Plus agent-server's own database (#194, docs/PLATFORM.md §6 "As built
+# (#194)"): row-level security is enabled and forced on each of its tables,
+# `agent` isn't BYPASSRLS and `agent_rls_bypass` can't log in (26); raw SQL
+# with agent-server's own credentials and no `app.user_id` sees no rows and
+# can't insert (27); with B's id it can't see A's thread, and a connection
+# from agent-server's own pool, returned by A and checked out again, carries
+# nothing of A's (28). That's defence in depth under the ownership checks,
+# not a boundary against a compromised agent-server.       checks 26-28
+#
 # For invariant 7, A installs the reference Grocery list app
 # (examples/apps/grocery-list) in its personal space and in the shared one,
 # builds both with the real builder, and adds a marker row to each. That is
@@ -227,10 +236,11 @@ setup() {
   HOME_B="$(_e2e_psql homeai_platform "SELECT s.id FROM spaces s JOIN users u ON u.id = s.owner_user_id
     WHERE s.kind = 'personal' AND u.username = '${USER_B}'")"
   SPACE_ID="$(_e2e_psql homeai_platform "SELECT id FROM spaces WHERE slug = '${SPACE}'")"
+  USER_A_ID="$(_e2e_psql homeai_platform "SELECT id FROM users WHERE username = '${USER_A}'")"
   USER_B_ID="$(_e2e_psql homeai_platform "SELECT id FROM users WHERE username = '${USER_B}'")"
   USER_ADM_ID="$(_e2e_psql homeai_platform "SELECT id FROM users WHERE username = '${USER_ADM}'")"
   local id
-  for id in "$HOME_A" "$HOME_B" "$SPACE_ID" "$USER_B_ID" "$USER_ADM_ID"; do
+  for id in "$HOME_A" "$HOME_B" "$SPACE_ID" "$USER_A_ID" "$USER_B_ID" "$USER_ADM_ID"; do
     [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || { log "ERROR: couldn't resolve the test users' ids (got '${id}')"; exit 1; }
   done
   SHARED="/spaces/${SPACE}"
@@ -698,6 +708,137 @@ check_16() {
   finish 16 "every live Postgres connection from agent-server is role 'agent' on its own database"
 }
 
+# ---- agent-server's database: row-level security (#194) -----------------------
+
+RLS_TABLES="threads user_settings checkpoints checkpoint_blobs checkpoint_writes turn_stats settings"
+
+check_26() {
+  local db got want t
+  db="$(_e2e_env_value POSTGRES_DB homeai)"
+  got="$(_e2e_psql "$db" "SELECT string_agg(c.relname || ':' || c.relrowsecurity || ':' || c.relforcerowsecurity
+      || ':' || pg_get_userbyid(c.relowner) || ':' || (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid),
+      ' ' ORDER BY c.relname)
+    FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+      AND c.relname = ANY(string_to_array('${RLS_TABLES}', ' '))" | tr ' ' '\n' | LC_ALL=C sort | xargs)"
+  want="$(for t in $RLS_TABLES; do
+    if [ "$t" = settings ]; then echo "$t:true:true:agent:0"; else echo "$t:true:true:agent:1"; fi
+  done | LC_ALL=C sort | xargs)"
+  [ "$got" = "$want" ] || ERRORS+=("tables: got '${got}', want '${want}'")
+  got="$(_e2e_psql postgres "SELECT string_agg(rolname || ':' || rolcanlogin || ':' || rolbypassrls || ':' || rolsuper, ' ' ORDER BY rolname)
+    FROM pg_roles WHERE rolname IN ('agent', 'agent_rls_bypass')")"
+  [ "$got" = "agent:true:false:false agent_rls_bypass:false:true:false" ] ||
+    ERRORS+=("roles (login:bypassrls:superuser): '${got}'")
+  got="$(_e2e_psql postgres "SELECT m.inherit_option || ':' || m.set_option || ':' || m.admin_option FROM pg_auth_members m
+    WHERE m.roleid = 'agent_rls_bypass'::regrole AND m.member = 'agent'::regrole")"
+  [ "$got" = "false:true:false" ] ||
+    ERRORS+=("agent's membership in agent_rls_bypass (inherit:set:admin) is '${got}', want false:true:false")
+  got="$(_e2e_psql "$db" "SELECT count(*) FROM pg_class WHERE relowner = 'agent_rls_bypass'::regrole")"
+  [ "$got" = 0 ] || ERRORS+=("agent_rls_bypass owns ${got} relation(s)")
+  finish 26 "RLS enabled and forced on agent-server's 7 tables (all owned by agent); agent not BYPASSRLS; agent_rls_bypass NOLOGIN, SET-only, owns nothing"
+}
+
+# Runs Python in the live agent-server container with its own credentials.
+agent_py() { _e2e_compose exec -T "$@" agent-server /app/.venv/bin/python - 2>&1; }
+
+check_27() {
+  local db out t total
+  db="$(_e2e_env_value POSTGRES_DB homeai)"
+  total=0
+  for t in $RLS_TABLES; do
+    total=$((total + $(_e2e_psql "$db" "SELECT count(*) FROM ${t}")))
+  done
+  [ "$total" -gt 0 ] || ERRORS+=("the superuser sees no rows at all, so this check proves nothing")
+  out="$(agent_py -e "RLS_TABLES=${RLS_TABLES}" <<'PY'
+import os
+
+import psycopg
+from app.core.config import Settings
+
+with psycopg.connect(Settings().postgres_dsn, autocommit=True) as conn:
+    print("user=" + conn.execute("SELECT current_user").fetchone()[0])
+    print("setting=" + repr(conn.execute("SELECT current_setting('app.user_id', true)").fetchone()[0]))
+    for table in os.environ["RLS_TABLES"].split():
+        print(f"{table}=" + str(conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]))
+    try:
+        conn.execute("INSERT INTO threads (title) VALUES ('verify-tenancy')")
+        print("insert=ALLOWED")
+    except psycopg.errors.InsufficientPrivilege:
+        print("insert=refused")
+PY
+)"
+  local line
+  for line in "user=agent" "setting=None" "insert=refused" $(for t in $RLS_TABLES; do echo "${t}=0"; done); do
+    grep -qxF "$line" <<<"$out" || ERRORS+=("expected '${line}' in: $(tr '\n' ' ' <<<"$out")")
+  done
+  finish 27 "raw SQL as agent-server's own role, no app.user_id: 0 rows in all 7 tables (superuser sees ${total}); an insert is refused"
+}
+
+check_28() {
+  local r thread out line
+  r="$(via_caddy POST /api/threads "$(cookie "$COOKIE_A")" '{"title": "verify-tenancy RLS"}')"
+  thread="$(jbody "$r" 'd["id"]' 2>/dev/null)" || thread=""
+  if ! [[ "$thread" =~ ^[0-9a-f-]{36}$ ]]; then
+    ERRORS+=("A couldn't create a thread: ${r:0:300}")
+    finish 28 "row-level security per user and across pooled connections"
+    return
+  fi
+  out="$(agent_py -e "THREAD=${thread}" -e "A=${USER_A_ID}" -e "B=${USER_B_ID}" <<'PY'
+import asyncio
+import contextvars
+import os
+
+import psycopg
+from psycopg.rows import dict_row
+
+from app.core.config import Settings
+from app.db import rls
+
+thread, a, b = os.environ["THREAD"], os.environ["A"], os.environ["B"]
+dsn = Settings().postgres_dsn
+Q = "SELECT count(*) FROM threads WHERE id = %s"
+
+with psycopg.connect(dsn, autocommit=True) as conn:
+    for who, uid in (("b", b), ("a", a)):
+        conn.execute("SELECT set_config('app.user_id', %s, false)", (uid,))
+        print(f"raw-{who}=" + str(conn.execute(Q, (thread,)).fetchone()[0]))
+
+
+async def pooled() -> None:
+    pool = rls.RlsConnectionPool(dsn, open=False, min_size=1, max_size=1,
+                                 kwargs={"autocommit": True, "row_factory": dict_row})
+    await pool.open()
+
+    async def peek(user):
+        if user:
+            rls.bind_user(user)
+        async with pool.connection() as conn:
+            row = await (await conn.execute(
+                "SELECT pg_backend_pid() AS pid, current_setting('app.user_id', true) AS uid, "
+                "(SELECT count(*) FROM threads WHERE id = %s) AS n", (thread,))).fetchone()
+        return row["pid"], row["uid"], row["n"]
+
+    pid_a, uid, n = await asyncio.create_task(peek(a), context=contextvars.Context())
+    print(f"pool-a={uid == a}:{n}")
+    for _ in range(100):
+        if pool.get_stats().get("pool_available", 0) == 1:
+            break
+        await asyncio.sleep(0.02)
+    for label, user in (("none", None), ("b", b)):
+        pid, uid, n = await asyncio.create_task(peek(user), context=contextvars.Context())
+        print(f"pool-{label}=same-conn:{pid == pid_a} leaked:{uid == a} rows:{n}")
+    await pool.close()
+
+
+asyncio.run(pooled())
+PY
+)"
+  for line in "raw-b=0" "raw-a=1" "pool-a=True:1" "pool-none=same-conn:True leaked:False rows:0" \
+    "pool-b=same-conn:True leaked:False rows:0"; do
+    grep -qxF "$line" <<<"$out" || ERRORS+=("expected '${line}' in: $(tr '\n' ' ' <<<"$out")")
+  done
+  finish 28 "as agent: B's app.user_id can't see A's thread; one pooled connection returned by A then checked out unbound or by B carries nothing of A's"
+}
+
 # ---- invariant 6: docker.sock, read-only roots, exec containers --------------
 
 check_17() {
@@ -908,7 +1049,7 @@ summary() {
 }
 
 main() {
-  log "=== M11-04/M12-08: tenancy suite (docs/PLATFORM.md §9 invariants 1-7) ==="
+  log "=== M11-04/M12-08/#194: tenancy suite (docs/PLATFORM.md §9 invariants 1-7, agent-server RLS) ==="
   setup
   local n
   for n in $(seq 1 19); do "check_${n}"; done
@@ -920,6 +1061,7 @@ main() {
       finish "$n" "invariant 7"
     done
   fi
+  for n in $(seq 26 28); do "check_${n}"; done
   summary
 }
 
