@@ -966,6 +966,20 @@ filters, `include`). So there is no `.git` in the source folder:
   installs pin versions; updates require approval; permission changes
   re-prompt. Fork = copy the source into your space as a new app.
 
+  > **As built (M14-01)** (`ARCHITECTURE.md` §3 "Apps"): `POST /apps/{id}/publish`
+  > with `space_ids` snapshots the current package under
+  > `app-releases/<app_id>/<version_id>/`, copies the working version's
+  > bundle and `app.json` version into a `published` row, and lists the
+  > app in those spaces' catalogs (`app_catalog`). `GET /spaces/{id}/catalog`
+  > is the latest published version of each listed app. Installing in a
+  > space that isn't the source needs a catalog entry and pins that
+  > version. `POST …/instances/{id}/update` pins a newer published version
+  > and migrates from the snapshot; permission diffs must be re-granted.
+  > `POST /apps/{id}/fork` copies live source (if readable) or the latest
+  > snapshot into another space as a new app. SDK 1 permissions stay `{}`;
+  > the prompt is implemented. UI: Catalog, install sheet, update badge,
+  > Publish on app info.
+
 ### Agent tools for apps (M13)
 
 `list_apps`, `create_app` (from a template), `build_app` (verify + migrate +

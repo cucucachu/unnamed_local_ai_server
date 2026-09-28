@@ -1150,7 +1150,11 @@ what another doc says it should be.
   `test_apps_api.py` (registration and install owner/editor/viewer/
   non-member × user/agent, source-path rules, diagnostics, visibility,
   validate, one instance per app and space, instance dir + trash, the
-  reserved `Apps` folder); `test_storage.py` also checks instance and trash
+  reserved `Apps` folder); M14-01: `test_app_sharing.py` (publish into a
+  space catalog, family member pinned install, permission prompt,
+  author-update then member-approve, permission re-prompt, fork into
+  another space, pinned RPC/migrations from the snapshot not the live
+  source); `test_storage.py` also checks instance and trash
   dirs as root. M12-04: `test_app_build.py` (against a fake builder that
   plays the container's part on the staging dir: the stored bundle and
   `bundle_path`, the staged copy's modes and owners, rebuild replacing the
@@ -1915,13 +1919,19 @@ sentence the validator reports.
   an install in one of their spaces (not a member of the source space).
 - `Instance`: `{"id", "app_id", "space_id", "tracks": "working"|<version
   id>, "installed_by": id|null, "granted_permissions": object,
-  "created_at", "app": {"id", "slug", "name", "version", "icon"}}` (`app`
-  from the tracked version). `granted_permissions` is the manifest's
-  `permissions` at install (always `{}` for now).
+  "created_at", "app": {"id", "slug", "name", "version", "icon"},
+  "update": {"id", "version", "permissions"}|null}` (`app` from the
+  tracked version). `granted_permissions` is the manifest's `permissions`
+  as confirmed at install or the last update. `update` is the newest
+  published version of that app newer than the pinned one (`null` for
+  `working` installs and when already current).
+- `CatalogEntry`: `{"app": Instance.app, "version": AppVersion (latest
+  published), "installed": bool, "instance_id": id|null}`.
 
 *Visible apps* (caller): apps whose source space they can read, plus apps
-with a live instance in a space they belong to; archived apps and apps
-whose source space is archived and have no such instance are hidden.
+with a live instance in a space they belong to, plus apps listed in a
+catalog of a space they belong to; archived apps and apps whose source
+space is archived and have no such instance or catalog listing are hidden.
 
 All routes: guard *user* — an agent delegation has its user's rights here
 (PLATFORM D6); space errors as in "Spaces authorization".
@@ -1936,17 +1946,38 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |
 | `GET /api/platform/apps/{id}/history` | read on the source space | query `offset` (≥ 0, default 0), `limit` (1-100, default 50) | `200 {"commits": [AppCommit], "next_offset": int\|null}` — newest first; see "App source history" below | `404 not_found` (not visible, or visible only through an install), space errors, `422 invalid_request` (bad `offset`/`limit`), `503 history_unavailable`, `500 history_failed` |
 | `POST /api/platform/apps/{id}/revert` | write on the source space | `{"commit": 7-40 lowercase hex}` | `200` the build response plus `"commit"`: the history's head after the revert (a commit with the target's tree). The source folder is rewritten to that tree, then the app is rebuilt as by `…/build`. | `404 not_found`, space errors, `422 invalid_request` (not hex), `422 unknown_commit` (not on this app's branch), `503 builder_unavailable`, `503 history_unavailable`, `500 history_failed` |
+| `POST /api/platform/apps/{id}/publish` | write on the source space and on each catalog space | `{"space_ids": [uuid, …]}` (1–100) | `200 {"app", "version": published AppVersion, "space_ids"}`. Copies the working version (must have a `bundle_path`) into a new `published` row, snapshots the package under `app-releases/<app_id>/<version_id>/`, and unions `space_ids` into `app_catalog`. | `404 not_found` (not visible, or visible only through an install/catalog), space errors, `422 not_built`, `409 version_exists` (that `app.json` version is already published) |
+| `POST /api/platform/apps/{id}/fork` | write on the destination space | `{"space_id", "slug"?}` | `201 {"app", "instance"}`. Copies live source if the caller can read it, else the latest published snapshot, into `<dest>/Apps/<slug>/` (default the original slug; `app.json` slug rewritten if different), registers it, and installs tracking `working`. | `404 not_found`, space errors, `409 app_exists`, `422 not_published` (no source access and no snapshot), `422 invalid_app` |
+| `GET /api/platform/spaces/{id}/catalog` | read | — | `200 {"entries": [CatalogEntry]}` — latest published version of each listed app, by name | space errors |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
-| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
+| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>, "granted_permissions"?}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`). Empty permissions are granted automatically; a non-empty set must be sent back as `granted_permissions`. A pinned install outside the source space needs the app in this space's catalog. | space errors, `404 not_found` (app not visible), `422 working_requires_source_space`, `422 invalid_tracks`, `422 unknown_version`, `422 not_in_catalog`, `422 permissions_required` / `permissions_mismatch`, `409 already_installed` |
+| `POST /api/platform/spaces/{id}/instances/{instance_id}/update` | write | `{"version_id", "granted_permissions"?}` | `200 {"instance", "migration"}`. Pins a published install to another published version of the same app and migrates using that version's snapshot `schema.sql`. If the new permissions differ from `granted_permissions`, they must be re-sent. | space errors, `404 not_found`, `422 working_not_updatable`, `422 unknown_version`, `422 permissions_changed` / `permissions_mismatch`, `409 already_on_version` |
 | `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine), after any running write or migration of the instance finishes; later ones are `404`. The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
 
-*Tables* (`0004_apps`): `apps` (`UNIQUE (source_space_id, slug)`),
+*Tables* (`0004_apps`, `0006_app_sharing`): `apps` (`UNIQUE (source_space_id, slug)`),
 `app_versions` (at most one `working` per app; published versions unique
-per `(app_id, version)`; `published_at` set iff `published`),
-`app_instances` (`tracks` `working`|`version` + `version_id`, set iff
-`version`; `uninstalled_at`; unique `(app_id, space_id)` among live
-rows). Nothing is hard-deleted by the product; the `ON DELETE CASCADE`s
-from spaces and apps exist for test and e2e cleanup.
+per `(app_id, version)`; `published_at` set iff `published`;
+`source_snapshot` is `app-releases/<app_id>/<version_id>` for published
+rows that went through `POST /publish`), `app_instances` (`tracks`
+`working`|`version` + `version_id`, set iff `version`; `uninstalled_at`;
+unique `(app_id, space_id)` among live rows), `app_catalog` (`PRIMARY KEY
+(app_id, space_id)`). Nothing is hard-deleted by the product; the `ON
+DELETE CASCADE`s from spaces and apps exist for test and e2e cleanup.
+
+> **As built (M14-01)**: publishing snapshots the *current* source folder
+> (same fd walk as a build: no dotfiles, no symlinks) and reuses the
+> working version's `bundle_path` (so a later rebuild of `working` does
+> not drop a published bundle still referenced). Catalog listing is
+> per-app, not per-version: a later publish unions more spaces and
+> becomes the catalog's "latest". Pinned RPC and migrations read
+> `schema.sql` / `actions/` from the snapshot, not the live source.
+> SDK 1 still has empty `permissions`; the prompt path is implemented
+> and tested by seeding a non-empty object on a published manifest.
+> UI: Apps tab Catalog button, install screen, update badge + confirm
+> screen, Publish on the app info screen. Fork is API-only in this
+> ticket (no agent tool). Tests: `tests/test_app_sharing.py`,
+> frontend `appCatalog.test.tsx` / Apps tab + app-info jest,
+> `scripts/e2e/app_publish_smoke.sh`.
 
 **App builds** (`app/core/appbuild.py`; M12-04; the builder is
 `services/app-builder`, run by code-exec-manager's `POST /builds`; design
@@ -2238,7 +2269,12 @@ credential or an instance id.
   `GET /api/platform/spaces`, then `GET …/spaces/{id}/instances` for each
   unarchived space (`lib/apps.ts`); sections Personal first, then shared
   spaces by name, empty ones hidden; a viewer's rows say "View only".
-  Reloads on focus and pull-to-refresh. A placeholder until M14's launcher.
+  Reloads on focus and pull-to-refresh. Catalog (`/apps/catalog`) lists
+  `GET …/spaces/{id}/catalog`; the install screen confirms permissions
+  and `POST …/instances` with `tracks` = the published version id; an
+  update badge on a pinned instance opens `/apps/update` (`POST …/update`).
+  App info can `POST /apps/{id}/publish` into selected writable spaces.
+  A placeholder until M14-02's Home launcher.
 - **Runner** (`/apps/<instance_id>`, `src/app/(tabs)/apps/[instanceId].tsx`
   → `components/AppRunner.tsx`): looks the instance up the same way (its
   space and the user's role come from the platform, `404 not_found`
@@ -3365,6 +3401,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/app_history_smoke.sh` | M13-01: same transport as `app_build_smoke.sh` — a CLI-created owner uploads the fixture `hello` to `/personal/Apps/hello` plus a planted git repo (`.git/config` with an fsmonitor, hooks path and `evil` filter, `.git/hooks/*`, `.gitattributes`) whose every trigger would `touch` a marker; control: plain `git add` over a copy of the folder in a throwaway `--network none` platform-image container does fire it. Register, build, change `app/index.tsx`, build: two commits, newest current, repo under `/data/platform/app-git`; the outsider's history is `404`. Revert to the first: a third commit (`revert`, reverting the first, parent the second) is the head and current, `app/index.tsx` reads back as the original, a new bundle; the revert's tree equals the first's. The marker never appears in the platform container, `.git/config` is unchanged, no commit has a dotfile. Deletes rows, dirs, bundles and the repo on exit. Also in `gate_full.sh` | After touching app builds or history (`app/core/appbuild.py`, `apphistory.py`, `fsops.py`) or the platform image |
 | `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; then (builder image rebuilt first) a column added in the source's `schema.sql` → `POST /apps/{id}/build` → the build's `migrations` show it applied, the column exists and the viewer's socket gets `app_built`; dropping it → build → `pending` in the build response and the migration list, column kept; deletes its rows, bundles and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2750` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
+| `scripts/e2e/app_publish_smoke.sh` | M14-01: through Caddy in headless Chromium — CLI-created author and family editor of a throwaway `e2e-pub-*` shared space; the author uploads, registers, installs and builds `hello` in Personal, publishes it into the family catalog from the app info screen; the editor opens Catalog, confirms permissions on the install sheet, and installs; the author bumps the version, rebuilds, publishes again; the editor's Apps tab shows an update badge, approves it. Deletes users, personal spaces, the shared space, bundles, git repos and `app-releases/` on exit. Takes `/tmp/homeai-stack.lock`. | After touching publish/catalog/install/update |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with HITL off — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |
