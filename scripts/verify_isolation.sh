@@ -2,22 +2,42 @@
 # verify_isolation.sh — M4-05: scripted isolation verification suite.
 #
 # The product's core safety promise ("safe to let it run code") verified as
-# a repeatable script instead of a one-time manual check. 14 checks drive
+# a repeatable script instead of a one-time manual check. Most checks drive
 # commands INSIDE a live exec container THROUGH the manager's own
 # `POST /sessions/{id}/execute` endpoint — never via `docker exec` straight
 # into the exec container, which would bypass exactly what's being tested
 # (an agent can only ever reach the container through that same endpoint,
-# so that's the only path this suite is willing to trust). 3 more checks
-# (15-17) inspect the compose stack itself directly via `docker`/`jq`, since
-# there's no "manager endpoint" equivalent for socket-exclusivity, the exec
-# container's own `docker inspect`, or the compose port-publishing policy.
+# so that's the only path this suite is willing to trust). Checks 15-17
+# inspect the compose stack itself directly via `docker`, since there's no
+# "manager endpoint" equivalent for socket-exclusivity, the exec container's
+# own `docker inspect`, or the compose port-publishing policy.
 #
 # Verifies `services/code-exec-manager/app/sessions.py`'s `build_run_kwargs`
-# §7 hardening spec exactly: `network_mode="none"`, `cap_drop=["ALL"]`,
+# §7 hardening spec: `network_mode="none"`, `cap_drop=["ALL"]`,
 # `security_opt=["no-new-privileges"]`, `read_only=True`, tmpfs `/tmp` +
 # `/home/homeai`, `mem_limit="4g"`, `nano_cpus=4_000_000_000`,
-# `user="1000:1000"`, `pids_limit=512`, single rw bind mount
-# `FILES_DIR -> /files`.
+# `pids_limit=512` — and, since M11-03 (docs/PLATFORM.md §6), that the
+# container runs as the delegation's user (`<user uid>:<personal space
+# gid>`, `group_add` = their other spaces' gids) with exactly one bind per
+# space they belong to: `/files/personal` and `/files/spaces/<slug>`,
+# read-only for a space they only view.
+#
+# ---- Two throwaway users, real delegations --------------------------------
+#
+# Every session call needs `Authorization: Bearer <delegation>` whose `thr`
+# is the session id. The suite creates two `e2e-iso-*` users with the
+# recovery CLI (`scripts/e2e/lib/auth.sh`; never completes bootstrap) and
+# a shared space `e2e-iso-<hex>` that A owns and B views. Delegations are
+# minted the way agent-server does it: the session cookie is exchanged at
+# the platform's `/internal/auth/verify` for an identity token, which
+# `/internal/delegations` (service token `PLATFORM_AGENT_TOKEN`, read from
+# `.env` and passed to the runner by environment, never printed) turns into
+# a delegation for the session's thread id. A fresh one is minted per call.
+# Everything is deleted on exit: both sessions and containers, the shared
+# space and its directory, the users and their personal spaces.
+#
+#   A (session `isolation-a-<pid>`): checks 1-17, 20, 21
+#   B (session `isolation-b-<pid>`): checks 18, 19, 22
 #
 # ---- The "no published port" problem -------------------------------------
 #
@@ -28,51 +48,35 @@
 # the public internet — see docs/ARCHITECTURE.md §5's "Network segmentation"
 # section), not `homeai-net`; `internal: true` only removes the network's
 # own default route/NAT out, it does NOT block containers on the same
-# network from reaching each other, so this runner-container workaround
-# still works unchanged, just joining the other network now. Worked around
-# by spinning up a throwaway "runner" container (`python:3.12-slim`,
-# already present on this host and on `homeai-internal` via
-# `--network`) for the script's duration, then `docker exec`-ing a small
-# `urllib.request`-based Python snippet into it for every REST call
-# (ensure/execute/delete) — that container has Python but no `curl`, and
-# `curl` isn't installed on the HOST either (same finding as every other
-# `scripts/e2e/*.sh` script in this repo), so this is the same
-# curl-unavailable workaround applied one layer further in. The runner is
-# named `verify-isolation-runner-$$` (PID-suffixed so concurrent runs never
-# collide) and is removed in the EXIT trap alongside the session itself, so
-# re-running this script is always safe.
+# network from reaching each other. Worked around by spinning up a
+# throwaway "runner" container (`python:3.12-slim`, already present on this
+# host and on `homeai-internal` via `--network`) for the script's duration,
+# then `docker exec`-ing a small `urllib.request`-based Python snippet into
+# it for every REST call (delegation minting on `platform:8100`, then
+# ensure/execute/delete on the manager) — that container has Python but no
+# `curl`, and `curl` isn't installed on the HOST either. The runner is named
+# `verify-isolation-runner-$$` (PID-suffixed so concurrent runs never
+# collide) and is removed in the EXIT trap, so re-running this script is
+# always safe.
 #
 # The compose network name is resolved at runtime via
-# `docker compose config --format json` (not hardcoded as a guess) — it
-# happens to be `homeai_homeai-internal` (compose project name `homeai` +
-# the network's own compose-file name `homeai-internal`), confirmed once
-# against `docker network ls` during development, but resolving it live
-# means this script keeps working even if the project name ever changes.
+# `docker compose config --format json` (not hardcoded as a guess).
 #
 # ---- cgroup v1 vs v2 (check 13) -------------------------------------------
 #
 # Determined INSIDE the exec container at check-time (`test -f
 # /sys/fs/cgroup/cpu.max`), not assumed from the host — this host is cgroup
-# v2 (confirmed: `/sys/fs/cgroup/cgroup.controllers` exists), and Docker's
-# private per-container cgroup namespace (`CgroupnsMode: private`, the
-# default) exposes that same v2 unified-hierarchy layout inside the exec
-# container too, so `/sys/fs/cgroup/cpu.max` / `memory.max` are readable
-# directly at the container's cgroup root with no `/cpu/`, `/memory/`
-# subdirectories (that's the v1 layout, handled as the `else` branch below
-# for portability, though it doesn't fire on this host).
+# v2, and Docker's private per-container cgroup namespace exposes that same
+# v2 unified-hierarchy layout inside the exec container too (the v1 layout
+# is handled as the `else` branch below for portability).
 #
 # **`nproc` caveat, verified independently of code-exec-manager**: `nproc`
 # does NOT reflect the cgroup v2 CPU quota on this host's Docker + GNU
 # coreutils 9.4 combination — confirmed with a bare
 # `docker run --rm --cpus=4 ubuntu:24.04 nproc` (prints the host's full
 # core count, not 4), even though `cpu.max` inside that same container
-# correctly reads `400000 100000` (= 4 cores' worth of quota). This is a
-# `nproc`/coreutils limitation on this cgroup v2 setup, not a
-# code-exec-manager bug: `nano_cpus=4_000_000_000` IS applied correctly
-# (verified via `cpu.max` directly, the authoritative source). Check 13
-# therefore gates on the `cpu.max` quota/period ratio, not on `nproc`'s own
-# (here, uninformative) output — `nproc`'s value is still captured and
-# logged for visibility, just not used to pass/fail the check.
+# correctly reads `400000 100000`. Check 13 therefore gates on the
+# `cpu.max` quota/period ratio, not on `nproc`'s own output (still logged).
 #
 # ---- Check 14 (mount parsing) ---------------------------------------------
 #
@@ -81,32 +85,38 @@
 # mounts that are (a) not `tmpfs` and (b) not one of the pseudo-filesystems
 # every container gets for free regardless of this hardening spec (`proc`,
 # `sysfs`, `cgroup`/`cgroup2`, `devpts`, `mqueue`, `overlay` — several of
-# which are mounted `rw` by Docker itself, e.g. `proc on /proc type proc
-# (rw,...)`, and would otherwise produce false positives against the
-# ticket's "exactly one" expectation). What's left after that filter is
-# real block/bind mounts; among those, exactly one should have the `rw`
-# option, and its target should be `/files` (everything else — `/tmp`,
-# `/home/homeai` — is `tmpfs`, already excluded; `/etc/resolv.conf`,
-# `/etc/hostname`, `/etc/hosts` are real `ro` bind mounts from the same host
-# block device, also excluded by the `rw` filter).
+# which are mounted `rw` by Docker itself). What's left are real bind
+# mounts; the `rw` ones must be exactly the user's writable spaces, the `ro`
+# ones under `/files` exactly their viewer spaces (`/etc/resolv.conf`,
+# `/etc/hostname`, `/etc/hosts` are `ro` binds outside `/files`).
+#
+# ---- Needs no sudo ---------------------------------------------------------
+#
+# Host-side ownership (check 20) is read with `stat` inside the platform
+# container: the host's space dirs are `root:<gid> 2770`, which the invoking
+# user can't traverse.
 #
 # Usage:
 #   scripts/verify_isolation.sh
 #
 # Any check failing prints it in RED and the suite continues (collects ALL
-# failures rather than stopping at the first, so a single run's output is
-# enough to see the full blast radius of a regression) then exits 1 at the
-# end if anything failed. Safe to re-run: the session + exec container +
-# runner container are all cleaned up in an EXIT trap.
+# failures rather than stopping at the first) then exits 1 at the end if
+# anything failed.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=e2e/lib/auth.sh
+source "${SCRIPT_DIR}/e2e/lib/auth.sh"
 
-SESSION_ID="isolation-suite"
-EXEC_CONTAINER_NAME="homeai-exec-${SESSION_ID}"
+SESSION_A="isolation-a-$$"
+SESSION_B="isolation-b-$$"
+CONTAINER_A="homeai-exec-${SESSION_A}"
+CONTAINER_B="homeai-exec-${SESSION_B}"
+SPACE="e2e-iso-$(openssl rand -hex 3)"
+MARK="iso-mark-$(openssl rand -hex 4)"
 RUNNER_NAME="verify-isolation-runner-$$"
 RUNNER_IMAGE="python:3.12-slim"
 RUNNER_STARTED=0
@@ -137,20 +147,56 @@ fail() {
   fi
 }
 
-# ---- REST helpers (urllib inside the runner container - see header) -------
+# ---- REST helper (urllib inside the runner container - see header) --------
 
-PY_ENSURE="$(cat <<'EOF'
-import json, sys, urllib.error, urllib.request
+# argv: method session_id action(ensure|execute|delete) auth timeout [json body]
+# auth: `delegation` (for session_id's own thread), `delegation-for:<thread>`,
+# `tampered` (a real delegation with a broken signature), or `none`.
+# Prints the manager's JSON response, `{"status": N}` for an empty 2xx, or
+# `{"http_error": N, "body": ...}`.
+PY_CALL="$(cat <<'EOF'
+import json, os, sys, urllib.error, urllib.request
 
-session_id = sys.argv[1]
-req = urllib.request.Request(
-    f"http://code-exec-manager:8090/sessions/{session_id}/ensure",
-    data=b"",
-    method="POST",
-)
+PLATFORM = "http://platform:8100"
+MANAGER = "http://code-exec-manager:8090"
+method, session_id, action, auth, timeout = sys.argv[1:6]
+body = sys.argv[6] if len(sys.argv) > 6 else ""
+timeout = int(timeout)
+
+
+def call(url, data=None, method="GET", headers=None, t=30):
+    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    return urllib.request.urlopen(req, timeout=t)
+
+
+def delegation(thread):
+    with call(f"{PLATFORM}/internal/auth/verify", headers={"Cookie": os.environ["ISO_COOKIE"]}) as r:
+        identity = r.headers["X-HomeAI-Identity"]
+    payload = json.dumps({"identity_token": identity, "thread_id": thread}).encode()
+    headers = {
+        "Authorization": f"Bearer {os.environ['PLATFORM_AGENT_TOKEN']}",
+        "Content-Type": "application/json",
+    }
+    with call(f"{PLATFORM}/internal/delegations", payload, "POST", headers) as r:
+        return json.loads(r.read())["token"]
+
+
+headers = {"Content-Type": "application/json"}
+if auth == "delegation":
+    headers["Authorization"] = f"Bearer {delegation(session_id)}"
+elif auth.startswith("delegation-for:"):
+    headers["Authorization"] = f"Bearer {delegation(auth.split(':', 1)[1])}"
+elif auth == "tampered":
+    head, claims, signature = delegation(session_id).split(".")
+    flipped = "A" if signature[0] != "A" else "B"
+    headers["Authorization"] = f"Bearer {head}.{claims}.{flipped}{signature[1:]}"
+
+path = f"/sessions/{session_id}" + ("" if action == "delete" else f"/{action}")
+data = body.encode() if body else (b"" if method == "POST" else None)
 try:
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        sys.stdout.write(resp.read().decode())
+    with call(MANAGER + path, data, method, headers, timeout + 20) as r:
+        out = r.read().decode()
+        sys.stdout.write(out if out else json.dumps({"status": r.status}))
 except urllib.error.HTTPError as e:
     sys.stdout.write(json.dumps({"http_error": e.code, "body": e.read().decode()}))
 except urllib.error.URLError as e:
@@ -158,74 +204,49 @@ except urllib.error.URLError as e:
 EOF
 )"
 
-PY_EXECUTE="$(cat <<'EOF'
-import json, sys, urllib.error, urllib.request
+# $1: a|b (whose session cookie mints the delegation), then PY_CALL's argv.
+manager_call() {
+  local who="$1" cookie
+  shift
+  if [ "$who" = a ]; then cookie="$COOKIE_A"; else cookie="$COOKIE_B"; fi
+  ISO_COOKIE="$cookie" docker exec -e ISO_COOKIE -e PLATFORM_AGENT_TOKEN \
+    "$RUNNER_NAME" python3 -c "$PY_CALL" "$@" 2>/dev/null || true
+}
 
-session_id, command, timeout_seconds = sys.argv[1], sys.argv[2], int(sys.argv[3])
-body = json.dumps({"command": command, "timeout_seconds": timeout_seconds}).encode()
-req = urllib.request.Request(
-    f"http://code-exec-manager:8090/sessions/{session_id}/execute",
-    data=body,
-    method="POST",
-    headers={"Content-Type": "application/json"},
-)
-try:
-    with urllib.request.urlopen(req, timeout=timeout_seconds + 20) as resp:
-        sys.stdout.write(resp.read().decode())
-except urllib.error.HTTPError as e:
-    sys.stdout.write(json.dumps({"http_error": e.code, "body": e.read().decode()}))
-except urllib.error.URLError as e:
-    sys.stdout.write(json.dumps({"url_error": str(e.reason)}))
-EOF
-)"
-
-PY_DELETE="$(cat <<'EOF'
-import sys, urllib.error, urllib.request
-
-session_id = sys.argv[1]
-req = urllib.request.Request(
-    f"http://code-exec-manager:8090/sessions/{session_id}",
-    method="DELETE",
-)
-try:
-    urllib.request.urlopen(req, timeout=30)
-except Exception:
-    pass
-EOF
-)"
+session_of() {
+  if [ "$1" = a ]; then echo "$SESSION_A"; else echo "$SESSION_B"; fi
+}
 
 manager_ensure() {
-  log "Creating exec session '${SESSION_ID}' via POST /sessions/${SESSION_ID}/ensure ..."
-  local out
-  out="$(docker exec "$RUNNER_NAME" python3 -c "$PY_ENSURE" "$SESSION_ID" 2>&1)" || true
-  if [ -z "$out" ]; then
-    log "ERROR: ensure produced no output - is code-exec-manager reachable on ${NETWORK_NAME}?"
+  local who="$1" out
+  log "Creating exec session '$(session_of "$who")' as user ${who^^} via POST .../ensure ..."
+  out="$(manager_call "$who" POST "$(session_of "$who")" ensure delegation 30)"
+  if ! python3 -c 'import json,sys; sys.exit(0 if "container_id" in json.loads(sys.argv[1]) else 1)' "${out:-{\}}" 2>/dev/null; then
+    log "ERROR: ensure as ${who^^} failed: ${out:-<no output - is code-exec-manager reachable on ${NETWORK_NAME}?>}"
     exit 1
   fi
   log "OK: ensure -> ${out}"
 }
 
-# $1: command to run inside the exec container. $2: execute timeout_seconds
-# (manager-side; also bounds the outer HTTP call). Prints the raw JSON
-# response from the manager's `execute` endpoint (never raises - a
-# docker-exec-into-the-runner failure becomes a synthetic JSON blob so
-# every check's own validator can fail cleanly instead of aborting the
-# whole suite).
-manager_execute() {
-  local command="$1" timeout_seconds="${2:-15}"
-  local out
-  out="$(docker exec "$RUNNER_NAME" python3 -c "$PY_EXECUTE" "$SESSION_ID" "$command" "$timeout_seconds" 2>/dev/null)" || true
+# $1: a|b. $2: command to run inside that user's exec container. $3: execute
+# timeout_seconds. Prints the raw JSON response from the manager's `execute`
+# endpoint (never raises - a failure becomes a synthetic JSON blob so every
+# check's own validator can fail cleanly instead of aborting the suite).
+manager_execute_as() {
+  local who="$1" command="$2" timeout_seconds="${3:-15}" body out
+  body="$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1], "timeout_seconds": int(sys.argv[2])}))' "$command" "$timeout_seconds")"
+  out="$(manager_call "$who" POST "$(session_of "$who")" execute delegation "$timeout_seconds" "$body")"
   if [ -z "$out" ]; then
     out='{"stdout":"","stderr":"[verify_isolation] docker exec to runner failed or returned empty output","exit_code":-1,"timed_out":false,"duration_ms":0,"truncated":false}'
   fi
   printf '%s' "$out"
 }
 
-manager_delete() {
-  docker exec "$RUNNER_NAME" python3 -c "$PY_DELETE" "$SESSION_ID" >/dev/null 2>&1 || true
+manager_execute() {
+  manager_execute_as a "$@"
 }
 
-# ---- shared check-1..14 python validators ----------------------------------
+# ---- shared python validators ----------------------------------------------
 # Each receives the manager `execute` response JSON as argv[1] (plus
 # occasional extra args), exits 0 for pass / non-zero for fail, and may
 # print a one-line reason - captured as the FAIL detail line.
@@ -243,7 +264,7 @@ VALIDATOR_ZERO_EXIT="$(cat <<'EOF'
 import json, sys
 data = json.loads(sys.argv[1])
 if data.get("exit_code") != 0:
-    print(f"expected exit_code 0, got {data.get('exit_code')} (stderr={data.get('stderr')!r})")
+    print(f"expected exit_code 0, got {data.get('exit_code')} (stderr={data.get('stderr')!r}, body={data.get('body')!r})")
     sys.exit(1)
 EOF
 )"
@@ -275,7 +296,7 @@ if uid == "0":
     print("running as root (uid 0) - hardening spec violated")
     sys.exit(1)
 if uid != expected:
-    print(f"expected uid {expected!r} (HOMEAI_UID), got {uid!r}")
+    print(f"expected the user's uid {expected!r}, got {uid!r}")
     sys.exit(1)
 EOF
 )"
@@ -361,9 +382,6 @@ else:
 if mem_max != "4294967296":
     failures.append(f"memory.max = {mem_max!r}, expected 4294967296 (4 GiB)")
 
-# `nproc` itself is NOT cgroup-v2-quota-aware on this host's Docker/coreutils
-# combo (verified independently, see this script's header comment) - logged
-# for visibility only, never gates pass/fail.
 note = f"(info: nproc={nproc_val} [not cgroup-aware here, ignored]; cgroup {version} cpu.max={quota}/{period}; memory.max={mem_max})"
 if failures:
     print("; ".join(failures) + " " + note)
@@ -372,50 +390,49 @@ print(note)
 EOF
 )"
 
-VALIDATOR_14="$(cat <<'EOF'
+# argv[2]: comma-separated targets that must be the ONLY rw binds.
+# argv[3]: comma-separated targets that must be the ONLY ro binds under /files.
+VALIDATOR_MOUNTS="$(cat <<'EOF'
 import json, re, sys
 
 data = json.loads(sys.argv[1])
+want_rw = set(filter(None, sys.argv[2].split(",")))
+want_ro = set(filter(None, sys.argv[3].split(",")))
 if data.get("exit_code") != 0:
     print(f"expected exit_code 0, got {data.get('exit_code')} stderr={data.get('stderr')!r}")
     sys.exit(1)
 
-# Container-inherent pseudo-filesystems every container gets regardless of
-# this hardening spec - several are mounted `rw` by Docker itself (e.g.
-# `proc`), so they're excluded before checking "exactly one rw mount".
 PSEUDO_FS = {"proc", "sysfs", "cgroup", "cgroup2", "devpts", "mqueue", "overlay"}
 PATTERN = re.compile(r"^(?P<source>.*) on (?P<target>.*) type (?P<fstype>\S+) \((?P<opts>[^)]*)\)$")
 
-candidates = []
+rw, ro = set(), set()
 for line in data.get("stdout", "").splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    m = PATTERN.match(line)
-    if not m:
-        continue
-    fstype = m.group("fstype")
-    if fstype == "tmpfs" or fstype in PSEUDO_FS:
+    m = PATTERN.match(line.strip())
+    if not m or m.group("fstype") == "tmpfs" or m.group("fstype") in PSEUDO_FS:
         continue
     opts = m.group("opts").split(",")
-    if "rw" not in opts:
-        continue
-    candidates.append((m.group("target"), fstype, m.group("opts")))
+    target = m.group("target")
+    if "rw" in opts:
+        rw.add(target)
+    elif target == "/files" or target.startswith("/files/"):
+        ro.add(target)
 
-if len(candidates) != 1:
-    print(f"expected exactly 1 non-tmpfs/pseudo rw mount, found {len(candidates)}: {candidates!r}")
-    sys.exit(1)
-target, fstype, opts = candidates[0]
-if target != "/files":
-    print(f"the sole writable non-tmpfs mount is {target!r} (type {fstype}), expected '/files'")
+errors = []
+if rw != want_rw:
+    errors.append(f"rw binds {sorted(rw)} != expected {sorted(want_rw)}")
+if ro != want_ro:
+    errors.append(f"ro binds under /files {sorted(ro)} != expected {sorted(want_ro)}")
+if errors:
+    print("; ".join(errors))
     sys.exit(1)
 EOF
 )"
 
-VALIDATOR_16="$(cat <<'EOF'
+# argv[2]: JSON {"user": "uid:gid", "group_add": [...], "binds": {source: [target, rw]}}.
+VALIDATOR_INSPECT="$(cat <<'EOF'
 import json, sys
 data = json.loads(sys.argv[1])[0]
-files_dir = sys.argv[2]
+want = json.loads(sys.argv[2])
 hc = data.get("HostConfig", {})
 errors = []
 if hc.get("NetworkMode") != "none":
@@ -426,11 +443,13 @@ if hc.get("CapDrop") != ["ALL"]:
     errors.append(f"CapDrop={hc.get('CapDrop')!r}, expected ['ALL']")
 if hc.get("Privileged") is not False:
     errors.append(f"Privileged={hc.get('Privileged')!r}, expected False")
-binds = [m for m in data.get("Mounts", []) if m.get("Type") == "bind"]
-if len(binds) != 1:
-    errors.append(f"expected exactly 1 bind mount, found {len(binds)}: {binds!r}")
-elif binds[0].get("Source") != files_dir:
-    errors.append(f"bind mount Source={binds[0].get('Source')!r}, expected {files_dir!r}")
+if data.get("Config", {}).get("User") != want["user"]:
+    errors.append(f"User={data.get('Config', {}).get('User')!r}, expected {want['user']!r}")
+if sorted(hc.get("GroupAdd") or []) != sorted(want["group_add"]):
+    errors.append(f"GroupAdd={hc.get('GroupAdd')!r}, expected {want['group_add']!r}")
+binds = {m["Source"]: [m["Destination"], m["RW"]] for m in data.get("Mounts", []) if m.get("Type") == "bind"}
+if binds != want["binds"]:
+    errors.append(f"bind mounts {binds!r} != expected {want['binds']!r}")
 if errors:
     print("; ".join(errors))
     sys.exit(1)
@@ -439,8 +458,10 @@ EOF
 
 # ---- setup / teardown -------------------------------------------------------
 
+cli() { _e2e_compose exec -T platform python -m app.cli "$@" >/dev/null; }
+
 preflight() {
-  log "Resolving compose network name for 'homeai-internal' (M7-01 - where code-exec-manager now lives) ..."
+  log "Resolving compose network name for 'homeai-internal' (M7-01 - where code-exec-manager lives) ..."
   NETWORK_NAME="$(docker compose config --format json | python3 -c "
 import json, sys
 print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
@@ -451,13 +472,14 @@ print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
   fi
   log "OK: using compose network '${NETWORK_NAME}'"
 
-  FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-  HOMEAI_UID="$(sed -n 's/^HOMEAI_UID=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-  if [ -z "$FILES_DIR" ] || [ -z "$HOMEAI_UID" ]; then
-    log "ERROR: FILES_DIR/HOMEAI_UID not set in .env"
+  SPACES_DIR="$(_e2e_env_value SPACES_DIR "")"
+  PLATFORM_AGENT_TOKEN="$(_e2e_env_value PLATFORM_AGENT_TOKEN "")"
+  export PLATFORM_AGENT_TOKEN
+  if [ -z "$SPACES_DIR" ] || [ -z "$PLATFORM_AGENT_TOKEN" ]; then
+    log "ERROR: SPACES_DIR/PLATFORM_AGENT_TOKEN not set in .env"
     exit 1
   fi
-  log "OK: FILES_DIR=${FILES_DIR} HOMEAI_UID=${HOMEAI_UID}"
+  log "OK: SPACES_DIR=${SPACES_DIR}; PLATFORM_AGENT_TOKEN is set"
 
   HOST_LAN_IP="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
   if [ -z "$HOST_LAN_IP" ]; then
@@ -466,8 +488,41 @@ print(json.load(sys.stdin)['networks']['homeai-internal']['name'])
   log "OK: host LAN IP (for check 3) = ${HOST_LAN_IP:-<unresolved>}"
 }
 
+# Prints "<personal space id> <personal gid> <uid>" for a username.
+personal_of() {
+  _e2e_psql homeai_platform "SELECT s.id || ' ' || s.gid || ' ' || u.uid FROM spaces s
+    JOIN users u ON u.id = s.owner_user_id WHERE s.kind = 'personal' AND u.username = '$1'"
+}
+
+setup_users() {
+  log "Creating users A and B and shared space ${SPACE} (A owner, B viewer) ..."
+  e2e_auth_create_user iso-a
+  USER_A="$E2E_NEW_USER"
+  COOKIE_A="$(e2e_auth_login "$USER_A" "$E2E_NEW_PASSWORD")"
+  e2e_auth_create_user iso-b
+  USER_B="$E2E_NEW_USER"
+  COOKIE_B="$(e2e_auth_login "$USER_B" "$E2E_NEW_PASSWORD")"
+  cli create-space "$SPACE" --name "E2E isolation" --owner "$USER_A"
+  cli add-member "$SPACE" "$USER_B" --role viewer
+
+  read -r HOME_A GID_A UID_A <<<"$(personal_of "$USER_A")"
+  read -r HOME_B GID_B UID_B <<<"$(personal_of "$USER_B")"
+  read -r SPACE_ID GID_S <<<"$(_e2e_psql homeai_platform \
+    "SELECT id || ' ' || gid FROM spaces WHERE slug = '${SPACE}'")"
+  local id
+  for id in "$HOME_A" "$HOME_B" "$SPACE_ID"; do
+    if ! [[ "$id" =~ ^[0-9a-f-]{36}$ ]]; then
+      log "ERROR: couldn't resolve the test users' spaces (got '${id}')"
+      exit 1
+    fi
+  done
+  SHARED="/files/spaces/${SPACE}"
+  log "OK: A=${USER_A} (uid ${UID_A}, personal gid ${GID_A}); B=${USER_B} (uid ${UID_B}," \
+    "personal gid ${GID_B}); ${SPACE} gid ${GID_S}"
+}
+
 start_runner() {
-  log "Starting runner container (${RUNNER_NAME}) on ${NETWORK_NAME} to drive the manager's REST API..."
+  log "Starting runner container (${RUNNER_NAME}) on ${NETWORK_NAME} to drive the platform + manager REST APIs..."
   docker run -d --rm --name "$RUNNER_NAME" --network "$NETWORK_NAME" "$RUNNER_IMAGE" sleep infinity >/dev/null
   RUNNER_STARTED=1
   local tries=0
@@ -484,16 +539,21 @@ start_runner() {
 
 cleanup() {
   if [ "$RUNNER_STARTED" = "1" ]; then
-    manager_delete
+    [ -n "${COOKIE_A:-}" ] && manager_call a DELETE "$SESSION_A" delete delegation 10 >/dev/null
+    [ -n "${COOKIE_B:-}" ] && manager_call b DELETE "$SESSION_B" delete delegation 10 >/dev/null
     docker rm -f "$RUNNER_NAME" >/dev/null 2>&1 || true
   fi
-  # Defensive: in case the runner died before DELETE landed, or ensure
-  # created the container but the runner never got a chance to call delete.
-  docker rm -f "$EXEC_CONTAINER_NAME" >/dev/null 2>&1 || true
+  # Defensive: in case a DELETE never landed.
+  docker rm -f "$CONTAINER_A" "$CONTAINER_B" >/dev/null 2>&1 || true
+  if [ -n "${SPACE_ID:-}" ] && [[ "$SPACE_ID" =~ ^[0-9a-f-]{36}$ ]]; then
+    _e2e_psql homeai_platform "DELETE FROM spaces WHERE id = '${SPACE_ID}'" >/dev/null 2>&1 || true
+    _e2e_compose exec -T platform rm -rf "/data/spaces/${SPACE_ID}" >/dev/null 2>&1 || true
+  fi
+  e2e_auth_end
 }
 trap cleanup EXIT
 
-# ---- checks 1-14 (through the manager's `execute` endpoint) ---------------
+# ---- checks 1-14 (A, through the manager's `execute` endpoint) ------------
 
 check_generic() {
   local num="$1" desc="$2" command="$3" validator="$4" timeout="${5:-15}"
@@ -518,18 +578,8 @@ check_generic() {
 }
 
 check_1() {
-  local json out rc
-  json="$(manager_execute 'cat /proc/net/route; ls /sys/class/net' 10)"
-  if out="$(python3 -c "$VALIDATOR_1" "$json" 2>&1)"; then
-    rc=0
-  else
-    rc=$?
-  fi
-  if [ "$rc" -eq 0 ]; then
-    pass 1 "no interfaces besides 'lo', no route table entries"
-  else
-    fail 1 "no interfaces besides 'lo', no route table entries" "$out"
-  fi
+  check_generic 1 "no interfaces besides 'lo', no route table entries" \
+    'cat /proc/net/route; ls /sys/class/net' "$VALIDATOR_1" 10
 }
 
 check_2() {
@@ -584,8 +634,9 @@ check_6() {
 }
 
 check_7() {
-  check_generic 7 "root filesystem is read-only" \
-    'touch /forbidden' "$VALIDATOR_NONZERO_EXIT" 10
+  check_generic 7 "root filesystem (and /files itself) is read-only" \
+    'touch /forbidden || touch /files/forbidden || touch /files/spaces/forbidden' \
+    "$VALIDATOR_NONZERO_EXIT" 10
 }
 
 check_8() {
@@ -594,22 +645,23 @@ check_8() {
 }
 
 check_9() {
-  check_generic 9 "/files is writable (rw bind mount)" \
-    'touch /files/isolation-ok && rm /files/isolation-ok' "$VALIDATOR_ZERO_EXIT" 10
+  check_generic 9 "/files/personal and the owned space are writable (rw binds)" \
+    "touch /files/personal/isolation-ok && rm /files/personal/isolation-ok && touch ${SHARED}/isolation-ok && rm ${SHARED}/isolation-ok" \
+    "$VALIDATOR_ZERO_EXIT" 10
 }
 
 check_10() {
   local json out rc
   json="$(manager_execute 'id -u' 10)"
-  if out="$(python3 -c "$VALIDATOR_UID" "$json" "$HOMEAI_UID" 2>&1)"; then
+  if out="$(python3 -c "$VALIDATOR_UID" "$json" "$UID_A" 2>&1)"; then
     rc=0
   else
     rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
-    pass 10 "runs as configured non-root HOMEAI_UID (${HOMEAI_UID}), not root"
+    pass 10 "runs as the user's own uid (${UID_A}), not root"
   else
-    fail 10 "runs as configured non-root HOMEAI_UID (${HOMEAI_UID}), not root" "$out"
+    fail 10 "runs as the user's own uid (${UID_A}), not root" "$out"
   fi
 }
 
@@ -642,11 +694,21 @@ check_13() {
 }
 
 check_14() {
-  check_generic 14 "exactly one non-tmpfs rw mount, targeting /files" \
-    'mount' "$VALIDATOR_14" 10
+  local json out rc
+  json="$(manager_execute 'mount' 10)"
+  if out="$(python3 -c "$VALIDATOR_MOUNTS" "$json" "/files/personal,${SHARED}" "" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}"
+  else
+    fail 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}" "$out"
+  fi
 }
 
-# ---- checks 15-17 (stack-level, directly on the host via docker/jq) -------
+# ---- checks 15-17 (stack-level, directly on the host via docker) ----------
 
 check_15() {
   local log_file
@@ -659,22 +721,31 @@ check_15() {
   rm -f "$log_file"
 }
 
-check_16() {
-  local inspect_json out rc
-  if ! inspect_json="$(docker inspect "$EXEC_CONTAINER_NAME" 2>&1)"; then
-    fail 16 "docker inspect hardening assertions on ${EXEC_CONTAINER_NAME}" "docker inspect failed: ${inspect_json}"
+# $1: check number, $2: container, $3: expected JSON for VALIDATOR_INSPECT, $4: description.
+check_inspect() {
+  local num="$1" container="$2" want="$3" desc="$4" inspect_json out rc
+  if ! inspect_json="$(docker inspect "$container" 2>&1)"; then
+    fail "$num" "$desc" "docker inspect failed: ${inspect_json}"
     return
   fi
-  if out="$(python3 -c "$VALIDATOR_16" "$inspect_json" "$FILES_DIR" 2>&1)"; then
+  if out="$(python3 -c "$VALIDATOR_INSPECT" "$inspect_json" "$want" 2>&1)"; then
     rc=0
   else
     rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
-    pass 16 "docker inspect: NetworkMode/ReadonlyRootfs/CapDrop/Privileged/bind-mount all correct"
+    pass "$num" "$desc"
   else
-    fail 16 "docker inspect: NetworkMode/ReadonlyRootfs/CapDrop/Privileged/bind-mount all correct" "$out"
+    fail "$num" "$desc" "$out"
   fi
+}
+
+check_16() {
+  local want
+  want="$(printf '{"user": "%s:%s", "group_add": ["%s"], "binds": {"%s": ["/files/personal", true], "%s": ["%s", true]}}' \
+    "$UID_A" "$GID_A" "$GID_S" "${SPACES_DIR}/${HOME_A}/files" "${SPACES_DIR}/${SPACE_ID}/files" "$SHARED")"
+  check_inspect 16 "$CONTAINER_A" "$want" \
+    "docker inspect: NetworkMode/ReadonlyRootfs/CapDrop/Privileged, User=uid:personal gid, GroupAdd, one bind per space"
 }
 
 check_17() {
@@ -692,6 +763,145 @@ print('\n'.join(bad))
   fi
 }
 
+# ---- checks 18-22 (per-user exec, M11-03) ----------------------------------
+
+# $1 check number, $2 description, $3 python assertion over `r` (the execute
+# response dict), $4 who, $5 command. Prints nothing on pass.
+check_exec_py() {
+  local num="$1" desc="$2" assertion="$3" who="$4" command="$5" json out rc
+  json="$(manager_execute_as "$who" "$command" 15)"
+  if out="$(python3 -c "
+import json, sys
+r = json.loads(sys.argv[1])
+$assertion
+" "$json" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass "$num" "$desc"
+  else
+    fail "$num" "$desc" "${out} (response: ${json})"
+  fi
+}
+
+check_18() {
+  manager_execute_as a "echo ${MARK} > /files/personal/${MARK}.txt" 10 >/dev/null
+  check_exec_py 18 "B's container can't see A's personal space (only B's own /files/personal and ${SHARED})" "
+out = r.get('stdout', '')
+assert r.get('exit_code') == 0, f'exit_code {r.get(\"exit_code\")}: {r.get(\"stderr\")!r}'
+spaces, personal, hits = out.split('---')
+assert spaces.split() == ['${SPACE}'], f'/files/spaces lists {spaces.split()}'
+assert '${MARK}' not in personal, f'A\\'s marker in B\\'s /files/personal: {personal!r}'
+assert not hits.strip(), f'A\\'s marker found under B\\'s /files: {hits!r}'
+" b "ls /files/spaces; echo ---; ls -a /files/personal; echo ---; grep -rl ${MARK} /files 2>/dev/null; true"
+}
+
+check_19() {
+  manager_execute_as a "echo shared-${MARK} > ${SHARED}/iso-shared.txt" 10 >/dev/null
+  check_exec_py 19 "viewer mount is read-only: B reads ${SHARED} but can't write, though in its group (${GID_S})" "
+out = r.get('stdout', '')
+lines = out.splitlines()
+assert lines[0] == 'shared-${MARK}', f'B read {lines[:1]!r}'
+assert '${GID_S}' in lines[1].split(), f'B not in the space group: id -G = {lines[1]!r}'
+assert lines[2] != '0', 'B wrote into the viewer space'
+assert 'Read-only file system' in r.get('stderr', ''), f'stderr {r.get(\"stderr\")!r}'
+" b "cat ${SHARED}/iso-shared.txt; id -G; touch ${SHARED}/viewer-write; echo \$?"
+  local json out rc
+  json="$(manager_execute_as b 'mount' 10)"
+  if out="$(python3 -c "$VALIDATOR_MOUNTS" "$json" "/files/personal" "$SHARED" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass 19 "B's mounts: /files/personal rw, ${SHARED} ro, nothing else"
+  else
+    fail 19 "B's mounts: /files/personal rw, ${SHARED} ro, nothing else" "$out"
+  fi
+  local want
+  want="$(printf '{"user": "%s:%s", "group_add": ["%s"], "binds": {"%s": ["/files/personal", true], "%s": ["%s", false]}}' \
+    "$UID_B" "$GID_B" "$GID_S" "${SPACES_DIR}/${HOME_B}/files" "${SPACES_DIR}/${SPACE_ID}/files" "$SHARED")"
+  check_inspect 19 "$CONTAINER_B" "$want" "docker inspect B: its own uid/gids, A's personal space not bound, ${SHARED} bound ro"
+}
+
+check_20() {
+  check_exec_py 20 "files A creates are <uid>:<space gid> and group-writable (dirs setgid)" "
+got = r.get('stdout', '').split()
+want = ['${UID_A}:${GID_S}:2775', '${UID_A}:${GID_S}:664', '${UID_A}:${GID_A}:664']
+assert got == want, f'stat gave {got}, expected {want} (stderr {r.get(\"stderr\")!r})'
+" a "mkdir -p ${SHARED}/iso-dir && echo x > ${SHARED}/iso-dir/f && stat -c '%u:%g:%a' ${SHARED}/iso-dir ${SHARED}/iso-dir/f /files/personal/${MARK}.txt"
+  local got expected
+  got="$(_e2e_compose exec -T platform stat -c '%u:%g:%a' \
+    "/data/spaces/${SPACE_ID}/files/iso-dir/f" "/data/spaces/${HOME_A}/files/${MARK}.txt" 2>&1 | tr '\n' ' ')"
+  expected="${UID_A}:${GID_S}:664 ${UID_A}:${GID_A}:664 "
+  if [ "$got" = "$expected" ]; then
+    pass 20 "on the host too: \${SPACES_DIR}/<space>/files/... is ${UID_A}:${GID_S} 664, personal ${UID_A}:${GID_A} 664"
+  else
+    fail 20 "on the host too: files are <uid>:<space gid> 664" "stat gave '${got}', expected '${expected}'"
+  fi
+}
+
+check_21() {
+  local desc="session calls without a valid delegation are refused (401), another thread's is 403"
+  local results
+  results="$(printf '%s\n' \
+    "$(manager_call a POST "$SESSION_A" ensure none 10)" \
+    "$(manager_call a POST "$SESSION_A" ensure tampered 10)" \
+    "$(manager_call a POST "$SESSION_A" execute none 10 '{"command": "id"}')" \
+    "$(manager_call a DELETE "$SESSION_A" delete none 10)" \
+    "$(manager_call a POST "$SESSION_A" ensure "delegation-for:${SESSION_B}" 10)" \
+    "$(manager_call a POST "$SESSION_A" execute "delegation-for:${SESSION_B}" 10 '{"command": "id"}')")"
+  local out rc
+  if out="$(python3 -c '
+import json, sys
+codes = [json.loads(line).get("http_error") for line in sys.argv[1].splitlines()]
+want = [401, 401, 401, 401, 403, 403]
+if codes != want:
+    print(f"got {codes}, expected {want}")
+    sys.exit(1)
+' "$results" 2>&1)" && docker inspect "$CONTAINER_A" >/dev/null 2>&1; then
+    rc=0
+  else
+    rc=1
+    if [ -z "$out" ]; then
+      out="A's container is gone after the refused calls"
+    fi
+  fi
+  if [ "$rc" -eq 0 ]; then
+    pass 21 "$desc"
+  else
+    fail 21 "$desc" "$out"
+  fi
+}
+
+check_22() {
+  local desc="B can't take over A's session: ensure, execute and DELETE are 403; A's container untouched"
+  local before after ensure execute delete out
+  before="$(docker inspect -f '{{.Id}} {{.State.Running}}' "$CONTAINER_A" 2>&1)"
+  ensure="$(manager_call b POST "$SESSION_A" ensure "delegation-for:${SESSION_A}" 30)"
+  execute="$(manager_call b POST "$SESSION_A" execute "delegation-for:${SESSION_A}" 15 '{"command": "cat /files/personal/*"}')"
+  delete="$(manager_call b DELETE "$SESSION_A" delete "delegation-for:${SESSION_A}" 10)"
+  after="$(docker inspect -f '{{.Id}} {{.State.Running}}' "$CONTAINER_A" 2>&1)"
+  if out="$(python3 -c '
+import json, sys
+before, after = sys.argv[4], sys.argv[5]
+codes = [json.loads(r).get("http_error") for r in sys.argv[1:4]]
+if codes != [403, 403, 403]:
+    print(f"B ensure/execute/DELETE of A session gave {codes}, expected [403, 403, 403]: {sys.argv[1:4]}")
+    sys.exit(1)
+if not before.endswith(" true") or after != before:
+    print(f"A container changed: before {before!r}, after {after!r}")
+    sys.exit(1)
+' "$ensure" "$execute" "$delete" "$before" "$after" 2>&1)" \
+    && out="$(python3 -c "$VALIDATOR_UID" "$(manager_execute 'id -u' 10)" "$UID_A" 2>&1)"; then
+    pass 22 "$desc"
+  else
+    fail 22 "$desc" "$out"
+  fi
+}
+
 summary() {
   local total=$((PASS_COUNT + FAIL_COUNT))
   echo
@@ -704,10 +914,11 @@ summary() {
 }
 
 main() {
-  log "=== M4-05: isolation verification suite ==="
+  log "=== M4-05 + M11-03: isolation verification suite ==="
   preflight
+  setup_users
   start_runner
-  manager_ensure
+  manager_ensure a
 
   check_1
   check_2
@@ -726,6 +937,13 @@ main() {
   check_15
   check_16
   check_17
+
+  manager_ensure b
+  check_18
+  check_19
+  check_20
+  check_21
+  check_22
 
   summary
 }

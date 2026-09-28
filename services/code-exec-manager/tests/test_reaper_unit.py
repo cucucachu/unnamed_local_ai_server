@@ -14,13 +14,16 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.config import Settings
 from app.sessions import SessionManager, container_name
+from tests.conftest import USER_A, grants_for
 from tests.fake_docker import FakeDockerClient
+
+GRANTS = grants_for(USER_A)
 
 
 async def test_reap_once_removes_idle_container(
     manager: SessionManager, fake_docker: FakeDockerClient, test_settings: Settings
 ) -> None:
-    await manager.ensure("sess-1")
+    await manager.ensure("sess-1", GRANTS)
     container = fake_docker.containers.get(container_name("sess-1"))
 
     now = datetime.now(UTC) + timedelta(minutes=test_settings.exec_idle_minutes + 1)
@@ -34,7 +37,7 @@ async def test_reap_once_removes_idle_container(
 async def test_reap_once_keeps_active_container(
     manager: SessionManager, fake_docker: FakeDockerClient
 ) -> None:
-    await manager.ensure("sess-1")
+    await manager.ensure("sess-1", GRANTS)
     container = fake_docker.containers.get(container_name("sess-1"))
 
     now = datetime.now(UTC)  # freshly `_touch`ed by `ensure` - well within the idle window
@@ -47,7 +50,7 @@ async def test_reap_once_keeps_active_container(
 async def test_reap_once_adopts_unknown_container_then_reaps_once_idle(
     manager: SessionManager, fake_docker: FakeDockerClient, test_settings: Settings
 ) -> None:
-    await manager.ensure("sess-1")
+    await manager.ensure("sess-1", GRANTS)
     container = fake_docker.containers.get(container_name("sess-1"))
 
     # Simulate a manager restart: the in-memory `_last_used` is gone, but
@@ -58,7 +61,9 @@ async def test_reap_once_adopts_unknown_container_then_reaps_once_idle(
 
     # First pass, still within the idle window relative to `started_at`:
     # adopted (seeded from `StartedAt`), not reaped.
-    still_idle_but_within_window = started_at + timedelta(minutes=test_settings.exec_idle_minutes - 1)
+    still_idle_but_within_window = started_at + timedelta(
+        minutes=test_settings.exec_idle_minutes - 1
+    )
     await manager.reap_once(now=still_idle_but_within_window)
 
     assert container.removed is False
@@ -90,8 +95,8 @@ async def test_reap_once_isolates_a_single_containers_processing_error(
     reaper from still reaping the others in the same pass - `reap_once`
     catches per-container, not just per-listing.
     """
-    await manager.ensure("sess-broken")
-    await manager.ensure("sess-idle")
+    await manager.ensure("sess-broken", GRANTS)
+    await manager.ensure("sess-idle", GRANTS)
     broken = fake_docker.containers.get(container_name("sess-broken"))
     idle = fake_docker.containers.get(container_name("sess-idle"))
 

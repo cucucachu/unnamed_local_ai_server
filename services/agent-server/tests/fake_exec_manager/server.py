@@ -20,14 +20,19 @@ def create_fake_exec_manager_app(fake: FakeExecManager) -> FastAPI:
     app = FastAPI()
 
     @app.post("/sessions/{session_id}/ensure")
-    async def ensure(session_id: str) -> Any:
-        fake.record_ensure(session_id)
+    async def ensure(session_id: str, request: Request) -> Any:
+        fake.record_ensure(session_id, request.headers.get("authorization"))
         return {"container_id": f"fake-container-{session_id}", "created": True}
 
     @app.post("/sessions/{session_id}/execute")
     async def execute(session_id: str, request: Request) -> Any:
         body = await request.json()
-        fake.record_execute(session_id, body["command"], body["timeout_seconds"])
+        fake.record_execute(
+            session_id,
+            body["command"],
+            body["timeout_seconds"],
+            request.headers.get("authorization"),
+        )
         return JSONResponse(fake.execute_response, status_code=fake.execute_status_code)
 
     return app

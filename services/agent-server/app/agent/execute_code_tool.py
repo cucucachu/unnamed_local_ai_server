@@ -8,6 +8,11 @@ to the code-exec-manager (`app.core.config.Settings.exec_manager_url`); it
 never touches Docker directly (see `services/code-exec-manager/README.md`'s
 "Isolation boundary" — this codebase's *only* docker.sock holder is that
 separate service).
+
+Every call carries the run's delegation (`configurable["delegation"]`, the
+same object `PlatformFilesBackend` reads) as `Authorization: Bearer`; the
+manager has the platform turn it into the user's uid, space gids and
+mounts. No delegation, no call.
 """
 
 from __future__ import annotations
@@ -81,21 +86,30 @@ def make_execute_code_tool(settings: Settings):
 
     @tool
     async def execute_code(command: str, config: RunnableConfig, timeout_seconds: int = 120) -> str:
-        """Run a shell command in a sandboxed Linux container.
+        """Run a shell command in a sandboxed Linux container, as the user.
 
-        The container has NO network access. /files is a persistent scratch directory; it
-        is NOT the user's /personal or /spaces files, which only your file tools can reach.
+        For running programs, not for creating, reading, editing or listing files (use the
+        file tools for those). The user's files are mounted at /files/personal (= /personal in your file tools) and
+        /files/spaces/<slug> (= /spaces/<slug>); a space the user only views is read-only.
+        Nothing else under /files is writable. Symlinks you create here need relative targets
+        (or none): the file tools don't follow absolute /files/... targets. The container has
+        NO network access.
         Installed: Python 3 with pandas/numpy/pillow/matplotlib/openpyxl/pypdf, Node.js, git,
         ffmpeg, imagemagick, pandoc, ripgrep, jq. You cannot install packages. State in /tmp
-        and $HOME is ephemeral; only /files persists. Long jobs: raise timeout_seconds
-        (max 600).
+        and $HOME is ephemeral; only the user's files persist. Long jobs: raise
+        timeout_seconds (max 600).
         """
-        thread_id = (config.get("configurable") or {}).get("thread_id")
-        session_id = _sanitize_session_id(thread_id)
+        configurable = config.get("configurable") or {}
+        session_id = _sanitize_session_id(configurable.get("thread_id"))
         clamped_timeout_seconds = _clamp_timeout(timeout_seconds)
+        token = getattr(configurable.get("delegation"), "token", None)
+        if not isinstance(token, str) or not token:
+            return "execute_code failed: code execution is unavailable for this run (no delegation)"
 
         try:
-            async with httpx.AsyncClient(base_url=settings.exec_manager_url) as client:
+            async with httpx.AsyncClient(
+                base_url=settings.exec_manager_url, headers={"Authorization": f"Bearer {token}"}
+            ) as client:
                 ensure_response = await client.post(f"/sessions/{session_id}/ensure")
                 ensure_response.raise_for_status()
                 execute_response = await client.post(

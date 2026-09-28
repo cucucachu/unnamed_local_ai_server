@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # M4-04 acceptance: "cross-view" smoke test - proves `execute_code` and the
-# file tools (both already-merged M2-03/M4-03 machinery) see the exact same
-# files directory that's bind-mounted to the real host filesystem, addressed
-# at `/files` from execute_code's shell and at `/` (bare root) from the file
-# tools - two real, distinct, non-aliased mount points onto one directory.
+# file tools see the exact same files: the signed-in user's personal space,
+# addressed at `/files/personal` from execute_code's shell and at
+# `/personal` from the file tools (M11-03: exec runs as the user, with one
+# bind per space; the file tools go through the platform files API).
 #
 # From a running (already up and healthy, per M4-04's own ticket) compose
 # stack, this script drives a single WS thread (`scripts/ws_smoke.py`'s
 # connect/send/recv pattern, same as `gate_m2.sh`/`gate_m3.sh`) through two
 # turns:
-#   1. Ask the agent to run `bash -lc 'date > /files/exec-proof.txt'` via
-#      its `execute_code` tool.
-#   2. On the SAME thread, ask it to `read_file` that same file and report
-#      its content.
+#   1. Ask the agent to run `bash -lc 'date > /files/personal/exec-proof.txt'`
+#      via its `execute_code` tool.
+#   2. On the SAME thread, ask it to `read_file` `/personal/exec-proof.txt`
+#      and report its content.
 #
-# Asserts BOTH tool calls show up as successful `tool_end` frames, AND that
-# the file genuinely exists on the HOST at `${FILES_DIR}/exec-proof.txt`
-# (`FILES_DIR` read from `.env`, same as `gate_m3.sh`/`files_rest_smoke.sh`).
+# Asserts BOTH tool calls show up as successful `tool_end` frames, that the
+# read_file result carries exactly what the platform files API returns for
+# `/personal/exec-proof.txt`, AND that on the host the file is owned by the
+# user's uid and their personal space's gid, group-writable (`umask 002`),
+# checked with `stat` inside the platform container (the host's space dirs
+# are root:<gid> 2770, not readable by the invoking user).
 #
 # `curl` is NOT installed on this host - uses `wget`/Python (`urllib.request`)
 # helpers, same as the other `scripts/e2e/*.sh` gate scripts.
@@ -24,26 +27,14 @@
 # Model nondeterminism: each WS turn gets one retry, same policy as
 # `gate_m2.sh`/`gate_m3.sh`.
 #
-# Cleans up the created thread + host file via an EXIT trap, so re-running
-# this script is safe.
-#
-# M6-03: cleanup now also deletes the code-exec-manager session/container
-# this script's `execute_code` call creates (session_id == THREAD_ID) -
-# without this, the exec container sat alive until the 30-min idle reaper
-# (EXEC_IDLE_MINUTES) fired, which is well past a `gate_full.sh` run's own
-# timeframe.
-#
-# M10-04: runs signed in (`lib/auth.sh`); the thread is created via `POST
-# /api/threads` since the chat socket only accepts threads the user owns.
+# Cleans up the created thread, the file, and the exec container
+# (`homeai-exec-<thread_id>`, removed with `docker rm` - the manager's own
+# DELETE needs the run's delegation) via an EXIT trap, so re-running this
+# script is safe. The signed-in `e2e-exec-*` user (`lib/auth.sh`) and its
+# personal space are deleted too.
 #
 # Usage:
 #   scripts/e2e/exec_crossview_smoke.sh
-#
-# M11-02: the file tools now work on the platform's spaces (`/personal`,
-# `/spaces/<slug>`) while exec still mounts `FILES_DIR` at `/files`, so the
-# two no longer see the same directory until M11-03 runs exec as the user.
-# Step 3 (read_file of the exec-written file) is skipped with a notice
-# rather than rewritten to pass; the exec half (steps 2, 4, 5) still runs.
 #
 # Exits non-zero (and prints the failing step) if any check fails.
 
@@ -54,6 +45,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=lib/auth.sh
 source "$SCRIPT_DIR/lib/auth.sh"
+# shellcheck source=lib/files.sh
+source "$SCRIPT_DIR/lib/files.sh"
 
 API_BASE="http://localhost/api"
 
@@ -66,12 +59,6 @@ API_HEALTH_TIMEOUT_S=120
 WS_TURN_TIMEOUT_S=90
 FILE_APPEAR_TIMEOUT_S=15
 
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[exec-crossview-smoke] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-HOST_FILE_PATH="${FILES_DIR}/${FILE_NAME}"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
 
@@ -171,15 +158,15 @@ step_stack_healthy() {
   log "OK: model-runner healthy + ${API_BASE}/health OK"
 }
 
-check_host_file_exists() {
-  [ -f "$HOST_FILE_PATH" ]
+check_file_exists() {
+  [ "$(e2e_personal_status "$FILE_NAME")" = "200" ]
 }
 
-poll_host_file_exists() {
+poll_file_exists() {
   local timeout_s="$1"
   local deadline=$(( $(date +%s) + timeout_s ))
   while (( $(date +%s) < deadline )); do
-    if check_host_file_exists; then
+    if check_file_exists; then
       return 0
     fi
     sleep 1
@@ -194,25 +181,25 @@ run_ws_turn() {
 }
 
 step_execute_code_writes_file() {
-  log "Step 2/5: WS prompt -> agent runs 'date > /files/${FILE_NAME}' via execute_code..."
-  rm -f "$HOST_FILE_PATH"
-  local prompt="Use your execute_code tool to run exactly this command: bash -lc 'date > /files/${FILE_NAME}'. Just run it and confirm when done."
+  log "Step 2/5: WS prompt -> agent runs 'date > /files/personal/${FILE_NAME}' via execute_code..."
+  e2e_personal_rm "$FILE_NAME"
+  local prompt="Use your execute_code tool to run exactly this command: bash -lc 'date > /files/personal/${FILE_NAME}'. Just run it and confirm when done."
 
   log "Sending execute_code prompt (attempt 1/2)..."
   run_ws_turn "$prompt" /tmp/exec-crossview-attempt-1.log
-  if successful_tool_end /tmp/exec-crossview-attempt-1.log "execute_code" && poll_host_file_exists "$FILE_APPEAR_TIMEOUT_S"; then
-    log "OK: execute_code tool_end succeeded and ${HOST_FILE_PATH} appeared on attempt 1"
+  if successful_tool_end /tmp/exec-crossview-attempt-1.log "execute_code" && poll_file_exists "$FILE_APPEAR_TIMEOUT_S"; then
+    log "OK: execute_code tool_end succeeded and /personal/${FILE_NAME} appeared on attempt 1"
     return 0
   fi
 
   log "WARN: execute_code tool_end/file not observed on attempt 1 - retrying once (LLM nondeterminism allowance, same policy as gate_m2.sh/gate_m3.sh)"
   run_ws_turn "$prompt" /tmp/exec-crossview-attempt-2.log
-  if successful_tool_end /tmp/exec-crossview-attempt-2.log "execute_code" && poll_host_file_exists "$FILE_APPEAR_TIMEOUT_S"; then
-    log "OK: execute_code tool_end succeeded and ${HOST_FILE_PATH} appeared on attempt 2"
+  if successful_tool_end /tmp/exec-crossview-attempt-2.log "execute_code" && poll_file_exists "$FILE_APPEAR_TIMEOUT_S"; then
+    log "OK: execute_code tool_end succeeded and /personal/${FILE_NAME} appeared on attempt 2"
     return 0
   fi
 
-  log "ERROR: execute_code never produced a successful tool_end + host file after 2 attempts - gate FAILS"
+  log "ERROR: execute_code never produced a successful tool_end + /personal/${FILE_NAME} after 2 attempts - gate FAILS"
   log "--- attempt 1 transcript ---"
   cat /tmp/exec-crossview-attempt-1.log 2>/dev/null || true
   log "--- attempt 2 transcript ---"
@@ -220,9 +207,44 @@ step_execute_code_writes_file() {
   return 1
 }
 
+# $1: WS log. Succeeds if a successful read_file tool_end carries the file's
+# first line exactly as the platform files API returns it.
+read_file_saw_content() {
+  local log_file="$1" expected
+  expected="$(e2e_personal_cat "$FILE_NAME" | head -n1)"
+  [ -n "$expected" ] || return 1
+  grep "'type': 'tool_end'" "$log_file" | grep "'name': 'read_file'" \
+    | grep "'status': 'success'" | grep -qF -- "$expected"
+}
+
 step_read_file_sees_same_content() {
-  log "Step 3/5: SKIPPED until M11-03 - execute_code's /files is FILES_DIR, the file tools" \
-    "see the user's spaces (/personal, /spaces/<slug>); the two trees are no longer one directory"
+  log "Step 3/5: same thread, WS prompt -> agent read_file's /personal/${FILE_NAME}..."
+  # The file tools' spelling of the same file: `/personal/...`, never the
+  # exec shell's `/files/personal/...` - spelled out here so this plumbing
+  # check isn't gated on model path reasoning it wasn't prompted for.
+  local prompt="Now use your read_file tool with file_path exactly '/personal/${FILE_NAME}' (the /files/ prefix is only for execute_code shell commands) and tell me exactly what it contains."
+  local retry_prompt="Wrong path. Call read_file now with file_path exactly '/personal/${FILE_NAME}' — not '/files/personal/${FILE_NAME}'. Then quote the file contents."
+
+  log "Sending read_file prompt (attempt 1/2)..."
+  run_ws_turn "$prompt" /tmp/exec-crossview-read-attempt-1.log
+  if read_file_saw_content /tmp/exec-crossview-read-attempt-1.log; then
+    log "OK: read_file returned the exec-written content on attempt 1"
+    return 0
+  fi
+
+  log "WARN: read_file of the exec-written content not observed on attempt 1 - retrying once (LLM nondeterminism allowance)"
+  run_ws_turn "$retry_prompt" /tmp/exec-crossview-read-attempt-2.log
+  if read_file_saw_content /tmp/exec-crossview-read-attempt-2.log; then
+    log "OK: read_file returned the exec-written content on attempt 2"
+    return 0
+  fi
+
+  log "ERROR: read_file never returned the exec-written content after 2 attempts - gate FAILS"
+  log "--- attempt 1 transcript ---"
+  cat /tmp/exec-crossview-read-attempt-1.log 2>/dev/null || true
+  log "--- attempt 2 transcript ---"
+  cat /tmp/exec-crossview-read-attempt-2.log 2>/dev/null || true
+  return 1
 }
 
 step_no_error_frames() {
@@ -238,14 +260,23 @@ step_no_error_frames() {
   log "OK: no error frames observed"
 }
 
-step_host_file_final_check() {
-  log "Step 5/5: confirming ${HOST_FILE_PATH} genuinely exists on the host..."
-  if ! check_host_file_exists; then
-    log "ERROR: ${HOST_FILE_PATH} does not exist on the host"
+step_host_ownership() {
+  log "Step 5/5: confirming the file on the host is <user uid>:<personal gid>, group-writable..."
+  local row space_id gid uid got expected
+  row="$(_e2e_psql homeai_platform "SELECT s.id || ' ' || s.gid || ' ' || u.uid FROM spaces s
+    JOIN users u ON u.id = s.owner_user_id WHERE s.kind = 'personal' AND u.username = '${E2E_AUTH_USER}'")"
+  read -r space_id gid uid <<<"$row"
+  if ! [[ "$space_id" =~ ^[0-9a-f-]{36}$ ]]; then
+    log "ERROR: personal space of ${E2E_AUTH_USER} not found (got '${row}')"
     return 1
   fi
-  log "OK: ${HOST_FILE_PATH} exists on the host, content:"
-  cat "$HOST_FILE_PATH"
+  got="$(_e2e_compose exec -T platform stat -c '%u:%g %a' "/data/spaces/${space_id}/files/${FILE_NAME}")"
+  expected="${uid}:${gid} 664"
+  if [ "$got" != "$expected" ]; then
+    log "ERROR: \${SPACES_DIR}/${space_id}/files/${FILE_NAME} is '${got}', expected '${expected}'"
+    return 1
+  fi
+  log "OK: \${SPACES_DIR}/${space_id}/files/${FILE_NAME} is ${got}; content: $(e2e_personal_cat "$FILE_NAME")"
 }
 
 cleanup() {
@@ -253,27 +284,15 @@ cleanup() {
   if [ -n "$SAVED_HITL" ]; then
     bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
-  rm -f "$HOST_FILE_PATH" 2>/dev/null || true
+  if [ -n "${E2E_AUTH_COOKIE:-}" ]; then
+    e2e_personal_rm "$FILE_NAME"
+  fi
   rm -f /tmp/exec-crossview-attempt-1.log /tmp/exec-crossview-attempt-2.log \
         /tmp/exec-crossview-read-attempt-1.log /tmp/exec-crossview-read-attempt-2.log 2>/dev/null || true
-  if [ -z "$THREAD_ID" ]; then
-    e2e_auth_end
-    return
+  if [ -n "$THREAD_ID" ]; then
+    rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
+    docker rm -f "homeai-exec-${THREAD_ID}" >/dev/null 2>&1 || true
   fi
-  rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
-  # M6-03: code-exec-manager publishes no host port (M4-03) - reached here
-  # by execing python3 directly inside its own container against its own
-  # localhost:8090 (same "no published port" workaround
-  # `scripts/verify_isolation.sh` uses via a separate runner container,
-  # simplified here since a session-delete call doesn't need its own
-  # network-attached container).
-  docker exec homeai-code-exec-manager-1 python3 -c "
-import sys, urllib.request
-try:
-    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
-except Exception:
-    pass
-" "$THREAD_ID" >/dev/null 2>&1 || true
   e2e_auth_end
 }
 trap cleanup EXIT
@@ -292,7 +311,7 @@ create_thread() {
 }
 
 main() {
-  log "=== EXEC CROSSVIEW SMOKE (M4-04): execute_code + read_file see the same files directory ==="
+  log "=== EXEC CROSSVIEW SMOKE (M4-04): execute_code + read_file see the same files ==="
   step_stack_healthy
   e2e_auth_begin exec
   create_thread
@@ -304,7 +323,7 @@ main() {
   step_execute_code_writes_file
   step_read_file_sees_same_content
   step_no_error_frames
-  step_host_file_final_check
+  step_host_ownership
   echo "EXEC CROSSVIEW SMOKE: PASS"
 }
 

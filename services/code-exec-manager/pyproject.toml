@@ -7,7 +7,9 @@ dependencies = [
     "anyio>=4.11.0",
     "docker>=7.1.0",
     "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "pydantic-settings>=2.15.0",
+    "pyjwt[crypto]>=2.15.0",
     "uvicorn[standard]>=0.52.4",
 ]
 
@@ -34,7 +36,6 @@ cache_dir = "/tmp/pytest_cache"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.5",

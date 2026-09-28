@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # `${SPACES_DIR}` bind mount: one `<space_id>/` tree per space
     # (`app/core/storage.py`). Must exist at startup.
     platform_spaces_dir: Path = Path("/data/spaces")
+    # The same directory as the Docker daemon on the host sees it (`${SPACES_DIR}`):
+    # the bind-mount sources `/internal/exec-grants` hands to code-exec-manager.
+    # Empty refuses every exec grant.
+    spaces_host_dir: str = ""
 
     # Pre-Stage-3 files root (`${FILES_DIR}` bind mount), moved into the
     # bootstrap admin's personal space when enabled (`app/core/legacy.py`).

@@ -51,7 +51,8 @@ flowchart TB
             exec2[Exec container: thread B]
         end
 
-        filesdir[("/srv/homeai/files\nhost bind mount, persistent")]
+        filesdir[("/srv/homeai/files\nlegacy, migration source only")]
+        spacesdir[("/srv/homeai/spaces\nper-space files/, persistent")]
         dri["/dev/dri\niGPU render node (Vulkan/RADV)"]
         dsock["/var/run/docker.sock"]
     end
@@ -64,12 +65,14 @@ flowchart TB
     agent -->|"file tools: /api/platform/files* as the user (delegation, M11-02)"| platform
     agent -->|"/internal/delegations*"| platform
     platform -.->|"one-time legacy migration source"| filesdir
-    agent -->|"execute_code tool: create/exec/destroy"| execmgr
+    platform -->|"files API, as the user"| spacesdir
+    agent -->|"execute_code tool: create/exec/destroy (Bearer delegation)"| execmgr
+    execmgr -->|"/internal/exec-grants (M11-03)"| platform
     execmgr -->|docker API| exec1
     execmgr -->|docker API| exec2
     execmgr -.->|mounted socket, only this service| dsock
-    exec1 -.->|"bind mount, rw, no other access, at /files"| filesdir
-    exec2 -.->|"bind mount, rw, no other access, at /files"| filesdir
+    exec1 -.->|"one bind per member space, as the user, at /files/..."| spacesdir
+    exec2 -.->|"one bind per member space, as the user, at /files/..."| spacesdir
     model -.->|device passthrough| dri
 ```
 
@@ -153,10 +156,12 @@ sequenceDiagram
     L-->>A: content (the user's personal space)
     A->>M: continue with tool result
     M-->>A: tool_call: execute_code("python resize.py photo.jpg")
-    A->>E: POST /sessions/{id}/ensure
-    E->>C: docker create+start (if not running), files dir mounted at /files, network none
-    A->>E: POST /sessions/{id}/execute
-    E->>C: docker exec
+    A->>E: POST /sessions/{id}/ensure (Bearer delegation)
+    E->>L: POST /internal/exec-grants (delegation)
+    L-->>E: uid, gids, one mount per member space
+    E->>C: docker create+start (if not running or grants changed), as the user, network none
+    A->>E: POST /sessions/{id}/execute (Bearer delegation)
+    E->>C: docker exec (as uid:gid, umask 002)
     C-->>E: stdout/stderr/exit
     E-->>A: result
     A->>M: continue with tool result
@@ -547,7 +552,7 @@ what another doc says it should be.
   **Tenancy**: threads have an owner (`threads.owner_user_id`) and every
   thread operation is scoped to the caller; settings are per user
   (`user_settings`). Files are the platform's spaces, reached as the user
-  (below); exec sessions and exec's `/files` stay shared until M11-03.
+  (below); `execute_code` runs as the user on the same spaces (M11-03).
   **Pre-M10 data**: threads with no owner and the old global
   `settings` row are handed to the bootstrap admin once one exists
   (`app/core/orphans.py`: asks `GET /internal/bootstrap-admin` with
@@ -570,8 +575,10 @@ what another doc says it should be.
   shared spaces); each write/edit/delete targets exactly one space, and a
   refused write (viewer) is reported rather than retried elsewhere;
   shared-space file contents are untrusted input, never instructions;
-  `execute_code`'s `/files` is a separate scratch area the file tools
-  can't see; `file:` links use the full virtual path
+  files are created, read and edited with the file tools only
+  (`write_file` makes parent folders), never `execute_code`, which sees
+  the same files at `/files/personal/...` and `/files/spaces/<slug>/...`
+  (viewer spaces read-only), a spelling used only inside it; `file:` links use the full virtual path
   (`[notes.md](file:/personal/notes.md)`). HITL approval descriptions
   show the normalized virtual path (e.g. "Write file `/personal/notes.md`"
   for `file_path: "personal/notes.md"`).
@@ -682,12 +689,15 @@ what another doc says it should be.
   service in the compose file with this mount, enforced by
   `scripts/check_socket_exclusivity.sh`.
 - **Env vars consumed** (compose `environment:` block, cross-checked
-  against `app/core/config.py`'s `Settings`): `FILES_DIR` (aliased to
-  the field `files_host_dir` — deliberately not named
-  `files_root`, since this service never reads the files directory itself;
-  it only tells `dockerd` where the exec-container bind-mount source
-  lives), `HOMEAI_UID`, `HOMEAI_GID`, `EXEC_IDLE_MINUTES`,
-  `EXEC_DEFAULT_TIMEOUT_S`.
+  against `app/core/config.py`'s `Settings`): `PLATFORM_EXEC_TOKEN` (its
+  service token for `POST /internal/exec-grants`), `EXEC_IDLE_MINUTES`,
+  `EXEC_DEFAULT_TIMEOUT_S`. `PLATFORM_URL` defaults to
+  `http://platform:8100`. It mounts no files at all: the bind sources come
+  from the platform's grants (M11-03).
+- **Auth (M11-03)**: ensure, execute and delete need `Authorization:
+  Bearer <delegation>`, verified against the platform JWKS
+  (`app/delegation.py`); grants are fetched per call (`app/grants.py`).
+  See "`code-exec-manager` API" below.
 - **Tests**: `services/code-exec-manager/tests/` — `test_api_unit.py`,
   `test_sessions_unit.py`, `test_hardening_spec.py`, `test_reaper_unit.py`
   (all use the `fake_docker.py` test double, no real Docker needed), plus
@@ -695,10 +705,8 @@ what another doc says it should be.
   `docker.sock` and the `homeai-exec-toolbox:latest` image built). Run:
   `cd services/code-exec-manager && uv run ruff check . && uv run pytest`
   for the deterministic suite, `uv run pytest -m integration` for the
-  real-Docker tests. `./smoke.sh` (from that same directory) is a
-  standalone ad-hoc `docker run` + curl-equivalent smoke check, independent
-  of compose. `scripts/verify_isolation.sh` (from the repo root, against
-  the live stack) is the full 17-check hardening-spec suite — see
+  real-Docker tests. `scripts/verify_isolation.sh` (from the repo root,
+  against the live stack) is the full 22-check hardening-spec suite — see
   "Security model" below.
 
 ### exec-toolbox image (`services/code-exec-manager/exec-image/`)
@@ -716,8 +724,10 @@ what another doc says it should be.
 - **Build**: `./services/code-exec-manager/build-exec-image.sh` →
   `homeai-exec-toolbox:latest` (~1.88 GB measured).
 - **Tests**: no unit tests of its own; exercised by `scripts/verify_isolation.sh`
-  (drives real commands through a live exec container) and
-  `services/code-exec-manager/smoke.sh`.
+  (drives real commands through a live exec container) and the manager's
+  `test_sessions_integration.py`. Containers run as the user's numeric
+  uid (M11-03), not the image's `homeai` account; `$HOME` stays
+  `/home/homeai`, a tmpfs owned by that uid.
 
 ### `postgres`
 
@@ -910,8 +920,12 @@ what another doc says it should be.
   `PLATFORM_DB_PASSWORD`, `PLATFORM_AGENT_TOKEN`, `PLATFORM_EXEC_TOKEN`
   (service bearers for `/internal/*` endpoints that need a caller,
   compared in constant time — `app/api/internal/service_auth.py`; an
-  empty token matches nothing. Only `PLATFORM_AGENT_TOKEN` is used so far,
-  by `GET /internal/bootstrap-admin` and `/internal/delegations*`).
+  empty token matches nothing. `PLATFORM_AGENT_TOKEN` guards
+  `GET /internal/bootstrap-admin` and `/internal/delegations*`,
+  `PLATFORM_EXEC_TOKEN` guards `POST /internal/exec-grants`).
+  `SPACES_HOST_DIR` (M11-03; compose sets it to `SPACES_DIR`, the host
+  path behind `/data/spaces`, so exec-grants can name bind sources the
+  Docker daemon resolves; empty refuses every grant).
   `PLATFORM_MIGRATE_LEGACY_FILES`
   (`0`/`1`, see above; the source dir `PLATFORM_LEGACY_FILES_DIR` defaults
   to `/data/legacy-files`). DB host/port/user/name default to
@@ -943,7 +957,10 @@ what another doc says it should be.
   and TTLs, service auth, bad identity tokens, refresh grace, a revoked
   session / disabled user can neither obtain nor refresh, and a minted
   delegation is refused by every admin/self-service/space-management
-  route). M11-01: `test_vfs.py` (the virtual-path guard: the old
+  route), `test_exec_grants.py` (M11-03: exact grants per role, viewer
+  read-only, non-member and other users' spaces absent, membership
+  changes, service token and delegation refusals, a symlinked `files/`
+  left out). M11-01: `test_vfs.py` (the virtual-path guard: the old
   `resolve_files_path` suite ported onto `beneath.locate`, plus roles,
   non-member vs unknown slug, cross-space and swapped-`files/` symlinks),
   `test_races.py` (M11-03a: a symlink to another space swapped in between
@@ -1088,7 +1105,8 @@ checkpoint by id — which may be a sibling the user is not looking at.
 **Files are not per branch either.** Forking the conversation does
 **not** branch files: `write_file` on one branch changes the user's real
 file (platform spaces) for every branch and every other thread, and
-`execute_code`'s session and `/files` mount are keyed on `thread_id`.
+`execute_code`'s session is keyed on `thread_id` and mounts those same
+spaces.
 
 **Files and media** moved to the platform (`/api/platform/files*`, M11-01;
 see "Platform API" → "Files"). agent-server's `/api/files*` and
@@ -1725,6 +1743,18 @@ from spaces and apps exist for test and e2e cleanup.
   <JWT>, "expires_at": ts}`. See "Delegation contract" below.
 - `POST /internal/delegations/refresh` (M11-02) — service auth. Body
   `{"token": <delegation>}` → the same shape, a new token.
+- `POST /internal/exec-grants` (M11-03) — service auth with
+  `PLATFORM_EXEC_TOKEN` (anything else `401`). Body `{"delegation":
+  <delegation>}` → `200 {"uid", "gid", "gids": [int], "mounts":
+  [{"host_path", "container_path", "read_only"}]}`: the user's uid, their
+  personal space's gid, every member space's gid (personal first), and
+  one mount per member space (`${SPACES_HOST_DIR}/<space_id>/files` →
+  `/files/personal` or `/files/spaces/<slug>`, `read_only` for a viewer;
+  a space whose `files/` isn't a plain directory is skipped). A delegation
+  that doesn't verify, has no `thr`, or whose session is revoked or user
+  disabled → `401 unauthenticated`; `SPACES_HOST_DIR` unset → `500
+  exec_unconfigured`. Read from the database on every call, so a
+  membership change applies to the next exec call.
 
 **Delegation contract** (`app/core/delegations.py`; agent-server side
 `app/core/delegation.py`). A delegation is a platform JWT (format below)
@@ -1768,34 +1798,50 @@ JWKS alone, re-fetching on an unknown `kid`.
 
 ### `code-exec-manager` API (internal, port 8090)
 
+Since M11-03, ensure, execute and delete require `Authorization: Bearer
+<delegation>` (EdDSA, platform JWKS at `/internal/jwks`, `act=agent`,
+`thr` = `session_id`): missing or invalid → `401 unauthenticated`,
+another thread's → `403`, JWKS unreachable → `503`. Ensure and execute then
+fetch the user's grants (`POST /internal/exec-grants`); the platform
+refusing the delegation → `401`, the platform unreachable → `503`. All
+three refuse (`403`) a container labelled `homeai.user` for another user
+and leave it untouched.
+
 - `POST /sessions/{session_id}/ensure` → `200 {"container_id": str,
   "created": bool}`. `session_id` must match `^[a-zA-Z0-9_-]{1,64}$`
-  (thread UUIDs qualify) — otherwise `422`.
+  (thread UUIDs qualify) — otherwise `422`. This user's container
+  whose `homeai.grants` label doesn't match the current grants, or an
+  unlabelled one from before M11-03, is replaced (`created: true`).
 - `POST /sessions/{session_id}/execute` body `{"command": str,
   "timeout_seconds": int = EXEC_DEFAULT_TIMEOUT_S}` → `200 {"stdout": str,
   "stderr": str, "exit_code": int, "timed_out": bool, "duration_ms": int,
   "truncated": bool}` (`stdout`/`stderr` each truncated to 200,000 bytes).
-  `404` if the session doesn't exist yet (callers must `ensure` first).
+  `404` if the session doesn't exist yet (callers must `ensure` first). A
+  container with stale grants is recreated before the command runs.
+  Commands run as `bash -lc` under `umask 002`.
 - `DELETE /sessions/{session_id}` → `204` (stop + remove the container;
-  idempotent).
+  idempotent); `403` if the container belongs to another user.
 - `GET /sessions` → `200 [{"session_id": str, "container_id": str,
-  "last_used": iso8601}]`.
+  "last_used": iso8601}]` (unauthenticated; ids only).
 
 **Exec-container hardening spec** — the exact configuration
 `services/code-exec-manager/app/sessions.py`'s `build_run_kwargs`
 produces, and the spec `scripts/verify_isolation.sh` checks against:
 `network_mode="none"`, `cap_drop=["ALL"]`,
 `security_opt=["no-new-privileges"]`, `read_only=True`,
-`tmpfs={"/tmp": "size=512m", "/home/homeai": "size=64m"}`,
+`tmpfs={"/tmp": "size=512m", "/home/homeai":
+"size=64m,uid=<uid>,gid=<gid>,mode=0700"}`,
 `mem_limit="4g"`, `nano_cpus=4_000_000_000` (4 CPUs),
-`user=f"{HOMEAI_UID}:{HOMEAI_GID}"`, `pids_limit=512`, a single bind mount
-`FILES_DIR (host path) -> /files (rw)`, command `sleep infinity`,
-labels `{"homeai.exec": "1", "homeai.session": session_id}`. Nothing else
-mounted; no env secrets passed in. Until exec runs as the user (M11-03)
-this `/files` is **not** the agent's file-tool tree (`/personal`,
-`/spaces/<slug>`): once the legacy migration has run it's an emptied,
-shared scratch area, and the prompt and the `execute_code` description
-say so.
+`user="<uid>:<personal space gid>"`, `group_add=[<other space gids>]`,
+`pids_limit=512`, one `--mount type=bind` per grant
+(`${SPACES_DIR}/<space_id>/files` → `/files/personal` or
+`/files/spaces/<slug>`, `read_only` for a viewer), command
+`sleep infinity`, labels `{"homeai.exec": "1", "homeai.session":
+session_id, "homeai.user": user_id, "homeai.grants": <sha256 of the
+grants>}`. Nothing else mounted; no env secrets passed in. The manager
+validates the grants before use: ids ≥ 1000, absolute normalized host
+paths, container paths only `/files/personal` or `/files/spaces/<slug>`,
+no duplicates.
 
 ### `web-fetch` API (internal, port 8000)
 
@@ -2255,8 +2301,8 @@ design actually protects against them:
    shell/Python/etc. the model asked for — genuinely untrusted code by
    construction, since a user (or content the model summarized) can steer
    what gets run. This is the boundary the isolation suite below exists
-   to verify: the exec container can touch the shared files directory and
-   nothing else.
+   to verify: the exec container runs as its user and can touch only that
+   user's spaces (viewer spaces read-only), nothing else.
 
 ### Isolation verification (M4-05)
 
@@ -2266,7 +2312,7 @@ or the toolbox image (`services/code-exec-manager/exec-image/Dockerfile`)
 promise ("safe to let it run code"), so it needs re-running whenever
 anything in that promise's implementation moves.
 
-It drives 17 checks against the live stack: 14 run commands **inside a
+It drives 22 checks against the live stack: 14 run commands **inside a
 real exec container through the manager's own `POST
 /sessions/{id}/execute` endpoint** (never via `docker exec` straight into
 the container, which would bypass exactly what's being tested — an agent
@@ -2281,11 +2327,18 @@ exact §7 hardening spec):
   (`curl`) and raw-socket (Python) level.
 - **Filesystem isolation** — the root filesystem is read-only; `docker.sock`
   and agent-server's own `/app`/`/data` paths are absent; `/tmp` and
-  `$HOME` are writable tmpfs; `/files` is the sole writable non-tmpfs
-  (real bind) mount.
+  `$HOME` are writable tmpfs; the user's writable spaces are the only
+  writable non-tmpfs (real bind) mounts.
 - **Capability dropping** — every Linux capability is dropped (`CapEff`
-  all-zero), and the container runs as the configured non-root
-  `HOMEAI_UID`, never root.
+  all-zero), and the container runs as the user's own uid, never root.
+- **Per-user exec (M11-03)** — two throwaway users, A owning a shared
+  space that B views, each with a real delegation: B's container can't
+  see A's personal space; B can read the shared space but its mount is
+  read-only (though B is in the space's group); files A creates are
+  `uid:space_gid` 0664 (dirs 2775), inside the container and on the host;
+  missing/tampered delegations are refused (401), another thread's
+  (403); B's ensure, execute and delete of A's session are all refused
+  (403) and A's container is left running, unchanged.
 - **Resource limits** — the cgroup CPU quota and `memory.max` match
   `nano_cpus`/`mem_limit` exactly.
 - **Secret non-leakage** — no environment variables reach the exec
@@ -2303,7 +2356,8 @@ if anything failed. It's always safe to re-run: the exec container, its
 manager session, and the throwaway "runner" container used to reach the
 manager's REST API (see the script's own header comment for why a runner
 container is needed at all — `code-exec-manager` publishes no host port)
-are all cleaned up in an `EXIT` trap.
+are all cleaned up in an `EXIT` trap, as are the throwaway users and
+their spaces. It needs no `sudo`.
 
 ### Network segmentation (M7-01)
 
@@ -2497,12 +2551,12 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_full.sh` | Full chain — every gate script below in order, against one fresh `docker compose up -d --build` | Before/after any change that could affect multiple milestones; the M6-03 Tier A acceptance check |
 | `scripts/e2e/gate_m2.sh` | M2 (agentic chat) scripted gate | After touching agent-server's chat/agent code |
 | `scripts/e2e/gate_m3.sh` | M3 (persistence + files) scripted gate | After touching threads/files/checkpointer code |
-| `scripts/e2e/gate_m4.sh` | M4 (code execution) scripted gate (since M11-02 its "agent writes a script with file tools, runs it with `execute_code`" steps are skipped until M11-03 — the file tools and exec's `/files` are different trees; `verify_isolation.sh` and the `gate_m2`/`gate_m3` regression still run) | After touching code-exec-manager or the `execute_code` tool |
+| `scripts/e2e/gate_m4.sh` | M4 (code execution) scripted gate: the agent writes a script in `/personal/gate-m4/` with its file tools and runs it with `execute_code` (as `/files/personal/gate-m4/`), then `verify_isolation.sh` and the `gate_m2`/`gate_m3` regression | After touching code-exec-manager or the `execute_code` tool |
 | `scripts/e2e/persistence_smoke.sh` | Thread/message persistence across agent-server restart, plus a pending HITL approval still on `GET /api/threads/{id}/state` after another restart (M8-08) | After touching the checkpointer, HITL interrupt state, or files storage |
-| `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view (since M11-02 its "file tools read the exec-written file" step is skipped until M11-03; the exec write/host check still runs) | After touching the exec ↔ files-directory file-visibility path |
+| `scripts/e2e/exec_crossview_smoke.sh` | A file `execute_code` writes to `/files/personal/` is read back by the file tools as `/personal/...` and is `uid:personal gid` 0664 on the host | After touching the exec ↔ files-directory file-visibility path |
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`; since M11-02 it checks the agent's `ls` sees a file put into `/personal` through that API) | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
-| `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
+| `scripts/verify_isolation.sh` | 22-check code-exec hardening and per-user exec suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |

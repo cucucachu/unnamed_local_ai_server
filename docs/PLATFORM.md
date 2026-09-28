@@ -285,9 +285,7 @@ in `.env`. Each token only unlocks the internal endpoints that service needs.
 ```
 
 Exec containers see the same tree under `/files`
-(`/files/personal/...`, `/files/spaces/<slug>/...`) from M11-03; until then
-their `/files` is still the old shared `FILES_DIR`, which the agent's file
-tools no longer see. The `file:` link
+(`/files/personal/...`, `/files/spaces/<slug>/...`; §6). The `file:` link
 convention (M9-03) uses the same virtual paths. Resolution of every virtual
 path goes through one guard (the successor of `resolve_files_path`), which
 maps it into a space *and* checks membership and role (`viewer` = read-only);
@@ -326,8 +324,9 @@ boundary; UID/GID permissions are defense in depth.
 
 ### Race-free access
 
-Everything below `<space_id>/` is writable by the space's members (and, from
-M11-03, by their exec containers), while the platform acts on it as root.
+Everything below `<space_id>/` is writable by the space's members (and,
+since M11-03, everything below `files/` by their exec containers, which
+mount only that dir), while the platform acts on it as root.
 So **no platform operation on space content may be redirected by a symlink
 or directory swapped in between a check and a use**: not a read, write,
 mkdir, move/rename (within or across spaces), copy, delete, chown/chmod,
@@ -390,6 +389,29 @@ Until then they're visible to nobody.
   limits) and additionally run as `uid` with `group_add: gids`. Session key
   = thread id; a container is recreated if its grants (user, memberships,
   roles) no longer match.
+
+> **As built (M11-03):**
+> - `POST /internal/exec-grants` (service token `PLATFORM_EXEC_TOKEN`, body
+>   `{"delegation": ...}`) returns `{uid, gid, gids, mounts}`. `gid` is the
+>   personal space's gid (the container's primary group); `gids` lists
+>   every member space's gid, personal first. Mounts are
+>   `${SPACES_HOST_DIR}/<space_id>/files` → `/files/personal` or
+>   `/files/spaces/<slug>`, with `read_only` for a viewer. Compose sets
+>   `SPACES_HOST_DIR` from `SPACES_DIR`; left empty, every call is refused.
+>   A space whose `files/` isn't a plain directory is left out.
+> - `code-exec-manager` verifies the delegation (platform JWKS, `act=agent`)
+>   on ensure, execute and delete, and requires its `thr` to equal the
+>   session id (403 otherwise). It fetches the grants on ensure and execute
+>   and runs the container with `user=<uid>:<gid>` and
+>   `group_add=<the other gids>`. Binds are `--mount type=bind`, so a
+>   missing source fails instead of being created. Nothing else is mounted
+>   and every other hardening flag is unchanged. Labels `homeai.user` and
+>   `homeai.grants` (a digest) are compared on every ensure *and* execute:
+>   a container labelled for another user is refused (403) by ensure,
+>   execute and delete and left alone; otherwise a mismatch recreates it. Commands run under `umask 002`, so
+>   exec-created files are `uid:space_gid` 0664 and dirs 2775.
+> - The manager no longer mounts `FILES_DIR` or reads
+>   `HOMEAI_UID`/`HOMEAI_GID`.
 - **Threads** are owned by a user (`owner_user_id`); every chat REST/WS
   endpoint checks ownership from the verified identity. (Shared-space
   threads are a later extension.)

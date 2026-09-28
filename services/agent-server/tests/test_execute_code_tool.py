@@ -13,6 +13,13 @@ from app.core.config import Settings
 from tests.fake_exec_manager.scripting import FakeExecManager
 
 
+class _Delegation:
+    token = "dlg-test-token"
+
+
+DELEGATED = {"delegation": _Delegation()}
+
+
 def _settings(exec_manager_url: str) -> Settings:
     return Settings(exec_manager_url=exec_manager_url, _env_file=None)
 
@@ -23,7 +30,8 @@ async def test_ensure_and_execute_called_with_thread_id_as_session(
     tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
 
     await tool.ainvoke(
-        {"command": "echo hi"}, config={"configurable": {"thread_id": "thread-abc-123"}}
+        {"command": "echo hi"},
+        config={"configurable": {**DELEGATED, "thread_id": "thread-abc-123"}},
     )
 
     assert fake_exec_manager.ensure_calls == ["thread-abc-123"]
@@ -44,12 +52,10 @@ async def test_success_result_exact_formatting(fake_exec_manager: FakeExecManage
     tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
 
     result = await tool.ainvoke(
-        {"command": "echo hello"}, config={"configurable": {"thread_id": "fmt-thread"}}
+        {"command": "echo hello"}, config={"configurable": {**DELEGATED, "thread_id": "fmt-thread"}}
     )
 
-    assert result == (
-        "exit_code: 0\n" "--- stdout ---\n" "hello\n\n" "--- stderr ---\n" "(empty)"
-    )
+    assert result == ("exit_code: 0\n--- stdout ---\nhello\n\n--- stderr ---\n(empty)")
 
 
 async def test_timed_out_truncated_and_empty_placeholders_exact_formatting(
@@ -66,7 +72,8 @@ async def test_timed_out_truncated_and_empty_placeholders_exact_formatting(
     tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
 
     result = await tool.ainvoke(
-        {"command": "sleep 1000"}, config={"configurable": {"thread_id": "timeout-thread"}}
+        {"command": "sleep 1000"},
+        config={"configurable": {**DELEGATED, "thread_id": "timeout-thread"}},
     )
 
     assert result == (
@@ -91,12 +98,10 @@ async def test_stderr_only_exact_formatting(fake_exec_manager: FakeExecManager) 
     tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
 
     result = await tool.ainvoke(
-        {"command": "false"}, config={"configurable": {"thread_id": "stderr-thread"}}
+        {"command": "false"}, config={"configurable": {**DELEGATED, "thread_id": "stderr-thread"}}
     )
 
-    assert result == (
-        "exit_code: 1\n" "--- stdout ---\n" "(empty)\n" "--- stderr ---\n" "boom\n"
-    )
+    assert result == ("exit_code: 1\n--- stdout ---\n(empty)\n--- stderr ---\nboom\n")
 
 
 async def test_timeout_seconds_clamped_low(fake_exec_manager: FakeExecManager) -> None:
@@ -104,7 +109,7 @@ async def test_timeout_seconds_clamped_low(fake_exec_manager: FakeExecManager) -
 
     await tool.ainvoke(
         {"command": "echo hi", "timeout_seconds": 0},
-        config={"configurable": {"thread_id": "clamp-low-thread"}},
+        config={"configurable": {**DELEGATED, "thread_id": "clamp-low-thread"}},
     )
 
     assert fake_exec_manager.execute_calls[0].timeout_seconds == 1
@@ -115,7 +120,7 @@ async def test_timeout_seconds_clamped_high(fake_exec_manager: FakeExecManager) 
 
     await tool.ainvoke(
         {"command": "echo hi", "timeout_seconds": 999_999},
-        config={"configurable": {"thread_id": "clamp-high-thread"}},
+        config={"configurable": {**DELEGATED, "thread_id": "clamp-high-thread"}},
     )
 
     assert fake_exec_manager.execute_calls[0].timeout_seconds == 600
@@ -128,7 +133,7 @@ async def test_timeout_seconds_within_range_passed_through(
 
     await tool.ainvoke(
         {"command": "echo hi", "timeout_seconds": 45},
-        config={"configurable": {"thread_id": "clamp-noop-thread"}},
+        config={"configurable": {**DELEGATED, "thread_id": "clamp-noop-thread"}},
     )
 
     assert fake_exec_manager.execute_calls[0].timeout_seconds == 45
@@ -145,7 +150,8 @@ async def test_unreachable_exec_manager_returns_failure_string_not_exception() -
     tool = make_execute_code_tool(_settings(f"http://127.0.0.1:{unused_port}"))
 
     result = await tool.ainvoke(
-        {"command": "echo hi"}, config={"configurable": {"thread_id": "unreachable-thread"}}
+        {"command": "echo hi"},
+        config={"configurable": {**DELEGATED, "thread_id": "unreachable-thread"}},
     )
 
     assert isinstance(result, str)
@@ -159,7 +165,8 @@ async def test_5xx_from_exec_manager_returns_failure_string_not_exception(
     tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
 
     result = await tool.ainvoke(
-        {"command": "echo hi"}, config={"configurable": {"thread_id": "server-error-thread"}}
+        {"command": "echo hi"},
+        config={"configurable": {**DELEGATED, "thread_id": "server-error-thread"}},
     )
 
     assert isinstance(result, str)
@@ -171,7 +178,7 @@ async def test_missing_thread_id_falls_back_to_default_session(
 ) -> None:
     tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
 
-    await tool.ainvoke({"command": "echo hi"}, config={"configurable": {}})
+    await tool.ainvoke({"command": "echo hi"}, config={"configurable": DELEGATED})
 
     assert fake_exec_manager.ensure_calls == ["default"]
 
@@ -183,7 +190,46 @@ async def test_thread_id_sanitized_for_disallowed_characters(
 
     await tool.ainvoke(
         {"command": "echo hi"},
-        config={"configurable": {"thread_id": "weird/thread id!@#"}},
+        config={"configurable": {**DELEGATED, "thread_id": "weird/thread id!@#"}},
     )
 
     assert fake_exec_manager.ensure_calls == ["weirdthreadid"]
+
+
+async def test_every_call_carries_the_runs_delegation(fake_exec_manager: FakeExecManager) -> None:
+    tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
+
+    await tool.ainvoke(
+        {"command": "id"}, config={"configurable": {**DELEGATED, "thread_id": "dlg-thread"}}
+    )
+
+    assert fake_exec_manager.ensure_authorizations == ["Bearer dlg-test-token"]
+    assert fake_exec_manager.execute_calls[0].authorization == "Bearer dlg-test-token"
+
+
+async def test_no_delegation_fails_closed_without_calling_the_manager(
+    fake_exec_manager: FakeExecManager,
+) -> None:
+    tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
+
+    for configurable in ({"thread_id": "t"}, {"thread_id": "t", "delegation": None}):
+        result = await tool.ainvoke({"command": "id"}, config={"configurable": configurable})
+        assert result.startswith("execute_code failed: ")
+        assert "no delegation" in result
+
+    assert fake_exec_manager.ensure_calls == []
+    assert fake_exec_manager.execute_calls == []
+
+
+async def test_refused_delegation_is_reported_not_raised(
+    fake_exec_manager: FakeExecManager,
+) -> None:
+    fake_exec_manager.execute_status_code = 401
+    fake_exec_manager.execute_response = {"detail": "unauthenticated"}
+    tool = make_execute_code_tool(_settings(fake_exec_manager.base_url))
+
+    result = await tool.ainvoke(
+        {"command": "id"}, config={"configurable": {**DELEGATED, "thread_id": "t"}}
+    )
+
+    assert result.startswith("execute_code failed: 401")

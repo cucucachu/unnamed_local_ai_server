@@ -15,6 +15,7 @@ Run for real:
 
 from __future__ import annotations
 
+import stat
 import time
 
 import docker
@@ -22,7 +23,9 @@ import docker.errors
 import pytest
 
 from app.core.config import Settings
+from app.grants import Grants, Mount
 from app.sessions import SessionManager, container_name
+from tests.conftest import USER_A
 
 TOOLBOX_IMAGE = "homeai-exec-toolbox:latest"
 SESSION_ID = "pytest-integration"
@@ -58,12 +61,37 @@ def real_docker_client() -> docker.DockerClient:
 
 
 @pytest.fixture
-def real_settings(tmp_path) -> Settings:
-    return Settings(files_host_dir=str(tmp_path), toolbox_image=TOOLBOX_IMAGE, _env_file=None)
+def real_settings() -> Settings:
+    return Settings(toolbox_image=TOOLBOX_IMAGE, _env_file=None)
 
 
 @pytest.fixture
-def real_manager(real_docker_client: docker.DockerClient, real_settings: Settings) -> SessionManager:
+def grants(tmp_path) -> Grants:
+    """A personal dir and a viewer-only shared dir. The test can't chown to a
+    space gid, so both are world-writable setgid dirs: only the mount mode
+    stands between the viewer and a write."""
+    dirs = {}
+    for name in ("personal", "family"):
+        path = tmp_path / name
+        path.mkdir()
+        path.chmod(0o2777)
+        dirs[name] = str(path)
+    return Grants(
+        USER_A,
+        20001,
+        30001,
+        (30001, 30050),
+        (
+            Mount(dirs["personal"], "/files/personal", False),
+            Mount(dirs["family"], "/files/spaces/family", True),
+        ),
+    )
+
+
+@pytest.fixture
+def real_manager(
+    real_docker_client: docker.DockerClient, real_settings: Settings
+) -> SessionManager:
     return SessionManager(real_docker_client, real_settings)
 
 
@@ -76,19 +104,21 @@ def _cleanup(real_docker_client: docker.DockerClient):
         pass
 
 
-async def test_ensure_then_ensure_again_reuses_container(real_manager: SessionManager) -> None:
-    first = await real_manager.ensure(SESSION_ID)
-    second = await real_manager.ensure(SESSION_ID)
+async def test_ensure_then_ensure_again_reuses_container(
+    real_manager: SessionManager, grants: Grants
+) -> None:
+    first = await real_manager.ensure(SESSION_ID, grants)
+    second = await real_manager.ensure(SESSION_ID, grants)
 
     assert first["created"] is True
     assert second["created"] is False
     assert first["container_id"] == second["container_id"]
 
 
-async def test_execute_echo_hi(real_manager: SessionManager) -> None:
-    await real_manager.ensure(SESSION_ID)
+async def test_execute_echo_hi(real_manager: SessionManager, grants: Grants) -> None:
+    await real_manager.ensure(SESSION_ID, grants)
 
-    result = await real_manager.execute(SESSION_ID, "echo hi", timeout_seconds=10)
+    result = await real_manager.execute(SESSION_ID, grants, "echo hi", timeout_seconds=10)
 
     assert result.stdout == "hi\n"
     assert result.exit_code == 0
@@ -96,37 +126,85 @@ async def test_execute_echo_hi(real_manager: SessionManager) -> None:
 
 
 async def test_execute_sleep_beyond_timeout_reports_timed_out_quickly(
-    real_manager: SessionManager,
+    real_manager: SessionManager, grants: Grants
 ) -> None:
-    await real_manager.ensure(SESSION_ID)
+    await real_manager.ensure(SESSION_ID, grants)
 
     start = time.monotonic()
-    result = await real_manager.execute(SESSION_ID, "sleep 30", timeout_seconds=2)
+    result = await real_manager.execute(SESSION_ID, grants, "sleep 30", timeout_seconds=2)
     elapsed = time.monotonic() - start
 
     assert result.timed_out is True
     assert elapsed < 10
 
 
-async def test_file_written_in_container_visible_at_host_path(
-    real_manager: SessionManager, tmp_path
+async def test_runs_as_the_grants_uid_with_every_space_gid(
+    real_manager: SessionManager, grants: Grants
 ) -> None:
-    await real_manager.ensure(SESSION_ID)
+    await real_manager.ensure(SESSION_ID, grants)
 
     result = await real_manager.execute(
-        SESSION_ID, "echo hello > /files/from-container.txt", timeout_seconds=10
+        SESSION_ID, grants, "id -u; id -g; id -G", timeout_seconds=10
     )
 
-    assert result.exit_code == 0
-    assert (tmp_path / "from-container.txt").read_text() == "hello\n"
+    assert result.stdout.split("\n")[:3] == ["20001", "30001", "30001 30050"]
+
+
+async def test_file_written_in_container_visible_at_host_path_group_writable(
+    real_manager: SessionManager, grants: Grants, tmp_path
+) -> None:
+    await real_manager.ensure(SESSION_ID, grants)
+
+    result = await real_manager.execute(
+        SESSION_ID, grants, "echo hello > /files/personal/from-container.txt", timeout_seconds=10
+    )
+
+    assert result.exit_code == 0, result.stderr
+    written = tmp_path / "personal" / "from-container.txt"
+    assert written.read_text() == "hello\n"
+    st = written.stat()
+    assert st.st_uid == 20001
+    assert stat.S_IMODE(st.st_mode) == 0o664
+
+
+async def test_viewer_mount_is_read_only_and_nothing_else_is_mounted(
+    real_manager: SessionManager, grants: Grants, tmp_path
+) -> None:
+    await real_manager.ensure(SESSION_ID, grants)
+
+    write = await real_manager.execute(
+        SESSION_ID, grants, "touch /files/spaces/family/x", timeout_seconds=10
+    )
+    listing = await real_manager.execute(
+        SESSION_ID, grants, "ls /files /files/spaces", timeout_seconds=10
+    )
+
+    assert write.exit_code != 0
+    assert "Read-only file system" in write.stderr
+    assert not (tmp_path / "family" / "x").exists()
+    assert listing.stdout.split() == ["/files:", "personal", "spaces", "/files/spaces:", "family"]
+
+
+async def test_changed_grants_recreate_the_container(
+    real_manager: SessionManager, grants: Grants
+) -> None:
+    first = await real_manager.ensure(SESSION_ID, grants)
+    fewer = Grants(grants.user_id, grants.uid, grants.gid, grants.gids[:1], grants.mounts[:1])
+
+    second = await real_manager.ensure(SESSION_ID, fewer)
+    listing = await real_manager.execute(SESSION_ID, fewer, "ls /files/spaces", timeout_seconds=10)
+
+    assert second["created"] is True
+    assert second["container_id"] != first["container_id"]
+    assert listing.exit_code != 0
 
 
 async def test_delete_removes_container_entirely(
-    real_manager: SessionManager, real_docker_client: docker.DockerClient
+    real_manager: SessionManager, grants: Grants, real_docker_client: docker.DockerClient
 ) -> None:
-    await real_manager.ensure(SESSION_ID)
+    await real_manager.ensure(SESSION_ID, grants)
 
-    await real_manager.remove(SESSION_ID)
+    await real_manager.remove(SESSION_ID, USER_A)
 
     with pytest.raises(docker.errors.NotFound):
         real_docker_client.containers.get(container_name(SESSION_ID))
