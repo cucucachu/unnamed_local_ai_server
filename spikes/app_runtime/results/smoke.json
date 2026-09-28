@@ -1,0 +1,75 @@
+[
+  {
+    "app": "groceries",
+    "ok": true,
+    "totalMs": 285.3,
+    "routes": [
+      {
+        "route": "index",
+        "path": "/",
+        "ms": 75,
+        "timedOut": false,
+        "renderedText": "GroceriesAdd",
+        "warnings": []
+      },
+      {
+        "route": "item/[id]",
+        "path": "/item/1",
+        "ms": 74,
+        "timedOut": false,
+        "renderedText": "Item…Not doneToggle doneBack",
+        "warnings": []
+      }
+    ],
+    "diagnostics": []
+  },
+  {
+    "app": "render-throw",
+    "ok": false,
+    "totalMs": 206.7,
+    "routes": [
+      {
+        "route": "index",
+        "path": "/",
+        "ms": 75,
+        "timedOut": false,
+        "renderedText": "GroceriesAddno such column: nam",
+        "warnings": []
+      },
+      {
+        "route": "item/[id]",
+        "path": "/item/1",
+        "ms": 75,
+        "timedOut": false,
+        "renderedText": "App crashed: Cannot read properties of undefined (reading '0')",
+        "warnings": [
+          "%o\n\n%s\n\n%s\n TypeError: Cannot read properties of undefined (reading '0') The above error occurred in the <ItemScreen> component. React will try to recreate this component tree from scratch using the error boundary you provided, ErrorBoundary."
+        ]
+      }
+    ],
+    "diagnostics": [
+      {
+        "severity": "error",
+        "kind": "sql",
+        "route": "index",
+        "path": "/",
+        "message": "no such column: nam",
+        "sql": "SELECT id, nam, done FROM items ORDER BY id"
+      },
+      {
+        "severity": "error",
+        "kind": "render",
+        "route": "item/[id]",
+        "path": "/item/1",
+        "message": "Cannot read properties of undefined (reading '0')",
+        "file": "app/item/[id].tsx",
+        "line": 14,
+        "column": 19,
+        "source": "const heading = data![0].name.toUpperCase();",
+        "componentStack": [
+          "ItemScreen (app/item/[id].tsx:8:18)"
+        ]
+      }
+    ]
+  }
+]

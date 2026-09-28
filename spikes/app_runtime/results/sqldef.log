@@ -1,0 +1,71 @@
+== noop (none)
+  safe       : - 
+  enable-drop: -
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== add_table (additive)
+  safe       : ['CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL);'] 
+  enable-drop: ['CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL);']
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1, 'tags': 0}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== add_column_nullable (additive)
+  safe       : ['ALTER TABLE "items" ADD COLUMN "qty" integer;'] 
+  enable-drop: ['ALTER TABLE "items" ADD COLUMN "qty" integer;']
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note', 'qty']} | idempotent: True
+== add_column_notnull_default (additive)
+  safe       : ['ALTER TABLE "items" ADD COLUMN "qty" integer NOT NULL DEFAULT 1;'] 
+  enable-drop: ['ALTER TABLE "items" ADD COLUMN "qty" integer NOT NULL DEFAULT 1;']
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note', 'qty']} | idempotent: True
+== add_column_notnull_no_default (invalid/rebuild)
+  safe       : ['ALTER TABLE "items" ADD COLUMN "qty" integer NOT NULL;'] 
+  enable-drop: ['ALTER TABLE "items" ADD COLUMN "qty" integer NOT NULL;']
+  apply exit : 1 -- Apply --
+BEGIN;
+ALTER TABLE "items" ADD COLUMN "qty" integer NOT NULL;
+ROLLBACK;
+2026/09/28 00:09:31 SQL logic error: Cannot add a NOT NULL column with default value NULL (1) | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: False
+== add_column_fk (additive)
+  safe       : ['ALTER TABLE "items" ADD COLUMN "list_id" integer;', 'ALTER TABLE "items" ADD CONSTRAINT "" FOREIGN KEY ("list_id") REFERENCES "lists" ("id");'] 
+  enable-drop: ['ALTER TABLE "items" ADD COLUMN "list_id" integer;', 'ALTER TABLE "items" ADD CONSTRAINT "" FOREIGN KEY ("list_id") REFERENCES "lists" ("id");']
+  apply exit : 1 " ADD COLUMN "list_id" integer;
+ALTER TABLE "items" ADD CONSTRAINT "" FOREIGN KEY ("list_id") REFERENCES "lists" ("id");
+ROLLBACK;
+2026/09/28 00:09:31 SQL logic error: near "FOREIGN": syntax error (1) | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: False
+== add_index (additive)
+  safe       : ['CREATE INDEX items_done ON items (done);'] 
+  enable-drop: ['CREATE INDEX items_done ON items (done);']
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== drop_index (destructive(cheap))
+  safe       : - ['-- Skipped: DROP INDEX "items_name";']
+  enable-drop: ['DROP INDEX "items_name";']
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== drop_column (destructive)
+  safe       : - ['-- Skipped: ALTER TABLE "items" DROP COLUMN "note";']
+  enable-drop: ['ALTER TABLE "items" DROP COLUMN "note";']
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done']} | idempotent: True
+== drop_table (destructive)
+  safe       : - ['-- Skipped: DROP TABLE "lists";']
+  enable-drop: ['DROP TABLE "lists";']
+  apply exit : 0  | after: {'rows': {'items': 3}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== type_change (destructive(rebuild))
+  safe       : - 
+  enable-drop: -
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== rename_column (destructive(ambiguous))
+  safe       : ['ALTER TABLE "items" ADD COLUMN "title" text NOT NULL;'] ['-- Skipped: DROP INDEX "items_name";', '-- Skipped: CREATE INDEX items_name ON items (title);', '-- Skipped: ALTER TABLE "items" DROP COLUMN "name";']
+  enable-drop: ['ALTER TABLE "items" ADD COLUMN "title" text NOT NULL;', 'DROP INDEX "items_name";', 'CREATE INDEX items_name ON items (title);', 'ALTER TABLE "items" DROP COLUMN "name";']
+  apply exit : 1 -- Apply --
+BEGIN;
+ALTER TABLE "items" ADD COLUMN "title" text NOT NULL;
+ROLLBACK;
+2026/09/28 00:09:31 SQL logic error: Cannot add a NOT NULL column with default value NULL (1) | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: False
+== add_unique (destructive(rebuild))
+  safe       : - 
+  enable-drop: -
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== nullable_to_notnull (destructive(rebuild))
+  safe       : - 
+  enable-drop: -
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True
+== change_default (rebuild(safe))
+  safe       : - 
+  enable-drop: -
+  apply exit : 0  | after: {'rows': {'items': 3, 'lists': 1}, 'items_columns': ['id', 'name', 'done', 'note']} | idempotent: True

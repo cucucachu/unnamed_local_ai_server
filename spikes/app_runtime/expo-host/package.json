@@ -1,0 +1,26 @@
+{
+  "name": "homeai-sandbox-spike-host",
+  "private": true,
+  "main": "index.ts",
+  "description": "M12-01: minimal Expo SDK 57 host that runs the sandboxed app runtime in an iframe (web) or react-native-webview (Expo Go).",
+  "scripts": {
+    "start": "expo start",
+    "export:web": "expo export -p web"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~57.0.14",
+    "expo": "~57.0.18",
+    "expo-sqlite": "~57.0.2",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-web": "~0.21.0",
+    "react-native-webview": "13.16.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}

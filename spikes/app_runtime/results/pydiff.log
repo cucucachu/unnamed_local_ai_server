@@ -1,0 +1,49 @@
+== noop (expected none) -> {'additive': 0, 'safe': 0, 'destructive': 0}
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== add_table (expected additive) -> {'additive': 1, 'safe': 0, 'destructive': 0}
+   [additive] create_table tags: new table
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1, 'tags': 0} | idempotent: True
+== add_column_nullable (expected additive) -> {'additive': 1, 'safe': 0, 'destructive': 0}
+   [additive] add_column items: new column qty
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== add_column_notnull_default (expected additive) -> {'additive': 1, 'safe': 0, 'destructive': 0}
+   [additive] add_column items: new column qty
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== add_column_notnull_no_default (expected invalid/rebuild) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] rebuild items: adds column qty that can't be added in place (NOT NULL without a default; fails if the table has rows — add a DEFAULT)
+   without approval: destructive changes need approval | approved apply: False IntegrityError: NOT NULL constraint failed: _homeai_new_items.qty | rows after: {'items': 3, 'lists': 1} | idempotent: False
+== add_column_fk (expected additive) -> {'additive': 1, 'safe': 0, 'destructive': 0}
+   [additive] add_column items: new column list_id
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== add_index (expected additive) -> {'additive': 1, 'safe': 0, 'destructive': 0}
+   [additive] create_index items: new index items_done
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== drop_index (expected destructive(cheap)) -> {'additive': 0, 'safe': 1, 'destructive': 0}
+   [safe] drop_index items: index items_name removed (no data loss)
+   without approval: applied | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== drop_column (expected destructive) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] drop_column items: drops column note and its data
+   without approval: destructive changes need approval | approved apply: True  | rows after: {'items': 3, 'lists': 1} | idempotent: True
+== drop_table (expected destructive) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] drop_table lists: drops table lists and all its rows
+   without approval: destructive changes need approval | approved apply: True  | rows after: {'items': 3} | idempotent: True
+== type_change (expected destructive(rebuild)) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] rebuild items: done: type 'integer' -> 'text'; done: default 0 -> 'no'
+   without approval: destructive changes need approval | approved apply: True  | rows after: {'lists': 1, 'items': 3} | idempotent: True
+== rename_column (expected destructive(ambiguous)) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] rebuild items: drops column(s) ['name']; adds column title that can't be added in place (NOT NULL without a default; fails if the table has rows — add a DEFAULT); hint: if ['name'] -> ['title'] is a rename, data in ['name'] is lost; renames are drop+add
+   without approval: destructive changes need approval | approved apply: False IntegrityError: NOT NULL constraint failed: _homeai_new_items.title | rows after: {'items': 3, 'lists': 1} | idempotent: False
+== add_unique (expected destructive(rebuild)) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] rebuild items: name: definition 'name text not null' -> 'name text not null unique'; table constraints change (UNIQUE/CHECK/PK/FK)
+   without approval: destructive changes need approval | approved apply: True  | rows after: {'lists': 1, 'items': 3} | idempotent: True
+== nullable_to_notnull (expected destructive(rebuild)) -> {'additive': 0, 'safe': 0, 'destructive': 1}
+   [destructive] rebuild items: note: adds NOT NULL; note: default None -> ''
+   without approval: destructive changes need approval | approved apply: False IntegrityError: NOT NULL constraint failed: _homeai_new_items.note | rows after: {'items': 3, 'lists': 1} | idempotent: False
+== change_default (expected rebuild(safe)) -> {'additive': 0, 'safe': 1, 'destructive': 0}
+   [safe] rebuild items: done: default 0 -> 1
+   without approval: applied | approved apply: True  | rows after: {'lists': 1, 'items': 3} | idempotent: True
+schema "ATTACH '/tmp/x.db' AS x;": rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)
+schema 'CREATE TABLE t (a); INSERT INTO t VALUES (1);': rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)
+schema 'PRAGMA writable_schema=1;': rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)
+schema 'CREATE TABLE t (a); CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;': rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)
+schema 'CREATE TABLE t (a); CREATE VIEW v AS SELECT * FROM t;': rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)

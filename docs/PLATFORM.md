@@ -69,7 +69,7 @@ explicitly revisits it (and updates this list).
 | D8 | **App UI runtime**: user apps are React Native code compiled server-side and run in a **sandbox** — a sandboxed iframe on web, a WebView (react-native-web) on native. The sandbox holds no credentials; all I/O is RPC over a bridge that the host forwards to a fixed app instance. |
 | D9 | **Option B stays open**: app code may only use React Native primitives, an allowlist of Expo-API-compatible modules, and `@homeai/sdk` — never DOM/web APIs — so the same code can later run natively for trusted apps. New capabilities are added by growing the SDK/shim allowlist. |
 | D10 | **App data**: **SQLite, one file per app instance**, in the space's directory. Core data (users, spaces, registry, chat threads/checkpoints) stays in Postgres. No MongoDB. |
-| D11 | **Plain SQL everywhere**: app code uses an expo-sqlite-shaped async API; schema is a plain `schema.sql` of `CREATE TABLE` statements; migrations are *computed* by diffing (sqldef's `sqlite3def` or equivalent) and classified additive (auto) vs destructive (approval + snapshot). |
+| D11 | **Plain SQL everywhere**: app code uses an expo-sqlite-shaped async API; schema is a plain `schema.sql` of `CREATE TABLE` statements; migrations are *computed* by diffing — the platform's own stdlib differ (M12-01 rejected `sqlite3def`: it silently skips type/constraint changes) — and classified additive / safe (auto) vs destructive (approval + snapshot). |
 | D12 | **The platform is the only writer** of app databases (UI via SDK RPC, agent via `app_sql`/actions). Exec containers get read-only access to app data. |
 | D13 | **Cross-app data, phase 1**: the agent is the integration layer (reads across all apps/spaces the user can see). **Phase 2**: apps declare `exports`; other apps declare `reads`; granted at install; read-only via SQLite `ATTACH`; writes via the owning app's exported actions; exports are versioned contracts. |
 | D14 | **App source is a git repo per app, run by the platform** (the agent never needs the git CLI). One commit per successful build. History + revert in the UI. |
@@ -288,6 +288,7 @@ ${SPACES_DIR}/                       # default /srv/homeai/spaces
     files/                           # the space's files root
     apps/<instance_id>/data.sqlite   # app data, platform-only writer (D12)
     apps/<instance_id>/snapshots/    # pre-migration snapshots
+    apps/<instance_id>/ro/data.sqlite  # read-only snapshot published for exec (§7 Data); only ro/ is ever mounted
 ```
 
 App **source** lives inside the files tree at `/<space>/Apps/<app-slug>/`
@@ -345,9 +346,10 @@ Until then they're visible to nobody.
 
 ## 7. Apps
 
-> The runtime details below are the design target; **M12-01 is a spike**
-> that must confirm or amend them (bundle format, bridge, router shim,
-> sqlite3def, WAL read-only access) before M12 builds on them.
+> The runtime details below were validated (and amended) by the M12-01
+> spike; measurements and rationale are in
+> [`spikes/app_runtime.md`](spikes/app_runtime.md). The on-device Expo Go
+> check is a maintainer step before G12.
 
 ### Package format (standards-shaped, D11)
 
@@ -367,16 +369,27 @@ the platform publishes.
 
 ### Allowed imports (D9)
 
-`react`, `react-native`, `expo-router` (shim: `Stack`, `Link`,
-`useRouter`, `useLocalSearchParams`), `expo-sqlite` (shim bound to this
-instance's database), `@homeai/sdk`, and a growing allowlist of
-Expo-compatible shims. Anything else — including `react-dom`, `window`,
-`document`, raw `fetch` — fails the build.
+`react`, `react-native` (all of react-native-web's exports), `expo-router`
+(shim: `Stack` + `Stack.Screen`, `Slot`, `Link`, `router` / `useRouter`,
+`useLocalSearchParams`, `useGlobalSearchParams`, `usePathname`),
+`expo-sqlite` (shim bound to this instance's database), `@homeai/sdk`, and
+a growing allowlist of Expo-compatible shims. Relative imports must resolve
+inside the app directory (symlinks included). Anything else — including
+`react-dom`, `fs`, `window`, `document`, raw `fetch` — fails the build:
+imports in the bundler's allowlist plugin (file:line:col), DOM globals in
+the type-check (no `dom` lib).
+
+Routes: only `.ts`/`.tsx` files under `app/`, segments `name`, `index`,
+`[param]`, `[...rest]`, and a root `app/_layout.tsx`. Groups, nested
+layouts, tabs and modals are not in the shim yet and are rejected with a
+diagnostic until added.
 
 ### `@homeai/sdk` (the only platform-specific surface; keep it tiny)
 
 - `useDatabase()` → expo-sqlite-shaped: `getAllAsync(sql, params)`,
-  `getFirstAsync`, `runAsync`, `withTransactionAsync(fn)`.
+  `getFirstAsync`, `runAsync`. `withTransactionAsync(fn)` is deferred: over
+  RPC it needs a server-side transaction lease; multi-statement atomic
+  writes use `runAction` (actions are transactional, D16).
 - `useQuery(sql, params)` → `{ data, error, loading, refresh }`, re-runs when
   the platform reports a change to the instance's database.
 - `runAction(name, params)`; `useSpace()` → `{ id, slug, name, role }`.
@@ -384,19 +397,55 @@ Expo-compatible shims. Anything else — including `react-dom`, `window`,
 
 ### Runtime and bridge
 
-- The platform serves a runtime page per instance; the sandbox loads a
-  prebuilt runtime (React, react-native-web, SDK, shims) plus the app bundle.
+- **Runtime bundle**: one IIFE per SDK version (≈468 KB, ≈146 KB gzip),
+  cacheable forever: React + `react-dom/client` + react-native-web (all
+  exports) + the expo-router shim + `@homeai/sdk` + the `expo-sqlite` shim +
+  the bridge. It registers the allowlisted modules and refuses any other
+  `require`.
+- **App bundle**: esbuild CJS body (es2020, automatic JSX) wrapped as
+  `__homeai_define(function (require, module, exports) {…})`, exporting
+  `{ routes, layout }` from a route table generated at build time from
+  `app/**`. Externals are exactly the allowed imports. A few KB; the source
+  map is kept with the version artifact (for diagnostics), not shipped.
+- **Sandbox document**: one HTML string — CSP `<meta>` + config + runtime +
+  app, all inline — used as the iframe `srcdoc` on web and as WebView
+  `source={{ html }}` on native. CSP: `default-src 'none'; script-src
+  'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src
+  data:; connect-src 'none'; form-action 'none'; base-uri 'none'`. The CSP is
+  required: without it the opaque-origin sandbox still can't read
+  credentials, but it can send requests.
 - Web: `<iframe sandbox="allow-scripts">` (no `allow-same-origin`, opaque
-  origin, no cookie/storage access). Native: `react-native-webview` (present
-  in Expo Go).
-- **The sandbox holds no credentials.** It can only `postMessage` RPC
-  requests (`db.getAll`, `db.run`, `action`, …). The host forwards them to
-  `/api/platform/apps/instances/<instance_id>/rpc` — the instance id is fixed
-  by the host when it opens the sandbox, never taken from the message — using
-  the host's own session. The platform authorizes against the user's role in
-  the instance's space.
+  origin, no cookie/storage access). The host removes the iframe if it fires
+  a second `load` (the frame navigated itself; see §11). Native:
+  `react-native-webview` 13.16.1 (the version Expo SDK 57 / Expo Go
+  bundles) with `originWhitelist={['*']}` plus `onShouldStartLoadWithRequest`
+  allowing only `about:*` — the default whitelist hands non-matching URLs to
+  `Linking.openURL` — and multiple windows, DOM storage, cache, file access
+  and third-party/shared cookies off.
+- **Bridge envelope v1** (always a JSON string — WebViews only carry
+  strings): `{homeai:1, kind:'req', id, method, params}`,
+  `{homeai:1, kind:'res', id, ok, result | error:{code, message}}`,
+  `{homeai:1, kind:'evt', event, data}`. Sandbox → host:
+  `ReactNativeWebView.postMessage(s)` in a WebView, else
+  `parent.postMessage(s, '*')` (host checks `event.source`). Host → sandbox:
+  `iframe.contentWindow.postMessage(s, '*')` on web;
+  `injectJavaScript("window.__homeaiReceive(<s>);true;")` on native (the
+  WebView's own `postMessage` dispatches on `document` on Android but
+  `window` on iOS, so it is not used). Events: `db.changed`, `bundle.load`,
+  `space` (host → sandbox); `runtime.ready`, `runtime.error`, `nav.changed`
+  (sandbox → host).
+- **The sandbox holds no credentials.** It can only send RPC requests
+  (`db.getAll`, `db.getFirst`, `db.run`, `action`). The host checks the
+  envelope and the method allowlist (viewers: no `db.run`/`action`) and
+  forwards them to `/api/platform/apps/instances/<instance_id>/rpc` — the
+  instance id is fixed by the host when it opens the sandbox, never taken
+  from the message — using the host's own session. The platform authorizes
+  against the user's role in the instance's space.
 - Change events (for `useQuery` and hot reload) come from
-  `/ws/platform/events` and are relayed into the sandbox by the host.
+  `/ws/platform/events` and are relayed into the sandbox by the host. Hot
+  reload = `bundle.load` with the new app bundle: the runtime re-evaluates it
+  and re-renders, keeping the navigation stack (component state is not
+  preserved).
 
 ### Data (D10–D12)
 
@@ -404,11 +453,29 @@ Expo-compatible shims. Anything else — including `react-dom`, `window`,
   platform. Queries are executed on a connection that has only that
   instance's database open (plus read-only `ATTACH`es for granted exports in
   phase 2) — scope is physical, not parsed.
-- **Migrations**: on build, the platform diffs `schema.sql` against the live
-  database, classifies statements additive/destructive, applies additive ones
-  automatically, and for destructive ones requires approval (UI confirm or
-  HITL for the agent) after taking a snapshot (SQLite backup API), with
-  automatic rollback on failure.
+- **Migrations**: on build, the platform runs `schema.sql` into a scratch
+  in-memory database under a SQLite authorizer that permits only CREATE
+  TABLE / CREATE INDEX, and diffs it against the live database (`PRAGMA
+  table_xinfo` / `foreign_key_list` / `index_list` plus each table's
+  normalized column and constraint text). Each step is classified:
+  **additive** (CREATE TABLE, ADD COLUMN where SQLite allows it, CREATE
+  INDEX) and **safe** (index drop/replace, a table rebuild that only relaxes,
+  e.g. a default change) apply automatically; **destructive** (DROP
+  TABLE/COLUMN, a rebuild that retypes or tightens — type, NOT NULL, UNIQUE,
+  CHECK, FK, PK — and renames, which are drop + add) require approval (UI
+  confirm or HITL for the agent) after taking a snapshot (SQLite backup
+  API). Changes `ALTER` can't do use the standard table rebuild. The whole
+  plan runs in one transaction; `foreign_key_check` and a re-diff that must
+  come back empty gate the commit, otherwise it rolls back and returns a
+  diagnostic.
+- **Exec read-only access (D12)**: exec containers never see the live
+  database (WAL `mode=ro` fails whenever the platform has no open
+  connection, and a read-only reader can still pin the WAL; `immutable=1` on
+  the live file returns corrupt reads). The platform publishes a consistent
+  snapshot with `VACUUM INTO` to `apps/<instance_id>/ro/data.sqlite` (temp
+  file → fsync → 0444 → atomic rename) when it issues an exec grant, or on
+  request if the database changed (at most once per second), mounts only
+  that `ro/` directory, and exec opens it with `mode=ro&immutable=1`.
 - Viewers get read-only RPC (`db.getAll`/`getFirst`, no `run`/actions).
 
 ### Build and verify
@@ -416,8 +483,14 @@ Expo-compatible shims. Anything else — including `react-dom`, `window`,
 The platform builds apps in a sandboxed container (network none, same
 hardening as exec): validate `app.json`, check imports against the
 allowlist, type-check against the SDK/shim typings, bundle (esbuild), and
-smoke-render. Errors come back as structured, model-readable diagnostics
-(file, line, message). A successful build is committed to the app's git
+smoke-render. The smoke render loads every route (dynamic params filled in)
+in jsdom with `react-dom/client` — not `react-dom/server`, so effects and
+`useQuery` really run — evaluating the dev builds of the runtime and the app
+against an in-memory SQLite created from `schema.sql`, over the same bridge
+transport the WebView uses; render errors are source-mapped and SQL errors
+reported. Errors come back as structured, model-readable diagnostics
+(`kind` = import/route/type/render/sql, file, line, column, message,
+component stack or SQL). A successful build is committed to the app's git
 repo, stored as a version artifact, and pushed as a hot-reload event.
 
 ### Registry, lifecycle, sharing
@@ -502,10 +575,25 @@ The full dependency graph and ordered backlog are on the
   apps. Mitigations: tiny SDK, standards-shaped surfaces, templates, the
   verify loop, and an explicit authoring eval (M13) with a pass-rate target
   before G13.
-- **Sandbox runtime on Expo Go** (M12-01 spike): react-native-web inside a
-  WebView, bundle size, router shim, bridge latency.
-- **SQLite read-only access from exec containers** in WAL mode needs a
-  verified approach (M12-01 / M14).
+- **Sandbox runtime on Expo Go**: M12-01 verified the web iframe (including
+  an Expo web build) and a desktop emulation of the WebView transport, but
+  not a real phone (no device available to the agent). The maintainer's
+  on-device run (`spikes/app_runtime/README.md` → Expo Go) must pass before
+  G12. The runtime is ≈146 KB gzip per SDK version — fine on the LAN, worth
+  caching in the host app.
+- **Sandbox self-navigation**: code in the iframe can navigate its own frame
+  (`location.href = …`), which sends one cookieless request carrying
+  whatever the app put in the URL; neither sandbox flags nor CSP can stop
+  it. The host kills the frame on its second `load`, and D9 typing keeps
+  `location`/`window` out of app code, but a deliberately malicious app can
+  leak data it can already read, once per open. WebRTC-based egress was not
+  tested. Native blocks navigation before any request
+  (`onShouldStartLoadWithRequest`).
+- **SQLite read-only access from exec containers**: resolved by M12-01 —
+  published snapshots, never the live WAL file (§7 Data).
+- **`withTransactionAsync`** is not in SDK v1 (needs a server-side
+  transaction lease); revisit if the model reaches for it in the M13
+  authoring eval.
 - **Host app builds** (M15): the host has no Android SDK today; building a
   dev client needs either local Android tooling or EAS Build (maintainer
   account). Decide at M15.

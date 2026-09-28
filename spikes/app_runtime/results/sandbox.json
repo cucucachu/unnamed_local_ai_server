@@ -1,0 +1,445 @@
+{
+  "runtime": {
+    "bytes": 468171,
+    "gzip": 145602,
+    "brotli": 123607,
+    "buildMs": 608.5,
+    "byPackage": {
+      "react-native-web": 248418,
+      "react-dom": 180763,
+      "runtime (shim+sdk+bridge)": 8274,
+      "react": 8077,
+      "css-in-js-utils": 5734,
+      "inline-style-prefixer": 5473,
+      "scheduler": 3711,
+      "@babel/runtime": 2441,
+      "styleq": 1697,
+      "fbjs": 837,
+      "nullthrows": 239,
+      "hyphenate-style-name": 228
+    }
+  },
+  "checks": [
+    {
+      "name": "iframe sandbox attribute is exactly \"allow-scripts\"",
+      "pass": true,
+      "detail": "allow-scripts"
+    },
+    {
+      "name": "index route renders rows from db.getAll via host RPC",
+      "pass": true
+    },
+    {
+      "name": "layout Stack.Screen title on index",
+      "pass": true
+    },
+    {
+      "name": "Link to /item/[id] navigates; useLocalSearchParams id=2; in-screen Stack.Screen sets title",
+      "pass": true,
+      "detail": "Eggs"
+    },
+    {
+      "name": "db.run + db.changed relay re-runs useQuery",
+      "pass": true
+    },
+    {
+      "name": "back() returns to index; insert via runAsync appears",
+      "pass": true
+    },
+    {
+      "name": "nav.changed events reported to host",
+      "pass": true,
+      "detail": [
+        "/",
+        "/item/2",
+        "/"
+      ]
+    },
+    {
+      "name": "bridge echo p95 < 5 ms",
+      "pass": true,
+      "detail": {
+        "n": 200,
+        "p50": 0,
+        "p95": 0.1,
+        "p99": 0.1,
+        "max": 0.2,
+        "mean": 0.01
+      }
+    },
+    {
+      "name": "hot reload: new bundle renders without host reload, route /item/1 kept",
+      "pass": true,
+      "detail": {
+        "pushToReadyMs": 4.4,
+        "renderMs": 3.4,
+        "compileMs": 7.3
+      }
+    },
+    {
+      "name": "[csp] sandbox cannot: document.cookie",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "[csp] sandbox cannot: localStorage",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "[csp] sandbox cannot: sessionStorage",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'sessionStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "[csp] sandbox cannot: indexedDB",
+      "pass": true,
+      "detail": "SecurityError: Failed to execute 'open' on 'IDBFactory': access to the Indexed Database API is denied in this context."
+    },
+    {
+      "name": "[csp] sandbox cannot: parent.document",
+      "pass": true,
+      "detail": "SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    {
+      "name": "[csp] sandbox cannot: parent.location.href",
+      "pass": true,
+      "detail": "SecurityError: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    {
+      "name": "[csp] sandbox cannot: parent.homeHost",
+      "pass": true,
+      "detail": "SecurityError: Failed to read a named property 'homeHost' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    {
+      "name": "[csp] sandbox cannot: fetch host /api/secret credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "[csp] sandbox cannot: fetch host /api/rpc credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "[csp] sandbox cannot: fetch no-cors",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "[csp] sandbox cannot: XMLHttpRequest",
+      "pass": true,
+      "detail": "Error: xhr error"
+    },
+    {
+      "name": "[csp] sandbox cannot: WebSocket",
+      "pass": true,
+      "detail": "Error: ws error"
+    },
+    {
+      "name": "[csp] sandbox cannot: image beacon",
+      "pass": true,
+      "detail": "Error: img error"
+    },
+    {
+      "name": "[csp] sandbox cannot: window.open",
+      "pass": true,
+      "detail": "Error: returned null"
+    },
+    {
+      "name": "[csp] origin is opaque (\"null\")",
+      "pass": true
+    },
+    {
+      "name": "[csp] top navigation blocked (host URL unchanged)",
+      "pass": true,
+      "detail": "http://127.0.0.1:44495/"
+    },
+    {
+      "name": "[csp] no request from the sandbox reached the host server",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "[no csp] sandbox cannot: document.cookie",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "[no csp] sandbox cannot: localStorage",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "[no csp] sandbox cannot: parent.document",
+      "pass": true,
+      "detail": "SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    {
+      "name": "[no csp] sandbox cannot: fetch host /api/secret credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "[no csp] sandbox cannot: fetch host /api/rpc credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "[no csp] requests that did reach the host carried no session cookie",
+      "pass": true,
+      "detail": [
+        {
+          "path": "/api/secret",
+          "origin": "null",
+          "hasSession": false
+        },
+        {
+          "path": "/api/rpc/inst-123",
+          "origin": "null",
+          "hasSession": false
+        },
+        {
+          "path": "/api/secret?no-cors=1",
+          "origin": null,
+          "hasSession": false
+        },
+        {
+          "path": "/api/secret?xhr=1",
+          "origin": "null",
+          "hasSession": false
+        },
+        {
+          "path": "/ws/x",
+          "origin": "null",
+          "hasSession": false
+        },
+        {
+          "path": "/api/secret?beacon=1",
+          "origin": null,
+          "hasSession": false
+        }
+      ]
+    },
+    {
+      "name": "self-navigation: host detects the second load and removes the frame",
+      "pass": true,
+      "detail": {
+        "requestReachedServer": true,
+        "hasSession": false,
+        "hostKilledFrame": true
+      }
+    },
+    {
+      "name": "viewer: host rejects db.run (row not added)",
+      "pass": true
+    }
+  ],
+  "firstRenderMs": 110,
+  "srcdocBytes": 472085,
+  "latencyMs": {
+    "echo_bridge_only": {
+      "n": 200,
+      "p50": 0,
+      "p95": 0.1,
+      "p99": 0.1,
+      "max": 0.2,
+      "mean": 0.01
+    },
+    "db_getAll_via_host_http": {
+      "n": 200,
+      "p50": 1.1,
+      "p95": 1.6,
+      "p99": 2.6,
+      "max": 3.2,
+      "mean": 1.124
+    }
+  },
+  "hotReload": {
+    "pushToReadyMs": 4.4,
+    "renderMs": 3.4,
+    "compileMs": 7.3
+  },
+  "probes_with_csp": {
+    "probes": {
+      "self.origin": {
+        "succeeded": true,
+        "value": "null"
+      },
+      "document.cookie": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag."
+      },
+      "localStorage": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+      },
+      "sessionStorage": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read the 'sessionStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+      },
+      "indexedDB": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to execute 'open' on 'IDBFactory': access to the Indexed Database API is denied in this context."
+      },
+      "parent.document": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+      },
+      "parent.location.href": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+      },
+      "parent.homeHost": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read a named property 'homeHost' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+      },
+      "top.location navigate": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to set a named property 'href' on 'Location': The current window does not have permission to navigate the target frame to 'http://127.0.0.1:44495/pwned-top'."
+      },
+      "fetch host /api/secret credentials:include": {
+        "succeeded": false,
+        "error": "TypeError: Failed to fetch"
+      },
+      "fetch host /api/rpc credentials:include": {
+        "succeeded": false,
+        "error": "TypeError: Failed to fetch"
+      },
+      "fetch no-cors": {
+        "succeeded": false,
+        "error": "TypeError: Failed to fetch"
+      },
+      "XMLHttpRequest": {
+        "succeeded": false,
+        "error": "Error: xhr error"
+      },
+      "WebSocket": {
+        "succeeded": false,
+        "error": "Error: ws error"
+      },
+      "image beacon": {
+        "succeeded": false,
+        "error": "Error: img error"
+      },
+      "window.open": {
+        "succeeded": false,
+        "error": "Error: returned null"
+      },
+      "form submit": {
+        "succeeded": true,
+        "value": "submitted (check server log)"
+      }
+    },
+    "serverSawFromSandbox": []
+  },
+  "probes_without_csp": {
+    "probes": {
+      "self.origin": {
+        "succeeded": true,
+        "value": "null"
+      },
+      "document.cookie": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag."
+      },
+      "localStorage": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+      },
+      "sessionStorage": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read the 'sessionStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+      },
+      "indexedDB": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to execute 'open' on 'IDBFactory': access to the Indexed Database API is denied in this context."
+      },
+      "parent.document": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+      },
+      "parent.location.href": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+      },
+      "parent.homeHost": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to read a named property 'homeHost' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+      },
+      "top.location navigate": {
+        "succeeded": false,
+        "error": "SecurityError: Failed to set a named property 'href' on 'Location': The current window does not have permission to navigate the target frame to 'http://127.0.0.1:44495/pwned-top'."
+      },
+      "fetch host /api/secret credentials:include": {
+        "succeeded": false,
+        "error": "TypeError: Failed to fetch"
+      },
+      "fetch host /api/rpc credentials:include": {
+        "succeeded": false,
+        "error": "TypeError: Failed to fetch"
+      },
+      "fetch no-cors": {
+        "succeeded": true,
+        "value": "opaque type=opaque"
+      },
+      "XMLHttpRequest": {
+        "succeeded": false,
+        "error": "Error: xhr error"
+      },
+      "WebSocket": {
+        "succeeded": false,
+        "error": "Error: ws error"
+      },
+      "image beacon": {
+        "succeeded": false,
+        "error": "Error: img error"
+      },
+      "window.open": {
+        "succeeded": false,
+        "error": "Error: returned null"
+      },
+      "form submit": {
+        "succeeded": true,
+        "value": "submitted (check server log)"
+      }
+    },
+    "serverSawFromSandbox": [
+      {
+        "path": "/api/secret",
+        "origin": "null",
+        "hasSession": false
+      },
+      {
+        "path": "/api/rpc/inst-123",
+        "origin": "null",
+        "hasSession": false
+      },
+      {
+        "path": "/api/secret?no-cors=1",
+        "origin": null,
+        "hasSession": false
+      },
+      {
+        "path": "/api/secret?xhr=1",
+        "origin": "null",
+        "hasSession": false
+      },
+      {
+        "path": "/ws/x",
+        "origin": "null",
+        "hasSession": false
+      },
+      {
+        "path": "/api/secret?beacon=1",
+        "origin": null,
+        "hasSession": false
+      }
+    ]
+  },
+  "selfNavigation": {
+    "requestReachedServer": true,
+    "hasSession": false,
+    "hostKilledFrame": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "shim": {
+    "bytes": 4005,
+    "gzip": 1965
+  },
+  "reactNavigationStack": {
+    "bytes": 188341,
+    "gzip": 60411,
+    "versions": {
+      "native": "7.4.1",
+      "stack": "7.11.2"
+    }
+  },
+  "reactNavigationNativeStackOnWeb": {
+    "bytes": 131044,
+    "gzip": 45725,
+    "versions": {
+      "native-stack": "7.19.2"
+    }
+  },
+  "note": "Delta on top of react + react-dom + react-native-web (all external). PNG assets inlined as data URLs."
+}

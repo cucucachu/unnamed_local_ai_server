@@ -1,0 +1,26 @@
+# {'writer': {'tx': 16111, 'checkpoints': 32, 'checkpoint_busy': 0, 'wal_max_bytes': 1038272, 'snapshots': 36, 'snap_ms': [0.2, 0.2, 4.9, 2.7, 7.4, 5.4, 6.3, 7.6, 10.0, 11.1, 16.1, 12.9, 18.3, 16.1, 15.4, 11.0, 15.8, 12.7, 16.6, 12.9, 17.8, 14.4, 20.6, 15.6, 23.0, 16.8, 22.8, 17.5, 23.1, 20.5, 28.9, 25.2, 43.3, 38.0, 45.9, 31.7], 'rows': 16111, 'db_bytes': 66105344, 'sqlite': '3.46.1', 'exit': 'clean'}}
+# pin=0 {'writer': {'tx': 10842, 'checkpoints': 21, 'checkpoint_busy': 0, 'wal_max_bytes': 840512, 'snapshots': 24, 'snap_ms': [0.2, 0.2, 4.3, 3.5, 7.6, 4.0, 9.8, 5.9, 11.2, 7.9, 14.2, 8.8, 16.1, 11.2, 17.2, 12.0, 17.8, 14.8, 19.9, 14.9, 21.7, 17.2, 26.2, 18.0], 'rows': 10842, 'db_bytes': 44339200, 'sqlite': '3.46.1', 'exit': 'clean'}}
+# {'pin_reader': {'held_read_tx_seconds': 9.0, 'saw_n': 1503}}
+# pin=1 {'writer': {'tx': 4220, 'checkpoints': 8, 'checkpoint_busy': 1, 'wal_max_bytes': 16764312, 'snapshots': 14, 'snap_ms': [0.2, 0.2, 3.4, 3.1, 7.3, 4.5, 7.2, 5.0, 10.0, 8.4, 8.3, 6.5, 12.7, 8.5], 'rows': 4220, 'db_bytes': 17252352, 'sqlite': '3.46.1', 'exit': 'clean'}}
+# {'writer': {'tx': 2757, 'checkpoints': 5, 'checkpoint_busy': 0, 'wal_max_bytes': 840512, 'snapshots': 6, 'snap_ms': [0.2, 0.2, 4.6, 2.9, 7.7, 4.0], 'rows': 2757, 'db_bytes': 11300864, 'sqlite': '3.46.1', 'exit': 'clean'}}
+# files after writer (clean): app.sqlite snapshots 
+# {'writer': {'tx': 2752, 'checkpoints': 5, 'checkpoint_busy': 0, 'wal_max_bytes': 840512, 'snapshots': 6, 'snap_ms': [0.3, 0.5, 5.7, 3.2, 6.6, 4.0], 'rows': 2752, 'db_bytes': 11300864, 'sqlite': '3.46.1', 'exit': 'crash'}}
+# files after writer (crash): app.sqlite app.sqlite-shm app.sqlite-wal snapshots 
+== concurrent  (sqlite 3.46.1, files: ['app.sqlite', 'app.sqlite-shm', 'app.sqlite-wal', 'snapshots'])
+  mode=ro                                ok=  433 violations=   0 lag p50/p95=6.5/13.8 ms errors={}
+  mode=ro (long-lived conn)              ok=  433 violations=   0 lag p50/p95=5.9/13.8 ms errors={}
+  immutable=1                            ok=  291 violations=   7 lag p50/p95=36.2/59.7 ms errors={'DatabaseError: database disk image is malformed': 142}
+  snapshot VACUUM INTO + immutable=1     ok=  433 violations=   0 lag p50/p95=536.6/972.1 ms errors={}
+  snapshot backup API + immutable=1      ok=  433 violations=   0 lag p50/p95=550.1/981.6 ms errors={}
+== after-clean  (sqlite 3.46.1, files: ['app.sqlite', 'snapshots'])
+  mode=ro                                ok=    0 violations=   0 lag p50/p95=None/None ms errors={'OperationalError: unable to open database file': 229}
+  mode=ro (long-lived conn)              ok=    0 violations=   0 lag p50/p95=None/None ms errors={'OperationalError: unable to open database file': 229}
+  immutable=1                            ok=  229 violations=   0 lag p50/p95=1848.0/3124.5 ms errors={}
+  snapshot VACUUM INTO + immutable=1     ok=  229 violations=   0 lag p50/p95=2849.1/4124.9 ms errors={}
+  snapshot backup API + immutable=1      ok=  229 violations=   0 lag p50/p95=2851.2/4126.9 ms errors={}
+== after-crash  (sqlite 3.46.1, files: ['app.sqlite', 'app.sqlite-shm', 'app.sqlite-wal', 'snapshots'])
+  mode=ro                                ok=  150 violations=   0 lag p50/p95=1890.9/3123.2 ms errors={}
+  mode=ro (long-lived conn)              ok=  150 violations=   0 lag p50/p95=1893.7/3125.7 ms errors={}
+  immutable=1                            ok=  150 violations=   0 lag p50/p95=1899.4/3131.0 ms errors={}
+  snapshot VACUUM INTO + immutable=1     ok=  150 violations=   0 lag p50/p95=2897.5/4129.3 ms errors={}
+  snapshot backup API + immutable=1      ok=  150 violations=   0 lag p50/p95=2899.9/4131.4 ms errors={}
