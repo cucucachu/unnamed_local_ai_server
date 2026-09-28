@@ -37,7 +37,7 @@ export GROCERY_SMOKE_SPACE_SLUG GROCERY_SMOKE_STATE
 cleanup() {
   local id ids
   while read -r id || [ -n "$id" ]; do
-    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/$id" || true
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/$id" </dev/null || true
   done <"$GROCERY_SMOKE_STATE"
   rm -f "$GROCERY_SMOKE_STATE"
   # Apps and instances cascade from the spaces; e2e_auth_end removes the

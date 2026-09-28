@@ -8,8 +8,9 @@
 #   -> agent_tenancy_smoke.sh (M11-02: the agent's file tools per user/role)
 #   -> persistence_smoke.sh
 #   -> gate_m3.sh -> exec_crossview_smoke.sh -> gate_m4.sh -> verify_isolation.sh
-#   -> verify_tenancy.sh (M11-04: docs/PLATFORM.md §9 invariants 1-6 across
-#      Caddy, the files API, delegations, exec, and the compose config)
+#   -> verify_tenancy.sh (M11-04: docs/PLATFORM.md §9 invariants 1-7 across
+#      Caddy, the files API, delegations, exec, the compose config, and
+#      (M12-08) the app sandbox and app RPC)
 #   -> verify_network.sh
 #   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
 #      after it signs in as a throwaway CLI user via auth_helpers.mjs)
@@ -55,6 +56,9 @@
 #      same "one dedicated script per Files-tab preview feature" shape.)
 #   -> gate_m10.sh (M10-08) -> gate_m11.sh (M11-05: cross-user isolation
 #      across the Files UI, the agent's file tools, and exec)
+#   -> gate_m12.sh (M12-08: builder/SDK/platform app tests, the app smokes,
+#      the reference app in personal and shared spaces, verify_tenancy.sh
+#      with invariant 7)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -262,6 +266,9 @@ main() {
   # (shared_space_viewer_smoke.sh); same idempotent reasoning. It skips
   # verify_network.sh unless run as root — the sudo step above covers it.
   run_step "gate_m11.sh"             bash "${SCRIPT_DIR}/gate_m11.sh"
+  # M12-08: gate_m12.sh re-runs the app smokes and verify_tenancy.sh above,
+  # plus the builder/SDK/platform app unit tests; same idempotent reasoning.
+  run_step "gate_m12.sh"             bash "${SCRIPT_DIR}/gate_m12.sh"
 
   print_summary
 

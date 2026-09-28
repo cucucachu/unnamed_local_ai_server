@@ -438,7 +438,7 @@ Until then they're visible to nobody.
 >   starts only after `db-init` succeeds.
 > - `agent-server` and `platform` run with read-only roots and a `/tmp`
 >   tmpfs; agent-server also drops every capability.
-> - `scripts/verify_tenancy.sh` checks §9 invariants 1-6 (`docs/ARCHITECTURE.md`
+> - `scripts/verify_tenancy.sh` checks §9 invariants 1-7 (`docs/ARCHITECTURE.md`
 >   §5 "Tenancy verification").
 - **Model**: all users share one `model-runner`; llama.cpp queues requests.
   No fair-share scheduling in this stage (D1).
