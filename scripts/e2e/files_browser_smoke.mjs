@@ -39,14 +39,14 @@
 
 import { chromium } from 'playwright';
 
-import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
+import { createE2eUser, deleteE2eSpaces, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 import { addMember, createSpace, deleteBestEffort, entryNames, listDir, openSpace } from './files_helpers.mjs';
 
 const BASE_URL = process.env.FILES_SMOKE_BASE_URL ?? 'http://localhost/';
 const UI_TIMEOUT_MS = 20_000;
 
 const RUN_SUFFIX = `${process.pid}-${Date.now()}`;
-const SPACE_SLUG = `e2e-files-${Math.random().toString(16).slice(2, 8)}`;
+const SPACE_SLUG = process.env.FILES_SMOKE_SPACE_SLUG ?? `e2e-files-${Math.random().toString(16).slice(2, 8)}`;
 const SPACE_NAME = `E2E Files ${RUN_SUFFIX}`;
 
 const ASCII_FLOW = {
@@ -196,8 +196,13 @@ async function checkViewerIsReadOnly(browser, viewer) {
 async function main() {
   const startedAt = Date.now();
 
-  const e2eUser = createE2eUser({ prefix: 'e2e-files' });
-  const viewer = createE2eUser({ prefix: 'e2e-files-viewer' });
+  const { FILES_SMOKE_USER, FILES_SMOKE_PASSWORD, FILES_SMOKE_VIEWER, FILES_SMOKE_VIEWER_PASSWORD } = process.env;
+  const e2eUser = FILES_SMOKE_USER
+    ? { username: FILES_SMOKE_USER, password: FILES_SMOKE_PASSWORD }
+    : createE2eUser({ prefix: 'e2e-files' });
+  const viewer = FILES_SMOKE_VIEWER
+    ? { username: FILES_SMOKE_VIEWER, password: FILES_SMOKE_VIEWER_PASSWORD }
+    : createE2eUser({ prefix: 'e2e-files-viewer' });
   let cookie = null;
 
   const browser = await chromium.launch({ headless: true });
@@ -236,7 +241,9 @@ async function main() {
       await deleteBestEffort(cookie, `/personal/${ASCII_FLOW.folderName}`);
       await deleteBestEffort(cookie, `/personal/${UNICODE_FLOW.folderName}`);
     }
-    // Also removes the shared space (owned by e2eUser) and both users' dirs.
+    // Shared spaces have no `owner_user_id`, so deleting the users would not
+    // take the space with them.
+    deleteE2eSpaces(SPACE_SLUG);
     deleteE2eUsers(e2eUser.username, viewer.username);
   }
 }
