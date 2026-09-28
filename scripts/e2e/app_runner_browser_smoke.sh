@@ -39,7 +39,7 @@ export RUNNER_SMOKE_SPACE_SLUG RUNNER_SMOKE_STATE
 cleanup() {
   local id ids
   while read -r id || [ -n "$id" ]; do
-    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/$id" </dev/null || true
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/$id" "/data/platform/app-git/$id.git" </dev/null || true
   done <"$RUNNER_SMOKE_STATE"
   rm -f "$RUNNER_SMOKE_STATE"
   # Apps and instances cascade from the space.

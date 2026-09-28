@@ -71,7 +71,7 @@ cleanup() {
     [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && docker compose exec -T platform rm -rf "/data/spaces/$id" || true
   done
   if [[ "$APP_ID" =~ ^[0-9a-f-]{36}$ ]]; then
-    docker compose exec -T platform rm -rf "/data/platform/app-bundles/$APP_ID" || true
+    docker compose exec -T platform rm -rf "/data/platform/app-bundles/$APP_ID" "/data/platform/app-git/$APP_ID.git" || true
   fi
 }
 trap cleanup EXIT

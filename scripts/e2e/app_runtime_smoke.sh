@@ -37,7 +37,7 @@ export RUNTIME_SMOKE_STATE
 cleanup() {
   local id
   while read -r id || [ -n "$id" ]; do
-    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/$id" </dev/null || true
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/$id" "/data/platform/app-git/$id.git" </dev/null || true
   done <"$RUNTIME_SMOKE_STATE"
   rm -f "$RUNTIME_SMOKE_STATE"
   e2e_auth_end

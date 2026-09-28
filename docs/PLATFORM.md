@@ -72,7 +72,7 @@ explicitly revisits it (and updates this list).
 | D11 | **Plain SQL everywhere**: app code uses an expo-sqlite-shaped async API; schema is a plain `schema.sql` of `CREATE TABLE` statements; migrations are *computed* by diffing — the platform's own stdlib differ (M12-01 rejected `sqlite3def`: it silently skips type/constraint changes) — and classified additive / safe (auto) vs destructive (approval + snapshot). |
 | D12 | **The platform is the only writer** of app databases (UI via SDK RPC, agent via `app_sql`/actions). Exec containers get read-only access to app data. |
 | D13 | **Cross-app data, phase 1**: the agent is the integration layer (reads across all apps/spaces the user can see). **Phase 2**: apps declare `exports`; other apps declare `reads`; granted at install; read-only via SQLite `ATTACH`; writes via the owning app's exported actions; exports are versioned contracts. |
-| D14 | **App source is a git repo per app, run by the platform** (the agent never needs the git CLI). One commit per successful build. History + revert in the UI. |
+| D14 | **App source is a git repo per app, run by the platform** (the agent never needs the git CLI). One commit per successful build. History + revert in the UI. *Amended (M13-01, security):* the repo is a bare one in platform-owned storage, never a `.git` in the source folder; it records the staged copy each build makes (§7 "Source history"). |
 | D15 | **Live editing**: the author's own install tracks the working copy (hot reload; additive migrations auto; destructive need approval + snapshot). Installs in other spaces pin **published versions**; updates are approved; permission changes re-prompt. Forking = copy into your space. |
 | D16 | **Server-side logic v1**: declared SQL **actions** executed by the platform (parameterized, transactional). Sandboxed server functions / scheduled jobs are a later, additive extension. |
 | D17 | **System apps** (Chat, Files, Settings/Admin, Home/launcher) use the same package format (manifest, `AGENT.md`, actions) with privileged capabilities only grantable to image-shipped apps; they render natively in the host app and are read-only to the agent. |
@@ -308,15 +308,17 @@ ${SPACES_DIR}/                       # default /srv/homeai/spaces
 
 App **source** lives inside the files tree at `/<space>/Apps/<app-slug>/`
 (D14, M13) so the agent edits it with its ordinary file tools; `Apps` is a
-reserved top-level folder the platform protects from deletion/rename, and
-`.git` is hidden from every file API.
+reserved top-level folder the platform protects from deletion/rename. The
+app's git history is kept outside the files tree (§7 "Source history"), so
+there is no platform `.git` in it to hide.
 
 > **As built (M12-02):** the files API refuses delete, rename and move of a
 > space's top-level `Apps` *directory* with `403 reserved`; copying it and
 > everything inside it stay ordinary, and a file or symlink squatting on
 > the name can be removed. `Apps` isn't pre-created: users (and agents) may
-> `mkdir` it, and registering an app creates it if missing. Hiding `.git`
-> comes with the git repos (M13).
+> `mkdir` it, and registering an app creates it if missing. (M13-01: the
+> original "`.git` hidden from every file API" was dropped with the move of
+> the repos out of the tree; a `.git` a user makes there is ordinary files.)
 
 Ownership: directories are group-owned by the space GID with the setgid bit;
 files created on behalf of a user are owned `user_uid:space_gid`, mode
@@ -794,8 +796,9 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 >   bundle, type, render, sql, build), not `kind`; the component stack is
 >   in the render message.
 > - A successful build migrates the instances tracking `working` and emits
->   `app_built` (wired in M12-03); hot reload is the host's (M12-05) and no git
->   commit (M13), so `commit` stays null.
+>   `app_built` (wired in M12-03); hot reload is the host's (M12-05). Since
+>   M13-01 it also commits the staged copy (§7 "Source history") and sets
+>   the working version's `commit`.
 > - The runtime and SDK/shim typings lived in the builder until M12-05
 >   moved them to `packages/homeai-sdk/`, which the builder image now
 >   copies in (build context: the repo root).
@@ -808,6 +811,82 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 >   There is no app archive endpoint yet (`apps.archived_at` is never
 >   set); whatever adds one should delete the app's bundles the same way
 >   (`appbuild.release_space_bundles` + `drop_bundles`).
+
+### Source history
+
+Every successful build is a commit in the app's history; the UI lists it
+and can revert to any earlier commit (D14).
+
+**Spec amendment (M13-01, security).** The source folder is writable by the
+space's members and by their exec containers, and the platform runs as
+root: git run inside a user-controlled `.git` would execute whatever a
+planted `.git/config` asks for (`core.fsmonitor`, hooks, `core.sshCommand`,
+filters, `include`). So there is no `.git` in the source folder:
+
+- One **bare repo per app in platform-owned storage**,
+  `<platform data>/app-git/<app_id>.git` (root 0700), never inside a space.
+- What gets committed is the **staged copy** the build already makes by fd
+  walk (M12-04, `appbuild.Builds.stage`), with `GIT_DIR` on the repo and
+  `GIT_WORK_TREE` on the staging dir, both platform-owned. The copy skips
+  dotfiles, so a user's `.git`, `.gitattributes` or `.gitignore` never
+  reaches git.
+- Every git call gets a **hardened environment**: nothing inherited (no
+  `GIT_*` from the service's environment), `GIT_CONFIG_NOSYSTEM=1`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, `HOME` an empty platform-owned dir, and
+  `-c` overrides for `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
+  `core.attributesFile`/`core.excludesFile=/dev/null`, `protocol.allow=never`,
+  no auto gc, and `safe.directory` naming only that repo. No remotes exist.
+- **Revert writes the target tree back through `fsops`/`beneath`** by fd
+  (never `git checkout` into the user tree, never following a symlink),
+  then rebuilds.
+
+> **As built (M13-01)** (contract: `ARCHITECTURE.md` §3 "App source
+> history"; code: `app/core/apphistory.py`, `appbuild.revert_app`).
+> - A build that gets through `smoke` stores the staged tree
+>   (`git add -A` into a throwaway index, `write-tree`) before the staging
+>   dir is removed; the commit itself (`commit-tree` + `update-ref` with the
+>   old head as a guard) happens under the working version's row lock,
+>   together with recording the bundle, and its id becomes
+>   `app_versions.commit` and the build's `commit`. A build that fails at
+>   any step (manifest, files, compile, smoke, or the space archived
+>   meanwhile) commits nothing.
+> - Messages: `Build <version>` (`... by the agent` for `act=agent`), or
+>   `Revert to <short> (<version>)`, followed by trailers `Version`, `User`
+>   (username), `Thread` (the delegation's thread id), `Reverts` (full id),
+>   which `GET .../history` parses back. Author and committer are a fixed
+>   "Home AI" identity.
+> - `GET /api/platform/apps/{id}/history?offset=&limit=` (read on the
+>   source space; `limit` 1-100, default 50) lists the first-parent chain
+>   newest first, with `current` on the commit the working version was
+>   built from and `next_offset` for the next page.
+> - `POST /api/platform/apps/{id}/revert {commit}` (write on the source
+>   space; agents too) takes a full or 7+ hex-digit id that must be on the
+>   app's branch (else 422 `unknown_commit`). It commits the target's tree
+>   on top of the head, replaces the source folder's contents with that
+>   tree (files `uid:space_gid` 0660; entries not in the tree removed;
+>   dotfiles, and folders that still hold dotfiles, left alone; a symlink
+>   where a file or folder goes is replaced, not followed), then runs the
+>   ordinary build, which migrates instances (M12-03: destructive steps stay
+>   pending). The response is the build response plus `commit`, the new head.
+> - The app info screen (Apps tab, the runner's info button) shows the
+>   history and, to owners and editors, a Revert button with a confirmation.
+> - `git` is in the platform image; with `read_only: true` it writes only
+>   under `/data/platform/app-git`. If git is missing or that dir is
+>   unusable at startup (logged), builds still work with `commit` null and
+>   history/revert answer 503 `history_unavailable`.
+> - Deviations: a build whose tree equals the head's adds no empty commit
+>   and records the head (so "a commit per build" means per build that
+>   changed something); reverting to the head's own tree likewise adds no
+>   commit but still restores the folder (discarding unbuilt edits). The
+>   revert commit is made before the rebuild, so if the rebuild then fails
+>   (diagnostics in the response) the head is a revert that isn't built;
+>   `current` shows which commit is. Git records every file as 100644 (the
+>   staged copy has no exec bits), and archiving the source space keeps the
+>   repo (nothing is hard-deleted).
+> - Tests: `tests/test_app_history.py` (including a planted `.git` whose
+>   hooks, fsmonitor, filter and `GIT_*` environment would each touch a
+>   marker, which a plain `git add` in the folder does fire and the platform
+>   never does) and `scripts/e2e/app_history_smoke.sh` (in `gate_full.sh`).
 
 ### Registry, lifecycle, sharing
 

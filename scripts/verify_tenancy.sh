@@ -296,7 +296,7 @@ setup_apps() {
 cleanup() {
   local id
   for id in "${APP_IDS[@]}"; do
-    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/${id}" >/dev/null 2>&1 || true
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/platform/app-bundles/${id}" "/data/platform/app-git/${id}.git" >/dev/null 2>&1 || true
   done
   if [ -n "$INTERNAL_RUNNER" ]; then
     [ -n "${COOKIE_A:-}" ] && internal_exec_manager_call "$COOKIE_A" DELETE "$SESSION_A" delete delegation 10 >/dev/null
