@@ -6,7 +6,7 @@ test above.
 
 SKIPPED (not failed) when `http://localhost/api/health` isn't reachable, so a
 plain `uv run pytest` (stack not up) never tries to hit a real network
-service — same intent as `test_checkpointer_pg.py`'s `TEST_PG_DSN` skip, but
+service — same intent as the Postgres tests' skip without `docker`, but
 driven by a live reachability probe instead of an env var, since this test
 needs the FULL stack (caddy + agent-server + model-runner + code-exec-manager)
 rather than just a Postgres DSN.

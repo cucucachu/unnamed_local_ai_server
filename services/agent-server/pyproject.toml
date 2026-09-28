@@ -29,7 +29,7 @@ line-length = 100
 asyncio_mode = "auto"
 pythonpath = ["."]
 markers = [
-    "integration: requires a real Postgres reachable via TEST_PG_DSN",
+    "integration: needs a throwaway Postgres (the docker CLI); skipped without one",
 ]
 # /tmp is world-writable (1777) regardless of runtime UID, same reasoning as
 # the Dockerfile's `UV_CACHE_DIR=/tmp/uv-cache` — the container runs as a

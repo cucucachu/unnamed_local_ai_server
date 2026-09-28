@@ -6,53 +6,40 @@ fake-model turns on a thread, tearing the saver down completely, building a
 brand new one from scratch against the same Postgres, and asserting a third
 turn still sees the full prior history.
 
-Requires a real Postgres reachable via the `TEST_PG_DSN` env var. SKIPPED
-(not failed) when it's unset, so a plain `uv run pytest` never tries to
-connect to a real database.
-
-Run it:
-
-    TEST_PG_DSN=postgresql://user:pass@host:5432/db uv run pytest -m integration
-
-The simplest way to run it for real is from inside the `agent-server`
-container, against the compose Postgres — `TEST_PG_DSN` is already set there
-via `docker-compose.yml`'s `agent-server.environment` block:
-
-    docker compose exec agent-server uv run pytest -m integration
+Runs against the throwaway Postgres from `tests/conftest.py`'s `pg_server`,
+as `agent` under row-level security, in a thread its user owns. Skipped
+without the `docker` CLI.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 
 from app.agent.build import build_agent
+from app.db import rls
 from app.db.checkpointer import build_postgres_checkpointer
+from app.db.threads import PgThreadStore
+from tests.conftest import PgServer
 from tests.fake_model.scripting import FakeModel, TextTurn
 
-TEST_PG_DSN = os.environ.get("TEST_PG_DSN")
-
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        not TEST_PG_DSN, reason="TEST_PG_DSN not set - no real Postgres to test against"
-    ),
-]
+pytestmark = pytest.mark.integration
 
 
-async def test_persistence_survives_saver_teardown(fake_model: FakeModel) -> None:
+async def test_persistence_survives_saver_teardown(
+    fake_model: FakeModel, pg_server: PgServer
+) -> None:
     settings = fake_model.settings()
-    # Unique per run so repeated test runs against a persistent Postgres
-    # (e.g. the real compose volume) don't accumulate cross-run history.
-    thread_id = f"pg-integration-{uuid.uuid4()}"
-    config = {"configurable": {"thread_id": thread_id}}
+    owner = str(uuid.uuid4())
+    rls.bind_user(owner)
 
     fake_model.queue(TextTurn("first reply"), TextTurn("second reply"))
 
-    pg1 = await build_postgres_checkpointer(TEST_PG_DSN)
+    pg1 = await build_postgres_checkpointer(pg_server.agent_dsn)
     try:
+        thread_id = (await PgThreadStore(pg1.pool).create(owner, None)).id
+        config = {"configurable": {"thread_id": thread_id}}
         agent1 = build_agent(settings, pg1.saver)
         await agent1.ainvoke(
             {"messages": [{"role": "user", "content": "message one"}]}, config=config
@@ -70,16 +57,14 @@ async def test_persistence_survives_saver_teardown(fake_model: FakeModel) -> Non
     # assertion, not just proving the checkpointer works within one process.
     fake_model.queue(TextTurn("third reply"))
 
-    pg2 = await build_postgres_checkpointer(TEST_PG_DSN)
+    pg2 = await build_postgres_checkpointer(pg_server.agent_dsn)
     try:
         agent2 = build_agent(settings, pg2.saver)
         await agent2.ainvoke(
             {"messages": [{"role": "user", "content": "message three"}]}, config=config
         )
 
-        third_request_contents = [
-            m.get("content") for m in fake_model.requests[-1]["messages"]
-        ]
+        third_request_contents = [m.get("content") for m in fake_model.requests[-1]["messages"]]
         assert len(fake_model.requests) == 3
         assert any("message one" in (c or "") for c in third_request_contents)
         assert any("first reply" in (c or "") for c in third_request_contents)
