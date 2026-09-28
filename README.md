@@ -29,7 +29,9 @@ This repo builds a personal AI agent that lives on your own hardware and your ow
 
 In short: a private, always-on "computer-use" assistant for your home network, with hands (file access) and a sandboxed toolbox (code execution), instead of just a chat window.
 
-**Who it's for**: you, on your home network. A single-user, trusted-LAN tool, not a multi-tenant product, not exposed to the internet.
+**Who it's for**: you, on your home network. A household LAN tool. Remote
+access is WireGuard (Settings → Remote access; `docs/NETWORKING.md`), not
+exposing HTTP to the internet.
 
 **What using it looks like**:
 
@@ -69,10 +71,9 @@ spinning up locked-down, session-scoped containers for the agent's
 `execute_code` tool), and **postgres** (thread/checkpoint state). Code
 execution is deliberately isolated from agent-server's own app code,
 secrets, and every other service — see the isolation boundary described
-below. The whole stack is LAN-only by design (no auth, no internet
-exposure; local HTTPS via Caddy's internal CA is optional and does not
-replace the LAN trust model) via network topology + host firewall, not
-application logic.
+below. HTTP/HTTPS stay LAN-only by topology + host firewall (local HTTPS
+via Caddy's internal CA does not replace the LAN trust model). Remote
+access is WireGuard (`docs/NETWORKING.md`), not public HTTP.
 
 **Full as-built detail — the service catalog (ports/mounts/env), system
 diagrams, model operations, security model, and day-to-day operations —
@@ -198,7 +199,7 @@ The binding technical contracts every ticket built against — environment varia
 - **Definition of done**: each ticket issue lists
   - **Tier A** — automated checks (lint, tests, `docker compose config -q`, any named e2e script) — required to close the issue.
   - **Tier B** (gate issues only) — a human/host checklist (needs the real machine, a phone, or a LAN device). Appended to `docs/HOST-CHECKS.md`.
-- **Out of scope for v1** (don't build these, even if tempting): public ACME certificates, forcing HTTPS / HSTS, auth, docker-socket-proxy, transcoding, EAS builds, multi-user, GPU queueing, runtime `pip`/`npm` in exec containers, exposing anything to the internet. Local HTTPS for `homeai.local` (Caddy internal CA) is in.
+  - **Out of scope for v1** (don't build these, even if tempting): public ACME certificates, forcing HTTPS / HSTS, auth, docker-socket-proxy, transcoding, EAS builds, multi-user, GPU queueing, runtime `pip`/`npm` in exec containers, exposing HTTP/HTTPS to the internet. Local HTTPS for `homeai.local` (Caddy internal CA) is in. Stage 3's sanctioned remote path is WireGuard (M15-01), not a public website.
 
 ## Getting started
 

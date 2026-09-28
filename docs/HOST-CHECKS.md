@@ -213,3 +213,15 @@ phones.
 
 > **PM sign-off: G14 passed ____**
 
+## M15
+
+Phone-off-LAN (G15) waits for later M15 tickets. M15-01 is "create the QR
+on the LAN":
+
+- [ ] (M15-01) On home Wi-Fi: Settings → Remote access → create a device
+      named for this phone → scan the QR in a WireGuard app → the tunnel
+      comes up and `http://homeai.local` (or `http://10.13.13.1`) loads
+      the UI. Revoke the device; the tunnel no longer reaches the box.
+
+> **PM sign-off: G15 passed ____**
+

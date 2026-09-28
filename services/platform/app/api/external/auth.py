@@ -27,9 +27,9 @@ from app.api.session_http import (
     session_token,
     set_session_cookie,
 )
-from app.core import invites, legacy, passwords, sessions, totp, users
+from app.core import invites, legacy, passwords, sessions, totp, users, wireguard
 from app.core.bootstrap import Bootstrap
-from app.core.errors import Forbidden, Unauthorized
+from app.core.errors import Forbidden, InvalidInput, Unauthorized
 
 router = APIRouter(prefix="/api/auth")
 
@@ -106,7 +106,15 @@ async def login(body: LoginRequest, request: Request, response: Response) -> Ses
                 raise Forbidden("account_disabled")
 
             await users.rehash_if_needed(conn, creds["id"], body.password)
-            token, _ = await sessions.create_session(conn, creds["id"], body.device_label)
+            device_id = None
+            if body.device_id is not None:
+                wg: wireguard.WireGuardService = request.app.state.wireguard
+                if not await wg.peer_belongs_to_user(conn, body.device_id, creds["id"]):
+                    raise InvalidInput("unknown_device")
+                device_id = body.device_id
+            token, _ = await sessions.create_session(
+                conn, creds["id"], body.device_label, device_id=device_id
+            )
             user = await users.get_user(conn, creds["id"])
     return session_response(request, response, user, token)
 

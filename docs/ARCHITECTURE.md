@@ -44,6 +44,7 @@ flowchart TB
             pg[(Postgres\nhomeai: checkpoints + metadata\nhomeai_platform: platform)]
             platform["Platform (M10-02 skeleton)\nFastAPI, :8100\nsigning keys + JWKS, migrations"]
             dbinit[db-init\none-shot: platform role + DB]
+            wg["WireGuard sidecar (M15-01)\nUDP 51820, 10.13.13.0/24\nhomeai-internal + homeai-wg"]
         end
 
         subgraph execpool [Code-exec containers, session-scoped, network none]
@@ -95,7 +96,10 @@ route/NAT, so nothing on it can reach the public internet at the network
 layer) and `homeai-net` (the ordinary bridge network with default Docker
 egress). `agent-server`, `model-runner`, `code-exec-manager`,
 `postgres`, and (M10-02) `platform` and `db-init` are on
-`homeai-internal` **only**. `caddy` is the sole service
+`homeai-internal` **only**. The M15-01 `wireguard` sidecar sits on
+`homeai-internal` (to reach `caddy` by name) plus `homeai-wg` (a
+non-internal bridge with masquerade off) so published UDP 51820 has a
+return path; it must not join `homeai-net`. `caddy` is the sole service
 on both: it needs `homeai-internal` to reach `agent-server`, and
 `homeai-net` to keep its published port (and thus a route out, for
 whatever it itself needs). `homeai-net` is reserved exclusively for
@@ -130,6 +134,8 @@ canonical. The actual Docker network name on the host is project-prefixed:
 `homeai_homeai-net`/`homeai_homeai-internal` (compose project name
 `homeai` + the compose-file key, confirmed via `docker network ls` — see
 `scripts/verify_isolation.sh`'s own header comment for the same finding).
+M15-01's `homeai-wg` sets an explicit `name: homeai-wg` (no project
+prefix) so the UDP return-path network is obvious in `docker network ls`.
 Scripts resolve this dynamically via `docker compose config --format json`
 rather than hardcoding either name.
 
@@ -219,7 +225,8 @@ what another doc says it should be.
 - **Purpose**: the single ingress point for the whole LAN — reverse proxy
   for `/api`/`/ws` to `agent-server` and `platform`, the auth gate in
   front of them (`forward_auth`, below), and static file server for the
-  Expo web build. The only service that publishes host ports. HTTP on `:80`
+  Expo web build. Publishes host TCP 80 and 443. (M15-01 also publishes
+  UDP 51820 on the `wireguard` sidecar — see that catalog entry.) HTTP on `:80`
   stays first-class (no redirect to HTTPS) so Expo Go and phones that
   have not installed the local CA keep working. HTTPS on
   `https://homeai.local` uses Caddy's `tls internal` CA (M9-05) so
@@ -262,9 +269,9 @@ what another doc says it should be.
   `packages/homeai-sdk/` into `/srv/app-runtime/1/`, final
   stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
 - **Published ports**: `80` and `443` — confirmed via `docker compose
-  config`; the *only* service in the stack with a `ports:` entry. 443 is
-  the one intentional amendment to the original v1 "no new published
-  ports" rule.
+  config`. 443 is the one intentional amendment to the original v1 "no new
+  published ports" rule (M9-05). M15-01 adds UDP 51820 on `wireguard`, not
+  here.
 - **Internal ports**: `80` and `443` (same — it's the entry point, not
   proxied to from anything else).
 - **Network (M7-01)**: `homeai-net` **and** `homeai-internal` — the only
@@ -959,7 +966,9 @@ what another doc says it should be.
 - **Mounts**: named volume `platform-data:/data/platform` (signing key at
   `keys/signing-key.pem`, dir `0700`, file `0600`; losing the volume
   rotates the key and invalidates every outstanding token; `setup-code`,
-  `0600`, only until the first admin exists), and
+  `0600`, only until the first admin exists; M15-01 WireGuard server key
+  at `wireguard/server.key`, `0600`), `wireguard-config:/data/wireguard`
+  (derived `wg0.conf` for the sidecar), and
   `${SPACES_DIR}:/data/spaces` (rw bind, host default
   `/srv/homeai/spaces`; must exist at startup). Docker creates a missing
   `SPACES_DIR` as `root:root 0755` on first `up`; keep it that way (only
@@ -1087,6 +1096,8 @@ what another doc says it should be.
   `SPACES_HOST_DIR` (M11-03; compose sets it to `SPACES_DIR`, the host
   path behind `/data/spaces`, so exec-grants can name bind sources the
   Docker daemon resolves; empty refuses every grant).
+  `WIREGUARD_ENDPOINT` (M15-01; `Endpoint =` in client QR configs, default
+  `homeai.local:51820`; never a private key).
   `PLATFORM_MIGRATE_LEGACY_FILES`
   (`0`/`1`, see above; the source dir `PLATFORM_LEGACY_FILES_DIR` defaults
   to `/data/legacy-files`). DB host/port/user/name default to
@@ -1200,6 +1211,36 @@ what another doc says it should be.
   touches no compose service), which runs `test_thumbnails.py` and
   `test_media_api.py` by default or any pytest arguments given.
 
+### `wireguard`
+
+- **Purpose** (M15-01, `docs/PLATFORM.md` §8): the WireGuard data plane.
+  Creates `wg0` on **10.13.13.0/24** (server **10.13.13.1**), listens UDP
+  **51820**, applies the platform-written `wg0.conf`, answers DNS for
+  `homeai.local` → `10.13.13.1`, and TCP-proxies `:80`/`:443` on that
+  address to `caddy`. Peers and server keys live in the platform (Postgres
+  + `/data/platform/wireguard/`); this container never sees the platform
+  database and never logs private keys.
+- **Image/base**: `alpine:3.21` + `wireguard-tools`, `dnsmasq`, `socat`.
+  Dockerfile: `services/wireguard/Dockerfile`. Entrypoint waits for
+  `/data/wireguard/wg0.conf`, `wg-quick up` / `wg syncconf` on change.
+  Missing host kernel module is a hard failure (`sudo modprobe wireguard`).
+- **Published port**: `51820/udp` — the one stack port besides caddy's
+  80/443. Published from `homeai-wg`, not `homeai-net` (no default route
+  out). `internal: true` on `homeai-internal` drops forwarded WireGuard
+  replies, which is why this service also joins `homeai-wg`.
+- **Internal ports**: UDP 51820 on `wg0`; TCP 80/443 and UDP 53 bound to
+  `10.13.13.1` only (not published on the host).
+- **Network**: `homeai-internal` (reach `caddy`) and `homeai-wg` (UDP
+  return path; masquerade off). Not privileged; `cap_drop: ALL` +
+  `cap_add: NET_ADMIN`; no `SYS_MODULE`.
+- **Mounts**: `wireguard-config:/data/wireguard:ro` (platform writes
+  `wg0.conf` mode 0600).
+- **Env**: none required (`WG_GATEWAY` / `WG_CADDY_HOST` have defaults).
+- **Tests**: `services/platform/tests/test_wireguard.py` (keys, config
+  text, API, revoke vs sessions, `act=agent` 403). Live:
+  `scripts/e2e/wireguard_smoke.sh`. Host steps:
+  `infra/host/setup-wireguard.md`.
+
 ### Host-level pieces (not containers)
 
 These aren't compose services at all — they run directly on the Linux
@@ -1215,7 +1256,9 @@ host and are set up/verified by scripts under `infra/host/` and `scripts/`.
   installs a small systemd oneshot unit (`homeai-docker-user-fw.service`)
   to re-insert both `DOCKER-USER` rules on every boot (the rules
   themselves don't survive a reboot or a `dockerd` restart otherwise).
-  Verified by `scripts/verify_network.sh` checks 3–5.
+  Verified by `scripts/verify_network.sh` checks 3–5. UDP 51820 (WireGuard)
+  is **not** installed by that script; opening it is a human step
+  (`infra/host/setup-wireguard.md`). Check 3 allows that published port.
 - **`homeai-backup.timer` / `homeai-backup.service`** (systemd) — runs
   `infra/host/backup-files.sh` daily at 03:00. Installed/removed by
   `infra/host/install-backup-timer.sh`. See "Operations" below and
@@ -1658,7 +1701,7 @@ themselves)
 |---|---|---|---|
 | `GET /api/auth/status` | session credential optional | `200 {"setup_required": bool, "authenticated": bool, "user"?: User}` (`user` only when authenticated). Re-sends the cookie (fresh `Max-Age`) when the credential was the cookie. | — |
 | `POST /api/auth/setup` | `{"setup_code", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates the bootstrap **admin**, closes setup for good | `401 invalid_setup_code`, `409 setup_complete`, `409 username_taken`, `422` input rules, `429 rate_limited` |
-| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?}` | `200 SessionResponse` | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `429 rate_limited` |
+| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Optional `device_id` tags the session to a WireGuard peer the user owns (M15-01). | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `422 unknown_device`, `429 rate_limited` |
 | `POST /api/auth/logout` | session credential optional | `204`, revokes the session, clears the cookie; idempotent | — |
 | `POST /api/auth/step-up` | session credential + `{"password"}` | `200 {"stepped_up_until": ts}` (now + 5 min, this session only) | `401 unauthenticated`, `403 invalid_password`, `429 rate_limited` |
 | `POST /api/auth/invite/accept` | `{"token", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates a **member** | `401 invalid_invite` (unknown, used, expired, or revoked — not distinguished), `409 username_taken` (invite stays usable), `422` input rules, `429 rate_limited` |
@@ -1672,6 +1715,9 @@ themselves)
 | `PATCH /api/platform/me` | human | `{"display_name"?, "password"?, "current_password"?}` | `200 User`. A password change revokes all the user's *other* sessions. | `422 current_password_required`, `403 invalid_password`, `422 weak_password`, `422 invalid_display_name`, `429 rate_limited` |
 | `GET /api/platform/me/sessions` | human | — | `200 {"sessions": [Session]}` (active only, most recently seen first) | — |
 | `DELETE /api/platform/me/sessions/{id}` | human | — | `204` (revoking the current session logs the caller out) | `404 not_found` (unknown, not yours, or already revoked/expired) |
+| `GET /api/platform/me/wireguard-devices` | human | — | `200 {"devices": [WireGuardDevice]}` (id, name, address, created_at; no keys) | — |
+| `POST /api/platform/me/wireguard-devices` | human | `{"name"}` | `201 WireGuardDevice + {"config": "<wg-quick text>"}` — the only time the peer private key is returned (also the QR payload). LAN create is allowed (origin policy is M15-02). | `422 invalid_name`, `409 too_many_devices`, `409 peers_exhausted` |
+| `DELETE /api/platform/me/wireguard-devices/{id}` | human | — | `204` — deletes the peer, rewrites live wg0.conf, revokes sessions tagged with that `device_id` (not untagged LAN sessions) | `404 not_found` (unknown or not yours) |
 | `POST /api/platform/me/totp/enroll` | human | `{"password"}` | `200 {"secret": base32, "otpauth_uri": "otpauth://totp/HomeAI:<username>?secret=…&issuer=HomeAI&algorithm=SHA1&digits=6&period=30"}`. Pending until confirmed; re-enrolling replaces the pending secret. | `403 invalid_password`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/confirm` | human | `{"code"}` | `200 User` (`totp_enabled: true`) | `403 invalid_totp`, `409 totp_not_pending`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/disable` | human | `{"password"}` | `200 User` (`totp_enabled: false`) | `403 invalid_password`, `409 totp_not_enabled`, `429 rate_limited` |
@@ -1713,7 +1759,8 @@ A chat socket closed with `4404` (or a `404` from the thread's history)
 shows "Chat not found" instead of reconnecting (M10-07).
 
 Settings (M10-07, `src/app/settings/`) covers `/me` (display name,
-password, TOTP enroll with the `otpauth_uri` as a QR), sessions, spaces and
+password, TOTP enroll with the `otpauth_uri` as a QR), sessions, **Remote
+access** (M15-01: WireGuard devices + QR), spaces and
 members (owners manage shared spaces), and, for admins, users and invites.
 Any `403 step_up_required` opens a password prompt, calls `POST
 /api/auth/step-up`, and retries the request once. Invite links are built
@@ -3002,12 +3049,13 @@ What the design defends against, and how:
    read-only root, resource limits and no environment. A session container
    labelled for another user is refused, never reused. "Isolation
    verification (M4-05)" below is the check.
-4. **The network.** LAN-only by topology: only `caddy` publishes ports
-   (80 and 443), and `ufw` plus the `DOCKER-USER` iptables rules scope
+4. **The network.** LAN HTTP/HTTPS by topology: `caddy` publishes ports
+   80 and 443, and `ufw` plus the `DOCKER-USER` iptables rules scope
    them to the LAN (`docs/NETWORKING.md`; checked by
-   `scripts/verify_network.sh`). Remote access is planned over WireGuard
-   (M15), not by exposing the box. Local HTTPS (`https://homeai.local`,
-   Caddy `tls internal`) is confidentiality on the LAN and a browser
+   `scripts/verify_network.sh`). Remote access is WireGuard (M15-01): the
+   `wireguard` sidecar publishes UDP 51820; the human forwards that port
+   if they want off-LAN access. Do not expose `:80`/`:443` to the internet.
+   Local HTTPS (`https://homeai.local`, Caddy `tls internal`) is confidentiality on the LAN and a browser
    secure context; HTTP on `:80` stays available on purpose, so a session
    cookie used on `:80` crosses the LAN in the clear — prefer HTTPS.
 5. **No outbound internet by default — and where Stage 2 grants it,
@@ -3101,7 +3149,7 @@ exact §7 hardening spec):
   holder (reuses M4-03's `scripts/check_socket_exclusivity.sh`), the exec
   container's own `docker inspect` confirms `NetworkMode`/`ReadonlyRootfs`/
   `CapDrop`/`Privileged`/bind-mount all match spec, and no compose service
-  other than `caddy` publishes a host port.
+  other than `caddy` (80/443) and `wireguard` (51820/udp) publishes a host port.
 - **App builds (M12-04, checks 23-27)** — A builds a probe app through
   `POST /api/platform/apps/{id}/build`. Its screen escapes jsdom into the
   smoke container's Node (on purpose: that's the residual jsdom leaves)

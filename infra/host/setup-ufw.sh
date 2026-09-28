@@ -10,8 +10,11 @@
 # Docker caveat (important): Docker publishes container ports via its own
 # iptables/nftables rules, inserted ahead of ufw's chain — so `ufw allow`/`deny`
 # alone does NOT restrict traffic to published container ports (e.g. caddy's
-# 80:80 and 443:443). Since caddy is the only service that publishes ports, the
-# real enforcement for them is the DOCKER-USER chain, which Docker guarantees
+# 80:80 and 443:443). Caddy publishes HTTP/HTTPS; WireGuard publishes UDP
+# 51820 (M15-01). Opening 51820 in ufw/router is a *human* step
+# (`infra/host/setup-wireguard.md`) — this script still only installs the
+# LAN-only TCP 80/443 rules. The real enforcement for Docker-published TCP
+# ports is the DOCKER-USER chain, which Docker guarantees
 # to consult before its own forwarding rules. See docs/NETWORKING.md.
 #
 # Persistence (M6-01 fix — do NOT reintroduce iptables-persistent here): the

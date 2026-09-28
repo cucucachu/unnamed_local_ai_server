@@ -153,6 +153,9 @@ async def test_identity_role_comes_from_database(platform):
         ("POST", "/api/platform/me/totp/enroll", {"password": PASSWORD}),
         ("POST", "/api/platform/me/totp/confirm", {"code": "123456"}),
         ("POST", "/api/platform/me/totp/disable", {"password": PASSWORD}),
+        ("GET", "/api/platform/me/wireguard-devices", None),
+        ("POST", "/api/platform/me/wireguard-devices", {"name": "phone"}),
+        ("DELETE", f"/api/platform/me/wireguard-devices/{uuid4()}", None),
     ],
 )
 async def test_agent_act_rejected_even_for_stepped_up_admin(platform, method, path, body):

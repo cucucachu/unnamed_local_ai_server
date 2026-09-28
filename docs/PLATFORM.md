@@ -91,7 +91,7 @@ flowchart TB
     web --- sandbox
     native --- sandbox
 
-    clients -->|"https/http, later WireGuard"| caddy
+    clients -->|"https/http; remote: WireGuard"| caddy
 
     subgraph host [Linux host]
         caddy["caddy\nforward_auth -> platform\nstrips/sets X-HomeAI-Identity"]
@@ -102,6 +102,7 @@ flowchart TB
             pg[(postgres\nhomeai_platform + homeai)]
             model[model-runner]
             webfetch[web-fetch / searxng / egress-proxy]
+            wg["wireguard sidecar\nUDP 51820, NET_ADMIN\n10.13.13.0/24"]
         end
         spaces[("/srv/homeai/spaces\nper-space dirs, GID per space")]
         execc["exec / build containers\nuser UID + space GIDs\nper-space mounts, network none"]
@@ -1190,6 +1191,36 @@ with that app's context.
   endpoints refused unless the client address is on the LAN or VPN.
 - **Host app**: device pairing via hardware-backed key (Android Keystore /
   Secure Enclave); later, an embedded WireGuard tunnel.
+
+> **As built (M15-01)** — WireGuard is the default remote mode. A dedicated
+> `wireguard` compose service (`cap_add: NET_ADMIN` only; not privileged,
+> not `SYS_MODULE`) publishes **UDP 51820** on `homeai-wg` (return path;
+> masquerade off) and reaches Caddy over `homeai-internal`. Platform is source of truth:
+> Postgres `wireguard_peers`, server private key at
+> `/data/platform/wireguard/server.key` (0600, never in git or compose
+> env), derived `wg0.conf` on the `wireguard-config` volume (also 0600).
+> The sidecar polls that file and `wg syncconf`s; kernel module load is a
+> host step (`sudo modprobe wireguard`, `infra/host/setup-wireguard.md`).
+> Tunnel subnet **10.13.13.0/24** (server **10.13.13.1**), chosen not to
+> collide with home LAN `192.168.x` or Docker `172.x`. Client configs set
+> `DNS = 10.13.13.1` and `AllowedIPs = 10.13.13.0/24`; the sidecar answers
+> `homeai.local` and proxies `:80`/`:443` to Caddy. Split/recursive DNS is
+> M15-03.
+>
+> Settings → Remote access lists devices, creates a named profile (QR +
+> wg-quick text **once**), and revokes with confirm. Routes
+> `GET|POST|DELETE /api/platform/me/wireguard-devices` are *human* only
+> (`403 agent_not_allowed`). Create is allowed from the LAN; origin policy
+> is M15-02. Revoke deletes the peer and live config, and revokes sessions
+> **tagged** with that `device_id` (`POST /api/auth/login` optional
+> `device_id`). Untagged LAN sessions of the same user stay. Admin does
+> not manage other users' peers in v1.
+>
+> This ticket does **not** change the live host firewall or router. Human
+> steps (module, `ufw allow 51820/udp`, router UDP forward, optional
+> `WIREGUARD_ENDPOINT` for off-LAN QR) are in `docs/NETWORKING.md` and
+> `infra/host/setup-wireguard.md`. Live check:
+> `scripts/e2e/wireguard_smoke.sh`.
 
 ## 9. Security invariants
 

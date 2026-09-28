@@ -42,6 +42,7 @@ from app.core.hitl import HitlApprovals
 from app.core.ratelimit import RateLimited, RateLimiter
 from app.core.storage import SpaceStorage, StorageError
 from app.core.tokens import TokenService, load_or_create_signing_key
+from app.core.wireguard import WireGuardService
 from app.db.migrate import run_migrations
 from app.db.pool import open_pool
 
@@ -163,6 +164,10 @@ def create_app(
             tokens = token_service_override or TokenService(load_or_create_signing_key(s.keys_dir))
             logger.info("signing key kid=%s", tokens.kid)
 
+            wg = WireGuardService(s)
+            async with pool.connection() as conn:
+                await wg.write_server_config(conn)
+
             storage = SpaceStorage(s.platform_spaces_dir)
             if not storage.root.is_dir():
                 raise StorageError(f"{storage.root}: spaces root is not a directory")
@@ -182,6 +187,7 @@ def create_app(
             app.state.db_pool = pool
             app.state.storage = storage
             app.state.tokens = tokens
+            app.state.wireguard = wg
             app.state.bootstrap = bootstrap
             app.state.builds = await _prepare_builds(s)
             app.state.history = await _prepare_history(s)

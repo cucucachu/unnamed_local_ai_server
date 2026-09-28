@@ -27,15 +27,15 @@ the same end state rather than fail on a second run.
 
 Three independent layers, because no single one is sufficient on its own:
 
-1. **Only `caddy` publishes host ports (80 and 443).** Every other compose
-   service (`agent-server`, `model-runner`, `postgres`, `code-exec-manager`)
-   is only reachable from inside a Docker bridge network — there's no host
-   port to attack even from the LAN. (As of M7-01, that network is
-   `homeai-internal`, not `homeai-net` — see docs/ARCHITECTURE.md §5's
-   "Network segmentation" section for the full internal/egress split; this
-   LAN-only story is unaffected either way.) 443 is the one intentional
-   exception to the original v1 "no new published ports" rule (M9-05,
-   local HTTPS).
+1. **`caddy` publishes TCP 80 and 443; `wireguard` publishes UDP 51820.**
+   Every other compose service is only reachable from inside a Docker
+   bridge network — there's no host port to attack even from the LAN.
+   (As of M7-01, that network is `homeai-internal`, not `homeai-net` —
+   see docs/ARCHITECTURE.md §5's "Network segmentation" section for the
+   full internal/egress split; this LAN-only story is unaffected either
+   way.) 443 is the one intentional exception to the original v1 "no new
+   published ports" rule (M9-05, local HTTPS). M15-01's UDP 51820 is the
+   sanctioned remote-access port (WireGuard), not a public HTTP hole.
 2. **`ufw`** enforces LAN-only access for anything running *directly on the
    host* (default-deny incoming, `192.168.x.x/24 -> tcp/80` and `tcp/443`
    allowed, `OpenSSH` allowed if installed). On its own this does **not**
@@ -182,14 +182,15 @@ scripts exited 0 once." Five checks:
    returns `200`, proving mDNS + Caddy + agent-server all work together
    from the host's own point of view, not just each piece in isolation.
 3. **Port audit, Docker-stack scope** — `docker compose config` and live
-   `docker ps` output agree that **only** `caddy` publishes host ports,
-   and that it publishes **only** ports 80 and 443. Deliberately scoped to
+   `docker ps` output agree that **only** `caddy` (TCP 80 and 443) and
+   `wireguard` (UDP 51820) publish host ports. Deliberately scoped to
    the compose stack, not to every process on the dev machine: an
    unrelated host tool (an IDE helper, another project's dev server, etc.)
    listening on some other port isn't a regression in *this* stack's
    isolation posture, and flagging it would just be noise. `sshd` on port
    22 (if installed) is the one explicitly-allowed non-Docker exception —
-   its own exposure is `ufw`'s job (check 4), not this check's.
+   its own exposure is `ufw`'s job (check 4), not this check's. Random
+   extra container ports still fail.
 4. **`ufw` posture** — active, default-deny incoming, and the LAN-subnet
    allow rules for tcp/80 and tcp/443 that `setup-ufw.sh` installs.
 5. **`DOCKER-USER` chain** — contains the actual enforcement rules for
@@ -364,23 +365,27 @@ always the device, not this setup:
   never crosses subnets/routers by design — both the host and the client
   must be on the same LAN segment).
 
-## What would change for internet exposure
+## Remote access (WireGuard)
 
-Nothing here is designed for it, and the recommendation is: don't — this
-setup's security model (home-grade sign-in with files and code execution
-shared by every signed-in user, an `execute_code` tool that runs
-arbitrary shell commands, plain HTTP kept on purpose) assumes a trusted
-LAN, and none of that is safe to expose to the public internet as-is.
-Local HTTPS encrypts the LAN hop; it does not authenticate callers.
-If remote access is ever genuinely needed (e.g. checking on a home server
-while traveling), the sanctioned path is a VPN — WireGuard is the natural
-fit (lightweight, works well on a home router or as a container on this
-same host) — so a remote device joins the LAN itself (or an
-equivalent virtual one) and everything above just works unchanged, rather
-than trying to safely expose `homeai.local`/ports 80 and 443 directly to
-the internet. See README.md's "Documented fast-follows" for where this and
-the remaining hardening (shared-password auth at the proxy, public ACME
-certs) are tracked — none of that is in scope for v1.
+HTTP and HTTPS stay LAN-scoped. The sanctioned remote path is WireGuard
+(M15-01, `docs/PLATFORM.md` §8): a phone or laptop joins **10.13.13.0/24**
+and reaches Caddy at `http://homeai.local` or `http://10.13.13.1` through
+the tunnel. Do **not** forward TCP 80 or 443 on the router.
+
+**As built:** compose service `wireguard` publishes UDP 51820 (`NET_ADMIN`
+only) on `homeai-wg` (not `homeai-net`; masquerade off so it is not a
+second internet path). Platform stores peers and the server key; Settings → Remote access
+issues a QR while you are on the LAN. Client DNS is `10.13.13.1`
+(`homeai.local` only in v1; split DNS is M15-03).
+
+**Human host steps** (agents must not run these against the live firewall
+or router): `infra/host/setup-wireguard.md` — `modprobe wireguard`,
+optional `ufw allow 51820/udp`, router UDP 51820 forward, then set
+`WIREGUARD_ENDPOINT` to the public host:port for new QR codes.
+
+Public HTTPS (opt-in, passkey-only) is M15-05, not this. The v1 security
+model (home-grade sign-in, `execute_code`, plain HTTP on the LAN) is
+unchanged for anything that is not the WireGuard UDP port.
 
 ## Verifying from a phone
 
