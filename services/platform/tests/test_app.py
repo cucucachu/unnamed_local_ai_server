@@ -32,7 +32,7 @@ async def test_startup_migrates_and_serves_health(pg_database, tmp_path):
 
     with psycopg.connect(pg_database.dsn) as conn:
         versions = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
-        assert versions == [(1,), (2,), (3,), (4,)]
+        assert versions == [(1,), (2,), (3,), (4,), (5,)]
 
 
 async def test_jwks_and_kid_stable_across_restarts(pg_database, tmp_path):

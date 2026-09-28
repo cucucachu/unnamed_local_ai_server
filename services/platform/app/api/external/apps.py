@@ -65,15 +65,16 @@ async def build_app(app_id: UUID, request: Request, principal: CurrentUser):
     state = request.app.state
     if state.builds is None:
         raise Unavailable("builder_unavailable")
-    app, build, diagnostics = await appbuild.build_app(
+    app, build, diagnostics, migrations = await appbuild.build_app(
         state.db_pool, principal, state.storage, state.builds, state.builder,
-        state.settings.platform_data_dir, app_id,
+        state.settings.platform_data_dir, state.appdata, app_id,
     )  # fmt: skip
     return AppBuildOut(
         app=app,
         ok=build is not None and build.ok,
         build=None if build is None else vars(build),
         diagnostics=diagnostics,
+        migrations=migrations,
     )
 
 
@@ -101,5 +102,4 @@ async def install_app(
 async def uninstall_app(
     space_id: UUID, instance_id: UUID, request: Request, principal: CurrentUser
 ) -> None:
-    async with request.app.state.db_pool.connection() as conn:
-        await apps.uninstall_app(conn, principal, request.app.state.storage, space_id, instance_id)
+    await request.app.state.appdata.uninstall(principal, space_id, instance_id)

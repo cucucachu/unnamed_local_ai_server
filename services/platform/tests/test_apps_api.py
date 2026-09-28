@@ -9,6 +9,7 @@ the `chowns` fixture; `test_storage.py` checks them for real as root.
 from __future__ import annotations
 
 import json
+import shutil
 import stat
 from pathlib import Path
 
@@ -319,7 +320,9 @@ async def test_install_creates_the_instance_dir(world, chowns) -> None:
     }  # fmt: skip
     storage = world.platform.app.state.storage
     path = storage.instance_dir(world.family["id"], inst["id"])
-    assert path.is_dir() and stat.S_IMODE(path.stat().st_mode) == 0o2770
+    assert path.is_dir() and stat.S_IMODE(path.stat().st_mode) == 0o2750
+    for sub in ("ro", "snapshots"):
+        assert stat.S_IMODE((path / sub).stat().st_mode) == 0o2750
     assert chowns[path] == (0, world.family["gid"])
 
     listing = await world.client.get(
@@ -454,7 +457,7 @@ async def test_uninstall_with_the_dir_already_gone(world) -> None:
     _family_pkg(world)
     app = await _registered(world)
     inst = (await _install(world, world.headers["alice"], world.family["id"], app["id"])).json()
-    world.platform.app.state.storage.instance_dir(world.family["id"], inst["id"]).rmdir()
+    shutil.rmtree(world.platform.app.state.storage.instance_dir(world.family["id"], inst["id"]))
     url = f"{_instances(world, world.family['id'])}/{inst['id']}"
     assert (await world.client.delete(url, headers=world.headers["alice"])).status_code == 204
 

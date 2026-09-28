@@ -869,8 +869,11 @@ what another doc says it should be.
   registry — the `app.json` schema and package check, apps / versions /
   instances, and each instance's `apps/<instance_id>/` dir (§3 "Apps").
   As of M12-04: app builds, run by code-exec-manager in the builder image
-  over a staging copy the platform makes (§3 "App builds"). It also holds
-  the Ed25519 signing key every
+  over a staging copy the platform makes (§3 "App builds").
+  As of M12-03: app data — each instance's SQLite database, computed
+  migrations with snapshots, the RPC route the sandbox bridge forwards to,
+  and the `/ws/platform/events` change feed (§3 "App data").
+  It also holds the Ed25519 signing key every
   platform token is signed with and serves the public half as a JWKS.
   API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
@@ -964,9 +967,10 @@ what another doc says it should be.
   **`authorize_space(conn, principal, space_id, need)`** is the check every
   space-data route uses — contract in §3 "Platform API" → "Spaces".
   **Storage**: each space's row and `${SPACES_DIR}/<space_id>/{files,apps}`
-  (all three `root:<gid>`, mode `2770`) are created in the same
+  (all three `root:<gid>`; `2770`, except `apps/` which is `2750` since
+  M12-03 so only the platform writes app data) are created in the same
   transaction, dirs before commit, so a storage failure rolls the row back.
-  Below `<space_id>/` is group-writable, so the platform opens each child
+  `<space_id>/` is group-writable, so the platform opens each child
   with `O_NOFOLLOW` relative to its parent's fd and fixes it with
   `fchown`/`fchmod`: a planted symlink fails the space instead of
   redirecting a root chown. The same holds for everything inside
@@ -996,7 +1000,8 @@ what another doc says it should be.
   `platform_state` (key → JSONB); `0002_accounts` creates `users`,
   `sessions`, `invites`; `0003_spaces` creates `spaces`, `space_members`,
   and the personal-space member trigger; `0004_apps` creates `apps`,
-  `app_versions`, `app_instances` (§3 "Apps").
+  `app_versions`, `app_instances` (§3 "Apps"); `0005_app_data` creates
+  `app_migrations` (§3 "App data").
 - **Healthcheck**: `GET /internal/health` via the image's `python`
   (`SELECT 1` against the pool; `503` if the database is unreachable).
 - **Env vars consumed** (cross-checked against `app/core/config.py`):
@@ -1082,12 +1087,34 @@ what another doc says it should be.
   builder, builder diagnostics passed on, normalized and capped, hostile
   outputs — bad or oversized JSON, symlinked results and bundles, a
   non-bundle `app.js` — refused, timeouts, the role × agent matrix, `503`s,
-  and `ExecManagerBuilder`'s HTTP contract). Unprivileged
+  and `ExecManagerBuilder`'s HTTP contract).
+  M12-03: `test_appschema.py` (the differ: the spike's
+  15-case classification matrix, rebuilds keeping rows and FKs, an FK
+  violation rolling back, quoted names, bad and oversized schemas, stdlib
+  only), `test_appdb.py` (the connection: WAL, refusing symlinked files,
+  params and values, the scope matrix — ATTACH, VACUUM [INTO], DDL,
+  pragmas, BEGIN, REINDEX, `load_extension` all refused, reads can't write
+  — timeouts, row/byte caps, transactions, actions, snapshot pruning, the
+  `ro/` publish), `test_appdata_api.py` (migrations additive/destructive
+  → pending → approve/reject/superseded/`plan_changed`, a failed apply
+  rolled back with its snapshot kept, every RPC op, actions with params,
+  the owner/editor/viewer/non-member × user/agent matrix, symlinked
+  `schema.sql`/actions, the `ro/` debounce, and the events socket:
+  credential, members only, coalescing, `app_built`, membership removal
+  and logout closing it; uninstall waiting for a running write, and a
+  write that passed its check before an uninstall not re-creating the dir);
+  `test_app_build.py` also covers the build migrating `working` instances
+  to the staged `schema.sql` (additive applied, destructive `pending`, a
+  failing instance not failing the build, uninstalled and other apps'
+  instances untouched) and `app_built` reaching members only after a good
+  build; `test_storage.py` checks as root that a member
+  can read `ro/data.sqlite` and nothing else under `apps/`. Unprivileged
   tests record space-dir chowns via the autouse `chowns` fixture instead
   of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
   `scripts/e2e/platform_spaces_smoke.sh`,
   `scripts/e2e/platform_files_smoke.sh`, `scripts/e2e/platform_apps_smoke.sh`,
-  `scripts/e2e/app_build_smoke.sh`.
+  `scripts/e2e/app_build_smoke.sh`,
+  `scripts/e2e/platform_app_data_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
@@ -1818,8 +1845,8 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `POST /api/platform/apps/{id}/validate` | write on the source space | — | `200 {"app": App, "valid": bool, "diagnostics": [Diagnostic]}`. When valid, the working version takes the current `app.json` (and the app its `name`); when not, nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors |
 | `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
-| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` (`root:<gid>` `2770`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
-| `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine). The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
+| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
+| `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine), after any running write or migration of the instance finishes; later ones are `404`. The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
 
 *Tables* (`0004_apps`): `apps` (`UNIQUE (source_space_id, slug)`),
 `app_versions` (at most one `working` per app; published versions unique
@@ -1890,6 +1917,16 @@ in `docs/PLATFORM.md` §7 "Build and verify").
 - `Build`: `{"id": build_id, "duration_ms", "bundle_path": str|null,
   "bundle_bytes": int|null}` (null unless it succeeded). The response's
   `build` is null when it stopped at staging or validation.
+- `migrations` (M12-03): after a successful build, one `{"instance_id",
+  "migration": Migration|null, "error": code|null}` per live instance
+  tracking the app's `working` version (oldest first; `[]` otherwise). Each
+  was migrated to the `schema.sql` of the staged copy that was built — not
+  the source as it is now — exactly as `POST …/migrate` would (§3 "App
+  data"): additive/safe plans are `applied`, a destructive one is left
+  `pending` for approval. An instance that can't be migrated gets `error`
+  (`invalid_schema`, `migration_failed` with its `failed` migration,
+  `not_found` if it was uninstalled meanwhile, …) and the build is still
+  `ok`. Then `app_built` goes to the source space's members.
 
 *Type-check* (`services/app-builder/src/typecheck.mjs`): TS `strict`
 except `noImplicitAny`, `lib: ["es2020"]` (no DOM), JSX `react-jsx`,
@@ -1908,6 +1945,130 @@ imports are still checked): `react`, `react/jsx-runtime`, `react-native`,
 `expo-router`, `expo-sqlite`, `@homeai/sdk`, and relative imports of
 `.ts`/`.tsx`/`.js`/`.jsx`/`.json` files that resolve (symlinks included)
 inside the app folder.
+**App data** (`app/core/{appdata,appdb,appschema,events}.py`,
+`app/api/external/{appdata,events}.py`; M12-03; design in
+`docs/PLATFORM.md` §7 "Data")
+
+Each live instance has one SQLite database,
+`${SPACES_DIR}/<space_id>/apps/<instance_id>/data.sqlite` (WAL, `0600`),
+opened only by the platform, through the instance dir's fd, on a connection
+that has nothing else attached. Every statement is prepared under an
+allow-list authorizer: reads (`SELECT`, `WITH`, `VALUES`, functions except
+`load_extension`, and the introspection pragmas `table_info`,
+`table_xinfo`, `table_list`, `index_list`, `index_info`, `index_xinfo`,
+`foreign_key_list` on `main`), plus `INSERT`/`UPDATE`/`DELETE` on non-`sqlite_`
+tables for writes. Everything else is `422 sql_not_allowed`: DDL, `ATTACH`,
+`VACUUM [INTO]`, `REINDEX`, `ANALYZE`, transaction control and other pragmas.
+`SQLITE_LIMIT_ATTACHED` is `0`.
+
+Access is the instance's space's (§3 "Spaces authorization"): `read` for
+`getAll`/`getFirst` and the migration list, `write` for everything else; a
+non-member, an unknown or uninstalled instance, and an instance whose app
+is gone are all `404 not_found`. An agent delegation has its user's rights.
+
+*RPC* — `POST /api/platform/apps/instances/{id}/rpc`, body discriminated by
+`op`. `params` is a list for `?` placeholders or an object for named ones
+(`:x`, `$x`, `@x`; the prefix is optional in the key). Values are
+string / number / boolean (bound as `0`/`1`) / `null`; integers must fit
+in 64 bits. Output values are the SQLite values, except a BLOB comes back
+as `{"$blob": "<base64>"}` and a non-finite REAL as `null`.
+
+| `op` | Need | Request | `200` body |
+|---|---|---|---|
+| `getAll` | read | `{"sql", "params"?}` | `{"rows": [{column: value}]}` |
+| `getFirst` | read | `{"sql", "params"?}` | `{"row": {…} \| null}` |
+| `run` | write | `{"sql", "params"?}` | `{"changes", "lastInsertRowId"}` |
+| `transaction` | write | `{"statements": [{"sql", "params"?}]}` (1–100) | `{"results": [{"changes", "lastInsertRowId"}]}`; all or nothing |
+| `action` | write | `{"name", "params"?: {…}}` | `{"changes", "lastInsertRowId", "rows"}`; `rows` are those of the last statement that returned any |
+
+An action is `actions/<name>.sql` in the app's source (`name` matches
+`^[a-z][a-zA-Z0-9_]*$`, file ≤ 64 KiB, read below the source space's
+`files/` with no symlinks). It can hold up to 100 statements, which run in
+one transaction and all get the same named `params`. `getAll`/`getFirst`
+run on a read-only authorizer, so a write inside them (`DELETE … RETURNING`)
+is `sql_not_allowed` even for an editor.
+
+Limits: `sql` ≤ 100 KiB and one statement per `sql` (use `transaction` or
+an action for more); ≤ 5 s per request (then `sql_timeout`); ≤ 10,000 rows
+and ≤ 8 MiB per result (`too_many_rows`, `result_too_large`); a value is
+≤ 16 MiB. Writes to one instance are serialized; a busy database after 5 s
+is `503 db_busy`.
+
+Errors: `422 {"detail": code, "message", "index"?}` with `code` one of
+`sql_error` (SQLite's message: syntax, constraint, missing table…),
+`sql_not_allowed`, `sql_timeout`, `too_many_rows`, `result_too_large`,
+`invalid_params`. `index` is the failing statement's position in a
+`transaction` or action (an action with no statements is `sql_error`).
+Also `404 unknown_action` (missing, a symlink, or not a regular file),
+`422 invalid_action` (bad name, not UTF-8), `422 file_too_large`,
+`409 pinned_versions_unsupported` (an action on an instance that tracks a
+published version), `500 instance_storage_invalid` (a `data.sqlite` or
+side file that isn't a regular file), and the space errors.
+
+*Migrations* — computed from the app's `schema.sql` (same source rules as
+actions; ≤ 256 KiB; only `CREATE TABLE`/`CREATE INDEX`; names can't start
+with `sqlite_` or `_homeai_`). The plan diffs a scratch database built from
+it against the live one; each step is `additive` (new table, column or
+index), `safe` (an index dropped or replaced, a rebuild that only relaxes)
+or `destructive` (a table or column dropped, a retype or tightening,
+renames). Applying a plan snapshots the database first (when it has any
+table) with the backup API to `snapshots/<UTC stamp>-<migration id>.sqlite`
+(`0600`, the newest 10 kept). It then runs every step in one
+`BEGIN IMMEDIATE` transaction with foreign keys off, and commits only if
+`foreign_key_check` is clean and a re-diff is empty; otherwise it rolls
+back.
+
+`Migration` = `{"id", "instance_id", "status", "steps": [{"kind", "op",
+"table", "sql": [...], "reason"}], "summary": {"additive", "safe",
+"destructive"}, "needs_approval", "snapshot", "error", "created_by",
+"created_at", "decided_by", "decided_at"}`. `status` is `up_to_date` (with
+`id: null`, nothing recorded), `applied`, `pending`, `failed`, `rejected`
+or `superseded`.
+
+| Method + path | Need | Success | Errors |
+|---|---|---|---|
+| `GET …/instances/{id}/migrations` | read | `200 {"migrations": [Migration]}` — newest 50 | space errors |
+| `POST …/instances/{id}/migrate` | write | `200 Migration`: `up_to_date`; `applied` when no step is destructive; else `pending` (any older pending one becomes `superseded`) | `422 invalid_schema` + `diagnostics` (missing or unreadable `schema.sql`, a statement the scratch authorizer refused, SQL errors); `422 migration_failed` + `migration` (status `failed`, `error`, the snapshot kept); `409 pinned_versions_unsupported` |
+| `POST …/migrations/{mid}/approve` | write | `200 Migration` `applied` | `404 not_found` (not this instance's); `409 migration_not_pending`; `409 plan_changed` (re-planning now gives other steps; the row becomes `superseded`, call `migrate` again); `422 migration_failed` |
+| `POST …/migrations/{mid}/reject` | write | `200 Migration` `rejected` | `404 not_found`, `409 migration_not_pending` |
+
+Nothing migrates on install. A successful build migrates every live
+instance tracking the app's `working` version (§3 "App builds" →
+`migrations`). Writes, migrations and uninstall of one instance are
+serialized by the same in-process lock; the instance dir is never
+re-created after install, so anything that reaches it after an uninstall
+is `404 not_found`.
+
+*Table* (`0005_app_data`): `app_migrations` (status check; at most one
+`pending` per instance; `ON DELETE CASCADE` from `app_instances`).
+
+*Read-only copy for exec*: after each committed write (`changes > 0`) and
+each applied migration, the platform publishes
+`apps/<instance_id>/ro/data.sqlite` (`0444`, `root:<gid>`) with `VACUUM
+INTO` a temp file, fsync, and an atomic rename. Publishing is debounced to
+at most once a second and is trailing, so the last write always lands.
+Readers open it with `mode=ro&immutable=1`. `apps/` and everything under
+it except that file are closed to members (`2750` dirs, `0600` files).
+Exec grants don't mount `ro/` yet.
+
+*Events* — `GET /ws/platform/events` (WebSocket, through Caddy's
+`forward_auth` like `/api/platform/*`; an agent's delegation bearer works
+too). The server accepts, authenticates, then sends `{"type": "ready"}`.
+Then it sends, as JSON text frames:
+
+- `{"type": "db_changed", "instance_id"}` after a write that changed rows
+  or an applied migration, to members of the instance's space;
+- `{"type": "app_built", "app_id", "version"}` to members of the app's
+  source space after a successful build, once its instances' migrations
+  are done (`version` is the built `app.json`'s).
+
+Events are hints to re-query, not a log. They are coalesced per key while
+a subscriber is behind: one `db_changed` per instance, the latest
+`app_built` per app. Nothing is replayed after a reconnect, so a client
+re-queries on `ready`. The server re-reads the subscriber's session and
+spaces every 10 s: a removed member stops getting a space's events within
+that window, and a revoked session or a missing/invalid credential closes
+with code `4401`. Client frames are ignored.
 
 **`/internal/*`** (never routed by Caddy)
 
@@ -2911,10 +3072,11 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real `/personal/research/llamacpp.md` in the user's personal space) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
-| `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
+| `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/` is `0:<gid> 2770` and `apps/` `2750`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
-| `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2770` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/app_build_smoke.sh` | M12-04: (re)builds `homeai-app-builder:latest`, then with the same transport a CLI-created owner uploads and registers the fixture `hello` and builds it: `ok`, `bundle_path` = `app-bundles/<app>/<build>/app.js` in the API and an `__homeai_define(` bundle + map on disk, staging dir and builder containers gone. A missing import, a disallowed import (`fs`), a type error and a render throw in `app/index.tsx` each give exactly one diagnostic with the expected step, file, line and column and leave the bundle as it was; a bad `app.json` gives one `manifest` diagnostic and never reaches the builder; an outsider's build is `404`; a rebuild replaces the bundle and deletes the old one; deletes its rows, dirs and bundles on exit. Also in `gate_full.sh` | After touching `services/app-builder/`, `app/builds.py` or the platform's `appbuild.py` |
+| `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; then (builder image rebuilt first) a column added in the source's `schema.sql` → `POST /apps/{id}/build` → the build's `migrations` show it applied, the column exists and the viewer's socket gets `app_built`; dropping it → build → `pending` in the build response and the migration list, column kept; deletes its rows, bundles and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
+| `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2750` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with HITL off — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |

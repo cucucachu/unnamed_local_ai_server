@@ -23,6 +23,7 @@ from app.core.appbuild import Builds, ExecManagerBuilder, PhaseRun
 from app.core.errors import Unavailable
 from tests.app_packages import manifest, write_package
 from tests.files_world import API, World
+from tests.ws import WsClient
 
 APPS = f"{API}/apps"
 BUNDLE = b"__homeai_define(function(){});\n"
@@ -501,3 +502,161 @@ async def test_no_token_means_no_call() -> None:
     builder = ExecManagerBuilder("http://m", "", 5, transport=httpx.MockTransport(handler))
     with pytest.raises(Unavailable):
         await builder.run("ab" * 16, "compile")
+
+
+# --- the instances' data ----------------------------------------------------------------
+
+ITEMS = "CREATE TABLE items (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);\n"
+ITEMS_NOTE = (
+    "CREATE TABLE items (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  note TEXT\n);\n"
+)
+
+
+def _schema(world: World, text: str, slug: str = "hello") -> None:
+    (world.family_root / "Apps" / slug / "schema.sql").write_text(text)
+
+
+async def _install(world: World, app: dict) -> dict:
+    response = await world.client.post(
+        f"{API}/spaces/{world.family['id']}/instances", json={"app_id": app["id"]},
+        headers=world.headers["alice"],
+    )  # fmt: skip
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def _columns(world: World, inst: dict) -> list[str]:
+    response = await world.client.post(
+        f"{API}/apps/instances/{inst['id']}/rpc",
+        json={"op": "getAll", "sql": "SELECT name FROM pragma_table_info('items')"},
+        headers=world.headers["carol"],
+    )
+    assert response.status_code == 200, response.text
+    return [row["name"] for row in response.json()["rows"]]
+
+
+async def test_a_build_migrates_the_instances_tracking_the_working_version(world, builder) -> None:
+    app = await _registered(world)
+    inst = await _install(world, app)
+    _schema(world, ITEMS)
+
+    body = (await _build(world, app["id"])).json()
+
+    assert body["ok"] is True
+    [result] = body["migrations"]
+    assert (result["instance_id"], result["error"]) == (inst["id"], None)
+    migration = result["migration"]
+    assert (migration["status"], migration["summary"]["additive"]) == ("applied", 1)
+    assert await _columns(world, inst) == ["id", "name"]
+
+    _schema(world, ITEMS_NOTE)
+    migration = (await _build(world, app["id"])).json()["migrations"][0]["migration"]
+    assert (migration["status"], migration["snapshot"] is not None) == ("applied", True)
+    assert [s["reason"] for s in migration["steps"]] == ["new column note"]
+    assert await _columns(world, inst) == ["id", "name", "note"]
+
+    body = (await _build(world, app["id"])).json()
+    assert body["migrations"][0]["migration"]["status"] == "up_to_date"
+
+
+async def test_a_destructive_change_is_left_pending_in_the_build_response(world, builder) -> None:
+    app = await _registered(world)
+    inst = await _install(world, app)
+    _schema(world, ITEMS_NOTE)
+    await _build(world, app["id"])
+    _schema(world, ITEMS)
+
+    body = (await _build(world, app["id"])).json()
+
+    assert body["ok"] is True
+    migration = body["migrations"][0]["migration"]
+    assert (migration["status"], migration["needs_approval"]) == ("pending", True)
+    assert [s["kind"] for s in migration["steps"]] == ["destructive"]
+    assert await _columns(world, inst) == ["id", "name", "note"]
+    listed = await world.client.get(
+        f"{API}/apps/instances/{inst['id']}/migrations", headers=world.headers["alice"]
+    )
+    assert listed.json()["migrations"][0]["id"] == migration["id"]
+
+
+async def test_the_build_migrates_to_the_schema_it_built(world, builder) -> None:
+    app = await _registered(world)
+    inst = await _install(world, app)
+    _schema(world, ITEMS)
+
+    def edit_meanwhile(phase: str, build: Path) -> None:
+        _schema(world, "")
+        succeed(phase, build)
+
+    builder.script = edit_meanwhile
+    body = (await _build(world, app["id"])).json()
+
+    assert body["migrations"][0]["migration"]["status"] == "applied"
+    assert await _columns(world, inst) == ["id", "name"]
+
+
+async def test_a_failed_build_migrates_nothing_and_announces_nothing(world, builder) -> None:
+    app = await _registered(world)
+    inst = await _install(world, app)
+    _schema(world, ITEMS)
+    builder.script = fail_with("smoke", {"step": "render", "message": "boom"})
+    ws = WsClient(world.platform.app, "/ws/platform/events", world.headers["carol"])
+    await ws.connect()
+    assert await ws.recv() == {"type": "ready"}
+
+    body = (await _build(world, app["id"])).json()
+
+    assert (body["ok"], body["migrations"]) == (False, [])
+    assert await _columns(world, inst) == []
+    with pytest.raises(TimeoutError):
+        await ws.recv(timeout=0.3)
+    await ws.close()
+
+
+async def test_a_good_build_announces_app_built_to_the_source_space(world, builder) -> None:
+    app = await _registered(world)
+    await _install(world, app)
+    _schema(world, ITEMS)
+    sockets = {u: WsClient(world.platform.app, "/ws/platform/events", world.headers[u])
+               for u in ("carol", "dave")}  # fmt: skip
+    for ws in sockets.values():
+        await ws.connect()
+        assert await ws.recv() == {"type": "ready"}
+
+    await _build(world, app["id"])
+
+    events = [await sockets["carol"].recv(), await sockets["carol"].recv()]
+    assert events[0]["type"] == "db_changed"
+    assert events[1] == {"type": "app_built", "app_id": app["id"], "version": "1.0.0"}
+    with pytest.raises(TimeoutError):
+        await sockets["dave"].recv(timeout=0.3)
+    for ws in sockets.values():
+        await ws.close()
+
+
+async def test_one_instance_failing_to_migrate_doesnt_fail_the_build(world, builder) -> None:
+    app = await _registered(world)
+    inst = await _install(world, app)
+    _schema(world, ITEMS + "CREATE VIEW names AS SELECT name FROM items;\n")
+
+    body = (await _build(world, app["id"])).json()
+
+    assert body["ok"] is True
+    assert body["migrations"] == [
+        {"instance_id": inst["id"], "migration": None, "error": "invalid_schema"}
+    ]
+
+
+async def test_uninstalled_and_other_apps_instances_are_left_alone(world, builder) -> None:
+    app = await _registered(world)
+    other = await _registered(world, "other")
+    gone = await _install(world, app)
+    kept = await _install(world, other)
+    response = await world.client.delete(
+        f"{API}/spaces/{world.family['id']}/instances/{gone['id']}", headers=world.headers["alice"]
+    )
+    assert response.status_code == 204
+    _schema(world, ITEMS)
+
+    assert (await _build(world, app["id"])).json()["migrations"] == []
+    assert await _columns(world, kept) == []

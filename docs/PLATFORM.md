@@ -299,9 +299,10 @@ the filesystem is then reached only below that space's open `files/` fd
 ${SPACES_DIR}/                       # default /srv/homeai/spaces
   <space_id>/                        # root:<space_gid> 2770 (setgid)
     files/                           # the space's files root
-    apps/<instance_id>/data.sqlite   # app data, platform-only writer (D12)
-    apps/<instance_id>/snapshots/    # pre-migration snapshots
-    apps/<instance_id>/ro/data.sqlite  # read-only snapshot published for exec (§7 Data); only ro/ is ever mounted
+    apps/                            # root:<space_gid> 2750: only the platform writes below here (M12-03)
+    apps/<instance_id>/data.sqlite   # app data, platform-only writer (D12); 0600
+    apps/<instance_id>/snapshots/    # pre-migration snapshots (0600, newest 10 kept)
+    apps/<instance_id>/ro/data.sqlite  # read-only snapshot published for exec (§7 Data), 0444; only ro/ is ever mounted
     apps/.trash/<instance_id>-<stamp>/ # an uninstalled instance's dir, kept as its final snapshot (M12-02)
 ```
 
@@ -587,6 +588,42 @@ diagnostic until added.
   that `ro/` directory, and exec opens it with `mode=ro&immutable=1`.
 - Viewers get read-only RPC (`db.getAll`/`getFirst`, no `run`/actions).
 
+> **As built (M12-03)** (contract: `ARCHITECTURE.md` §3 "App data"):
+> `POST /api/platform/apps/instances/{id}/rpc` takes `getAll`, `getFirst`,
+> `run`, `transaction` and `action` (a named `actions/<name>.sql` read from
+> the app's source, `:named` params, every statement in one transaction);
+> `GET …/migrations`, `POST …/migrate` and `POST …/migrations/{mid}/approve`
+> / `reject` drive migrations, with pending ones kept in Postgres
+> (`app_migrations`). `/ws/platform/events` emits `db_changed` and
+> `app_built`. Scope is enforced by an allow-list SQLite authorizer rather
+> than a CREATE-only deny-list, plus `SQLITE_LIMIT_ATTACHED = 0` and a
+> leading-keyword check. Deviations:
+>
+> - **`apps/` is 2750, not 2770.** SQLite reopens a database (and its
+>   `-wal`/`-shm`) by the path it was given, and a `/proc/self/fd/N/…` path
+>   resolves back to a real one. Pinning the instance dir by fd alone can't
+>   stop a group member from swapping files under it, so nobody but root may
+>   write below `apps/`. The platform also refuses to open a `data.sqlite`
+>   or side file that isn't a regular file. `<space_id>/` itself is still
+>   2770; tightening it to 2750 is a follow-up for M11-04.
+> - **`ro/` is published after every committed write and migration**
+>   (debounced to once a second, trailing), not when an exec grant is
+>   issued. Exec grants don't mount it yet: that needs an exec mount
+>   contract (`/app-data/<instance>`?), which is a follow-up with M11-04 and
+>   M13.
+> - **Migrations don't run on install**; a successful build migrates each
+>   instance tracking `working` to the `schema.sql` it built (destructive
+>   plans stay `pending` and are listed in the build response). The approver of a destructive plan is any editor+ of the
+>   space, agents included. HITL for agent approval is M13-02.
+> - Pinned instances (`tracks: pinned`) get 409
+>   `pinned_versions_unsupported` for actions and migrations until published
+>   versions exist (M14).
+> - `transaction` is a batch of statements run in one transaction, not a
+>   lease held across requests; that's the shape `withTransactionAsync` in
+>   the shim needs (deferred per the M12-01 spike).
+> - Virtual tables (FTS etc.), views and triggers aren't allowed in
+>   `schema.sql` yet.
+
 ### Build and verify
 
 The platform builds apps in a sandboxed container (network none, same
@@ -623,9 +660,9 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 > - The diagnostic field is `step` (manifest, files, route, import,
 >   bundle, type, render, sql, build), not `kind`; the component stack is
 >   in the render message.
-> - No migrate, `app_built` event or hot reload yet (M12-03's migrations
->   and `/ws/platform/events` aren't in); no git commit (M13), so
->   `commit` stays null.
+> - A successful build migrates the instances tracking `working` and emits
+>   `app_built` (wired in M12-03); no hot reload yet (M12-05) and no git
+>   commit (M13), so `commit` stays null.
 > - The runtime and SDK/shim typings live in the builder
 >   (`services/app-builder/runtime`, `types/homeai.d.ts`) until M12-05's
 >   `packages/homeai-sdk/`.

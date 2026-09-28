@@ -11,7 +11,8 @@
 #      B as a viewer.
 #   2. On the host, `${SPACES_DIR}` (default /srv/homeai/spaces) holds a
 #      `<space_id>` dir per space, `root:<gid>` with mode 2770 (drwxrws---);
-#      inside the container `files/` and `apps/` are the same.
+#      inside the container `files/` is the same and `apps/` is 2750 (only the
+#      platform writes app data).
 #   3. API: B lists both spaces with the right roles; B (viewer) can't add a
 #      member (403 insufficient_role) and A's personal space is 404 to B;
 #      A promotes B to editor, can't remove the last owner (409), and the
@@ -138,7 +139,9 @@ for pair in "$SHARED_ID:$SHARED_GID" "$A_ID:$A_GID" "$B_ID:$B_GID"; do
   inside="$(docker compose exec -T platform stat -c '%n %u:%g %a' \
     "/data/spaces/$id/files" "/data/spaces/$id/apps")"
   while read -r path owner mode; do
-    [[ "$owner" == "0:$gid" && "$mode" == 2770 ]] || fail "container: $path is $owner $mode"
+    want=2770
+    [[ "$path" == */apps ]] && want=2750
+    [[ "$owner" == "0:$gid" && "$mode" == "$want" ]] || fail "container: $path is $owner $mode, want 0:$gid $want"
     echo "ok   container $path  $owner $mode"
   done <<<"$inside"
 done

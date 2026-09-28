@@ -22,7 +22,8 @@ from datetime import timedelta
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import Depends
+from starlette.requests import HTTPConnection
 
 from app.core import sessions
 from app.core.errors import Forbidden, Unauthorized
@@ -55,7 +56,7 @@ def issue_identity_token(tokens: TokenService, *, user_id: UUID, session_id: UUI
     return tokens.issue_token(claims, IDENTITY_TTL)
 
 
-def bearer_token(request: Request) -> str | None:
+def bearer_token(request: HTTPConnection) -> str | None:
     scheme, _, credential = request.headers.get("authorization", "").partition(" ")
     credential = credential.strip()
     if scheme.lower() != "bearer" or not credential:
@@ -63,7 +64,7 @@ def bearer_token(request: Request) -> str | None:
     return credential
 
 
-def _claims(request: Request) -> dict:
+def _claims(request: HTTPConnection) -> dict:
     tokens: TokenService = request.app.state.tokens
     identity = request.headers.get(IDENTITY_HEADER)
     try:
@@ -77,8 +78,11 @@ def _claims(request: Request) -> dict:
     raise Unauthorized("unauthenticated")
 
 
-async def require_user(request: Request) -> Principal:
-    """Any authenticated principal: a user via Caddy, or their agent via delegation."""
+async def require_user(request: HTTPConnection) -> Principal:
+    """Any authenticated principal: a user via Caddy, or their agent via delegation.
+
+    Also called directly on a WebSocket's handshake (`/ws/platform/*`).
+    """
     claims = _claims(request)
     try:
         user_id, session_id = UUID(claims["sub"]), UUID(str(claims.get("sid")))

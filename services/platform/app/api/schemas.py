@@ -439,6 +439,8 @@ class AppBuildOut(BaseModel):
     # None when it stopped before the builder ran (the package itself failed).
     build: BuildOut | None
     diagnostics: list[BuildDiagnosticOut]
+    # One per live instance tracking the working version, after a successful build.
+    migrations: list[InstanceMigrationOut] = []
 
 
 class InstanceAppOut(BaseModel):
@@ -468,3 +470,89 @@ class InstanceList(BaseModel):
 class InstallRequest(BaseModel):
     app_id: UUID
     tracks: Short = "working"
+
+
+# --- app data (M12-03) ------------------------------------------------------------
+
+SqlText = Annotated[str, Field(min_length=1, max_length=100 * 1024)]
+SqlValue = str | bool | int | float | None
+# expo-sqlite's bind params: positional for `?`, or named (`:x`, `$x`, `@x`; prefix optional).
+SqlParams = (
+    Annotated[list[SqlValue], Field(max_length=1000)]
+    | Annotated[dict[Short, SqlValue], Field(max_length=1000)]
+    | None
+)
+
+
+class RpcGetAll(BaseModel):
+    op: Literal["getAll"]
+    sql: SqlText
+    params: SqlParams = None
+
+
+class RpcGetFirst(BaseModel):
+    op: Literal["getFirst"]
+    sql: SqlText
+    params: SqlParams = None
+
+
+class RpcRun(BaseModel):
+    op: Literal["run"]
+    sql: SqlText
+    params: SqlParams = None
+
+
+class RpcStatement(BaseModel):
+    sql: SqlText
+    params: SqlParams = None
+
+
+class RpcTransaction(BaseModel):
+    op: Literal["transaction"]
+    statements: Annotated[list[RpcStatement], Field(min_length=1, max_length=100)]
+
+
+class RpcAction(BaseModel):
+    op: Literal["action"]
+    name: Short
+    params: Annotated[dict[Short, SqlValue], Field(max_length=1000)] = {}
+
+
+RpcRequest = Annotated[
+    RpcGetAll | RpcGetFirst | RpcRun | RpcTransaction | RpcAction, Field(discriminator="op")
+]
+
+
+class MigrationStepOut(BaseModel):
+    kind: Literal["additive", "safe", "destructive"]
+    op: str
+    table: str
+    sql: list[str]
+    reason: str
+
+
+class MigrationOut(BaseModel):
+    # None when the schema is already up to date (nothing is recorded).
+    id: UUID | None
+    instance_id: UUID
+    status: Literal["up_to_date", "applied", "pending", "failed", "rejected", "superseded"]
+    steps: list[MigrationStepOut]
+    summary: dict[str, int]
+    needs_approval: bool
+    snapshot: str | None
+    error: str | None
+    created_by: UUID | None
+    created_at: datetime | None
+    decided_by: UUID | None
+    decided_at: datetime | None
+
+
+class MigrationList(BaseModel):
+    migrations: list[MigrationOut]
+
+
+class InstanceMigrationOut(BaseModel):
+    instance_id: UUID
+    # None when it couldn't be planned (`error` says why).
+    migration: MigrationOut | None
+    error: str | None
