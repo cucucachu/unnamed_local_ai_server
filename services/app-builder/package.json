@@ -1,0 +1,28 @@
+{
+  "name": "homeai-app-builder",
+  "private": true,
+  "type": "module",
+  "description": "M12-04: the app builder image - import allowlist, type-check, esbuild bundle and smoke render of user apps, run by code-exec-manager with no network (docs/PLATFORM.md §7).",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@jridgewell/trace-mapping": "0.3.31",
+    "@types/react": "19.2.18",
+    "esbuild": "0.25.12",
+    "jsdom": "26.1.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-web": "0.21.2",
+    "typescript": "6.0.3"
+  },
+  "scripts": {
+    "build:runtime": "node src/build-runtime.mjs",
+    "lint": "tsc -p tsconfig.json && for f in src/*.mjs tests/*.mjs; do node --check \"$f\" || exit 1; done",
+    "test": "node src/build-runtime.mjs && node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/react-dom": "19.2.7"
+  }
+}
