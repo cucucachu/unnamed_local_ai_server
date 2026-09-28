@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # M12-03: live app data (per-instance SQLite, migrations, RPC, change events)
-# against the running `platform`.
+# against the running `platform` (and `code-exec-manager` for step 8).
 #
+# Step 0 (re)builds the builder image like app_build_smoke.sh (cached; its
+# `npm ci` needs the internet the first time).
 # Like platform_apps_smoke.sh, requests go from a throwaway `curlimages/curl`
 # container on `homeai_homeai-internal` straight to `platform:8100`, playing
 # Caddy's part (verify -> X-HomeAI-Identity) by hand. Never completes
@@ -24,6 +26,12 @@
 #   7. `apps/<instance_id>/` is `0:<gid>` 2750, and `ro/data.sqlite` (0444) is
 #      readable, with the current rows, by an exec-shaped container (member
 #      uid, space gid, `--network none`, only `ro/` mounted read-only).
+#   8. Build → data: with a column added to the source's schema.sql, `POST
+#      /apps/{id}/build` succeeds, its `migrations` show the instance's
+#      additive migration applied, the column exists, and the viewer's
+#      socket gets `app_built` for the app. Dropping the column again and
+#      building leaves a `pending` destructive migration, in the build
+#      response and in the instance's migration list, and the column stays.
 # Everything it created (rows and directories) is deleted on exit.
 #
 # Usage: scripts/e2e/platform_app_data_smoke.sh
@@ -42,6 +50,7 @@ API="$BASE/api/platform"
 FIXTURE="$SCRIPT_DIR/fixtures/apps/hello"
 PREFIX="e2e-pad-$(openssl rand -hex 3)"
 SPACE="$PREFIX"
+APP_ID=""
 ROLES=(owner viewer outsider)
 PASSWORD="$(openssl rand -hex 16)"
 env_value() { grep -E "^$1=" .env | tail -n1 | cut -d= -f2- || true; }
@@ -77,6 +86,9 @@ cleanup() {
   for id in $ids; do
     [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && docker compose exec -T platform rm -rf "/data/spaces/$id" || true
   done
+  if [[ "$APP_ID" =~ ^[0-9a-f-]{36}$ ]]; then
+    docker compose exec -T platform rm -rf "/data/platform/app-bundles/$APP_ID" || true
+  fi
 }
 trap cleanup EXIT
 
@@ -127,6 +139,9 @@ put_text() {
     "$API/files/content?path=$2"
 }
 rpc() { post_json "$1" "/apps/instances/$IID/rpc" "$2"; }
+
+echo "== 0. builder image"
+bash services/app-builder/build-builder-image.sh >/dev/null
 
 echo "== waiting for platform health"
 for _ in $(seq 1 30); do
@@ -290,5 +305,58 @@ except OSError:
 ")"
 [[ "$got" == $'3\nread-only' ]] || fail "exec-shaped reader got: $got"
 echo "ok   exec-shaped container (uid $VIEWER_UID, gid $S_GID, ro/ only) reads 3 rows, can't write"
+
+echo "== 8. build -> data"
+columns() {
+  field "$(rpc viewer '{"op":"getAll","sql":"SELECT name FROM pragma_table_info('"'"'greetings'"'"')"}')" \
+    '[c["name"] for c in d["rows"]]'
+}
+sed 's/  text TEXT NOT NULL/  text TEXT NOT NULL,\n  mood TEXT/' "$FIXTURE/schema.sql" |
+  put_text owner "$SRC/schema.sql" >/dev/null
+# The build from inside the platform container, with the viewer's socket open.
+docker compose exec -T -e VIEWER="${IDENT[viewer]}" -e OWNER="${IDENT[owner]}" -e IID="$IID" \
+  -e APP_ID="$APP_ID" platform python - <<'PY' || fail "build -> additive migration + app_built"
+import json, os, urllib.request
+from websockets.sync.client import connect
+
+base = "localhost:8100"
+with connect(f"ws://{base}/ws/platform/events",
+             additional_headers={"X-HomeAI-Identity": os.environ["VIEWER"]}) as ws:
+    assert json.loads(ws.recv(timeout=5)) == {"type": "ready"}
+    req = urllib.request.Request(
+        f"http://{base}/api/platform/apps/{os.environ['APP_ID']}/build", data=b"{}",
+        headers={"X-HomeAI-Identity": os.environ["OWNER"], "Content-Type": "application/json"},
+    )
+    body = json.loads(urllib.request.urlopen(req, timeout=600).read())
+    assert body["ok"] is True, body["diagnostics"]
+    [result] = body["migrations"]
+    migration = result["migration"]
+    assert result["instance_id"] == os.environ["IID"] and result["error"] is None, result
+    assert (migration["status"], [s["reason"] for s in migration["steps"]]) == \
+        ("applied", ["new column mood"]), migration
+    print(f"ok   build {body['build']['id']} -> ok; instance migration applied (new column mood)")
+    while (event := json.loads(ws.recv(timeout=10)))["type"] != "app_built":
+        assert event == {"type": "db_changed", "instance_id": os.environ["IID"]}, event
+    assert event == {"type": "app_built", "app_id": os.environ["APP_ID"], "version": "1.0.0"}, event
+    print("ok   viewer's /ws/platform/events got", event)
+PY
+[[ "$(columns)" == "['id', 'text', 'mood']" ]] || fail "columns after build: $(columns)"
+echo "ok   instance DB has 'mood'"
+put_text owner "$SRC/schema.sql" <"$FIXTURE/schema.sql" >/dev/null
+r="$(docker run --rm -i --network "$NETWORK" "$CURL_IMAGE" -sS -i --max-time 600 \
+  -H "X-HomeAI-Identity: ${IDENT[owner]}" -H 'Content-Type: application/json' -d '{}' \
+  "$API/apps/$APP_ID/build" </dev/null)"
+expect 200 "$r" "build (drop column)"
+m='d["migrations"][0]["migration"]'
+[[ "$(field "$r" "d['ok'], ${m}['status'], ${m}['summary']['destructive']")" == "True pending 1" ]] ||
+  fail "destructive build: $(body_of "$r")"
+MID="$(field "$r" "${m}['id']")"
+echo "ok   destructive: $(field "$r" "${m}['steps'][0]['reason']") -> pending in the build response"
+r="$(as owner "$API/apps/instances/$IID/migrations" </dev/null)"
+[[ "$(field "$r" 'd["migrations"][0]["id"], d["migrations"][0]["status"]')" == "$MID pending" ]] ||
+  fail "migration list: $(body_of "$r")"
+echo "ok   listed as the instance's pending migration"
+[[ "$(columns)" == "['id', 'text', 'mood']" ]] || fail "column dropped without approval: $(columns)"
+echo "ok   'mood' kept until approved"
 
 echo "PASS: platform app data smoke"

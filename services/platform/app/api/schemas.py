@@ -439,6 +439,8 @@ class AppBuildOut(BaseModel):
     # None when it stopped before the builder ran (the package itself failed).
     build: BuildOut | None
     diagnostics: list[BuildDiagnosticOut]
+    # One per live instance tracking the working version, after a successful build.
+    migrations: list[InstanceMigrationOut] = []
 
 
 class InstanceAppOut(BaseModel):
@@ -547,3 +549,10 @@ class MigrationOut(BaseModel):
 
 class MigrationList(BaseModel):
     migrations: list[MigrationOut]
+
+
+class InstanceMigrationOut(BaseModel):
+    instance_id: UUID
+    # None when it couldn't be planned (`error` says why).
+    migration: MigrationOut | None
+    error: str | None

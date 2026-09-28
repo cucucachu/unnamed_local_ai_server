@@ -45,7 +45,8 @@ import httpx
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import apps, fsops, manifest, spaces, vfs
+from app.core import apps, appschema, fsops, manifest, spaces, vfs
+from app.core.appdata import AppData
 from app.core.errors import NotFound, Unavailable
 from app.core.principal import Principal
 from app.core.storage import SpaceStorage
@@ -378,6 +379,14 @@ async def _run(builds: Builds, builder: Builder, build_id: str):
 # --- the build -----------------------------------------------------------------------------
 
 
+def _staged_schema(builds: Builds, build_id: str) -> str | None:
+    data = builds.read(build_id, "src", "schema.sql", appschema.MAX_SCHEMA_BYTES)
+    try:
+        return None if data is None else data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def _stage(r: vfs.Resolved, slug: str, builds: Builds) -> tuple[str | None, Any, list[Diagnostic]]:
     fd = apps.open_source(r)
     if fd is None:
@@ -410,12 +419,15 @@ async def build_app(
     builds: Builds,
     builder: Builder,
     data_dir: Path,
+    appdata: AppData,
     app_id: UUID,
-) -> tuple[dict[str, Any], Build | None, list[Diagnostic]]:
-    """(app, the build or None if the builder never ran, diagnostics).
+) -> tuple[dict[str, Any], Build | None, list[Diagnostic], list[dict[str, Any]]]:
+    """(app, the build or None if the builder never ran, diagnostics, instance migrations).
 
     Needs `write` on the source space. The database connection isn't held
-    while the builder runs.
+    while the builder runs. A successful build then migrates the instances
+    that track the working version to the `schema.sql` it built
+    (`AppData.built`), which also emits `app_built`.
     """
     async with pool.connection() as conn:
         app = await apps.get_visible_app(conn, principal, app_id)
@@ -423,17 +435,20 @@ async def build_app(
         r, slug = await apps.resolve_source(conn, principal, storage, app["source_path"])
     build_id, doc, found = await anyio.to_thread.run_sync(_stage, r, slug, builds)
     if build_id is None:
-        return app, None, found
+        return app, None, found, []
     start = time.monotonic()
+    schema_sql = None
     try:
         if found:
-            return app, None, found
+            return app, None, found, []
         found, output = await _run(builds, builder, build_id)
+        if output is not None:
+            schema_sql = await anyio.to_thread.run_sync(_staged_schema, builds, build_id)
     finally:
         await anyio.to_thread.run_sync(builds.discard, build_id)
     duration_ms = int((time.monotonic() - start) * 1000)
     if output is None:
-        return app, Build(build_id, False, duration_ms), found
+        return app, Build(build_id, False, duration_ms), found, []
 
     bundle_path = await anyio.to_thread.run_sync(_store_bundle, data_dir, app_id, build_id, output)
     try:
@@ -445,7 +460,8 @@ async def build_app(
     await anyio.to_thread.run_sync(_drop_bundle, data_dir, previous)
     async with pool.connection() as conn:
         app = await apps.get_visible_app(conn, principal, app_id)
-    return app, Build(build_id, True, duration_ms, bundle_path, len(output[0])), []
+    migrations = await appdata.built(principal, app, doc["version"], schema_sql)
+    return app, Build(build_id, True, duration_ms, bundle_path, len(output[0])), [], migrations
 
 
 async def _record(

@@ -1101,7 +1101,13 @@ what another doc says it should be.
   the owner/editor/viewer/non-member × user/agent matrix, symlinked
   `schema.sql`/actions, the `ro/` debounce, and the events socket:
   credential, members only, coalescing, `app_built`, membership removal
-  and logout closing it); `test_storage.py` checks as root that a member
+  and logout closing it; uninstall waiting for a running write, and a
+  write that passed its check before an uninstall not re-creating the dir);
+  `test_app_build.py` also covers the build migrating `working` instances
+  to the staged `schema.sql` (additive applied, destructive `pending`, a
+  failing instance not failing the build, uninstalled and other apps'
+  instances untouched) and `app_built` reaching members only after a good
+  build; `test_storage.py` checks as root that a member
   can read `ro/data.sqlite` and nothing else under `apps/`. Unprivileged
   tests record space-dir chowns via the autouse `chowns` fixture instead
   of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
@@ -1840,7 +1846,7 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
 | `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
-| `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine). The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
+| `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine), after any running write or migration of the instance finishes; later ones are `404`. The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
 
 *Tables* (`0004_apps`): `apps` (`UNIQUE (source_space_id, slug)`),
 `app_versions` (at most one `working` per app; published versions unique
@@ -1911,6 +1917,16 @@ in `docs/PLATFORM.md` §7 "Build and verify").
 - `Build`: `{"id": build_id, "duration_ms", "bundle_path": str|null,
   "bundle_bytes": int|null}` (null unless it succeeded). The response's
   `build` is null when it stopped at staging or validation.
+- `migrations` (M12-03): after a successful build, one `{"instance_id",
+  "migration": Migration|null, "error": code|null}` per live instance
+  tracking the app's `working` version (oldest first; `[]` otherwise). Each
+  was migrated to the `schema.sql` of the staged copy that was built — not
+  the source as it is now — exactly as `POST …/migrate` would (§3 "App
+  data"): additive/safe plans are `applied`, a destructive one is left
+  `pending` for approval. An instance that can't be migrated gets `error`
+  (`invalid_schema`, `migration_failed` with its `failed` migration,
+  `not_found` if it was uninstalled meanwhile, …) and the build is still
+  `ok`. Then `app_built` goes to the source space's members.
 
 *Type-check* (`services/app-builder/src/typecheck.mjs`): TS `strict`
 except `noImplicitAny`, `lib: ["es2020"]` (no DOM), JSX `react-jsx`,
@@ -2016,7 +2032,12 @@ or `superseded`.
 | `POST …/migrations/{mid}/approve` | write | `200 Migration` `applied` | `404 not_found` (not this instance's); `409 migration_not_pending`; `409 plan_changed` (re-planning now gives other steps; the row becomes `superseded`, call `migrate` again); `422 migration_failed` |
 | `POST …/migrations/{mid}/reject` | write | `200 Migration` `rejected` | `404 not_found`, `409 migration_not_pending` |
 
-Nothing migrates on install; the build (M12-04) calls `migrate`.
+Nothing migrates on install. A successful build migrates every live
+instance tracking the app's `working` version (§3 "App builds" →
+`migrations`). Writes, migrations and uninstall of one instance are
+serialized by the same in-process lock; the instance dir is never
+re-created after install, so anything that reaches it after an uninstall
+is `404 not_found`.
 
 *Table* (`0005_app_data`): `app_migrations` (status check; at most one
 `pending` per instance; `ON DELETE CASCADE` from `app_instances`).
@@ -2037,9 +2058,9 @@ Then it sends, as JSON text frames:
 
 - `{"type": "db_changed", "instance_id"}` after a write that changed rows
   or an applied migration, to members of the instance's space;
-- `{"type": "app_built", "app_id", "version"}` to members of the spaces
-  that can see the app (emitted by the build, M12-04; the hub method
-  exists now).
+- `{"type": "app_built", "app_id", "version"}` to members of the app's
+  source space after a successful build, once its instances' migrations
+  are done (`version` is the built `app.json`'s).
 
 Events are hints to re-query, not a log. They are coalesced per key while
 a subscriber is behind: one `db_changed` per instance, the latest
@@ -3053,9 +3074,8 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/` is `0:<gid> 2770` and `apps/` `2750`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
-| `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2770` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/app_build_smoke.sh` | M12-04: (re)builds `homeai-app-builder:latest`, then with the same transport a CLI-created owner uploads and registers the fixture `hello` and builds it: `ok`, `bundle_path` = `app-bundles/<app>/<build>/app.js` in the API and an `__homeai_define(` bundle + map on disk, staging dir and builder containers gone. A missing import, a disallowed import (`fs`), a type error and a render throw in `app/index.tsx` each give exactly one diagnostic with the expected step, file, line and column and leave the bundle as it was; a bad `app.json` gives one `manifest` diagnostic and never reaches the builder; an outsider's build is `404`; a rebuild replaces the bundle and deletes the old one; deletes its rows, dirs and bundles on exit. Also in `gate_full.sh` | After touching `services/app-builder/`, `app/builds.py` or the platform's `appbuild.py` |
-| `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
+| `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; then (builder image rebuilt first) a column added in the source's `schema.sql` → `POST /apps/{id}/build` → the build's `migrations` show it applied, the column exists and the viewer's socket gets `app_built`; dropping it → build → `pending` in the build response and the migration list, column kept; deletes its rows, bundles and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2750` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |

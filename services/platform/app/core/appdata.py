@@ -41,13 +41,14 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import appdb, appschema, beneath, fsops, spaces, vfs
+from app.core import appdb, apps, appschema, beneath, fsops, spaces, vfs
 from app.core.errors import (
     Conflict,
     InvalidApp,
     InvalidInput,
     MigrationFailed,
     NotFound,
+    PlatformError,
     ServerError,
     SqlFailed,
 )
@@ -161,10 +162,11 @@ class AppData:
         access = await spaces.authorize_space(conn, principal, instance["space_id"], need)
         return Target(instance, access.space)
 
-    def _in_instance(
-        self, target: Target, fn: Callable[[Any, int], T], *, create: bool = True
-    ) -> T:
-        fd = self.storage.open_instance(target.space_id, target.gid, target.id, create=create)
+    def _in_instance(self, target: Target, fn: Callable[[Any, int], T]) -> T:
+        try:
+            fd = self.storage.open_instance(target.space_id, target.gid, target.id, create=False)
+        except FileNotFoundError:
+            raise NotFound("not_found") from None
         try:
             with appdb.connect(fd) as con:
                 return fn(con, fd)
@@ -237,10 +239,8 @@ class AppData:
             self._publishing.pop(target.id, None)
         self._published_at[target.id] = time.monotonic()
         try:
-            await anyio.to_thread.run_sync(
-                lambda: self._in_instance(target, appdb.publish, create=False)
-            )
-        except FileNotFoundError:
+            await anyio.to_thread.run_sync(lambda: self._in_instance(target, appdb.publish))
+        except NotFound:
             pass  # uninstalled meanwhile
         except Exception:
             logger.exception("instance %s: publishing ro/%s failed", target.id, appdb.DB_NAME)
@@ -325,6 +325,9 @@ class AppData:
         async with self.pool.connection() as conn:
             target = await self._target(conn, principal, instance_id, "write")
             schema_sql = await self._read_schema(conn, principal, target)
+        return await self._migrate(target, principal, schema_sql)
+
+    async def _migrate(self, target: Target, principal: Principal, schema_sql: str) -> Row:
         async with self._lock(target.id):
             plan = await self._run(target, lambda c, _: appschema.plan(c, schema_sql))
             if not plan.steps:
@@ -345,6 +348,45 @@ class AppData:
                      principal.user_id),
                 )  # fmt: skip
                 return await cur.fetchone()
+
+    async def built(
+        self, principal: Principal, app: Row, version: str, schema_sql: str | None
+    ) -> list[dict]:
+        """After a build of `app`'s working version: migrate every live instance tracking it
+        to the built `schema_sql` (None if it couldn't be read), then emit `app_built`.
+
+        One `{"instance_id", "migration", "error"}` per instance; a failure there
+        doesn't fail the build.
+        """
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT id FROM app_instances "
+                "WHERE app_id = %s AND tracks = 'working' AND uninstalled_at IS NULL "
+                "ORDER BY created_at, id",
+                (app["id"],),
+            )
+            ids = [row["id"] for row in await cur.fetchall()]
+        results = []
+        for instance_id in ids:
+            result: dict[str, Any] = {"instance_id": instance_id, "migration": None, "error": None}
+            try:
+                if schema_sql is None:
+                    raise _schema_diagnostic("schema.sql can't be used for a migration")
+                async with self.pool.connection() as conn:
+                    target = await self._target(conn, principal, instance_id, "write")
+                result["migration"] = await self._migrate(target, principal, schema_sql)
+            except MigrationFailed as exc:
+                result["migration"], result["error"] = exc.migration, exc.code
+            except PlatformError as exc:
+                result["error"] = exc.code
+            results.append(result)
+        self.hub.app_built([app["source_space_id"]], app["id"], version)
+        return results
+
+    async def uninstall(self, principal: Principal, space_id: UUID, instance_id: UUID) -> None:
+        """`apps.uninstall_app` once no write or migration of the instance is running."""
+        async with self._lock(instance_id), self.pool.connection() as conn:
+            await apps.uninstall_app(conn, principal, self.storage, space_id, instance_id)
 
     async def approve(self, principal: Principal, instance_id: UUID, migration_id: UUID) -> Row:
         async with self.pool.connection() as conn:

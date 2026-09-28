@@ -24,6 +24,7 @@ a bare `python` container to check real ownership on disk.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import stat
@@ -52,15 +53,21 @@ def _fchown(fd: int, uid: int, gid: int) -> None:
     os.fchown(fd, uid, gid)
 
 
-def _ensure_dir(name: str, gid: int, *, dir_fd: int | None = None, mode: int = DIR_MODE) -> int:
-    """Create `name` if missing, fix owner/mode, and return an open fd on it."""
-    try:
-        os.mkdir(name, 0o700, dir_fd=dir_fd)
-    except FileExistsError:
-        pass
+def _ensure_dir(
+    name: str, gid: int, *, dir_fd: int | None = None, mode: int = DIR_MODE, create: bool = True
+) -> int:
+    """Create `name` if missing (else `FileNotFoundError` without `create`), fix owner/mode,
+    and return an open fd on it."""
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
     try:
         fd = os.open(name, _OPEN_DIR, dir_fd=dir_fd)
     except OSError as exc:
+        if exc.errno == errno.ENOENT and not create:
+            raise
         raise StorageError(f"{name}: not a plain directory ({exc.strerror})") from exc
     try:
         st = os.fstat(fd)
@@ -117,9 +124,7 @@ class SpaceStorage:
         """
         apps_fd = self._open_apps(space_id, gid)
         try:
-            if not create:
-                os.stat(str(instance_id), dir_fd=apps_fd, follow_symlinks=False)
-            fd = _ensure_dir(str(instance_id), gid, dir_fd=apps_fd, mode=APPS_MODE)
+            fd = _ensure_dir(str(instance_id), gid, dir_fd=apps_fd, mode=APPS_MODE, create=create)
         finally:
             os.close(apps_fd)
         try:

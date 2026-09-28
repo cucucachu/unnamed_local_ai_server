@@ -611,8 +611,9 @@ diagnostic until added.
 >   issued. Exec grants don't mount it yet: that needs an exec mount
 >   contract (`/app-data/<instance>`?), which is a follow-up with M11-04 and
 >   M13.
-> - **Migrations aren't run on install or build.** The build (M12-04) calls
->   `migrate`. The approver of a destructive plan is any editor+ of the
+> - **Migrations don't run on install**; a successful build migrates each
+>   instance tracking `working` to the `schema.sql` it built (destructive
+>   plans stay `pending` and are listed in the build response). The approver of a destructive plan is any editor+ of the
 >   space, agents included. HITL for agent approval is M13-02.
 > - Pinned instances (`tracks: pinned`) get 409
 >   `pinned_versions_unsupported` for actions and migrations until published
@@ -659,9 +660,9 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 > - The diagnostic field is `step` (manifest, files, route, import,
 >   bundle, type, render, sql, build), not `kind`; the component stack is
 >   in the render message.
-> - No migrate, `app_built` event or hot reload yet (M12-03's migrations
->   and `/ws/platform/events` aren't in); no git commit (M13), so
->   `commit` stays null.
+> - A successful build migrates the instances tracking `working` and emits
+>   `app_built` (wired in M12-03); no hot reload yet (M12-05) and no git
+>   commit (M13), so `commit` stays null.
 > - The runtime and SDK/shim typings live in the builder
 >   (`services/app-builder/runtime`, `types/homeai.d.ts`) until M12-05's
 >   `packages/homeai-sdk/`.

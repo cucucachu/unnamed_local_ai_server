@@ -524,3 +524,60 @@ async def test_membership_and_session_changes_reach_an_open_socket(
     with pytest.raises(WsClosed) as e:
         await ws.recv(timeout=2)
     assert e.value.code == 4401
+
+
+# --- uninstall -----------------------------------------------------------------------------
+
+
+async def test_uninstall_waits_for_a_running_write_and_later_writes_are_404(world, inst) -> None:
+    await _ready(world, inst)
+    appdata_ = world.platform.app.state.appdata
+    uninstall = f"{API}/spaces/{world.family['id']}/instances/{inst['id']}"
+    lock = appdata_._lock(UUID(inst["id"]))
+
+    await lock.acquire()
+    try:
+        task = asyncio.create_task(world.client.delete(uninstall, headers=world.headers["alice"]))
+        await asyncio.sleep(0.2)
+        assert not task.done()
+        assert _dir(world, inst).is_dir()
+    finally:
+        lock.release()
+    assert (await task).status_code == 204
+    assert not _dir(world, inst).exists()
+
+    for body in (
+        {"op": "run", "sql": "INSERT INTO items (name) VALUES ('late')"},
+        {"op": "getAll", "sql": "SELECT * FROM items"},
+    ):
+        assert (await _rpc(world, inst, "bob", body)).status_code == 404
+    assert (await _migrate(world, inst)).status_code == 404
+    assert not _dir(world, inst).exists()
+
+
+async def test_a_write_that_passed_its_check_before_uninstall_doesnt_recreate_the_dir(
+    world, inst
+) -> None:
+    await _ready(world, inst)
+    appdata_ = world.platform.app.state.appdata
+    lock = appdata_._lock(UUID(inst["id"]))
+
+    await lock.acquire()
+    try:
+        write = asyncio.create_task(
+            _rpc(world, inst, "bob", {"op": "run", "sql": "INSERT INTO items (name) VALUES ('x')"})
+        )
+        await asyncio.sleep(0.2)
+        assert not write.done()
+        # What an uninstall that didn't take the lock would do.
+        sql(world.platform, "UPDATE app_instances SET uninstalled_at = now() WHERE id = %s",
+            (inst["id"],))  # fmt: skip
+        world.platform.app.state.storage.trash_instance(
+            UUID(world.family["id"]), world.family["gid"], UUID(inst["id"]), "stamp"
+        )
+    finally:
+        lock.release()
+
+    response = await write
+    assert (response.status_code, response.json()["detail"]) == (404, "not_found")
+    assert not _dir(world, inst).exists()
