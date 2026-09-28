@@ -47,6 +47,8 @@
 #      still cached/loads on revisit -> direct-tap playback still works.
 #      Inserted right after image_browser_smoke.sh, its closest sibling —
 #      same "one dedicated script per Files-tab preview feature" shape.)
+#   -> gate_m10.sh (M10-08) -> gate_m11.sh (M11-05: cross-user isolation
+#      across the Files UI, the agent's file tools, and exec)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -247,6 +249,11 @@ main() {
   # M10-08: gate_m10.sh re-runs the M10 platform/tenancy/auth smokes above
   # as its own chain; same idempotent reasoning.
   run_step "gate_m10.sh"             bash "${SCRIPT_DIR}/gate_m10.sh"
+  # M11-05: gate_m11.sh re-runs verify_tenancy/verify_isolation and the
+  # files/agent/exec smokes above, then the G11 shared-space scenario
+  # (shared_space_viewer_smoke.sh); same idempotent reasoning. It skips
+  # verify_network.sh unless run as root — the sudo step above covers it.
+  run_step "gate_m11.sh"             bash "${SCRIPT_DIR}/gate_m11.sh"
 
   print_summary
 
