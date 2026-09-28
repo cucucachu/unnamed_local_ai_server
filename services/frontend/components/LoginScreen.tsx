@@ -7,12 +7,13 @@ import { authErrorMessage, getAuthStatus, passkeysAvailable } from '@/lib/auth';
 import { passkeysSupported } from '@/lib/webauthn';
 import { theme } from '@/lib/theme';
 
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, Platform, StyleSheet, Text } from 'react-native';
 
 /** Username + password, plus a TOTP field once the platform answers
  * `totp_required`. When status says passkeys are available at this origin,
- * also offers passkey sign-in. `onShowSetup` is offered while bootstrap
- * is still open. */
+ * also offers passkey sign-in. Public HTTPS (flag on + this request is
+ * public) hides the password field on web. `onShowSetup` is offered while
+ * bootstrap is still open. */
 export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
   const { login, loginWithPasskey } = useAuth();
   const [username, setUsername] = useState('');
@@ -22,12 +23,17 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offerPasskey, setOfferPasskey] = useState(false);
+  const [passkeyOnly, setPasskeyOnly] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     getAuthStatus()
       .then((status) => {
-        if (!cancelled) setOfferPasskey(passkeysSupported() && passkeysAvailable(status.webauthn));
+        if (cancelled) return;
+        setOfferPasskey(passkeysSupported() && passkeysAvailable(status.webauthn));
+        setPasskeyOnly(
+          Platform.OS === 'web' && Boolean(status.public_https) && status.origin === 'public',
+        );
       })
       .catch(() => {});
     return () => {
@@ -37,6 +43,10 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
 
   async function handleSubmit() {
     if (busy) return;
+    if (passkeyOnly) {
+      await handlePasskey();
+      return;
+    }
     if (!username.trim() || !password) {
       setError('Enter your username and password.');
       return;
@@ -76,7 +86,11 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
   return (
     <AuthFormFrame
       title="Sign in"
-      subtitle="Sign in to your Home AI account."
+      subtitle={
+        passkeyOnly
+          ? 'This server requires a passkey on the public internet.'
+          : 'Sign in to your Home AI account.'
+      }
       error={error}
       testID="auth-login-screen"
       footer={
@@ -94,17 +108,19 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
         returnKeyType="next"
         testID="auth-username"
       />
-      <AuthField
-        label="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-        autoComplete="current-password"
-        textContentType="password"
-        returnKeyType="go"
-        onSubmitEditing={handleSubmit}
-        testID="auth-password"
-      />
+      {passkeyOnly ? null : (
+        <AuthField
+          label="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          autoComplete="current-password"
+          textContentType="password"
+          returnKeyType="go"
+          onSubmitEditing={handleSubmit}
+          testID="auth-password"
+        />
+      )}
       {needsTotp ? (
         <AuthField
           label="Authenticator code"
@@ -120,8 +136,12 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
           testID="auth-totp"
         />
       ) : null}
-      <AuthSubmitButton label="Sign in" busy={busy} onPress={handleSubmit} />
-      {offerPasskey ? (
+      <AuthSubmitButton
+        label={passkeyOnly ? 'Sign in with a passkey' : 'Sign in'}
+        busy={busy}
+        onPress={handleSubmit}
+      />
+      {offerPasskey && !passkeyOnly ? (
         <Pressable
           onPress={handlePasskey}
           disabled={busy}

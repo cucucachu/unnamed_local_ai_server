@@ -82,12 +82,14 @@ Three independent layers, because no single one is sufficient on its own:
    the host by name without router DNS changes — this is a convenience, not
    a security boundary.
 
-Also out of scope for v1 by design (see README): forcing HTTPS / HSTS,
-public WAN listeners (M15-05), auth, docker-socket-proxy, router/VLAN
-changes. Local HTTPS for `homeai.local` (Caddy internal CA) is in — see
-"Local HTTPS (Caddy internal CA)" below. Optional real certificates via
-ACME DNS-01 (no inbound 80/443) shipped in M15-03 — see "Split DNS
-(optional real domain)" below.
+Also out of scope for v1 by design (see README): forcing HTTPS on `:80` /
+`homeai.local`, auth, docker-socket-proxy, router/VLAN changes. Local
+HTTPS for `homeai.local` (Caddy internal CA) is in — see "Local HTTPS
+(Caddy internal CA)" below. Optional real certificates via ACME DNS-01
+(no inbound 80/443) shipped in M15-03 — see "Split DNS (optional real
+domain)" below. Opt-in public HTTPS **policy** (passkey-only when public,
+rate limits, Settings toggle) shipped in M15-05; opening WAN 443 is still
+a human firewall step (`infra/host/setup-public-https.md`).
 
 ### Known gotcha: `avahi-daemon` doesn't notice a live hostname change
 
@@ -380,8 +382,12 @@ and WireGuard device *create* from public (`403 public_origin`). Login and
 WireGuard revoke stay allowed. Caddy overwrites client-supplied XFF (no
 `trusted_proxies`). Host-published `:80`/`:443` may still look like a
 docker-bridge RFC1918 address even for a WAN client; tunnel HTTP often
-looks like the sidecar's internal address (still privileged). Real WAN
-distinction is M15-05 — until then, do not forward TCP 80/443.
+looks like the sidecar's internal address (still privileged). When the
+public HTTPS flag is on (M15-05), `172.16.0.0/12` is not LAN, and Caddy
+sets `X-HomeAI-Via: vpn` for the wireguard sidecar so tunnel HTTP stays
+privileged. Opening WAN TCP 443 is a **human** firewall step after the
+Settings toggle (`infra/host/setup-public-https.md`) — do not forward
+TCP 80; agents must not change live ufw/`DOCKER-USER`.
 
 **As built:** compose service `wireguard` publishes UDP 51820 (`NET_ADMIN`
 only) on `homeai-wg` (not `homeai-net`; masquerade off so it is not a
@@ -395,9 +401,12 @@ or router): `infra/host/setup-wireguard.md` — `modprobe wireguard`,
 optional `ufw allow 51820/udp`, router UDP 51820 forward, then set
 `WIREGUARD_ENDPOINT` to the public host:port for new QR codes.
 
-Public HTTPS (opt-in, passkey-only) is M15-05, not this. The v1 security
+Public HTTPS (opt-in, passkey-only when the Settings flag is on) shipped
+in M15-05. The toggle does not open the internet by itself. Human WAN
+steps and threat notes: `infra/host/setup-public-https.md`. The v1 security
 model (home-grade sign-in, `execute_code`, plain HTTP on the LAN) is
-unchanged for anything that is not the WireGuard UDP port.
+unchanged for anything that is not the WireGuard UDP port or an
+explicitly allowed WAN 443.
 
 ## Split DNS (optional real domain)
 
@@ -405,7 +414,9 @@ Optional `HOMEAI_DOMAIN` (M15-03) is a **real DNS name** (typically a
 DuckDNS hostname) that Caddy serves with a Let's Encrypt certificate
 obtained via **ACME DNS-01**. That challenge talks outbound to the CA and
 to DuckDNS's API. It does **not** require inbound TCP 80 or 443. Do not
-punch those holes — public HTTPS / WAN listeners are M15-05.
+punch those holes unless you have enabled public HTTPS in Settings and
+accepted the threat model — public HTTPS **policy** shipped in M15-05;
+WAN 443 is still human (`infra/host/setup-public-https.md`).
 
 LAN clients should resolve `HOMEAI_DOMAIN` to **this host's LAN IPv4**,
 not to DuckDNS's public address. That is split DNS: the same name, a
@@ -417,6 +428,7 @@ Leave `HOMEAI_DOMAIN` empty (the default) unless you want this. Setting it
 on a live stack makes Caddy attempt ACME; keep it unset until the token
 and split-DNS record are ready (`https://homeai.local` stays `tls
 internal` either way). HTTP `:80` is never redirected and has no HSTS.
+Optional HSTS is only on `https://$HOMEAI_DOMAIN` (M15-05).
 `http://homeai.local/ca.crt` remains for the local CA.
 
 Find the LAN IPv4 with `ip -4 addr show` (or `scripts/verify_network.sh`
@@ -449,7 +461,35 @@ public internet (`--no-resolv`).
 
 After split DNS is in place, open `https://$HOMEAI_DOMAIN` on the LAN
 (public CA, no local-CA install). `https://homeai.local` keeps working
-with the Caddy internal CA. Passkeys / WebAuthn are M15-04, not this.
+with the Caddy internal CA. Passkeys / WebAuthn are M15-04.
+
+## Public HTTPS (opt-in, M15-05)
+
+Policy and the Settings toggle ship in the platform. **This does not
+open TCP 443 on the host.** Human WAN steps:
+`infra/host/setup-public-https.md`.
+
+1. Enable domain mode (M15-03) first (`HOMEAI_DOMAIN` + split DNS).
+2. On the LAN or VPN, a stepped-up admin turns on **Settings → Remote
+   access → Allow public HTTPS**. Needs an RP ID (`422 domain_required`
+   otherwise).
+3. Only if you accept the threat model: allow WAN **TCP 443** (ufw +
+   router). Do not require HTTP-01. **`:80` stays LAN** (`/ca.crt`, Expo).
+   No HSTS on `:80` or `homeai.local`. Optional HSTS only on
+   `https://$HOMEAI_DOMAIN` (`auto_https disable_redirects` stays).
+
+**Threat notes**
+
+- Passkey-only login is the origin classifier plus the DB flag, not the
+  firewall. Native password still works until M15-06. Enrollment,
+  invites, and admin stay M15-02 (`403 public_origin`).
+- Docker SNAT: a WAN client on published `:80`/`:443` may appear as
+  `172.16.0.0/12`. While the flag is on, that range is not LAN. Caddy
+  strips client `X-HomeAI-Via` then sets `X-HomeAI-Via: vpn` when the TCP
+  peer is the `wireguard` compose service, so tunnel HTTP stays
+  privileged. Last-hop XFF only. Do not add `trusted_proxies`, PROXY
+  protocol on `:80`/`:443`, or `network_mode: host`.
+- Public-origin credential attempts: 3 per 300 s (LAN/VPN stay 5 per 60 s).
 
 ## Verifying from a phone
 

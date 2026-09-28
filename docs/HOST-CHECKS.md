@@ -225,9 +225,16 @@ on the LAN":
 - [ ] (M15-03) Optional: if you already have a DuckDNS name and token,
       split-DNS `HOMEAI_DOMAIN` to this host's LAN IPv4
       (`docs/NETWORKING.md`) and open `https://$HOMEAI_DOMAIN` on the LAN.
-      Do not forward TCP 80/443. Not required to close the ticket (Tier A
-      is `scripts/verify_caddy_domain.sh`; default `HOMEAI_DOMAIN` stays
+      Do not forward TCP 80/443 unless you later opt into public HTTPS.
+      Not required to close the ticket (Tier A is
+      `scripts/verify_caddy_domain.sh`; default `HOMEAI_DOMAIN` stays
       empty so live `https://homeai.local` is not disturbed).
+- [ ] (M15-05, G15 later) Public HTTPS: domain mode on, Settings → Remote
+      access → **Allow public HTTPS** (stepped-up admin, LAN/VPN). From a
+      non-LAN network, password login is refused (`passkey_required`);
+      enrollment/admin still `public_origin`. Do not require agents to
+      punch WAN 443 for Tier A. Human WAN steps:
+      `infra/host/setup-public-https.md`.
 
 > **PM sign-off: G15 passed ____**
 

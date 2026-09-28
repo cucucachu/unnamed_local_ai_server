@@ -202,7 +202,8 @@ platform's `/internal/*` routes are never routed by Caddy.
   / when `WEBAUTHN_RP_ID` is set; 5-minute window, this session). Native
   clients (`X-HomeAI-Client: native`) stay on password (+ optional TOTP)
   and are exempt from `require_passkeys` until M15-06 device pairing.
-- Login attempts are rate-limited per username and per client IP.
+- Login attempts are rate-limited per username and per client IP (5/60
+  on LAN/VPN; 3/300 from a public origin).
 
 ### Identity token (Caddy → services)
 
@@ -1216,7 +1217,8 @@ with that app's context.
 > ordinary space/app routes are not blocked. Unauthenticated setup/accept
 > from public is still `403 public_origin` (not 401). Unauthenticated admin
 > is still `401`; an agent on admin routes is still `403 agent_not_allowed`
-> (origin runs after those guards). Passkey-only-when-public is M15-05.
+> (origin runs after those guards). Passkey-only-when-public shipped in
+> M15-05 (flag + origin classifier; enrollment/admin stay this policy).
 >
 > Caddy has **no** `trusted_proxies`, so it overwrites client-supplied
 > `X-Forwarded-For` with the address it actually saw. Spoofed prefixes
@@ -1231,8 +1233,9 @@ with that app's context.
 > the sidecar's `homeai-internal` address (RFC1918 → **lan**), not
 > `10.13.13.x`. That is still *privileged* (allowed). Do not add PROXY
 > protocol on `:80`/`:443` (clients could spoof PROXY) and do not put
-> Caddy in `network_mode: host`. Real WAN distinction is M15-05 once a
-> public listener exists; M15-02 is the policy hook + tests.
+> Caddy in `network_mode: host`. Real WAN distinction is M15-05: when
+> the public HTTPS flag is on, `172.16.0.0/12` is not LAN, and Caddy
+> sets `X-HomeAI-Via: vpn` for the wireguard sidecar.
 >
 > Live check: `scripts/e2e/origin_policy_smoke.sh` (through Caddy; a LAN
 > request that also sends `X-Forwarded-For: 8.8.8.8` must not become
@@ -1266,10 +1269,51 @@ with that app's context.
 > (`docs/NETWORKING.md`); the WireGuard sidecar answers it → `10.13.13.1`
 > when the env is set. DNS-01 uses existing `homeai-net` egress; do not
 > forward TCP 80/443. Passkeys / WebAuthn / RP ID are M15-04. Public
-> HTTPS / HSTS / WAN listeners are M15-05. `/ca.crt` still serves the
+> HTTPS / HSTS / WAN listeners shipped in M15-05 (opt-in flag + human
+> firewall steps; HSTS only on `https://$HOMEAI_DOMAIN`). `/ca.crt` still serves the
 > local CA. Live check: `scripts/verify_caddy_domain.sh` (compose config
 > + Caddyfile validate; does not obtain a real cert; does not set
 > `HOMEAI_DOMAIN` on the live stack).
+>
+> **As built (M15-05)** — opt-in public HTTPS. Source of truth is the
+> Postgres flag `platform_state.public_https` (migration `0010`, default
+> false), not a `PUBLIC_HTTPS` env var. `GET /api/platform/settings` is
+> any authenticated principal; `PATCH /api/platform/admin/settings` is
+> the existing admin router (stepped-up admin + privileged origin).
+> Enabling needs an RP ID (`WEBAUTHN_RP_ID` or `HOMEAI_DOMAIN`), else
+> `422 domain_required`. Disabling is always allowed. Settings → Remote
+> access shows an admin-only toggle (`settings-public-https-*`); it does
+> **not** punch the host firewall (human WAN steps:
+> `docs/NETWORKING.md`, `infra/host/setup-public-https.md`).
+>
+> `GET /api/auth/status` includes `public_https` and this request's
+> `origin` (no secrets) so the login UI hides the password when the flag
+> is on *and* the origin is public (web only; native stays on password
+> until M15-06).
+>
+> When the flag is on and the request origin is **public** and the client
+> is not native, `POST /api/auth/login` and `POST /api/auth/step-up` with
+> a password return `403 passkey_required` **without checking the
+> password** (same as per-user `require_passkeys`). Passkey login/step-up
+> stay allowed from public. Flag off: password login from public stays
+> allowed. Enrollment / invites / admin / WG create / passkey register
+> are unchanged (`403 public_origin`, M15-02) — this ticket does not
+> invent a second policy.
+>
+> Public-origin credential buckets use `PLATFORM_AUTH_PUBLIC_RATE_LIMIT`
+> / `PLATFORM_AUTH_PUBLIC_RATE_WINDOW_S` (default **3 / 300 s**). LAN/VPN
+> keep **5 / 60**.
+>
+> While the flag is on, `172.16.0.0/12` is **not** LAN (Docker bridge /
+> userland-proxy SNAT). Home `192.168.0.0/16` and the rest of
+> `ORIGIN_LAN_SUBNETS` stay LAN; VPN `10.13.13.0/24` still matches first.
+> Caddy strips client `X-HomeAI-Via` then sets `X-HomeAI-Via: vpn` when
+> `remote_ip` is the `wireguard` compose service (Docker DNS → snippet,
+> same trust model as last-hop XFF). Flag off: RFC1918 stays LAN so
+> spoofed-XFF checks keep working. Do not add `trusted_proxies`, PROXY
+> protocol on `:80`/`:443`, or `network_mode: host`. Optional HSTS is
+> only on `https://$HOMEAI_DOMAIN` (not `:80`, not `homeai.local`);
+> `auto_https disable_redirects` stays.
 >
 > **As built (M15-04)** — browser passkeys (WebAuthn) when an RP ID is
 > configured: `WEBAUTHN_RP_ID` if set, else `HOMEAI_DOMAIN`. Both empty
@@ -1285,7 +1329,7 @@ with that app's context.
 > Register is LAN/VPN-only (`403 public_origin`) and human-only
 > (`403 agent_not_allowed`); list/revoke stay allowed from public (like
 > WireGuard revoke). Login and step-up passkey paths are not origin-blocked
-> (M15-05 will tighten public login). Password login/setup/invite stay as
+> (M15-05 tightens public login when the flag is on). Password login/setup/invite stay as
 > they are when passkeys are optional. If an admin sets
 > `users.require_passkeys` (needs an RP ID, else `422 domain_required`),
 > browser `POST /api/auth/login` with a password returns `403 passkey_required`
@@ -1296,7 +1340,7 @@ with that app's context.
 > `scripts/e2e/passkey_browser_smoke.sh` (Playwright CDP virtual
 > authenticator through Caddy at `http://localhost`; restores
 > `WEBAUTHN_RP_ID` empty afterwards). Public HTTPS / passkey-only-when-public
-> is M15-05; native device pairing is M15-06.
+> shipped in M15-05; native device pairing is M15-06.
 >
 > Settings → Remote access lists devices, creates a named profile (QR +
 > wg-quick text **once**), and revokes with confirm. Routes

@@ -33,6 +33,8 @@ export interface AuthStatus {
   authenticated: boolean;
   user?: User;
   webauthn?: WebAuthnStatus;
+  public_https?: boolean;
+  origin?: 'lan' | 'vpn' | 'public';
 }
 
 interface SessionResponse {

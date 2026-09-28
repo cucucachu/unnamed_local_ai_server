@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react';
-import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, StyleSheet, Switch, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { AuthField } from '@/components/AuthForm';
+import { useAuth } from '@/components/AuthProvider';
 import {
   ActionButton,
   Card,
@@ -12,11 +13,14 @@ import {
   SettingsFrame,
   settingsStyles,
 } from '@/components/SettingsUI';
+import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
   createWireGuardDevice,
+  getPlatformSettings,
   listWireGuardDevices,
+  patchPlatformSettings,
   platformErrorMessage,
   revokeWireGuardDevice,
   type CreatedWireGuardDevice,
@@ -41,11 +45,27 @@ function confirmRevoke(device: WireGuardDevice): Promise<boolean> {
   });
 }
 
-/** Settings → Remote access: WireGuard device profiles (QR once), revoke. */
+/** Settings → Remote access: WireGuard device profiles (QR once), revoke.
+ * Admins also get the public HTTPS toggle (M15-05) — it does not punch
+ * the host firewall. */
 export default function RemoteAccessScreen() {
+  const { state: authState } = useAuth();
+  const user = authState.phase === 'ready' ? authState.user : null;
+  const isAdmin = user?.role === 'admin';
+  const { withStepUp } = useStepUp();
   const { message: toast, showToast } = useToast();
   const load = useCallback(() => listWireGuardDevices(), []);
   const { data: devices, error, reload, setData } = useLoad(load);
+  const loadSettings = useCallback(
+    () => (isAdmin ? getPlatformSettings() : Promise.resolve(null)),
+    [isAdmin],
+  );
+  const {
+    data: platformSettings,
+    error: settingsError,
+    reload: reloadSettings,
+    setData: setPlatformSettings,
+  } = useLoad(loadSettings);
   const { busyKey, run } = useAction(showToast);
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
@@ -77,6 +97,16 @@ export default function RemoteAccessScreen() {
     setData((previous) => previous?.filter((d) => d.id !== device.id) ?? null);
   }
 
+  async function handlePublicHttps(value: boolean) {
+    const updated = await run('public-https', () => withStepUp(() => patchPlatformSettings(value)));
+    if (!updated) return;
+    setPlatformSettings((previous) =>
+      previous ? { ...previous, public_https: value } : previous,
+    );
+  }
+
+  const domainOk = platformSettings?.domain_configured === true;
+
   return (
     <View style={styles.container}>
       <SettingsFrame title="Remote access" testID="settings-remote-screen">
@@ -85,6 +115,34 @@ export default function RemoteAccessScreen() {
           app. Revoking a device removes its VPN access. Host setup (kernel module, router UDP 51820,
           firewall) is documented in Networking — this screen does not open the internet by itself.
         </Text>
+
+        {isAdmin ? (
+          <>
+            <SectionTitle>Public HTTPS</SectionTitle>
+            {platformSettings === null ? (
+              <LoadState error={settingsError} onRetry={reloadSettings} />
+            ) : (
+              <Card testID="settings-public-https-row">
+                <View style={[settingsStyles.row, settingsStyles.firstRow]}>
+                  <View style={settingsStyles.rowMain}>
+                    <Text style={settingsStyles.rowTitle}>Allow public HTTPS</Text>
+                    <Text style={settingsStyles.muted} testID="settings-public-https-help">
+                      {domainOk
+                        ? 'Passkey-only login from the public internet, with tighter rate limits. This does not open the host firewall — human WAN steps are in Networking.'
+                        : 'Needs a domain (HOMEAI_DOMAIN or WEBAUTHN_RP_ID) before this can be turned on. This does not open the host firewall.'}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={platformSettings.public_https}
+                    onValueChange={handlePublicHttps}
+                    disabled={!domainOk && !platformSettings.public_https}
+                    testID="settings-public-https-switch"
+                  />
+                </View>
+              </Card>
+            )}
+          </>
+        ) : null}
 
         <SectionTitle>New device</SectionTitle>
         <Card>

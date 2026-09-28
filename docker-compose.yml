@@ -382,6 +382,10 @@ services:
       # to try passkeys (that would start ACME).
       HOMEAI_DOMAIN: ${HOMEAI_DOMAIN:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      # M15-05: public-origin credential buckets (LAN/VPN stay 5/60 via
+      # Settings defaults). The public_https *flag* is in Postgres, not env.
+      PLATFORM_AUTH_PUBLIC_RATE_LIMIT: ${PLATFORM_AUTH_PUBLIC_RATE_LIMIT:-3}
+      PLATFORM_AUTH_PUBLIC_RATE_WINDOW_S: ${PLATFORM_AUTH_PUBLIC_RATE_WINDOW_S:-300}
     healthcheck:
       # python:3.12-slim has no curl.
       test:

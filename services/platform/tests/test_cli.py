@@ -68,9 +68,11 @@ def test_create_user_and_list(run, settings):
     code, out, _ = run("list-users")
     assert "e2e-alice" in out and "boss" in out
 
-    # CLI users never complete bootstrap.
+    # CLI users never complete bootstrap (the public_https row is not that).
     with psycopg.connect(settings.database_dsn) as conn:
-        assert conn.execute("SELECT count(*) FROM platform_state").fetchone() == (0,)
+        assert conn.execute(
+            "SELECT count(*) FROM platform_state WHERE key = 'bootstrap_admin_id'"
+        ).fetchone() == (0,)
 
 
 def test_errors_exit_1_with_code(run):

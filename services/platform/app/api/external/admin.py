@@ -10,18 +10,21 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
 
+from app.api.external.settings import settings_out
 from app.api.schemas import (
     AdminUserPatch,
     InviteCreated,
     InviteCreateRequest,
     InviteList,
     InviteOut,
+    PlatformSettingsOut,
+    PlatformSettingsPatch,
     SpaceList,
     UserList,
     UserOut,
 )
 from app.api.session_http import is_https
-from app.core import invites, spaces, users, webauthn
+from app.core import invites, platform_settings, spaces, users, webauthn
 from app.core.errors import InvalidInput
 from app.core.origin import require_privileged_origin
 from app.core.principal import Principal, SteppedUpAdmin, require_admin_stepped_up
@@ -66,6 +69,20 @@ async def patch_user(user_id: UUID, body: AdminUserPatch, request: Request):
             disabled=body.disabled,
             require_passkeys=body.require_passkeys,
         )
+
+
+@router.patch("/settings", response_model=PlatformSettingsOut)
+async def patch_settings(body: PlatformSettingsPatch, request: Request) -> PlatformSettingsOut:
+    """Opt-in public HTTPS. Enabling needs an RP ID; disabling is always allowed.
+
+    Does not punch the host firewall — human WAN steps are in docs.
+    """
+    if body.public_https and webauthn.rp_id(request.app.state.settings) is None:
+        raise InvalidInput("domain_required")
+    async with request.app.state.db_pool.connection() as conn:
+        enabled = await platform_settings.set_public_https(conn, body.public_https)
+    request.app.state.public_https = enabled
+    return settings_out(request)
 
 
 @router.get("/spaces", response_model=SpaceList)

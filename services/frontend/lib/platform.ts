@@ -227,6 +227,19 @@ export function adminRevokeInvite(id: string): Promise<void> {
   return send<void>('DELETE', `/api/platform/admin/invites/${encodeURIComponent(id)}`);
 }
 
+export interface PlatformSettings {
+  public_https: boolean;
+  domain_configured: boolean;
+}
+
+export function getPlatformSettings(): Promise<PlatformSettings> {
+  return apiFetch<PlatformSettings>('/api/platform/settings');
+}
+
+export function patchPlatformSettings(publicHttps: boolean): Promise<PlatformSettings> {
+  return send<PlatformSettings>('PATCH', '/api/platform/admin/settings', { public_https: publicHttps });
+}
+
 /** The link a new member opens to accept `token`. Built from where this app
  * reaches the server (the page's origin on web, `EXPO_PUBLIC_API_HOST` on
  * native) rather than the platform's `accept_url`, whose host is whatever

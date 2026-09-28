@@ -35,7 +35,7 @@ from app.api.session_http import (
 from app.core import invites, legacy, passwords, sessions, totp, users, webauthn, wireguard
 from app.core.bootstrap import Bootstrap
 from app.core.errors import Forbidden, InvalidInput, Unauthorized
-from app.core.origin import require_privileged_origin
+from app.core.origin import request_origin, require_privileged_origin
 
 router = APIRouter(prefix="/api/auth")
 
@@ -56,11 +56,16 @@ def _webauthn_status(request: Request) -> WebAuthnStatus:
 
 def _passkeys_required(request: Request, require_passkeys: bool) -> bool:
     """Browser (not native) must use a passkey when the admin flagged the user
-    and an RP ID is configured. Native stays on password until M15-06."""
+    *or* public HTTPS is on and this request is public. Native stays on
+    password until M15-06. An RP ID is required so we never lock out
+    password without a working passkey path."""
+    if is_native(request) or webauthn.rp_id(request.app.state.settings) is None:
+        return False
+    if require_passkeys:
+        return True
     return (
-        require_passkeys
-        and webauthn.rp_id(request.app.state.settings) is not None
-        and not is_native(request)
+        bool(getattr(request.app.state, "public_https", False))
+        and request_origin(request) == "public"
     )
 
 
@@ -106,9 +111,15 @@ async def auth_status(request: Request, response: Response) -> StatusResponse:
     bootstrap: Bootstrap = request.app.state.bootstrap
     token, row = await _current_session(request)
     webauthn_out = _webauthn_status(request)
+    origin = request_origin(request)
+    public_https = bool(getattr(request.app.state, "public_https", False))
     if row is None:
         return StatusResponse(
-            setup_required=bootstrap.setup_required, authenticated=False, webauthn=webauthn_out
+            setup_required=bootstrap.setup_required,
+            authenticated=False,
+            webauthn=webauthn_out,
+            public_https=public_https,
+            origin=origin,
         )
     if token == request.cookies.get(SESSION_COOKIE):
         set_session_cookie(request, response, token)
@@ -117,6 +128,8 @@ async def auth_status(request: Request, response: Response) -> StatusResponse:
         authenticated=True,
         user=UserOut.model_validate(row),
         webauthn=webauthn_out,
+        public_https=public_https,
+        origin=origin,
     )
 
 
@@ -144,9 +157,11 @@ async def login(body: LoginRequest, request: Request, response: Response) -> Ses
     """Checks run password, then TOTP, then disabled, so a wrong password never
     reveals whether the account has TOTP or is disabled.
 
-    When `require_passkeys` is set and an RP ID is configured, browsers
+    When `require_passkeys` is set and an RP ID is configured, or when
+    public HTTPS is on and this request is public, browsers
     (`403 passkey_required`) must use the passkey login path; native is
-    exempt (M15-06). The password is not checked in that case.
+    exempt (M15-06). The password is not checked in that case. Flag off:
+    password login from public stays allowed.
     """
     username = body.username.strip().lower()
     ip = client_ip(request)

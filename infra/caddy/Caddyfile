@@ -28,6 +28,13 @@
 	# any route (authenticated or not) sees the request.
 	request_header -X-HomeAI-Identity
 
+	# Same trust model as XFF: strip any client X-HomeAI-Via, then Caddy
+	# sets it when the TCP peer is the wireguard compose service (snippet
+	# generated at start from Docker DNS — see entrypoint). Do not add
+	# trusted_proxies or PROXY protocol on :80/:443.
+	request_header -X-HomeAI-Via
+	import /etc/caddy/via.caddy
+
 	# Login, setup, invite accept, status: unauthenticated by design.
 	handle /api/auth/* {
 		reverse_proxy platform:8100
