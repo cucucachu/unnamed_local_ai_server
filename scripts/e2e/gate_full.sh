@@ -64,6 +64,8 @@
 #   -> gate_m12.sh (M12-08: builder/SDK/platform app tests, the app smokes,
 #      the reference app in personal and shared spaces, verify_tenancy.sh
 #      with invariant 7)
+#   -> gate_m13.sh (M13-05: history, app tools pytest, Ask-the-agent
+#      runner smoke, and the G13 real-model grocery-list scenario)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -276,6 +278,10 @@ main() {
   # M12-08: gate_m12.sh re-runs the app smokes and verify_tenancy.sh above,
   # plus the builder/SDK/platform app unit tests; same idempotent reasoning.
   run_step "gate_m12.sh"             bash "${SCRIPT_DIR}/gate_m12.sh"
+  # M13-05: gate_m13.sh re-runs app_history_smoke.sh and
+  # app_runner_browser_smoke.sh above, plus app-tools pytest and the G13
+  # real-model grocery-list scenario; same idempotent reasoning.
+  run_step "gate_m13.sh"             bash "${SCRIPT_DIR}/gate_m13.sh"
 
   print_summary
 

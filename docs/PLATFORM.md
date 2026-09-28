@@ -1079,6 +1079,22 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > (jsdom) + Playwright (stub platform, fake model) and frontend jest;
 > `app_runner_browser_smoke.sh` checks the panel's context and a live
 > `db_changed` while it is open.
+>
+> **As built (M13-05)** — `scripts/e2e/gate_m13.sh` (GATE G13) chains the
+> M13 smokes rather than duplicating them: stack healthy (no rebuild),
+> `app_history_smoke.sh`, agent-server `test_app_tools.py`,
+> `app_runner_browser_smoke.sh`, then the real-model scenario
+> `g13_grocery_smoke.sh`. That scenario signs in as a throwaway
+> `e2e-g13-*` user (HITL off, never completes bootstrap) and: creates a
+> grocery list app from chat (`create_app` + `build_app`); iterates once
+> ("add quantities") and builds again; opens it from the Apps tab; a row
+> added in the runner is in the instance database and `app_sql` sees it;
+> an `app_action` / `app_sql` write appears in the still-open runner
+> (`db_changed`); `POST /apps/{id}/revert` restores the first build's
+> commit and rebuilds. Report: `scripts/e2e/g13-last-report.json`
+> (gitignored) with failure taxonomy if the model misses a step. Also in
+> `gate_full.sh`. The ten-prompt authoring eval (M13-03) stays out of
+> both (GPU, tens of minutes).
 
 ### System apps (D17)
 

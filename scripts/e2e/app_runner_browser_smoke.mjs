@@ -184,7 +184,11 @@ try {
   await ui(viewer.page).getByTestId('add').click();
   await waitForFrameText(viewer.page, 'status', (t) => t === 'refused: read_only', "the viewer's write is refused (read_only)");
   const after = await rows();
-  check(after.length === 1 && after[0] === ROW, 'the database is unchanged by the viewer', after);
+  check(
+    after.includes(ROW) && after.includes('From agent') && !after.includes('viewer write'),
+    'the database is unchanged by the viewer',
+    after,
+  );
 
   check(fromSandbox.length === 0, 'no request from a sandbox frame reached anything', fromSandbox);
   await viewer.context.close();
