@@ -30,7 +30,7 @@ from httpx import ASGITransport, AsyncClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from app.core import fsops, storage
+from app.core import appbuild, fsops, storage
 from app.core.config import Settings
 from app.main import create_app
 
@@ -136,7 +136,7 @@ def pg_database(pg_server: PgServer) -> Iterator[PgDatabase]:
 
 
 def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
-    """`data_dir` also holds the spaces root, at `data_dir/spaces`."""
+    """`data_dir` also holds the spaces root, at `data_dir/spaces`, and the builds root."""
     spaces_dir = data_dir / "spaces"
     spaces_dir.mkdir(parents=True, exist_ok=True)
     return Settings(
@@ -147,6 +147,7 @@ def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
         platform_db_name=db.dbname,
         platform_data_dir=data_dir,
         platform_spaces_dir=spaces_dir,
+        platform_builds_dir=data_dir / "builds",
         _env_file=None,
         **overrides,
     )
@@ -171,6 +172,7 @@ def chowns(monkeypatch) -> dict[Path, tuple[int, int]]:
     monkeypatch.setattr(storage, "_fchown", fake_fchown)
     monkeypatch.setattr(fsops, "_fchown", fake_fchown)
     monkeypatch.setattr(fsops, "_lchown", fake_lchown)
+    monkeypatch.setattr(appbuild, "_fchown", fake_fchown)
     return recorded
 
 

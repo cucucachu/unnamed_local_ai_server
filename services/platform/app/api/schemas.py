@@ -412,6 +412,35 @@ class AppValidationOut(BaseModel):
     diagnostics: list[DiagnosticOut]
 
 
+class BuildDiagnosticOut(BaseModel):
+    """`DiagnosticOut` plus the build step and a 1-based position, when there is one."""
+
+    step: Literal[
+        "manifest", "files", "route", "import", "bundle", "type", "render", "sql", "build"
+    ]
+    file: str
+    path: str
+    line: int | None
+    column: int | None
+    message: str
+    source: str | None = None
+
+
+class BuildOut(BaseModel):
+    id: str
+    duration_ms: int
+    bundle_path: str | None
+    bundle_bytes: int | None
+
+
+class AppBuildOut(BaseModel):
+    app: AppOut
+    ok: bool
+    # None when it stopped before the builder ran (the package itself failed).
+    build: BuildOut | None
+    diagnostics: list[BuildDiagnosticOut]
+
+
 class InstanceAppOut(BaseModel):
     id: UUID
     slug: str

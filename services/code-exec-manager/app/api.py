@@ -1,4 +1,5 @@
-"""The four §7 endpoints - thin HTTP adapters over `app.sessions.SessionManager`.
+"""The four §7 endpoints - thin HTTP adapters over `app.sessions.SessionManager` -
+plus the platform's `/builds` endpoint over `app.builds.BuildRunner`.
 
 Every field of the actual container spec is hardcoded in
 `app.sessions.build_run_kwargs` or comes from the platform's grants for the
@@ -14,16 +15,22 @@ one, `403` for another thread's or for a session held by another user,
 `503` if the platform can't be asked.
 `ensure` and `execute` then fetch the grants, so a delegation whose session
 has ended is refused there (`401`).
+
+`/builds/{build_id}/{phase}` instead needs `Authorization: Bearer
+<platform_exec_token>` (`401` otherwise, `503` while unset). Its only
+caller-controlled values are the id and phase, both pattern-checked (`422`).
 """
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel
 
+from app.builds import BUILD_ID_PATTERN, BUILD_PHASE_PATTERN
 from app.delegation import Delegation, DelegationError, DelegationVerifier, KeysUnavailable
 from app.grants import Grants, GrantsClient, GrantsDenied, GrantsUnavailable
 from app.sessions import SESSION_ID_PATTERN
@@ -146,3 +153,33 @@ async def list_sessions(request: Request) -> list[SessionListEntry]:
         )
         for s in sessions
     ]
+
+
+def platform_service(request: Request) -> None:
+    settings = request.app.state.settings
+    if not settings.platform_exec_token or not settings.app_builds_host_dir:
+        raise HTTPException(503, "builds are not configured")
+    presented = _bearer(request) or ""
+    if not hmac.compare_digest(presented.encode(), settings.platform_exec_token.encode()):
+        raise HTTPException(401, "unauthenticated")
+
+
+class BuildPhaseResponse(BaseModel):
+    exit_code: int
+    timed_out: bool
+    duration_ms: int
+    stdout: str
+    stderr: str
+    truncated: bool
+
+
+@router.post("/builds/{build_id}/{phase}", dependencies=[Depends(platform_service)])
+async def run_build_phase(
+    build_id: Annotated[str, Path(pattern=BUILD_ID_PATTERN)],
+    phase: Annotated[str, Path(pattern=BUILD_PHASE_PATTERN)],
+    request: Request,
+) -> BuildPhaseResponse:
+    """Platform-only (service token, not a delegation): run one phase of an
+    app build over the dirs the platform staged for `build_id`."""
+    result = await request.app.state.build_runner.run(build_id, phase)
+    return BuildPhaseResponse(**vars(result))

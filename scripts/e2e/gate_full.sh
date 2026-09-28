@@ -216,6 +216,7 @@ main() {
   run_step "admin_browser_smoke.sh"  bash "${SCRIPT_DIR}/admin_browser_smoke.sh"
   run_step "platform_files_smoke.sh" bash "${SCRIPT_DIR}/platform_files_smoke.sh"
   run_step "platform_apps_smoke.sh"  bash "${SCRIPT_DIR}/platform_apps_smoke.sh"
+  run_step "app_build_smoke.sh"      bash "${SCRIPT_DIR}/app_build_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
   run_step "image_browser_smoke.sh"  bash "${SCRIPT_DIR}/image_browser_smoke.sh"
