@@ -152,7 +152,7 @@ async def test_invalid_package_is_422_with_diagnostics(world) -> None:
     body = response.json()
     assert body["detail"] == "invalid_app"
     assert [(d["file"], d["path"]) for d in body["diagnostics"]] == [
-        ("app.json", "/homeai/exports"),
+        ("app.json", "/homeai/exports/0"),
         ("app.json", "/slug"),
         ("AGENT.md", ""),
     ]

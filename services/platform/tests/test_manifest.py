@@ -87,9 +87,9 @@ def test_missing_required_properties_point_at_the_missing_key() -> None:
             "no permissions",
         ),
         (_homeai(permissions=[]), "/homeai/permissions", "no permissions"),
-        (_homeai(exports=["items"]), "/homeai/exports", "reserved"),
-        (_homeai(exports={}), "/homeai/exports", "reserved"),
-        (_homeai(reads=[{"app": "x"}]), "/homeai/reads", "reserved"),
+        (_homeai(exports=["items"]), "/homeai/exports/0", "name"),
+        (_homeai(exports={}), "/homeai/exports", "array"),
+        (_homeai(reads=["x"]), "/homeai/reads/0", "app"),
         (_homeai(colour="red"), "/homeai/colour", 'unknown property "colour"'),
         ([], "", "not of type 'object'"),
     ],
@@ -168,7 +168,7 @@ def test_slug_must_equal_the_folder(tmp_path: Path) -> None:
 
 def test_schema_errors_come_through(tmp_path: Path) -> None:
     folder = write_package(tmp_path / "hello", doc=_homeai(exports=["x"]))
-    assert _where(validate_package(folder, "hello")[1]) == [("app.json", "/homeai/exports")]
+    assert _where(validate_package(folder, "hello")[1]) == [("app.json", "/homeai/exports/0")]
 
 
 def test_symlinked_manifest_is_refused(tmp_path: Path) -> None:
@@ -302,3 +302,94 @@ def test_shipped_files_may_declare_privileged_and_json_actions() -> None:
     assert diags == []
     assert doc["homeai"]["permissions"]["privileged"] == ["files"]
     assert (folder / "actions" / "moveToSpace.json").is_file()
+
+
+def _export(name="events", version="1", tables=None, actions=None) -> dict:
+    item = {"name": name, "version": version, "tables": tables or ["events"]}
+    if actions is not None:
+        item["actions"] = actions
+    return item
+
+
+def test_good_exports_and_reads_validate(tmp_path: Path) -> None:
+    doc = _homeai(
+        exports=[_export(actions=["addItem"])],
+        reads=[{"app": "calendar", "export": "events", "version": "1"}],
+    )
+    assert validate_manifest(doc) == []
+    files = {**PACKAGE_FILES, "schema.sql": "CREATE TABLE events (id INTEGER PRIMARY KEY);\n"}
+    folder = write_package(tmp_path / "hello", doc=doc, files=files)
+    assert validate_package(folder, "hello")[1] == []
+
+
+def test_export_table_must_exist_in_schema(tmp_path: Path) -> None:
+    doc = _homeai(exports=[_export(tables=["missing"])])
+    folder = write_package(
+        tmp_path / "hello",
+        doc=doc,
+        files={**PACKAGE_FILES, "schema.sql": "CREATE TABLE events (id INTEGER PRIMARY KEY);\n"},
+    )
+    (diag,) = validate_package(folder, "hello")[1]
+    assert (diag.file, diag.path) == ("app.json", "/homeai/exports/0/tables/0")
+    assert "missing" in diag.message
+
+
+def test_export_action_must_exist(tmp_path: Path) -> None:
+    doc = _homeai(exports=[_export(actions=["nope"])])
+    folder = write_package(
+        tmp_path / "hello",
+        doc=doc,
+        files={**PACKAGE_FILES, "schema.sql": "CREATE TABLE events (id INTEGER PRIMARY KEY);\n"},
+    )
+    (diag,) = validate_package(folder, "hello")[1]
+    assert diag.path == "/homeai/exports/0/actions/0"
+    assert "nope" in diag.message
+
+
+def test_export_names_and_reads_are_unique(tmp_path: Path) -> None:
+    doc = _homeai(
+        exports=[_export(), _export(tables=["other"])],
+        reads=[
+            {"app": "calendar", "export": "events", "version": "1"},
+            {"app": "calendar", "export": "events", "version": "2"},
+        ],
+    )
+    folder = write_package(
+        tmp_path / "hello",
+        doc=doc,
+        files={
+            **PACKAGE_FILES,
+            "schema.sql": (
+                "CREATE TABLE events (id INTEGER PRIMARY KEY);\n"
+                "CREATE TABLE other (id INTEGER PRIMARY KEY);\n"
+            ),
+        },
+    )
+    paths = [d.path for d in validate_package(folder, "hello")[1]]
+    assert "/homeai/exports/1/name" in paths
+    assert "/homeai/reads/1" in paths
+
+
+def test_export_contract_requires_a_version_bump() -> None:
+    old = _homeai(exports=[_export(tables=["events"])])
+    new_tables = _homeai(exports=[_export(tables=["events", "notes"])])
+    old_sql = "CREATE TABLE events (id INTEGER PRIMARY KEY, title TEXT);\n"
+    new_sql = old_sql + "CREATE TABLE notes (id INTEGER PRIMARY KEY);\n"
+    (diag,) = manifest.export_contract_diagnostics(old, old_sql, new_tables, new_sql)
+    assert "bump version" in diag.message
+    assert diag.path == "/homeai/exports/0/version"
+
+    new_cols = _homeai(exports=[_export(tables=["events"])])
+    wider = "CREATE TABLE events (id INTEGER PRIMARY KEY, title TEXT, where_ TEXT);\n"
+    (diag,) = manifest.export_contract_diagnostics(old, old_sql, new_cols, wider)
+    assert "bump version" in diag.message
+
+    bumped = _homeai(exports=[_export(version="2", tables=["events", "notes"])])
+    assert manifest.export_contract_diagnostics(old, old_sql, bumped, new_sql) == []
+    same = _homeai(exports=[_export(tables=["events"])])
+    assert manifest.export_contract_diagnostics(old, old_sql, same, old_sql) == []
+    added = _homeai(exports=[_export(), _export(name="notes", tables=["notes"])])
+    extra = old_sql + "CREATE TABLE notes (id INTEGER PRIMARY KEY);\n"
+    assert manifest.export_contract_diagnostics(old, old_sql, added, extra) == []
+    dropped = _homeai(exports=[])
+    assert manifest.export_contract_diagnostics(old, old_sql, dropped, old_sql) == []

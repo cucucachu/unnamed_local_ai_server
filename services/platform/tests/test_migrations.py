@@ -13,6 +13,7 @@ SHIPPED = [
     (4, "apps"),
     (5, "app_data"),
     (6, "app_sharing"),
+    (7, "app_exports"),
 ]
 
 
@@ -56,6 +57,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0004_apps.sql",
             "0005_app_data.sql",
             "0006_app_sharing.sql",
+            "0007_app_exports.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}

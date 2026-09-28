@@ -39,7 +39,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from app.core import beneath, fsops
+from app.core import appschema, beneath, fsops
 from app.core.beneath import Root
 
 SDK_VERSIONS = ("1",)
@@ -51,6 +51,7 @@ MAX_DIAGNOSTICS = 50
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,39}$"
 ACTION_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*\.sql$")
 ACTION_JSON_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*\.json$")
+EXPORT_NAME_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 # Image-shipped system apps (D17). User packages may not use these slugs or
 # declare `homeai.permissions.privileged`.
 SYSTEM_APP_SLUGS = ("home", "chat", "files", "settings")
@@ -60,9 +61,86 @@ PARAM_SEGMENT_RE = re.compile(r"^\[[A-Za-z_][A-Za-z0-9_]*\]$")
 REST_SEGMENT_RE = re.compile(r"^\[\.\.\.[A-Za-z_][A-Za-z0-9_]*\]$")
 ROUTE_SUFFIXES = (".tsx", ".ts")
 
-_RESERVED = (
-    "reserved for cross-app data sharing, which isn't available yet: omit it or leave it empty ([])"
+_EXPORT_NAME_MSG = (
+    "must start with a lowercase letter, then letters, digits or '_' "
+    "(the same shape as an action name)"
 )
+_EXPORT_ITEM: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["name", "version", "tables"],
+    "properties": {
+        "name": {
+            "description": "Stable name other apps put in reads.export.",
+            "type": "string",
+            "pattern": EXPORT_NAME_RE.pattern,
+            "errorMessage": "export name " + _EXPORT_NAME_MSG,
+        },
+        "version": {
+            "description": 'Contract version; start at "1" and bump when tables or columns change.',
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "errorMessage": (
+                'export version must be a string (use "1" and bump it when the export changes)'
+            ),
+        },
+        "tables": {
+            "description": "Tables from schema.sql exposed read-only to readers of this export.",
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "errorMessage": "each tables entry must be a table name from schema.sql",
+            },
+            "errorMessage": "tables must be a non-empty array of unique table names from schema.sql",
+        },
+        "actions": {
+            "description": "Optional actions/<name>.sql files readers may call on this instance.",
+            "type": "array",
+            "uniqueItems": True,
+            "items": {
+                "type": "string",
+                "pattern": EXPORT_NAME_RE.pattern,
+                "errorMessage": "export action " + _EXPORT_NAME_MSG,
+            },
+            "errorMessage": "actions must be an array of unique action names",
+        },
+    },
+    "errorMessage": 'each export needs "name", "version" and "tables"; "actions" is optional',
+}
+_READ_ITEM: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["app", "export", "version"],
+    "properties": {
+        "app": {
+            "description": "Slug of the exporting app (not an instance id).",
+            "type": "string",
+            "pattern": SLUG_PATTERN,
+            "errorMessage": (
+                "app must be the exporting app's slug (lowercase letters, digits and '-')"
+            ),
+        },
+        "export": {
+            "description": "exports[].name on that app.",
+            "type": "string",
+            "pattern": EXPORT_NAME_RE.pattern,
+            "errorMessage": "export " + _EXPORT_NAME_MSG,
+        },
+        "version": {
+            "description": "Must match the exporter's export version at attach time.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "errorMessage": "version must be a string matching the exporter's export version",
+        },
+    },
+    "errorMessage": 'each read needs "app" (the exporting slug), "export" and "version"',
+}
 
 # `errorMessage` (the ajv-errors keyword) replaces the generic message for
 # that node's own errors; validators ignore it.
@@ -139,8 +217,23 @@ SCHEMA: dict[str, Any] = {
                         "SDK 1 defines no permissions yet: leave permissions empty ({}) or omit it"
                     ),
                 },
-                "exports": {"type": "array", "maxItems": 0, "errorMessage": _RESERVED},
-                "reads": {"type": "array", "maxItems": 0, "errorMessage": _RESERVED},
+                "exports": {
+                    "description": (
+                        "Collections this app exposes to other apps: read-only tables plus "
+                        "optional write actions, versioned as a contract."
+                    ),
+                    "type": "array",
+                    "items": _EXPORT_ITEM,
+                    "errorMessage": "exports must be an array of {name, version, tables, actions?}",
+                },
+                "reads": {
+                    "description": (
+                        "Exports of other apps this instance may ATTACH read-only, granted at install."
+                    ),
+                    "type": "array",
+                    "items": _READ_ITEM,
+                    "errorMessage": "reads must be an array of {app, export, version}",
+                },
             },
         },
     },
@@ -218,6 +311,85 @@ def validate_manifest(doc: Any, *, shipped: bool = False) -> list[Diagnostic]:
             if (d.path, d.message) not in seen:
                 seen.add((d.path, d.message))
                 out.append(d)
+    return out
+
+
+def homeai_list(doc: Any, key: str) -> list[Any]:
+    """`homeai.{exports|reads}` as a list; omitted or a non-list is `[]`."""
+    homeai = doc.get("homeai") if isinstance(doc, dict) else None
+    value = homeai.get(key) if isinstance(homeai, dict) else None
+    return value if isinstance(value, list) else []
+
+
+def homeai_exports(doc: Any) -> list[Any]:
+    return homeai_list(doc, "exports")
+
+
+def homeai_reads(doc: Any) -> list[Any]:
+    return homeai_list(doc, "reads")
+
+
+def find_export(doc: Any, name: str) -> dict[str, Any] | None:
+    for item in homeai_exports(doc):
+        if isinstance(item, dict) and item.get("name") == name:
+            return item
+    return None
+
+
+def schema_table_columns(schema_sql: str) -> dict[str, tuple[str, ...]] | None:
+    """Table name → ordered column names from `schema.sql`, or None if it isn't valid."""
+    try:
+        con = appschema.scratch_from(schema_sql)
+    except appschema.SchemaError:
+        return None
+    try:
+        described = appschema.describe(con)
+    finally:
+        con.close()
+    return {name: tuple(info["cols"]) for name, info in described["tables"].items()}
+
+
+def export_contract_diagnostics(
+    old_doc: Any, old_schema_sql: str | None, new_doc: Any, new_schema_sql: str | None
+) -> list[Diagnostic]:
+    """Bump `exports[].version` when the same name keeps its version but tables or columns change."""
+    old_by_name = {
+        e["name"]: e
+        for e in homeai_exports(old_doc)
+        if isinstance(e, dict) and isinstance(e.get("name"), str)
+    }
+    new_exports = homeai_exports(new_doc)
+    old_cols = schema_table_columns(old_schema_sql) if old_schema_sql is not None else None
+    new_cols = schema_table_columns(new_schema_sql) if new_schema_sql is not None else None
+    out: list[Diagnostic] = []
+    for i, item in enumerate(new_exports):
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            continue
+        name = item["name"]
+        previous = old_by_name.get(name)
+        if previous is None:
+            continue
+        if str(previous.get("version", "")) != str(item.get("version", "")):
+            continue
+        old_tables = previous.get("tables") if isinstance(previous.get("tables"), list) else []
+        new_tables = item.get("tables") if isinstance(item.get("tables"), list) else []
+        changed = list(old_tables) != list(new_tables)
+        if not changed and old_cols is not None and new_cols is not None:
+            for table in new_tables:
+                if not isinstance(table, str):
+                    continue
+                if old_cols.get(table) != new_cols.get(table):
+                    changed = True
+                    break
+        if changed:
+            out.append(
+                Diagnostic(
+                    MANIFEST_FILE,
+                    _pointer(["homeai", "exports", i, "version"]),
+                    f'export "{name}" changed its tables or columns; '
+                    f'bump version (currently "{item.get("version")}")',
+                )
+            )
     return out
 
 
@@ -438,6 +610,106 @@ def _action_diagnostics(pkg: int, walk: _Walk, *, shipped: bool = False) -> list
     return out
 
 
+def _action_names(pkg: int) -> set[str]:
+    fd = _open_dir(pkg, "actions")
+    if fd is None:
+        return set()
+    names: set[str] = set()
+    try:
+        with os.scandir(fd) as it:
+            for entry in it:
+                if entry.name.startswith("."):
+                    continue
+                if ACTION_RE.fullmatch(entry.name) and entry.is_file(follow_symlinks=False):
+                    names.add(entry.name[: -len(".sql")])
+    finally:
+        os.close(fd)
+    return names
+
+
+def read_schema_sql(pkg: int) -> str | None:
+    if not _is(pkg, "schema.sql", stat.S_ISREG):
+        return None
+    try:
+        with fsops.open_regular_at(pkg, "schema.sql") as f:
+            raw = f.read(appschema.MAX_SCHEMA_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > appschema.MAX_SCHEMA_BYTES:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _export_layout_diagnostics(pkg: int, doc: Any) -> list[Diagnostic]:
+    """Unique names, tables that exist in schema.sql, and export actions that exist as files."""
+    out: list[Diagnostic] = []
+    exports = homeai_exports(doc)
+    seen_export: set[str] = set()
+    for i, item in enumerate(exports):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if isinstance(name, str):
+            if name in seen_export:
+                out.append(
+                    Diagnostic(
+                        MANIFEST_FILE,
+                        _pointer(["homeai", "exports", i, "name"]),
+                        f'export name "{name}" is used more than once',
+                    )
+                )
+            seen_export.add(name)
+    seen_read: set[tuple[str, str]] = set()
+    for i, item in enumerate(homeai_reads(doc)):
+        if not isinstance(item, dict):
+            continue
+        app, export = item.get("app"), item.get("export")
+        if isinstance(app, str) and isinstance(export, str):
+            key = (app, export)
+            if key in seen_read:
+                out.append(
+                    Diagnostic(
+                        MANIFEST_FILE,
+                        _pointer(["homeai", "reads", i]),
+                        f'read of "{app}.{export}" is listed more than once',
+                    )
+                )
+            seen_read.add(key)
+    schema_sql = read_schema_sql(pkg)
+    tables = schema_table_columns(schema_sql) if schema_sql is not None else None
+    table_names = None if tables is None else set(tables)
+    actions = _action_names(pkg)
+    if table_names is not None:
+        for i, item in enumerate(exports):
+            if not isinstance(item, dict) or not isinstance(item.get("tables"), list):
+                continue
+            for j, table in enumerate(item["tables"]):
+                if isinstance(table, str) and table not in table_names:
+                    out.append(
+                        Diagnostic(
+                            MANIFEST_FILE,
+                            _pointer(["homeai", "exports", i, "tables", j]),
+                            f'table "{table}" is not created in schema.sql',
+                        )
+                    )
+    for i, item in enumerate(exports):
+        if not isinstance(item, dict) or not isinstance(item.get("actions"), list):
+            continue
+        for j, action in enumerate(item["actions"]):
+            if isinstance(action, str) and action not in actions:
+                out.append(
+                    Diagnostic(
+                        MANIFEST_FILE,
+                        _pointer(["homeai", "exports", i, "actions", j]),
+                        f'action "{action}" has no actions/{action}.sql',
+                    )
+                )
+    return out
+
+
 def validate_package(
     pkg: int | None, slug: str, *, shipped: bool = False
 ) -> tuple[Any, list[Diagnostic]]:
@@ -483,6 +755,8 @@ def validate_package(
     elif _lstat(pkg, "actions") is not None:
         kind = ".sql or .json files" if shipped else ".sql files"
         out.append(Diagnostic("actions", "", f"actions must be a folder of {kind}"))
+    if isinstance(manifest, dict):
+        out += _export_layout_diagnostics(pkg, manifest)
     if walk.truncated:
         out.append(
             Diagnostic(

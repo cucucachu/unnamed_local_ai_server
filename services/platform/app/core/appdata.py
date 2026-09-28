@@ -42,7 +42,7 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import appdb, apps, appschema, beneath, fsops, spaces, vfs
+from app.core import appdb, apps, appschema, beneath, fsops, manifest, spaces, vfs
 from app.core.errors import (
     Conflict,
     InvalidApp,
@@ -70,18 +70,41 @@ PUBLISH_INTERVAL_S = 1.0
 _OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 _INSTANCE = """
-SELECT i.id, i.app_id, i.space_id, i.tracks, i.version_id, a.slug, a.source_path,
-       v.source_snapshot
+SELECT i.id, i.app_id, i.space_id, i.tracks, i.version_id, i.granted_reads, a.slug, a.source_path,
+       v.source_snapshot, v.manifest
 FROM app_instances i
 JOIN apps a ON a.id = i.app_id
 LEFT JOIN app_versions v ON v.id = i.version_id
+    OR (i.version_id IS NULL AND v.app_id = i.app_id AND v.kind = 'working')
 WHERE i.id = %s AND i.uninstalled_at IS NULL
+"""
+
+_EXPORT_SOURCES = """
+SELECT i.id, i.space_id, a.slug, v.manifest, s.kind, s.slug AS space_slug, s.gid
+FROM app_instances i
+JOIN apps a ON a.id = i.app_id AND a.archived_at IS NULL
+JOIN spaces s ON s.id = i.space_id AND s.archived_at IS NULL
+JOIN space_members m ON m.space_id = s.id AND m.user_id = %(user)s
+LEFT JOIN app_versions v ON v.id = i.version_id
+    OR (i.version_id IS NULL AND v.app_id = i.app_id AND v.kind = 'working')
+WHERE i.uninstalled_at IS NULL AND a.slug = %(slug)s
 """
 
 _MIGRATION_COLUMNS = (
     "id, instance_id, status, steps, summary, needs_approval, snapshot, error, "
     "created_by, created_at, decided_by, decided_at"
 )
+
+
+@dataclass(frozen=True)
+class ExportSource:
+    space_id: UUID
+    gid: int
+    instance_id: UUID
+    app_slug: str
+    export_name: str
+    tables: tuple[str, ...]
+    space_path: str
 
 
 @dataclass(frozen=True)
@@ -184,20 +207,54 @@ class AppData:
         access = await spaces.authorize_space(conn, principal, instance["space_id"], need)
         return Target(instance, access.space)
 
-    def _in_instance(self, target: Target, fn: Callable[[Any, int], T]) -> T:
+    def _in_instance(
+        self,
+        target: Target,
+        fn: Callable[[Any, int], T],
+        sources: list[ExportSource] | None = None,
+    ) -> T:
         try:
             fd = self.storage.open_instance(target.space_id, target.gid, target.id, create=False)
         except FileNotFoundError:
             raise NotFound("not_found") from None
+        extra_fds: list[int] = []
         try:
             with appdb.connect(fd) as con:
+                grants: list[appdb.AttachGrant] = []
+                for src in sources or []:
+                    try:
+                        efd = self.storage.open_instance(
+                            src.space_id, src.gid, src.instance_id, create=False
+                        )
+                    except FileNotFoundError:
+                        continue
+                    extra_fds.append(efd)
+                    grants.append(
+                        appdb.AttachGrant(
+                            inst_fd=efd,
+                            instance_id=src.instance_id,
+                            app_slug=src.app_slug,
+                            export_name=src.export_name,
+                            tables=src.tables,
+                            space_path=src.space_path,
+                        )
+                    )
+                if grants:
+                    appdb.attach_exports(con, grants)
                 return fn(con, fd)
         finally:
+            for efd in extra_fds:
+                os.close(efd)
             os.close(fd)
 
-    async def _run(self, target: Target, fn: Callable[[Any, int], T]) -> T:
+    async def _run(
+        self,
+        target: Target,
+        fn: Callable[[Any, int], T],
+        sources: list[ExportSource] | None = None,
+    ) -> T:
         try:
-            return await anyio.to_thread.run_sync(self._in_instance, target, fn)
+            return await anyio.to_thread.run_sync(self._in_instance, target, fn, sources)
         except appdb.SqlError as exc:
             raise SqlFailed(exc.code, exc.message, exc.index) from exc
         except appschema.SchemaError as exc:
@@ -291,8 +348,74 @@ class AppData:
 
     # --- RPC --------------------------------------------------------------------------
 
+    async def _export_sources(
+        self, conn: AsyncConnection, principal: Principal, target: Target
+    ) -> list[ExportSource]:
+        granted = target.instance.get("granted_reads") or []
+        if not isinstance(granted, list) or not granted:
+            return []
+        out: list[ExportSource] = []
+        for read in granted:
+            if not isinstance(read, dict):
+                continue
+            slug, export_name, version = read.get("app"), read.get("export"), read.get("version")
+            if not isinstance(slug, str) or not isinstance(export_name, str):
+                continue
+            cur = await conn.execute(_EXPORT_SOURCES, {"user": principal.user_id, "slug": slug})
+            for row in await cur.fetchall():
+                if row["id"] == target.id:
+                    continue
+                exp = manifest.find_export(row["manifest"], export_name)
+                if exp is None or str(exp.get("version")) != str(version):
+                    continue
+                tables = tuple(t for t in (exp.get("tables") or []) if isinstance(t, str))
+                if not tables:
+                    continue
+                out.append(
+                    ExportSource(
+                        space_id=row["space_id"],
+                        gid=row["gid"],
+                        instance_id=row["id"],
+                        app_slug=row["slug"],
+                        export_name=export_name,
+                        tables=tables,
+                        space_path=vfs.space_prefix(
+                            {"kind": row["kind"], "slug": row["space_slug"]}
+                        ),
+                    )
+                )
+        return out
+
+    async def _export_action(self, principal: Principal, reader_id: UUID, req: dict) -> dict:
+        async with self.pool.connection() as conn:
+            reader = await self._target(conn, principal, reader_id, "read")
+            granted = reader.instance.get("granted_reads") or []
+            candidates = [
+                r for r in granted if isinstance(r, dict) and r.get("export") == req["export"]
+            ]
+            if not candidates:
+                raise NotFound("unknown_export")
+            owner = await self._target(conn, principal, req["instance"], "write")
+            wanted = next((r for r in candidates if r.get("app") == owner.instance["slug"]), None)
+            if wanted is None:
+                raise NotFound("unknown_export")
+            exp = manifest.find_export(owner.instance.get("manifest"), req["export"])
+            if exp is None or str(exp.get("version")) != str(wanted.get("version")):
+                raise NotFound("unknown_export")
+            actions = exp.get("actions") if isinstance(exp.get("actions"), list) else []
+            if req["name"] not in actions:
+                raise NotFound("unknown_action")
+            action_sql = await self._read_action(conn, principal, owner, req["name"])
+        async with self._lock(owner.id):
+            result = await self._run(owner, lambda c, _: appdb.action(c, action_sql, req["params"]))
+        if result["changes"]:
+            self._changed(owner)
+        return result
+
     async def rpc(self, principal: Principal, instance_id: UUID, req: dict) -> dict:
         op = req["op"]
+        if op == "exportAction":
+            return await self._export_action(principal, instance_id, req)
         async with self.pool.connection() as conn:
             target = await self._target(
                 conn, principal, instance_id, "read" if op in READ_OPS else "write"
@@ -302,12 +425,15 @@ class AppData:
                 if op == "action"
                 else None
             )
+            sources = await self._export_sources(conn, principal, target)
         if op == "getAll":
-            rows = await self._run(target, lambda c, _: appdb.get_all(c, req["sql"], req["params"]))
+            rows = await self._run(
+                target, lambda c, _: appdb.get_all(c, req["sql"], req["params"]), sources
+            )
             return {"rows": rows}
         if op == "getFirst":
             row = await self._run(
-                target, lambda c, _: appdb.get_first(c, req["sql"], req["params"])
+                target, lambda c, _: appdb.get_first(c, req["sql"], req["params"]), sources
             )
             return {"row": row}
 
@@ -319,7 +445,7 @@ class AppData:
         else:
             fn = lambda c, _: appdb.action(c, action_sql, req["params"])
         async with self._lock(target.id):
-            result = await self._run(target, fn)
+            result = await self._run(target, fn, sources)
         changes = (
             sum(r["changes"] for r in result["results"])
             if op == "transaction"

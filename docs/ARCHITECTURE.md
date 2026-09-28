@@ -1145,7 +1145,7 @@ what another doc says it should be.
   root chown, and `renameat2(RENAME_NOREPLACE)` working there),
   `test_legacy.py` (off by default, waits for bootstrap, idempotent,
   collisions, a name taken after it was picked, resume). M12-02: `test_manifest.py` (the schema — good and
-  bad manifests, reserved `exports`/`reads`, pointers — and the package
+  bad manifests, `exports`/`reads`, pointers — and the package
   layout: required files, route rules, action names, symlinks),
   `test_apps_api.py` (registration and install owner/editor/viewer/
   non-member × user/agent, source-path rules, diagnostics, visibility,
@@ -1897,8 +1897,12 @@ returned. Content (imports, types, SQL) is the builder's (M12-04).
 strict (unknown keys rejected): required `sdk` (one of `"1"`), `icon`
 (vector-icon name, `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 64); optional
 `description` (≤ 500), `permissions` (object; SDK 1 user apps define no keys, so it
-must be `{}` or omitted), `exports` / `reads` (reserved until M14-04: arrays that must
-be empty). Image-shipped system apps (M14-03) are validated with a separate schema
+must be `{}` or omitted), `exports` (array of `{name, version, tables, actions?}`;
+omit or `[]` if unused; `name`/`actions` match `^[a-z][a-zA-Z0-9_]*$`; `tables`
+must exist in `schema.sql`; unique `name`s), `reads` (array of `{app` (exporting
+slug), `export`, `version`}; unique `(app, export)`; granted at install as
+`granted_reads`). Changing an export's tables or columns without bumping
+`version` is a diagnostic. Image-shipped system apps (M14-03) are validated with a separate schema
 that allows `permissions.privileged` (`["files"]` only). Nodes carry an `errorMessage` (the ajv-errors keyword) with the
 sentence the validator reports.
 
@@ -1920,10 +1924,12 @@ sentence the validator reports.
   an install in one of their spaces (not a member of the source space).
 - `Instance`: `{"id", "app_id", "space_id", "tracks": "working"|<version
   id>, "installed_by": id|null, "granted_permissions": object,
+  "granted_reads": [{app, export, version}],
   "created_at", "app": {"id", "slug", "name", "version", "icon"},
   "update": {"id", "version", "permissions"}|null}` (`app` from the
   tracked version). `granted_permissions` is the manifest's `permissions`
-  as confirmed at install or the last update. `update` is the newest
+  as confirmed at install or the last update; `granted_reads` is the
+  manifest's `reads` (empty `[]` needs no prompt). `update` is the newest
   published version of that app newer than the pinned one (`null` for
   `working` installs and when already current).
 - `CatalogEntry`: `{"app": Instance.app, "version": AppVersion (latest
@@ -1958,17 +1964,18 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `POST /api/platform/apps/{id}/fork` | write on the destination space | `{"space_id", "slug"?}` | `201 {"app", "instance"}`. Copies live source if the caller can read it, else the latest published snapshot, into `<dest>/Apps/<slug>/` (default the original slug; `app.json` slug rewritten if different), registers it, and installs tracking `working`. | `404 not_found`, space errors, `409 app_exists`, `422 not_published` (no source access and no snapshot), `422 invalid_app` |
 | `GET /api/platform/spaces/{id}/catalog` | read | — | `200 {"entries": [CatalogEntry]}` — latest published version of each listed app, by name | space errors |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
-| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>, "granted_permissions"?}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`). Empty permissions are granted automatically; a non-empty set must be sent back as `granted_permissions`. A pinned install outside the source space needs the app in this space's catalog. | space errors, `404 not_found` (app not visible), `422 working_requires_source_space`, `422 invalid_tracks`, `422 unknown_version`, `422 not_in_catalog`, `422 permissions_required` / `permissions_mismatch`, `409 already_installed` |
-| `POST /api/platform/spaces/{id}/instances/{instance_id}/update` | write | `{"version_id", "granted_permissions"?}` | `200 {"instance", "migration"}`. Pins a published install to another published version of the same app and migrates using that version's snapshot `schema.sql`. If the new permissions differ from `granted_permissions`, they must be re-sent. | space errors, `404 not_found`, `422 working_not_updatable`, `422 unknown_version`, `422 permissions_changed` / `permissions_mismatch`, `409 already_on_version` |
+| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>, "granted_permissions"?, "granted_reads"?}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` and its `ro/`, `snapshots/` (`root:<gid>` `2750`). Empty permissions/reads are granted automatically; a non-empty set must be sent back as `granted_permissions` / `granted_reads`. A pinned install outside the source space needs the app in this space's catalog. | space errors, `404 not_found` (app not visible), `422 working_requires_source_space`, `422 invalid_tracks`, `422 unknown_version`, `422 not_in_catalog`, `422 permissions_required` / `permissions_mismatch`, `422 reads_required` / `reads_mismatch`, `409 already_installed` |
+| `POST /api/platform/spaces/{id}/instances/{instance_id}/update` | write | `{"version_id", "granted_permissions"?, "granted_reads"?}` | `200 {"instance", "migration"}`. Pins a published install to another published version of the same app and migrates using that version's snapshot `schema.sql`. If the new permissions or reads differ from what is stored, they must be re-sent. | space errors, `404 not_found`, `422 working_not_updatable`, `422 unknown_version`, `422 permissions_changed` / `permissions_mismatch`, `422 reads_changed` / `reads_mismatch`, `409 already_on_version` |
 | `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine), after any running write or migration of the instance finishes; later ones are `404`. The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
 
-*Tables* (`0004_apps`, `0006_app_sharing`): `apps` (`UNIQUE (source_space_id, slug)`),
+*Tables* (`0004_apps`, `0006_app_sharing`, `0007_app_exports`): `apps` (`UNIQUE (source_space_id, slug)`),
 `app_versions` (at most one `working` per app; published versions unique
 per `(app_id, version)`; `published_at` set iff `published`;
 `source_snapshot` is `app-releases/<app_id>/<version_id>` for published
 rows that went through `POST /publish`), `app_instances` (`tracks`
 `working`|`version` + `version_id`, set iff `version`; `uninstalled_at`;
-unique `(app_id, space_id)` among live rows), `app_catalog` (`PRIMARY KEY
+unique `(app_id, space_id)` among live rows; `granted_reads` jsonb default
+`[]`), `app_catalog` (`PRIMARY KEY
 (app_id, space_id)`). Nothing is hard-deleted by the product; the `ON
 DELETE CASCADE`s from spaces and apps exist for test and e2e cleanup.
 
@@ -2133,14 +2140,20 @@ inside the app folder.
 Each live instance has one SQLite database,
 `${SPACES_DIR}/<space_id>/apps/<instance_id>/data.sqlite` (WAL, `0600`),
 opened only by the platform, through the instance dir's fd, on a connection
-that has nothing else attached. Every statement is prepared under an
+that has nothing else attached except granted exports (M14-04). Every statement is prepared under an
 allow-list authorizer: reads (`SELECT`, `WITH`, `VALUES`, functions except
 `load_extension`, and the introspection pragmas `table_info`,
 `table_xinfo`, `table_list`, `index_list`, `index_info`, `index_xinfo`,
-`foreign_key_list` on `main`), plus `INSERT`/`UPDATE`/`DELETE` on non-`sqlite_`
-tables for writes. Everything else is `422 sql_not_allowed`: DDL, `ATTACH`,
+`foreign_key_list` on `main`/`temp`), plus `INSERT`/`UPDATE`/`DELETE` on non-`sqlite_`
+tables on `main` for writes. SELECT/READ on an ATTACHed schema is limited to
+that export's tables (and the TEMP merged views on `temp`). Everything else is `422 sql_not_allowed`: DDL, `ATTACH`,
 `VACUUM [INTO]`, `REINDEX`, `ANALYZE`, transaction control and other pragmas.
-`SQLITE_LIMIT_ATTACHED` is `0`.
+`SQLITE_LIMIT_ATTACHED` is `0` until the platform ATTACHes granted exporters
+(then it is set to that count). Granted reads: live instances whose app slug
+matches `reads.app`, in spaces the caller can read, whose export `name`+`version`
+match; each is ATTACHed `mode=ro` via `/proc/self/fd/…`; a TEMP VIEW
+`{app}_{export}` is `UNION ALL` of each copy plus `_space`. Missing exporters
+are skipped. Cross-app writes use `op: "exportAction"`.
 
 Access is the instance's space's (§3 "Spaces authorization"): `read` for
 `getAll`/`getFirst` and the migration list, `write` for everything else; a
@@ -2161,6 +2174,7 @@ as `{"$blob": "<base64>"}` and a non-finite REAL as `null`.
 | `run` | write | `{"sql", "params"?}` | `{"changes", "lastInsertRowId"}` |
 | `transaction` | write | `{"statements": [{"sql", "params"?}]}` (1–100) | `{"results": [{"changes", "lastInsertRowId"}]}`; all or nothing |
 | `action` | write | `{"name", "params"?: {…}}` | `{"changes", "lastInsertRowId", "rows"}`; `rows` are those of the last statement that returned any |
+| `exportAction` | write on the **owning** instance's space (read on this one) | `{"instance", "export", "name", "params"?: {…}}` | same as `action`; runs `actions/<name>.sql` on that instance. The export must be in this instance's `granted_reads`, `name` must be listed on the export. Viewer of the owning space: `403 insufficient_role`. Ungranted/unknown: `404 unknown_export` / `unknown_action`. |
 
 An action is `actions/<name>.sql` in the app's source (`name` matches
 `^[a-z][a-zA-Z0-9_]*$`, file ≤ 64 KiB, read below the source space's

@@ -154,6 +154,7 @@ async def install_app(
             body.app_id,
             body.tracks,
             body.granted_permissions,
+            body.granted_reads,
         )
 
 
@@ -197,7 +198,13 @@ async def update_instance(
     state = request.app.state
     async with state.db_pool.connection() as conn:
         instance = await apps.update_instance(
-            conn, principal, space_id, instance_id, body.version_id, body.granted_permissions
+            conn,
+            principal,
+            space_id,
+            instance_id,
+            body.version_id,
+            body.granted_permissions,
+            body.granted_reads,
         )
     migration = await state.appdata.migrate(principal, instance_id)
     state.events.app_built([instance["space_id"]], instance["app_id"], instance["app"]["version"])
