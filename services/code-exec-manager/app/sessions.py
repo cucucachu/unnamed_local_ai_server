@@ -3,9 +3,15 @@
 Implements docs/ARCHITECTURE.md's "Contracts" section's exec-container
 hardening spec exactly - this module is the *only* place in the codebase
 that builds a container-creation call, and every field of that call is a
-hardcoded constant or derived from `Settings`, never from a caller-supplied
-value (README.md "Isolation boundary": callers send a command string, never
-a container spec).
+hardcoded constant, derived from `Settings`, or taken from the session's
+`Grants` (uid, gids, and mounts the platform computed for the delegation's
+user), never from a caller-supplied value (README.md "Isolation boundary":
+callers send a command string, never a container spec).
+
+A container is labelled with its user and its grants' digest; one whose
+labels no longer match the current grants (another user, a membership or
+role change, a container from before per-user exec) is replaced, never
+reused.
 
 Request-shape validation (the `session_id` regex → 422) lives at the API
 layer (`app/api.py`, via FastAPI's own `Path(pattern=...)`), not here - this
@@ -24,9 +30,11 @@ from typing import Any
 
 import anyio.to_thread
 import docker.errors
+from docker.types import Mount
 from fastapi import HTTPException
 
 from app.core.config import Settings
+from app.grants import Grants
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +62,26 @@ def container_name(session_id: str) -> str:
     return f"homeai-exec-{session_id}"
 
 
-def build_run_kwargs(session_id: str, settings: Settings) -> dict[str, Any]:
+def grant_labels(session_id: str, grants: Grants) -> dict[str, str]:
+    return {
+        "homeai.exec": "1",
+        "homeai.session": session_id,
+        "homeai.user": grants.user_id,
+        "homeai.grants": grants.digest,
+    }
+
+
+def build_run_kwargs(session_id: str, settings: Settings, grants: Grants) -> dict[str, Any]:
     """The exact §7 hardening spec for a fresh exec container, as a plain
     dict ready to splat into `docker_client.containers.run(**kwargs)`.
 
     Deliberately a pure function (no docker client, no I/O, no `self`) so
     the security-critical unit test can assert it field-by-field in
     isolation, independent of `SessionManager`'s own control flow.
+
+    Binds use `mounts` (`--mount type=bind`), not `volumes` (`-v`): Docker
+    creates a missing `-v` source on the host as root, where a `--mount`
+    with a missing source fails the create instead.
     """
     return {
         "image": settings.toolbox_image,
@@ -83,16 +104,18 @@ def build_run_kwargs(session_id: str, settings: Settings) -> dict[str, Any]:
         # UID it's actually mounted for.
         "tmpfs": {
             "/tmp": "size=512m",
-            "/home/homeai": (
-                f"size=64m,uid={settings.homeai_uid},gid={settings.homeai_gid},mode=0700"
-            ),
+            "/home/homeai": f"size=64m,uid={grants.uid},gid={grants.gid},mode=0700",
         },
         "mem_limit": "4g",
         "nano_cpus": 4_000_000_000,
-        "user": f"{settings.homeai_uid}:{settings.homeai_gid}",
+        "user": grants.user,
+        "group_add": grants.group_add,
         "pids_limit": 512,
-        "volumes": {settings.files_host_dir: {"bind": "/files", "mode": "rw"}},
-        "labels": {"homeai.exec": "1", "homeai.session": session_id},
+        "mounts": [
+            Mount(m.container_path, m.host_path, type="bind", read_only=m.read_only)
+            for m in grants.mounts
+        ],
+        "labels": grant_labels(session_id, grants),
     }
 
 
@@ -136,47 +159,56 @@ class SessionManager:
     def _touch(self, session_id: str) -> None:
         self._last_used[session_id] = datetime.now(UTC)
 
-    async def ensure(self, session_id: str) -> dict[str, Any]:
-        return await anyio.to_thread.run_sync(self._ensure_sync, session_id)
+    async def ensure(self, session_id: str, grants: Grants) -> dict[str, Any]:
+        return await anyio.to_thread.run_sync(self._ensure_sync, session_id, grants)
 
-    def _ensure_sync(self, session_id: str) -> dict[str, Any]:
-        name = container_name(session_id)
+    def _get(self, session_id: str) -> Any | None:
         try:
-            container = self._client.containers.get(name)
+            return self._client.containers.get(container_name(session_id))
         except docker.errors.NotFound:
-            container = None
+            return None
 
+    def _ensure_sync(self, session_id: str, grants: Grants) -> dict[str, Any]:
+        container = self._get(session_id)
         if container is not None:
             container.reload()
-            if container.status == "running":
+            if container.status == "running" and _matches(container, session_id, grants):
                 self._touch(session_id)
                 return {"container_id": container.id, "created": False}
-            # Stopped/exited: remove and recreate fresh rather than
-            # `container.start()`-ing the old one. A bare restart wouldn't
-            # re-apply the §7 spec if it's ever changed (e.g. a
-            # code-exec-manager upgrade landing new hardening flags), and
-            # "if absent/stopped, create+start" is what the ticket asks for
-            # literally - both branches funnel into the same fresh create.
+            # Stopped, or created under other grants: remove and recreate
+            # fresh rather than `container.start()`-ing the old one. A bare
+            # restart wouldn't re-apply the §7 spec if it's ever changed
+            # (e.g. a code-exec-manager upgrade landing new hardening
+            # flags), and couldn't change its user or mounts at all.
             container.remove(force=True)
 
-        container = self._client.containers.run(**build_run_kwargs(session_id, self._settings))
+        container = self._client.containers.run(
+            **build_run_kwargs(session_id, self._settings, grants)
+        )
         self._touch(session_id)
         return {"container_id": container.id, "created": True}
 
-    async def execute(self, session_id: str, command: str, timeout_seconds: int) -> ExecResult:
-        name = container_name(session_id)
-        try:
-            container = await anyio.to_thread.run_sync(self._client.containers.get, name)
-        except docker.errors.NotFound:
-            raise HTTPException(
-                404, f"session not found: {session_id!r} (call ensure first)"
-            ) from None
+    def _container_for_exec(self, session_id: str, grants: Grants) -> Any:
+        container = self._get(session_id)
+        if container is None:
+            raise HTTPException(404, f"session not found: {session_id!r} (call ensure first)")
+        if not _matches(container, session_id, grants):
+            self._ensure_sync(session_id, grants)
+            container = self._get(session_id)
+        return container
+
+    async def execute(
+        self, session_id: str, grants: Grants, command: str, timeout_seconds: int
+    ) -> ExecResult:
+        container = await anyio.to_thread.run_sync(self._container_for_exec, session_id, grants)
 
         self._touch(session_id)
         start = time.monotonic()
         try:
             exit_code, stdout, stderr, out_truncated = await asyncio.wait_for(
-                anyio.to_thread.run_sync(self._exec_sync, container, command, timeout_seconds),
+                anyio.to_thread.run_sync(
+                    self._exec_sync, container, grants, command, timeout_seconds
+                ),
                 timeout=timeout_seconds + OUTER_TIMEOUT_GRACE_S,
             )
             timed_out = exit_code == GNU_TIMEOUT_EXIT_CODE
@@ -201,12 +233,14 @@ class SessionManager:
         )
 
     def _exec_sync(
-        self, container: Any, command: str, timeout_seconds: int
+        self, container: Any, grants: Grants, command: str, timeout_seconds: int
     ) -> tuple[int, str, str, bool]:
         # GNU `timeout` bounds the wall clock *inside* the container; the
         # outer `asyncio.wait_for` around this whole call (see `execute`)
         # bounds the Docker Engine API call itself, which `timeout` has no
-        # visibility into.
+        # visibility into. `umask 002` keeps what the command creates
+        # writable by the space's group (dirs are setgid to its gid), and is
+        # set after the login profile runs so nothing there can undo it.
         wrapped = [
             "timeout",
             "--signal=TERM",
@@ -214,13 +248,10 @@ class SessionManager:
             f"{timeout_seconds}s",
             "bash",
             "-lc",
-            command,
+            f"umask 002\n{command}",
         ]
-        result = container.exec_run(
-            wrapped,
-            demux=True,
-            user=f"{self._settings.homeai_uid}:{self._settings.homeai_gid}",
-        )
+        # `docker exec --user` keeps the container's `group_add` groups.
+        result = container.exec_run(wrapped, demux=True, user=grants.user)
         stdout_bytes, stderr_bytes = result.output
         stdout_bytes, stdout_truncated = _truncate_bytes(stdout_bytes)
         stderr_bytes, stderr_truncated = _truncate_bytes(stderr_bytes)
@@ -241,16 +272,17 @@ class SessionManager:
         except docker.errors.APIError:
             pass
 
-    async def remove(self, session_id: str) -> None:
-        name = container_name(session_id)
-        await anyio.to_thread.run_sync(self._remove_sync, name)
+    async def remove(self, session_id: str, user_id: str) -> None:
+        await anyio.to_thread.run_sync(self._remove_sync, session_id, user_id)
         self._last_used.pop(session_id, None)
 
-    def _remove_sync(self, name: str) -> None:
-        try:
-            container = self._client.containers.get(name)
-        except docker.errors.NotFound:
+    def _remove_sync(self, session_id: str, user_id: str) -> None:
+        container = self._get(session_id)
+        if container is None:
             return  # idempotent - already gone
+        owner = container.labels.get("homeai.user")
+        if owner is not None and owner != user_id:
+            raise HTTPException(403, "session belongs to another user")
         try:
             container.stop(timeout=5)
         except docker.errors.APIError:
@@ -303,7 +335,8 @@ class SessionManager:
                 self._reap_container_if_idle(container, now)
             except Exception:
                 logger.exception(
-                    "reaper: failed to process container %r", getattr(container, "name", "<unknown>")
+                    "reaper: failed to process container %r",
+                    getattr(container, "name", "<unknown>"),
                 )
 
     def _reap_container_if_idle(self, container: Any, now: datetime) -> None:
@@ -358,6 +391,11 @@ class SessionManager:
             started_at = datetime.now(UTC)
         self._last_used[session_id] = started_at
         return started_at
+
+
+def _matches(container: Any, session_id: str, grants: Grants) -> bool:
+    labels = container.labels or {}
+    return all(labels.get(k) == v for k, v in grant_labels(session_id, grants).items())
 
 
 def _truncate_bytes(data: bytes | None) -> tuple[bytes, bool]:

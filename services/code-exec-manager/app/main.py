@@ -15,6 +15,8 @@ from fastapi import FastAPI
 
 from app.api import router
 from app.core.config import Settings
+from app.delegation import DelegationVerifier, JwksDelegationVerifier, http_jwks_fetcher
+from app.grants import GrantsClient, HttpGrantsClient
 from app.reaper import reap_loop
 from app.sessions import SessionManager
 
@@ -28,7 +30,13 @@ from app.sessions import SessionManager
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 
-def create_app(settings: Settings | None = None, docker_client_override: Any | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    docker_client_override: Any | None = None,
+    *,
+    delegation_verifier: DelegationVerifier | None = None,
+    grants_client: GrantsClient | None = None,
+) -> FastAPI:
     """Build the FastAPI app.
 
     `settings` lets tests inject config without touching real env vars /
@@ -39,6 +47,10 @@ def create_app(settings: Settings | None = None, docker_client_override: Any | N
     requires a real `/var/run/docker.sock`). When omitted - the production
     path, including the module-level `app = create_app()` below - the
     lifespan opens a real client and closes it on shutdown.
+
+    `delegation_verifier` / `grants_client` default to the platform's JWKS
+    and `/internal/exec-grants` at `settings.platform_url`; tests pass
+    in-process fakes.
 
     Neither `docker.from_env()` nor `SessionManager(...)` runs at import
     time (only inside `lifespan`), so importing this module never requires
@@ -65,6 +77,12 @@ def create_app(settings: Settings | None = None, docker_client_override: Any | N
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
+    app.state.delegation_verifier = delegation_verifier or JwksDelegationVerifier(
+        http_jwks_fetcher(f"{settings.platform_url.rstrip('/')}/internal/jwks")
+    )
+    app.state.grants_client = grants_client or HttpGrantsClient(
+        settings.platform_url, settings.platform_exec_token
+    )
     app.include_router(router)
     return app
 
