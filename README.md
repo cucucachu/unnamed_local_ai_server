@@ -227,6 +227,21 @@ docker compose up -d
 
 Everything runs directly on the target Linux host (native, no cloud) — real `docker compose`, the real GPU, the real model. Only phone/LAN-device checks are deferred to a human host checklist ([`docs/HOST-CHECKS.md`](docs/HOST-CHECKS.md)). Networking details (mDNS, firewall, LAN-only isolation) are in [`docs/NETWORKING.md`](docs/NETWORKING.md).
 
+**Phone apps.** The same Expo project is both the web UI (Caddy) and the
+native app:
+
+- **Expo Go** (`npx expo start --go` from `services/frontend/`, or
+  `npm run start:go`): `X-HomeAI-Client: native`, password login. It
+  cannot use Android Keystore. This is the existing day-to-day phone path.
+- **Host app** (dev client, Android first): `expo-dev-client`, package
+  `ai.homeai.host`. Pairing login with a hardware-backed P-256 key.
+  Settings → Remote access → **Pair a phone** shows a LAN QR (not a
+  WireGuard config). Build a debug APK without a host SDK:
+  `./scripts/build_host_app_android.sh` (throwaway Docker Android image,
+  or `ANDROID_HOME` Gradle). Maintainer signed/store builds use EAS
+  (`services/frontend/eas.json` development profile) — do not `eas login`
+  from an agent. iOS is interface + docs only (no ipa yet).
+
 **If an AI coding agent is working in this repo**, see [`AGENTS.md`](AGENTS.md) before running `docker compose`/`scripts/e2e/*`/`scripts/verify_*` — a sandboxed shell tool usually can't reach the real Docker daemon or network directly, and needs explicit elevated permission (or the user running the command) to verify anything for real.
 
 ## Accounts and recovery

@@ -8,6 +8,7 @@
     "scheme": "homeai",
     "userInterfaceStyle": "dark",
     "android": {
+      "package": "ai.homeai.host",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -15,6 +16,9 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
+    },
+    "ios": {
+      "bundleIdentifier": "ai.homeai.host"
     },
     "web": {
       "output": "single",
@@ -41,7 +45,9 @@
           "enableBackgroundPlayback": false
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-dev-client",
+      "expo-local-authentication"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -16,6 +16,7 @@ FROM node:22-alpine AS frontend-build
 # relative to the frontend, so the stage keeps the repo's layout.
 WORKDIR /repo/services/frontend
 COPY packages/homeai-sdk/ /repo/packages/homeai-sdk/
+COPY services/frontend/modules/homeai-device-key/ /repo/services/frontend/modules/homeai-device-key/
 COPY services/frontend/package.json services/frontend/package-lock.json ./
 RUN npm ci
 COPY services/frontend/ ./

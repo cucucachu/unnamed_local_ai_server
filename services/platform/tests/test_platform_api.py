@@ -156,6 +156,9 @@ async def test_identity_role_comes_from_database(platform):
         ("GET", "/api/platform/me/wireguard-devices", None),
         ("POST", "/api/platform/me/wireguard-devices", {"name": "phone"}),
         ("DELETE", f"/api/platform/me/wireguard-devices/{uuid4()}", None),
+        ("GET", "/api/platform/me/device-pairs", None),
+        ("POST", "/api/platform/me/device-pairs/begin", None),
+        ("DELETE", f"/api/platform/me/device-pairs/{uuid4()}", None),
     ],
 )
 async def test_agent_act_rejected_even_for_stepped_up_admin(platform, method, path, body):

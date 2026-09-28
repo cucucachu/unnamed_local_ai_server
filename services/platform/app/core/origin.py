@@ -1,7 +1,8 @@
 """LAN / VPN / public client-origin classification (M15-02, M15-05).
 
-Enrollment, invite accept, admin routes, and passkey register refuse a
-*public* origin (`403 public_origin`). LAN and VPN are privileged and allowed.
+Enrollment, invite accept, admin routes, passkey register, and host-app
+device-pair begin/enroll refuse a *public* origin (`403 public_origin`).
+LAN and VPN are privileged and allowed.
 
 The address is `client_ip()`: last `X-Forwarded-For` hop (Caddy's), else
 the TCP peer. Earlier XFF entries are client-supplied and ignored.

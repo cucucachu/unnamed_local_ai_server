@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["HomeAIDeviceKeyModule"]
+  },
+  "android": {
+    "modules": ["ai.homeai.devicekey.HomeAIDeviceKeyModule"]
+  }
+}

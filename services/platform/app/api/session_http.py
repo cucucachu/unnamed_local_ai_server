@@ -26,8 +26,21 @@ def session_token(request: Request) -> str | None:
     return request.cookies.get(SESSION_COOKIE)
 
 
+def client_kind(request: Request) -> str:
+    return request.headers.get(CLIENT_HEADER, "").strip().lower()
+
+
 def is_native(request: Request) -> bool:
-    return request.headers.get(CLIENT_HEADER, "").strip().lower() == "native"
+    """Expo Go (`native`) and the host app (`host`) both get a body token.
+
+    Expo Go cannot do Android Keystore; it stays on password. The host
+    app sends `host` and uses device pairing. Both skip the web cookie.
+    """
+    return client_kind(request) in ("native", "host")
+
+
+def is_host_app(request: Request) -> bool:
+    return client_kind(request) == "host"
 
 
 def is_https(request: Request) -> bool:

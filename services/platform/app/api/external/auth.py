@@ -9,6 +9,11 @@ import asyncio
 from fastapi import APIRouter, Request, Response, status
 
 from app.api.schemas import (
+    DeviceEnrollRequest,
+    DeviceLoginBeginRequest,
+    DeviceLoginBeginResponse,
+    DeviceLoginFinishRequest,
+    DevicePairOut,
     InviteAcceptRequest,
     LoginRequest,
     PasskeyCredentialRequest,
@@ -32,7 +37,17 @@ from app.api.session_http import (
     session_token,
     set_session_cookie,
 )
-from app.core import invites, legacy, passwords, sessions, totp, users, webauthn, wireguard
+from app.core import (
+    device_pairs,
+    invites,
+    legacy,
+    passwords,
+    sessions,
+    totp,
+    users,
+    webauthn,
+    wireguard,
+)
 from app.core.bootstrap import Bootstrap
 from app.core.errors import Forbidden, InvalidInput, Unauthorized
 from app.core.origin import request_origin, require_privileged_origin
@@ -55,9 +70,13 @@ def _webauthn_status(request: Request) -> WebAuthnStatus:
 
 
 def _passkeys_required(request: Request, require_passkeys: bool) -> bool:
-    """Browser (not native) must use a passkey when the admin flagged the user
-    *or* public HTTPS is on and this request is public. Native stays on
-    password until M15-06. An RP ID is required so we never lock out
+    """Browser (not native/host) must use a passkey when the admin flagged
+    the user *or* public HTTPS is on and this request is public.
+
+    Expo Go (`X-HomeAI-Client: native`) stays on password (+ optional TOTP)
+    — it cannot do Android Keystore. The host app (`host`) uses device
+    pairing for sign-in but is still exempt here so a LAN password fallback
+    does not lock the user out. An RP ID is required so we never lock out
     password without a working passkey path."""
     if is_native(request) or webauthn.rp_id(request.app.state.settings) is None:
         return False
@@ -99,7 +118,11 @@ async def _finish_login(
                 raise InvalidInput("unknown_device")
             bound_device = device_id
         token, _ = await sessions.create_session(
-            conn, creds["id"], device_label, device_id=bound_device
+            conn,
+            creds["id"],
+            device_label,
+            device_id=bound_device,
+            host_device_id=creds.get("host_device_id"),
         )
         user = await users.get_user(conn, creds["id"])
     return session_response(request, response, user, token)
@@ -159,9 +182,11 @@ async def login(body: LoginRequest, request: Request, response: Response) -> Ses
 
     When `require_passkeys` is set and an RP ID is configured, or when
     public HTTPS is on and this request is public, browsers
-    (`403 passkey_required`) must use the passkey login path; native is
-    exempt (M15-06). The password is not checked in that case. Flag off:
-    password login from public stays allowed.
+    (`403 passkey_required`) must use the passkey login path; Expo Go
+    (`native`) and the host app (`host`) stay exempt so Expo Go is not
+    locked out. Host-app sign-in is the signed-challenge path; password
+    remains a LAN fallback. The password is not checked when passkeys are
+    required. Flag off: password login from public stays allowed.
     """
     username = body.username.strip().lower()
     ip = client_ip(request)
@@ -296,6 +321,58 @@ async def passkey_step_up_finish(
             )
             until = await sessions.step_up(conn, row["session_id"])
     return StepUpResponse(stepped_up_until=until)
+
+
+@router.post("/device/enroll", response_model=DevicePairOut)
+async def device_enroll(body: DeviceEnrollRequest, request: Request) -> DevicePairOut:
+    """New host app, LAN/VPN only. Signature is over the enroll challenge."""
+    require_privileged_origin(request)
+    with credential_attempt(request, f"enroll-ip:{client_ip(request)}"):
+        async with request.app.state.db_pool.connection() as conn:
+            return DevicePairOut(
+                **await device_pairs.finish_enroll(
+                    conn,
+                    token=body.token.strip(),
+                    public_key=body.public_key,
+                    name=body.name,
+                    signature=body.signature,
+                )
+            )
+
+
+@router.post("/device/begin", response_model=DeviceLoginBeginResponse)
+async def device_login_begin(
+    body: DeviceLoginBeginRequest, request: Request
+) -> DeviceLoginBeginResponse:
+    ip = client_ip(request)
+    with credential_attempt(request, f"login-device:{body.device_id}", f"login-ip:{ip}"):
+        async with request.app.state.db_pool.connection() as conn:
+            return DeviceLoginBeginResponse(**await device_pairs.begin_login(conn, body.device_id))
+
+
+@router.post("/device/finish", response_model=SessionResponse, response_model_exclude_none=True)
+async def device_login_finish(
+    body: DeviceLoginFinishRequest, request: Request, response: Response
+) -> SessionResponse:
+    """Signed-challenge login for a paired host app. TOTP still applies after
+    a valid signature; disabled is checked last, same order as password."""
+    ip = client_ip(request)
+    with credential_attempt(request, f"login-device:{body.device_id}", f"login-ip:{ip}"):
+        try:
+            async with request.app.state.db_pool.connection() as conn:
+                creds = await device_pairs.finish_login(conn, body.device_id, body.signature)
+        except InvalidInput:
+            # Malformed signature/key material: same 401 as a wrong key.
+            raise Unauthorized("invalid_credentials") from None
+        label = body.device_label or creds.get("device_name")
+        return await _finish_login(
+            request,
+            response,
+            creds,
+            totp_code=body.totp_code,
+            device_label=label,
+            device_id=None,
+        )
 
 
 @router.post("/invite/accept", response_model=SessionResponse, response_model_exclude_none=True)

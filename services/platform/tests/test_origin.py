@@ -200,6 +200,30 @@ async def test_wireguard_post_from_public_refused_list_and_delete_allowed(platfo
     assert revoked.status_code == 204
 
 
+async def test_device_pair_begin_from_public_refused_list_and_delete_allowed(platform):
+    await create_user(platform, "alice")
+    headers = await identity(platform, await login(platform, "alice"))
+    listed = await platform.client.get(
+        "/api/platform/me/device-pairs", headers={**headers, **PUBLIC}
+    )
+    assert listed.status_code == 200, listed.text
+    refused = await platform.client.post(
+        "/api/platform/me/device-pairs/begin", headers={**headers, **PUBLIC}
+    )
+    assert (refused.status_code, refused.json()) == (403, {"detail": "public_origin"})
+    created = await platform.client.post(
+        "/api/platform/me/device-pairs/begin", headers={**headers, **LAN}
+    )
+    assert created.status_code == 200, created.text
+    # Enroll is unauthenticated but still LAN/VPN-only.
+    enroll = await platform.client.post(
+        "/api/auth/device/enroll",
+        json={"token": created.json()["token"], "public_key": "x", "name": "x", "signature": "x"},
+        headers=PUBLIC,
+    )
+    assert (enroll.status_code, enroll.json()) == (403, {"detail": "public_origin"})
+
+
 async def test_wireguard_post_from_vpn_succeeds(platform):
     await create_user(platform, "alice")
     headers = await identity(platform, await login(platform, "alice"))

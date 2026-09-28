@@ -103,7 +103,7 @@ export default function SettingsScreen() {
         <NavRow
           icon="wifi-outline"
           title="Remote access"
-          description="WireGuard devices, QR codes, revoke"
+          description="WireGuard, pair a phone, public HTTPS"
           onPress={() => router.push('/settings/remote')}
           testID="settings-nav-remote"
         />

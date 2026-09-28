@@ -58,10 +58,14 @@ logs platform` or `docker compose exec platform cat /data/platform/setup-code`),
 with a link to sign in instead for accounts made with the recovery CLI.
 
 - **Web**: the `HttpOnly` `homeai_session` cookie. No token ever touches JS.
-- **Native (Expo Go)**: auth calls send `X-HomeAI-Client: native`; the
+- **Expo Go**: auth calls send `X-HomeAI-Client: native`; the
   returned `session_token` goes in `expo-secure-store` and every request,
   native upload/download, media load, and the chat WebSocket send
-  `Authorization: Bearer …`.
+  `Authorization: Bearer …`. Password login (Expo Go cannot use Android
+  Keystore).
+- **Host app** (dev client / `expo-dev-client`): `X-HomeAI-Client: host`
+  and pairing login (hardware-backed P-256; Settings → Remote access →
+  Pair a phone). Password remains a LAN fallback. iOS is a stub.
 - Any `401` from a non-auth call (or a chat socket the platform confirms
   has lost its session) signs out back to `/login`. Logout is in Settings.
 
@@ -72,12 +76,18 @@ Test accounts: `docker compose exec platform python -m app.cli create-user
 
 ```bash
 npm install
-npx expo start          # dev server; press w for web, or scan the QR code with Expo Go
+npm run start:go        # Expo Go (password login)
+npx expo start          # dev client after a prebuild/EAS install
+npm run android:dev     # host-app Android (needs a prebuild or EAS client)
 npm test                # scripts/check-platform.mjs (native-parity sweep) + jest (jest-expo preset)
 npx tsc --noEmit        # typecheck
 npx expo lint           # eslint (eslint-config-expo)
 npx expo export --platform web   # production web build -> dist/
 ```
+
+Debug APK without a host SDK: repo-root `./scripts/build_host_app_android.sh`
+(throwaway Docker Android image). Maintainer signed builds: `eas.json`
+development profile (do not `eas login` from an agent).
 
 Native builds read the API/WS host from `EXPO_PUBLIC_API_HOST` (defaults to
 `http://homeai.local`, see `.env.example` in this directory — `cp` it to

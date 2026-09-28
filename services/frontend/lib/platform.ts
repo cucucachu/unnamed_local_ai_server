@@ -125,6 +125,45 @@ export function revokeWireGuardDevice(id: string): Promise<void> {
   return send<void>('DELETE', `/api/platform/me/wireguard-devices/${encodeURIComponent(id)}`);
 }
 
+export interface HostDevice {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface HostPairBegin {
+  v: number;
+  kind: 'homeai-host-pair';
+  token: string;
+  challenge: string;
+  user: string;
+  expires_at: string;
+}
+
+/** JSON encoded in the pairing QR (no expires_at — that's UI-only). */
+export function pairingQrValue(payload: HostPairBegin): string {
+  return JSON.stringify({
+    v: payload.v,
+    kind: payload.kind,
+    token: payload.token,
+    challenge: payload.challenge,
+    user: payload.user,
+  });
+}
+
+export async function listHostDevices(): Promise<HostDevice[]> {
+  return (await apiFetch<{ devices: HostDevice[] }>('/api/platform/me/device-pairs')).devices;
+}
+
+export function beginHostPair(): Promise<HostPairBegin> {
+  return send<HostPairBegin>('POST', '/api/platform/me/device-pairs/begin');
+}
+
+export function revokeHostDevice(id: string): Promise<void> {
+  return send<void>('DELETE', `/api/platform/me/device-pairs/${encodeURIComponent(id)}`);
+}
+
 export function enrollTotp(password: string): Promise<TotpEnrollment> {
   return send<TotpEnrollment>('POST', '/api/platform/me/totp/enroll', { password });
 }
@@ -309,7 +348,13 @@ const MESSAGES: Record<string, string> = {
   invalid_passkey: "That passkey didn't work. Try again.",
   no_passkey: 'No passkey is registered on this account.',
   passkey_exists: 'That passkey is already registered.',
-  public_origin: 'Add a passkey from the LAN or VPN.',
+  public_origin: 'Do this from the LAN or VPN.',
+  already_used: 'That pairing code was already used. Show a new QR.',
+  invalid_token: 'That pairing code expired or is invalid. Show a new QR.',
+  invalid_signature: "This phone couldn't prove the pairing key. Try again.",
+  invalid_public_key: "This phone's pairing key isn't supported.",
+  already_enrolled: 'This phone is already paired.',
+  invalid_pairing_qr: "That pairing code isn't valid.",
 };
 
 /** Human-readable text for a failed platform call. */

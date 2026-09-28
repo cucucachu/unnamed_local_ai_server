@@ -1,0 +1,16 @@
+{
+  "name": "homeai-device-key",
+  "version": "1.0.0",
+  "description": "Hardware-backed P-256 signing for Home AI host-app pairing (Android Keystore; iOS stub).",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {},
+  "keywords": ["react-native", "expo", "homeai-device-key"],
+  "license": "UNLICENSED",
+  "homepage": "https://github.com/cucucachu/unnamed_local_ai_server",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

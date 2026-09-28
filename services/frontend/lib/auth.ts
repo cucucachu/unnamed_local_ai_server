@@ -1,15 +1,20 @@
 import { Platform } from 'react-native';
 
 import { ApiError, apiFetch } from './api';
+import { homeAiClientHeader } from './client';
+import { loadPairedDeviceId, savePairedDeviceId } from './devicePairStore';
+import { generateDeviceKey, signChallenge } from './deviceKey';
+import { confirmDevicePresence } from './localAuth';
 import { setSessionToken } from './session';
 import { clearStoredToken, loadStoredToken, saveStoredToken } from './tokenStore';
 
 /**
  * Client for the platform's `/api/auth/*` routes (`docs/ARCHITECTURE.md`
  * §3 "Platform API"). Web sessions are the `homeai_session` cookie the
- * platform sets; native sends `X-HomeAI-Client: native`, gets
- * `session_token` back instead, and persists it via `tokenStore` so every
- * later request can send it as a bearer (`lib/session.ts`).
+ * platform sets; native sends `X-HomeAI-Client: native` (Expo Go) or
+ * `host` (dev client), gets `session_token` back instead, and persists it
+ * via `tokenStore` so every later request can send it as a bearer
+ * (`lib/session.ts`).
  */
 
 export interface User {
@@ -66,7 +71,8 @@ const DEVICE_LABEL = Platform.OS === 'web' ? 'Web browser' : `HomeAI app (${Plat
 
 function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
-  if (Platform.OS !== 'web') headers['X-HomeAI-Client'] = 'native';
+  const client = homeAiClientHeader();
+  if (client) headers['X-HomeAI-Client'] = client;
   return apiFetch<T>(path, { ...init, headers }, { signOutOnUnauthorized: false });
 }
 
@@ -110,6 +116,76 @@ export async function login({ username, password, totpCode }: LoginInput): Promi
   if (totpCode) body.totp_code = totpCode;
   return adoptSession(await postJson<SessionResponse>('/api/auth/login', body));
 }
+
+export async function beginDeviceLogin(deviceId: string): Promise<{ challenge: string; expires_at: string }> {
+  return postJson<{ challenge: string; expires_at: string }>('/api/auth/device/begin', {
+    device_id: deviceId,
+  });
+}
+
+export async function finishDeviceLogin(input: {
+  deviceId: string;
+  signature: string;
+  totpCode?: string;
+}): Promise<User> {
+  const body: Record<string, unknown> = {
+    device_id: input.deviceId,
+    signature: input.signature,
+    device_label: DEVICE_LABEL,
+  };
+  if (input.totpCode) body.totp_code = input.totpCode;
+  return adoptSession(await postJson<SessionResponse>('/api/auth/device/finish', body));
+}
+
+export async function enrollDevice(input: {
+  token: string;
+  publicKey: string;
+  name: string;
+  signature: string;
+}): Promise<{ id: string; name: string }> {
+  const device = await postJson<{ id: string; name: string }>('/api/auth/device/enroll', {
+    token: input.token,
+    public_key: input.publicKey,
+    name: input.name,
+    signature: input.signature,
+  });
+  await savePairedDeviceId(device.id);
+  return device;
+}
+
+/** Host-app login: biometric unlock, sign the challenge, finish. */
+export async function loginWithPairedDevice(totpCode?: string): Promise<User> {
+  const deviceId = await loadPairedDeviceId();
+  if (!deviceId) throw new ApiError(401, 'invalid_credentials');
+  if (!(await confirmDevicePresence())) throw new ApiError(401, 'biometric_cancelled');
+  const { challenge } = await beginDeviceLogin(deviceId);
+  const signature = await signChallenge(challenge);
+  return finishDeviceLogin({ deviceId, signature, totpCode });
+}
+
+/** Host-app first pair: generate a Keystore key, consume the LAN QR, then
+ * sign in with the new pair (the key is still unlocked). */
+export async function pairThisDevice(payloadJson: string, name?: string): Promise<User> {
+  let payload: { token?: string; challenge?: string; kind?: string };
+  try {
+    payload = JSON.parse(payloadJson) as { token?: string; challenge?: string; kind?: string };
+  } catch {
+    throw new ApiError(422, 'invalid_pairing_qr');
+  }
+  if (payload.kind !== 'homeai-host-pair' || !payload.token || !payload.challenge) {
+    throw new ApiError(422, 'invalid_pairing_qr');
+  }
+  if (!(await confirmDevicePresence())) throw new ApiError(401, 'biometric_cancelled');
+  const publicKey = await generateDeviceKey();
+  const signature = await signChallenge(payload.challenge);
+  const label = name?.trim() || DEVICE_LABEL;
+  const device = await enrollDevice({ token: payload.token, publicKey, name: label, signature });
+  const { challenge } = await beginDeviceLogin(device.id);
+  const loginSig = await signChallenge(challenge);
+  return finishDeviceLogin({ deviceId: device.id, signature: loginSig });
+}
+
+export { loadPairedDeviceId };
 
 export async function beginPasskeyLogin(username: string): Promise<Record<string, unknown>> {
   return postJson<Record<string, unknown>>('/api/auth/passkey/login/begin', { username });
@@ -203,6 +279,9 @@ const MESSAGES: Record<string, string> = {
   passkey_rp_mismatch: 'This page does not match the passkey domain.',
   invalid_passkey: "That passkey didn't work. Try again.",
   no_passkey: 'No passkey is registered on this account.',
+  passkey_exists: 'That passkey is already registered.',
+  invalid_pairing_qr: "That pairing code isn't valid. Scan or paste the QR from Settings on the LAN.",
+  biometric_cancelled: 'Unlock cancelled.',
 };
 
 /** Human-readable text for an auth failure (a platform error code, a
