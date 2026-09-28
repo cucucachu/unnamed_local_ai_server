@@ -1,0 +1,13 @@
+{
+  "name": "Files",
+  "slug": "files",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "folder-outline",
+    "description": "The host Files tab: household files under /personal and /spaces, including move and copy across spaces.",
+    "permissions": {
+      "privileged": ["files"]
+    }
+  }
+}

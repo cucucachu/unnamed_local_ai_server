@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     platform_auth_rate_limit: int = 5
     platform_auth_rate_window_s: float = 60.0
 
+    # Image-shipped system apps (M14-03): Chat, Files, Settings, Home.
+    # Default is `system_apps/` next to this package (`/app/system_apps` in the image).
+    system_apps_dir: Path = Path(__file__).resolve().parents[2] / "system_apps"
+
     @property
     def keys_dir(self) -> Path:
         return self.platform_data_dir / "keys"

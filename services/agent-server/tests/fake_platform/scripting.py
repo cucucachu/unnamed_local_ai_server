@@ -30,6 +30,72 @@ AGENT_TOKEN = "fake-agent-service-token"
 TEST_SESSION_ID = "11111111-1111-4111-8111-111111111111"
 
 
+def _default_system_apps() -> list[dict]:
+    """The image-shipped set the real platform lists (M14-03)."""
+    files_actions = [
+        {
+            "name": "moveToSpace",
+            "description": "Move or rename a file or folder, including across spaces.",
+            "params": {"src": {"type": "string"}, "dst": {"type": "string"}},
+        },
+        {
+            "name": "copyToSpace",
+            "description": "Copy a file or folder, including across spaces.",
+            "params": {"src": {"type": "string"}, "dst": {"type": "string"}},
+        },
+    ]
+    return [
+        {
+            "slug": "home",
+            "name": "Home",
+            "version": "1.0.0",
+            "icon": "home-outline",
+            "description": "The host launcher.",
+            "native": True,
+            "read_only_source": True,
+            "privileged": [],
+            "actions": [],
+            "agent_md": "# Home\nNative launcher.\n",
+        },
+        {
+            "slug": "chat",
+            "name": "Chat",
+            "version": "1.0.0",
+            "icon": "chatbubbles-outline",
+            "description": "The host Chat tab.",
+            "native": True,
+            "read_only_source": True,
+            "privileged": [],
+            "actions": [],
+            "agent_md": "# Chat\nYou are the chat.\n",
+        },
+        {
+            "slug": "files",
+            "name": "Files",
+            "version": "1.0.0",
+            "icon": "folder-outline",
+            "description": "The host Files tab.",
+            "native": True,
+            "read_only_source": True,
+            "privileged": ["files"],
+            "actions": files_actions,
+            "agent_md": "# Files\nUse moveToSpace to move across spaces.\n",
+        },
+        {
+            "slug": "settings",
+            "name": "Settings",
+            "version": "1.0.0",
+            "icon": "settings-outline",
+            "description": "The host Settings tab.",
+            "native": True,
+            "read_only_source": True,
+            "privileged": [],
+            "actions": [],
+            "agent_md": "# Settings\nNative settings.\n",
+        },
+    ]
+
+
 @dataclass
 class Minted:
     user_id: str
@@ -69,6 +135,8 @@ class FakePlatform:
     # instance id -> rows any SELECT returns
     rows: dict[str, list[dict]] = field(default_factory=dict)
     rpc_calls: list[tuple[str, dict]] = field(default_factory=list)
+    system_action_calls: list[tuple[str, str, dict]] = field(default_factory=list)
+    system_apps: list[dict] = field(default_factory=_default_system_apps)
     # marker -> (thread_id, instance_id, migration_id)
     hitl_markers: dict[str, tuple[str, str, str]] = field(default_factory=dict)
     hitl_mints: list[dict] = field(default_factory=list)

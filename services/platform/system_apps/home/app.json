@@ -1,0 +1,11 @@
+{
+  "name": "Home",
+  "slug": "home",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "home-outline",
+    "description": "The host launcher: system tiles, apps grouped by space, catalog, and update badges.",
+    "permissions": {}
+  }
+}

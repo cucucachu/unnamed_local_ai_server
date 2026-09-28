@@ -34,6 +34,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev && rm -rf "$UV_CACHE_DIR"
 
 COPY app/ ./app/
+COPY system_apps/ ./system_apps/
 RUN python -m compileall -q app
 
 EXPOSE 8100

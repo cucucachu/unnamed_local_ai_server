@@ -1,0 +1,13 @@
+{
+  "description": "Move or rename a file or folder. dst may be in another space the user can write (parity with the Files tab Move).",
+  "params": {
+    "src": {
+      "type": "string",
+      "description": "Virtual path to move, e.g. /personal/notes.txt"
+    },
+    "dst": {
+      "type": "string",
+      "description": "Destination virtual path, e.g. /spaces/family/notes.txt"
+    }
+  }
+}

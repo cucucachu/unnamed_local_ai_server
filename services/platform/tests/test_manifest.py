@@ -15,14 +15,14 @@ from tests.app_packages import manifest as good_manifest
 from tests.app_packages import write_package
 
 
-def validate_package(folder: Path, slug: str):
+def validate_package(folder: Path, slug: str, *, shipped: bool = False):
     """`manifest.validate_package` on the folder opened like `app.core.apps` opens it."""
     try:
         fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
-        return manifest.validate_package(None, slug)
+        return manifest.validate_package(None, slug, shipped=shipped)
     try:
-        return manifest.validate_package(fd, slug)
+        return manifest.validate_package(fd, slug, shipped=shipped)
     finally:
         os.close(fd)
 
@@ -269,3 +269,36 @@ def test_the_walk_is_bounded(tmp_path: Path, monkeypatch) -> None:
         (folder / "app" / f"page{i}.tsx").write_text("")
     diags = validate_package(folder, "hello")[1]
     assert "more than 5 files" in diags[-1].message
+
+
+def test_user_app_cannot_declare_privileged(tmp_path: Path) -> None:
+    doc = _homeai(permissions={"privileged": ["files"]})
+    diags = validate_manifest(doc)
+    assert diags
+    assert any("privileged" in d.path or "permissions" in d.path for d in diags)
+    folder = write_package(tmp_path / "hello", doc=doc)
+    pkg_diags = validate_package(folder, "hello")[1]
+    assert any("privileged" in d.path or "no permissions" in d.message for d in pkg_diags)
+
+
+def test_reserved_system_app_slug_is_refused_for_user_packages(tmp_path: Path) -> None:
+    folder = write_package(tmp_path / "files", doc=good_manifest("files"))
+    (diag,) = [d for d in validate_package(folder, "files")[1] if d.path == "/slug"]
+    assert "reserved" in diag.message
+
+
+def test_shipped_system_apps_validate() -> None:
+    root = Path(__file__).resolve().parents[1] / "system_apps"
+    for slug in manifest.SYSTEM_APP_SLUGS:
+        folder = root / slug
+        doc, diags = validate_package(folder, slug, shipped=True)
+        assert diags == [], (slug, diags)
+        assert doc["slug"] == slug
+
+
+def test_shipped_files_may_declare_privileged_and_json_actions() -> None:
+    folder = Path(__file__).resolve().parents[1] / "system_apps" / "files"
+    doc, diags = validate_package(folder, "files", shipped=True)
+    assert diags == []
+    assert doc["homeai"]["permissions"]["privileged"] == ["files"]
+    assert (folder / "actions" / "moveToSpace.json").is_file()

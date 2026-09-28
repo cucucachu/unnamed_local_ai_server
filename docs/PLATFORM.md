@@ -506,8 +506,8 @@ the platform publishes.
 > "Apps". Where it narrows the text above: `sdk` is a string (`"1"` is the
 > only one); `homeai` also takes an optional `description`, and unknown
 > `homeai` keys are rejected while other top-level (Expo) keys are ignored;
-> SDK 1 defines no permissions, so `permissions` must be `{}` until the
-> first capability lands (then the schema grows the key); `exports` and
+> SDK 1 user-app permissions must be `{}` (or omitted); `permissions.privileged`
+> is only on the image-shipped schema (M14-03). `exports` and
 > `reads` are reserved as arrays that must be empty until M14-04 defines
 > them. Diagnostics are `{file, path (JSON pointer), message}`. Route names
 > are `^[A-Za-z0-9][A-Za-z0-9_-]*$` segments, and a `[...rest]` catch-all
@@ -1008,7 +1008,9 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >
 > - `list_apps`: every live instance in the user's spaces (id, app, space
 >   and role, source folder, last built commit, the `/app-data/...` path),
->   plus registered apps that aren't installed.
+>   plus registered apps that aren't installed, plus the four image-shipped
+>   system apps (Home, Chat, Files, Settings): native, read-only source,
+>   instance id = slug. Files lists `moveToSpace` / `copyToSpace`.
 > - `create_app(space, slug, name, template="grocery-list")`: copies a
 >   template (a folder with `app.json` under `APP_TEMPLATES_DIR`; the image
 >   ships `examples/apps/` at `/app/templates`) to
@@ -1022,7 +1024,8 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >   `getAll` first; if the platform says `sql_not_allowed` it's a write and
 >   goes through `run`. DDL is refused (schema changes go through
 >   `schema.sql` + `build_app`).
-> - `app_action(instance, name, params)`: `op: action`.
+> - `app_action(instance, name, params)`: `op: action` on a user-app instance;
+>   for system app `files`, `POST /system-apps/files/actions/{name}`.
 > - `approve_migration(instance, migration_id)` (not in the original list:
 >   approving inside `build_app` would re-run the build when the paused
 >   call resumes).
@@ -1119,15 +1122,29 @@ render natively. Every app gets an "ask the agent" panel that opens a thread
 with that app's context.
 
 > **As built (M14-02)** — Home is a **native host screen**, not a sandboxed
-> system-app package (`services/frontend/src/app/(tabs)/apps/index.tsx`;
+> iframe (`services/frontend/src/app/(tabs)/apps/index.tsx`;
 > tab title Home; `/` redirects here). Chat, Files, and Settings stay native
 > host screens too: Settings moved from a sibling modal into the tab bar
 > (Home, Chat, Files, Settings). Home shows system tiles that open those
 > screens, installed apps grouped by space, a space switcher (All + each
 > live space), catalog, and update badges. Runner/catalog/install/update/info
-> stay under `/apps`. `app.json`/`AGENT.md` and privileged capabilities for
-> image-shipped apps are M14-03; this ticket does not invent that framework
-> or ship Chat/Files/Settings as packages.
+> stay under `/apps`.
+>
+> **As built (M14-03)** — Chat, Files, Settings, and Home ship as packages
+> in the platform image (`services/platform/system_apps/`, copied to
+> `/app/system_apps`). Same `app.json` / `AGENT.md` / `schema.sql` layout;
+> they omit `app/` (native render). `GET /api/platform/apps/schema` is still
+> the user-app schema (`permissions` empty). Image-shipped validation
+> (`shipped=True`) allows `homeai.permissions.privileged`. SDK 1's only
+> privileged capability is `files`, held by the Files package. User
+> `register_app` rejects `privileged` and the slugs `home`/`chat`/`files`/
+> `settings`. They are not `apps` / `app_instances` rows. `GET
+> /api/platform/system-apps` lists them (any authenticated user, including
+> an agent delegation). `list_apps` includes them so the agent learns Files
+> the same way as any app. Files actions `moveToSpace` and `copyToSpace`
+> (`POST /system-apps/files/actions/{name}`) call the files API `move` /
+> `copy` (same write-on-both-spaces rules as the Files tab). Chat, Settings,
+> and Home have no actions. Source is read-only to the agent.
 
 ## 8. Remote access
 
