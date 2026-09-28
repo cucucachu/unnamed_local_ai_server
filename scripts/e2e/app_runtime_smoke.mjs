@@ -35,6 +35,10 @@ function ok(what) {
 const browser = await chromium.launch();
 try {
   const context = await browser.newContext();
+  // The host page is fulfilled by Playwright, so Chromium's Local Network
+  // Access check treats its WebSocket to localhost as a local-network request
+  // and blocks it; a page Caddy served itself wouldn't need this.
+  await context.grantPermissions(['local-network-access']);
   const api = context.request;
   const call = async (method, url, body, raw) => {
     const r = await api.fetch(`${BASE}${url}`, { method, ...(raw !== undefined ? { data: raw, headers: { 'Content-Type': 'application/octet-stream' } } : body !== undefined ? { data: body } : {}) });

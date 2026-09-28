@@ -94,7 +94,9 @@ export async function openHarness(page, { origin, instanceId, space, readOnly = 
   const error = await page.evaluate(() => window.harness.error);
   if (error) throw new Error(`host page: ${error}`);
   await onReady?.();
-  await page.waitForFunction(() => window.harness.frames.some((f) => f.type === 'ready'), null, { timeout: 10000 });
+  await page.waitForFunction(() => window.harness.wsClosed !== undefined || window.harness.frames.some((f) => f.type === 'ready'), null, { timeout: 10000 });
+  const closed = await page.evaluate(() => window.harness.wsClosed);
+  if (closed !== undefined) throw new Error(`host page: /ws/platform/events closed with ${closed} before "ready"`);
   const frame = page.frames().find((f) => f.parentFrame() === page.mainFrame());
   return { page, frame, ui: page.frameLocator('iframe'), probes, fromSandbox, blocked };
 }
@@ -175,7 +177,8 @@ export async function runChecks(h, platform, { SANDBOX_CSP, fixtureIndex }) {
   const { page, frame, ui } = h;
   const visible = (id) => ui.getByTestId(id).filter({ visible: true });
   const text = async (id) => (await visible(id).textContent({ timeout: 10000 }))?.trim();
-  const waitText = (id, want) => visible(id).filter({ hasText: want }).waitFor({ timeout: 10000 });
+  // A string `hasText` ignores case ("Not done" has "Done"); a RegExp doesn't.
+  const waitText = (id, want) => visible(id).filter({ hasText: new RegExp(want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).waitFor({ timeout: 10000 });
 
   // The sandbox itself.
   const iframe = page.locator('iframe');
