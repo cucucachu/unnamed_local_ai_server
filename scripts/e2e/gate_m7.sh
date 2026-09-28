@@ -19,7 +19,7 @@
 #   2. `scripts/verify_egress.sh` (M7-02) — 6 checks, egress-proxy policy
 #      against the live stack (HTTPS MITM, method + destination guards,
 #      agent-server itself has no route out). Needs real internet, no sudo.
-#   3. `scripts/verify_isolation.sh` (M4-05) — 17 checks, code-exec
+#   3. `scripts/verify_isolation.sh` (M4-05) — 22 checks, code-exec
 #      hardening suite.
 #   4. `scripts/e2e/web_research_smoke.sh` (M7-04) — web-fetch's `/search`
 #      against real SearXNG + egress-proxy, GET-only audit holds at

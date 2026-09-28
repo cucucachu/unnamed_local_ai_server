@@ -37,7 +37,7 @@
 #      `_TOOL_CATEGORY_BY_NAME` - `write_file`/etc -> "file",
 #      `execute_code` -> "exec").
 #   6. Runs `scripts/verify_isolation.sh` (M4-05, already merged) and asserts
-#      it exits 0 (all 17 checks green) - proves isolation is green on the
+#      it exits 0 (all checks green) - proves isolation is green on the
 #      SAME build this gate just exercised real tool calls against.
 #   7. Regression: runs `scripts/e2e/gate_m2.sh` and `scripts/e2e/gate_m3.sh`
 #      (both already implemented, self-contained) as subprocesses and
@@ -412,7 +412,7 @@ step_ws_frame_categories() {
 }
 
 step_verify_isolation() {
-  log "Step 5/6: running scripts/verify_isolation.sh (17 checks)..."
+  log "Step 5/6: running scripts/verify_isolation.sh (22 checks)..."
   if bash "${REPO_ROOT}/scripts/verify_isolation.sh"; then
     log "OK: verify_isolation.sh exited 0 (all checks green)"
   else
