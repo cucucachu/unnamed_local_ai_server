@@ -30,6 +30,7 @@ from app.api.session_http import (
 from app.core import invites, legacy, passwords, sessions, totp, users, wireguard
 from app.core.bootstrap import Bootstrap
 from app.core.errors import Forbidden, InvalidInput, Unauthorized
+from app.core.origin import require_privileged_origin
 
 router = APIRouter(prefix="/api/auth")
 
@@ -60,6 +61,7 @@ async def auth_status(request: Request, response: Response) -> StatusResponse:
 
 @router.post("/setup", response_model=SessionResponse, response_model_exclude_none=True)
 async def setup(body: SetupRequest, request: Request, response: Response) -> SessionResponse:
+    require_privileged_origin(request)
     bootstrap: Bootstrap = request.app.state.bootstrap
     with credential_attempt(request, f"setup-ip:{client_ip(request)}"):
         async with request.app.state.db_pool.connection() as conn:
@@ -147,6 +149,7 @@ async def step_up(body: StepUpRequest, request: Request) -> StepUpResponse:
 async def accept_invite(
     body: InviteAcceptRequest, request: Request, response: Response
 ) -> SessionResponse:
+    require_privileged_origin(request)
     with credential_attempt(request, f"accept-ip:{client_ip(request)}"):
         async with request.app.state.db_pool.connection() as conn:
             user, token = await invites.accept_invite(

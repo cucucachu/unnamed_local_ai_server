@@ -4,6 +4,7 @@ Admins manage space membership through the ordinary member routes
 (`spaces.authorize_membership`); nothing here grants access to space data.
 """
 
+from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -21,9 +22,20 @@ from app.api.schemas import (
 )
 from app.api.session_http import is_https
 from app.core import invites, spaces, users
-from app.core.principal import SteppedUpAdmin, require_admin_stepped_up
+from app.core.origin import require_privileged_origin
+from app.core.principal import Principal, SteppedUpAdmin, require_admin_stepped_up
 
-router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_stepped_up)])
+
+async def require_admin_from_privileged_origin(
+    request: Request,
+    principal: Annotated[Principal, Depends(require_admin_stepped_up)],
+) -> Principal:
+    """Auth and admin guards first (401 / agent_not_allowed), then origin."""
+    require_privileged_origin(request)
+    return principal
+
+
+router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_from_privileged_origin)])
 
 INVITE_PATH = "/invite"
 
