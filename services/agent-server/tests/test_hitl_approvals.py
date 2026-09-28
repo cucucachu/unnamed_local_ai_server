@@ -18,6 +18,7 @@ from __future__ import annotations
 from app.db.settings import InMemorySettingsStore
 from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
+from tests.fake_platform.scripting import FakePlatform
 from tests.test_chat_ws import _assert_turn_end, _drain_turn, _make_client
 
 
@@ -27,11 +28,11 @@ async def _hitl_settings_store(enabled: bool) -> InMemorySettingsStore:
     return store
 
 
-async def test_write_file_with_hitl_on_emits_approval_request(fake_model: FakeModel, tmp_path) -> None:
-    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
+async def test_write_file_with_hitl_on_emits_approval_request(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
     ) as client, client.websocket_connect("/ws/chat/hitl-on-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -47,22 +48,21 @@ async def test_write_file_with_hitl_on_emits_approval_request(fake_model: FakeMo
     action = approval["actions"][0]
     assert action["name"] == "write_file"
     assert action["category"] == "file"
-    assert action["args"] == {"file_path": "/x.txt", "content": "y"}
+    assert action["args"] == {"file_path": "/personal/x.txt", "content": "y"}
     assert isinstance(action["tool_call_id"], str) and action["tool_call_id"]
-    assert isinstance(action["description"], str) and action["description"]
+    assert action["description"] == "Write file `/personal/x.txt`"
 
     # No tool_start/tool_end for the paused call — it hasn't executed yet.
     assert not any(f["type"] in ("tool_start", "tool_end") for f in frames)
 
-    written = tmp_path / "x.txt"
-    assert not written.exists()
+    assert fake_platform.personal() == {}
 
 
-async def test_approve_writes_file_and_completes_turn(fake_model: FakeModel, tmp_path) -> None:
-    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
+async def test_approve_writes_file_and_completes_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
     ) as client, client.websocket_connect("/ws/chat/hitl-approve-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -89,19 +89,17 @@ async def test_approve_writes_file_and_completes_turn(fake_model: FakeModel, tmp
     assert tool_end["name"] == "write_file"
     assert tool_end["status"] == "success"
 
-    written = tmp_path / "x.txt"
-    assert written.exists()
-    assert written.read_text() == "y"
+    assert fake_platform.personal() == {"x.txt": b"y"}
 
     token_text = "".join(f["content"] for f in resume_frames if f["type"] == "token")
     assert token_text == "done"
 
 
-async def test_reject_does_not_write_file_and_informs_model(fake_model: FakeModel, tmp_path) -> None:
-    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
+async def test_reject_does_not_write_file_and_informs_model(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
     ) as client, client.websocket_connect("/ws/chat/hitl-reject-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -123,8 +121,7 @@ async def test_reject_does_not_write_file_and_informs_model(fake_model: FakeMode
     # No tool execution frames — the tool call was rejected, never run.
     assert not any(f["type"] in ("tool_start", "tool_end") for f in resume_frames)
 
-    written = tmp_path / "x.txt"
-    assert not written.exists()
+    assert fake_platform.personal() == {}
 
     # The model's next request carries the rejection as a tool message.
     last_request_messages = fake_model.requests[-1]["messages"]
@@ -133,11 +130,11 @@ async def test_reject_does_not_write_file_and_informs_model(fake_model: FakeMode
     assert "rejected" in tool_messages[-1]["content"].lower()
 
 
-async def test_cancel_while_awaiting_approval_rejects_all(fake_model: FakeModel, tmp_path) -> None:
-    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
+async def test_cancel_while_awaiting_approval_rejects_all(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
     ) as client, client.websocket_connect("/ws/chat/hitl-cancel-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -150,8 +147,7 @@ async def test_cancel_while_awaiting_approval_rejects_all(fake_model: FakeModel,
     assert resume_frames[0] == {"type": "turn_start"}
     _assert_turn_end(resume_frames[-1], "completed")
 
-    written = tmp_path / "x.txt"
-    assert not written.exists()
+    assert fake_platform.personal() == {}
 
     last_request_messages = fake_model.requests[-1]["messages"]
     tool_messages = [m for m in last_request_messages if m.get("role") == "tool"]
@@ -159,14 +155,14 @@ async def test_cancel_while_awaiting_approval_rejects_all(fake_model: FakeModel,
     assert "the user cancelled" in tool_messages[-1]["content"].lower()
 
 
-async def test_hitl_off_no_approval_request_at_all(fake_model: FakeModel, tmp_path) -> None:
+async def test_hitl_off_no_approval_request_at_all(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     fake_model.queue(
-        ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}),
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}),
         TextTurn("done"),
     )
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _hitl_settings_store(False)
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(False)
     ) as client, client.websocket_connect("/ws/chat/hitl-off-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -175,22 +171,20 @@ async def test_hitl_off_no_approval_request_at_all(fake_model: FakeModel, tmp_pa
     _assert_turn_end(frames[-1], "completed")
     assert not any(f["type"] == "approval_request" for f in frames)
 
-    written = tmp_path / "x.txt"
-    assert written.exists()
-    assert written.read_text() == "y"
+    assert fake_platform.personal() == {"x.txt": b"y"}
 
 
 async def test_thread_state_reflects_pending_approval_across_reconnect(
-    fake_model: FakeModel, tmp_path
+    fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
     """Simulates a reconnect: query `/api/threads/{id}/state` with no WS turn
     running, after a previous turn left an approval pending."""
-    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
     thread_store = AutoCreateThreadStore()
 
     with _make_client(
         fake_model,
-        tmp_path,
+        fake_platform,
         thread_store=thread_store,
         settings_store=await _hitl_settings_store(True),
     ) as client:
@@ -208,16 +202,16 @@ async def test_thread_state_reflects_pending_approval_across_reconnect(
         assert body["pending_approval"]["actions"] == approval["actions"]
 
 
-async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, tmp_path) -> None:
+async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     """A new WS connection must accept `approval_response` for an interrupt
     left pending by a previous connection (the checkpointer is the source
     of truth — see `chat_ws` hydrating `pending_approval` on connect)."""
-    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/x.txt", "content": "y"}))
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
     thread_store = AutoCreateThreadStore()
 
     with _make_client(
         fake_model,
-        tmp_path,
+        fake_platform,
         thread_store=thread_store,
         settings_store=await _hitl_settings_store(True),
     ) as client:
@@ -240,16 +234,14 @@ async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, 
 
     assert resume_frames[0] == {"type": "turn_start"}
     _assert_turn_end(resume_frames[-1], "completed")
-    written = tmp_path / "x.txt"
-    assert written.exists()
-    assert written.read_text() == "y"
+    assert fake_platform.personal() == {"x.txt": b"y"}
 
 
-async def test_thread_state_is_null_when_nothing_pending(fake_model: FakeModel, tmp_path) -> None:
+async def test_thread_state_is_null_when_nothing_pending(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     fake_model.queue(TextTurn("hello"))
 
     with _make_client(
-        fake_model, tmp_path, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
     ) as client:
         with client.websocket_connect("/ws/chat/hitl-state-empty-thread") as ws:
             ws.send_json({"type": "user_message", "content": "hi"})

@@ -12,9 +12,10 @@ from fastapi import Depends, FastAPI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.build import build_agent
-from app.api import chat, chat_ws, files, health, media
+from app.api import chat, chat_ws, health
 from app.api import settings as settings_api
 from app.core.config import Settings
+from app.core.delegation import DelegationClient, HttpDelegationClient
 from app.core.identity import (
     IdentityVerifier,
     JwksIdentityVerifier,
@@ -37,6 +38,7 @@ def create_app(
     settings_store_override: SettingsStore | None = None,
     turn_stats_store_override: TurnStatsStore | None = None,
     identity_verifier_override: IdentityVerifier | None = None,
+    delegation_client_override: DelegationClient | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -80,6 +82,10 @@ def create_app(
     of `X-HomeAI-Identity` (`app/core/identity.py`). Unlike the stores it
     has no test-mode default: tests pass a fake that yields a fixed user,
     or a `JwksIdentityVerifier` over a local key pair.
+
+    `delegation_client_override` (M11-02) replaces the HTTP client that
+    exchanges and refreshes delegation tokens (`app/core/delegation.py`);
+    by default it talks to `settings.platform_url`.
     """
     settings = settings or Settings()
 
@@ -89,7 +95,10 @@ def create_app(
         if s.platform_agent_token:
             lookup = http_admin_lookup(s.platform_url, s.platform_agent_token)
         else:
-            logger.warning("PLATFORM_AGENT_TOKEN unset: ownerless threads stay unassigned")
+            logger.warning(
+                "PLATFORM_AGENT_TOKEN unset: ownerless threads stay unassigned"
+                " and chat sockets close (no delegations)"
+            )
         app.state.orphan_adopter = OrphanAdopter(
             lookup, app.state.thread_store, app.state.settings_store
         )
@@ -127,12 +136,13 @@ def create_app(
     app.state.identity_verifier = identity_verifier_override or JwksIdentityVerifier(
         http_jwks_fetcher(f"{settings.platform_url}/internal/jwks")
     )
+    app.state.delegation_client = delegation_client_override or HttpDelegationClient(
+        settings.platform_url, settings.platform_agent_token
+    )
 
     authenticated = [Depends(current_user)]
     app.include_router(health.router, prefix="/api")
     app.include_router(chat.router, prefix="/api", dependencies=authenticated)
-    app.include_router(files.router, prefix="/api", dependencies=authenticated)
-    app.include_router(media.router, prefix="/api", dependencies=authenticated)
     app.include_router(settings_api.router, prefix="/api", dependencies=authenticated)
     # No prefix: the WS route's own path (`/ws/chat/{thread_id}`) must match
     # Caddy's `/ws/*` routing exactly (see `infra/caddy/Caddyfile`), not be

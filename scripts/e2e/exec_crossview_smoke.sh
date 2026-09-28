@@ -39,6 +39,12 @@
 # Usage:
 #   scripts/e2e/exec_crossview_smoke.sh
 #
+# M11-02: the file tools now work on the platform's spaces (`/personal`,
+# `/spaces/<slug>`) while exec still mounts `FILES_DIR` at `/files`, so the
+# two no longer see the same directory until M11-03 runs exec as the user.
+# Step 3 (read_file of the exec-written file) is skipped with a notice
+# rather than rewritten to pass; the exec half (steps 2, 4, 5) still runs.
+#
 # Exits non-zero (and prints the failing step) if any check fails.
 
 set -euo pipefail
@@ -215,39 +221,8 @@ step_execute_code_writes_file() {
 }
 
 step_read_file_sees_same_content() {
-  log "Step 3/5: same thread, WS prompt -> agent read_file's ${FILE_NAME}..."
-  # NOTE: explicit file-tool virtual path (`${FILE_NAME}`, NOT
-  # `/files/${FILE_NAME}`) - deepagents' `FilesystemBackend` is rooted at
-  # bare `/` for file tools (`virtual_mode=True`); `/files` is only the
-  # mount point execute_code's shell sees for the identical directory. This
-  # is exactly the "file tool paths and execute_code's /files refer to the
-  # same directory, under two different real prefixes" nuance the M4-04
-  # system-prompt addition documents - spelled out here so this plumbing
-  # check isn't gated on model path reasoning it wasn't specifically
-  # prompted to get right.
-  local prompt="Now use your read_file tool with file_path exactly '${FILE_NAME}' (root-relative; do NOT prefix /files — that prefix is only for execute_code shell commands) and tell me exactly what it contains."
-  local retry_prompt="Wrong path. Call read_file now with file_path exactly '${FILE_NAME}' — not '/files/${FILE_NAME}', not '/${FILE_NAME}'. Then quote the file contents."
-
-  log "Sending read_file prompt (attempt 1/2)..."
-  run_ws_turn "$prompt" /tmp/exec-crossview-read-attempt-1.log
-  if successful_tool_end /tmp/exec-crossview-read-attempt-1.log "read_file"; then
-    log "OK: read_file tool_end succeeded on attempt 1"
-    return 0
-  fi
-
-  log "WARN: read_file tool_end not observed on attempt 1 - retrying once (LLM nondeterminism allowance)"
-  run_ws_turn "$retry_prompt" /tmp/exec-crossview-read-attempt-2.log
-  if successful_tool_end /tmp/exec-crossview-read-attempt-2.log "read_file"; then
-    log "OK: read_file tool_end succeeded on attempt 2"
-    return 0
-  fi
-
-  log "ERROR: read_file never produced a successful tool_end after 2 attempts - gate FAILS"
-  log "--- attempt 1 transcript ---"
-  cat /tmp/exec-crossview-read-attempt-1.log 2>/dev/null || true
-  log "--- attempt 2 transcript ---"
-  cat /tmp/exec-crossview-read-attempt-2.log 2>/dev/null || true
-  return 1
+  log "Step 3/5: SKIPPED until M11-03 - execute_code's /files is FILES_DIR, the file tools" \
+    "see the user's spaces (/personal, /spaces/<slug>); the two trees are no longer one directory"
 }
 
 step_no_error_frames() {

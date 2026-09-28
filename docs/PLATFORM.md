@@ -224,15 +224,25 @@ session cookie/bearer and returns `200` with `X-HomeAI-Identity: <JWT>`, or
   `{identity_token, thread_id}` → `{token, expires_at}`. Same key and format
   as the identity token, with `act="agent"`, `thr=<thread_id>`, `exp` +15
   min. `POST /internal/delegations/refresh` with a still-valid-or-recent
-  delegation renews it **only while its `sid` session is active**.
+  (expired < 5 min) delegation renews it **only while its `sid` session is
+  active**. (Contract details: `docs/ARCHITECTURE.md` §3 "Delegation
+  contract".)
 - Every platform request authorized by a delegation re-checks that the
   session is not revoked/expired and the user is not disabled.
 - `act="agent"` tokens are **always rejected** by admin endpoints and by
   auth/session-management endpoints, regardless of `role`.
-- The token lives in the LangGraph run config (`configurable`), exactly like
-  `hitl_enabled` today — never in the prompt, messages, or tool arguments.
-- Resumed runs (HITL approve/reject) mint a fresh delegation from the
-  *approver's* identity; the approver must own the thread.
+- The token lives in the LangGraph run config (`configurable["delegation"]`)
+  — never in the prompt, messages, or tool arguments. It's held there as an
+  object rather than a bare string like `hitl_enabled`, because LangGraph
+  copies primitive `configurable` values into the checkpoint metadata it
+  stores; the token must not be persisted.
+- A chat socket exchanges its identity token once, at connect (the
+  identity token lives 5 min, a socket much longer), then refreshes the
+  delegation at every turn start and every resumed run (HITL
+  approve/reject), and in the background while it's open. So a resume
+  on the same socket gets a fresh delegation for the approver, who is
+  that socket's user and must own the thread; a resume from a new socket
+  exchanges that socket's identity token.
 
 ### Service-to-service auth
 
@@ -275,7 +285,9 @@ in `.env`. Each token only unlocks the internal endpoints that service needs.
 ```
 
 Exec containers see the same tree under `/files`
-(`/files/personal/...`, `/files/spaces/<slug>/...`). The `file:` link
+(`/files/personal/...`, `/files/spaces/<slug>/...`) from M11-03; until then
+their `/files` is still the old shared `FILES_DIR`, which the agent's file
+tools no longer see. The `file:` link
 convention (M9-03) uses the same virtual paths. Resolution of every virtual
 path goes through one guard (the successor of `resolve_files_path`), which
 maps to a host path *and* checks membership and role (`viewer` = read-only).
@@ -316,8 +328,9 @@ On the switch to the platform files API (M11-01), the pre-Stage-3 files root
 (`FILES_DIR`, mounted read-write into the platform at `/data/legacy-files`)
 is moved into the **bootstrap admin's personal space** `files/`, chowned,
 and a marker file prevents re-running. Idempotent and logged. It runs only
-with `PLATFORM_MIGRATE_LEGACY_FILES=1`, which stays off until M11-02 moves
-the agent onto spaces (details: `docs/ARCHITECTURE.md` §2 `platform`).
+with `PLATFORM_MIGRATE_LEGACY_FILES=1`, which compose sets since M11-02
+moved the agent onto spaces, and waits until bootstrap has completed
+(details: `docs/ARCHITECTURE.md` §2 `platform`).
 
 Pre-Stage-3 chat threads (no owner) and the old global chat settings are
 assigned to the bootstrap admin earlier, from M10-04: agent-server asks

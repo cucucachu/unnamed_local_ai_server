@@ -38,7 +38,7 @@ flowchart TB
         avahi[avahi-daemon\nmDNS: homeai.local]
 
         subgraph internalnet [Docker network: homeai-internal, internal: true — no route to the internet]
-            agent["Agent Server\nFastAPI + deepagents\napp code at /app\nFilesystemBackend at /data/files"]
+            agent["Agent Server\nFastAPI + deepagents\napp code at /app\nno data mounts: file tools\nvia the platform files API"]
             execmgr[Code-Exec Manager\nFastAPI + docker SDK\nno app-code or secret access]
             model[Model Runner\nllama.cpp server-vulkan]
             pg[(Postgres\nhomeai: checkpoints + metadata\nhomeai_platform: platform)]
@@ -61,7 +61,9 @@ flowchart TB
     agent --> pg
     platform --> pg
     dbinit -.->|"CREATE ROLE/DATABASE if missing"| pg
-    agent -->|"read/write/edit/ls (direct, in-process, virtual root /)"| filesdir
+    agent -->|"file tools: /api/platform/files* as the user (delegation, M11-02)"| platform
+    agent -->|"/internal/delegations*"| platform
+    platform -.->|"one-time legacy migration source"| filesdir
     agent -->|"execute_code tool: create/exec/destroy"| execmgr
     execmgr -->|docker API| exec1
     execmgr -->|docker API| exec2
@@ -136,6 +138,7 @@ sequenceDiagram
     participant P as Caddy
     participant A as Agent Server
     participant M as Model Runner
+    participant L as Platform
     participant E as Code-Exec Manager
     participant C as Exec Container
 
@@ -143,9 +146,11 @@ sequenceDiagram
     P->>U: static web bundle (served directly from /srv/www, baked into the caddy image at build time - web only, native app is prebuilt)
     U->>P: WS /ws/chat/{thread_id}
     P->>A: proxy upgrade
+    A->>L: POST /internal/delegations (identity token -> delegation, at connect; refreshed every turn)
     A->>M: /v1/chat/completions (stream)
-    M-->>A: tool_call: read_file("notes.md")
-    A->>A: FilesystemBackend reads /data/files/notes.md directly (no network hop; file-tool path was /notes.md)
+    M-->>A: tool_call: read_file("/personal/notes.md")
+    A->>L: POST /api/platform/files/read (Bearer delegation)
+    L-->>A: content (the user's personal space)
     A->>M: continue with tool result
     M-->>A: tool_call: execute_code("python resize.py photo.jpg")
     A->>E: POST /sessions/{id}/ensure
@@ -161,10 +166,11 @@ sequenceDiagram
 
 Caddy answers `GET homeai.local` directly from its own baked-in static
 files — no second process involved, matching the flowchart above.
-Everything else in this sequence (the WS upgrade, the tool-call round
-trips through `model-runner` and `code-exec-manager`) matches the real
-`app/api/chat_ws.py` / `app/agent/execute_code_tool.py` / `app/sessions.py`
-flow, and the `code-exec-manager` API calls (`POST /sessions/{id}/ensure`,
+Everything else in this sequence (the WS upgrade, the delegation
+exchange, the tool-call round trips through the platform, `model-runner`
+and `code-exec-manager`) matches the real `app/api/chat_ws.py` /
+`app/agent/platform_files.py` / `app/agent/execute_code_tool.py` /
+`app/sessions.py` flow, and the `code-exec-manager` API calls (`POST /sessions/{id}/ensure`,
 `POST /sessions/{id}/execute`) match the `code-exec-manager` API contract
 in "Contracts" below.
 
@@ -174,23 +180,24 @@ in "Contracts" below.
 sequenceDiagram
     participant U as Web / Expo App
     participant P as Caddy
-    participant A as Agent Server
-    participant W as Files dir
+    participant L as Platform
+    participant W as Spaces dir
 
-    U->>P: GET /api/media/stream?path=video.mp4\nRange: bytes=0-
-    P->>A: proxy with Range header
-    A->>W: open file, seek to range
-    A-->>P: 206 Partial Content + chunk
+    U->>P: GET /api/platform/files/stream?path=/personal/video.mp4\nRange: bytes=0-
+    P->>L: proxy with Range header (after forward_auth)
+    L->>W: open file, seek to range
+    L-->>P: 206 Partial Content + chunk
     P-->>U: stream to <video>/expo-video player
     U->>P: seek -> new Range request
-    P->>A: Range: bytes=X-
-    A-->>U: 206 Partial Content from offset X
+    P->>L: Range: bytes=X-
+    L-->>U: 206 Partial Content from offset X
 ```
 
-`app/api/media.py` parses `Range` per RFC 9110 §14.1.2, streams in 1 MiB
-chunks via `anyio.to_thread`, and returns `206`/`Content-Range` exactly as
-diagrammed (plus a `HEAD` path and a `416` path for unsatisfiable ranges,
-both omitted here as diagram-level detail).
+The platform's `app/api/external/media.py` parses `Range` per RFC 9110
+§14.1.2 and returns `206`/`Content-Range` exactly as diagrammed (plus a
+`HEAD` path and a `416` path for unsatisfiable ranges, both omitted here
+as diagram-level detail). Before M11-02 agent-server served the same
+flow at `/api/media/stream` over `FILES_DIR`; that route is gone.
 
 ---
 
@@ -239,7 +246,7 @@ what another doc says it should be.
   client-supplied `X-Forwarded-For`/`-Proto`/`-Host` with what it
   actually saw — the platform's per-IP rate limits (last XFF hop) can't
   be spoofed. `/internal/*` is never routed. Range and `HEAD` requests to
-  `/api/media/*` pass through unchanged (206 + `Content-Range`).
+  `/api/platform/files/stream` pass through unchanged (206 + `Content-Range`).
 - **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
   `npx expo export --platform web` against `services/frontend/`), final
   stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
@@ -518,10 +525,12 @@ what another doc says it should be.
 ### `agent-server`
 
 - **Purpose**: the FastAPI app hosting the `deepagents`-based chat agent —
-  REST APIs for threads/files, the WebSocket chat stream, Range-based media
-  streaming, the `execute_code` tool's HTTP client to `code-exec-manager`,
-  and the `web_search`/`web_fetch` tools' HTTP client to `web-fetch`
-  (M7-05).
+  REST APIs for threads and settings, the WebSocket chat stream, the
+  agent's file tools as a client of the platform files API
+  (`PlatformFilesBackend`, M11-02), the `execute_code` tool's HTTP client
+  to `code-exec-manager`, and the `web_search`/`web_fetch` tools' HTTP
+  client to `web-fetch` (M7-05). Since M11-02 it holds no files and serves
+  no files or media routes (those are the platform's, M11-01).
 - **Auth (M10-04)**: every route except `GET /api/health` needs a valid
   `X-HomeAI-Identity` JWT (`app/core/identity.py`): EdDSA, `iss
   homeai-platform`, `aud homeai`, unexpired, `act=user` (agent tokens
@@ -537,19 +546,38 @@ what another doc says it should be.
   worthless without a platform-signed token.
   **Tenancy**: threads have an owner (`threads.owner_user_id`) and every
   thread operation is scoped to the caller; settings are per user
-  (`user_settings`). Files, media, and exec sessions stay shared (auth
-  only). **Pre-M10 data**: threads with no owner and the old global
+  (`user_settings`). Files are the platform's spaces, reached as the user
+  (below); exec sessions and exec's `/files` stay shared until M11-03.
+  **Pre-M10 data**: threads with no owner and the old global
   `settings` row are handed to the bootstrap admin once one exists
   (`app/core/orphans.py`: asks `GET /internal/bootstrap-admin` with
   `PLATFORM_AGENT_TOKEN`, retried at most every 10 s from `GET
   /api/threads` until it succeeds); until then they're invisible to
   everyone.
+- **Agent file tools (M11-02)**: `ls`/`read_file`/`write_file`/
+  `edit_file`/`delete`/`glob`/`grep` run on `PlatformFilesBackend`
+  (`app/agent/platform_files.py`), which calls `/api/platform/files*`
+  with the run's delegation (`Authorization: Bearer`, `act=agent`) — the
+  platform decides what this user may read and change, exactly as for
+  the Files tab. Paths are virtual: `/personal/...` and
+  `/spaces/<slug>/...`. Errors come back as the same strings
+  `FilesystemBackend` returned (`File '<path>' not found`, ...), with
+  permission and "not a space" wording added; no delegation means no
+  request at all (fail closed). See "Delegation contract" under Platform
+  API for how the socket obtains and refreshes the token.
+- **System prompt** (`app/agent/prompts.py`): paths start with
+  `/personal/` or `/spaces/<slug>/` (`ls /spaces` lists the user's
+  shared spaces); each write/edit/delete targets exactly one space, and a
+  refused write (viewer) is reported rather than retried elsewhere;
+  shared-space file contents are untrusted input, never instructions;
+  `execute_code`'s `/files` is a separate scratch area the file tools
+  can't see; `file:` links use the full virtual path
+  (`[notes.md](file:/personal/notes.md)`). HITL approval descriptions
+  show the normalized virtual path (e.g. "Write file `/personal/notes.md`"
+  for `file_path: "personal/notes.md"`).
 - **Image/base**: `python:3.12-slim` + `uv` (astral's static binary
-  copied in), plus `ffmpeg` (apt, issue #125 — server-side video
-  poster-frame thumbnail generation, `app/core/thumbnails.py`; not a
-  Python dependency, so it's an OS package install in the Dockerfile
-  rather than a `pyproject.toml` entry). Dockerfile:
-  `services/agent-server/Dockerfile`.
+  copied in). Dockerfile: `services/agent-server/Dockerfile`. (`ffmpeg`
+  left with the thumbnails, M11-02; the platform image has its own.)
 - **Published port**: none.
 - **Internal port**: `8000` (`CMD`'s `uvicorn app.main:app --port 8000`).
 - **Network (M7-01)**: `homeai-internal` only — no route to the public
@@ -557,30 +585,31 @@ what another doc says it should be.
   `web_search`/`web_fetch` tools (M7-05) — `agent-server` itself never
   joins `homeai-net` or talks to `egress-proxy` directly; see "Security
   model" below.
-- **Mounts**: `${FILES_DIR}:/data/files` (rw bind; host default
-  `/srv/homeai/files`) — confirmed in `docker compose config`'s
-  `volumes:` block for this service.
+- **Mounts**: none (M11-02; it used to bind-mount `${FILES_DIR}` at
+  `/data/files`).
 - **Runs as**: `user: "${HOMEAI_UID}:${HOMEAI_GID}"` (non-root).
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings` class): `MODEL_BASE_URL`,
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
   `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05), `POSTGRES_USER`,
   `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PLATFORM_AGENT_TOKEN` (M10-04;
-  service bearer for `GET /internal/bootstrap-admin` — unset means pre-M10
-  threads/settings stay unassigned, with a startup warning; `PLATFORM_URL`
-  defaults to `http://platform:8100`), and `TEST_PG_DSN` (only read by
-  `tests/test_checkpointer_pg.py`'s integration fixture, not by the
-  application itself — compose's own comment on this line says so).
-  **Nuance**: `HOMEAI_UID`/`HOMEAI_GID`/`FILES_DIR` are used by
-  *compose* to set this service's `user:` field and bind-mount source —
-  they are never actually injected into the container's own environment.
-  `Settings.files_root` is a hardcoded `/data/files` default, not
-  read from a `FILES_DIR`/`FILES_ROOT` env var (`.env.example`'s own
-  "Consumed by" comments reflect this — they don't list `agent-server` for
-  `FILES_DIR`).
+  service bearer for `GET /internal/bootstrap-admin` and, since M11-02,
+  `/internal/delegations*` — unset means pre-M10 threads/settings stay
+  unassigned and every chat socket closes `1011`, with a startup warning;
+  `PLATFORM_URL` defaults to `http://platform:8100`), and `TEST_PG_DSN`
+  (only read by `tests/test_checkpointer_pg.py`'s integration fixture,
+  not by the application itself — compose's own comment on this line
+  says so). **Nuance**: `HOMEAI_UID`/`HOMEAI_GID` are used by *compose*
+  to set this service's `user:` field — they are never injected into the
+  container's own environment.
 - **Tests**: `services/agent-server/tests/` — `test_health.py`,
-  `test_chat.py`, `test_chat_ws.py`, `test_files_rest.py`,
-  `test_media_stream.py`, `test_paths.py`, `test_agent_build.py`,
+  `test_chat.py`, `test_chat_ws.py`, `test_agent_build.py`,
+  `test_platform_files.py` (M11-02: every backend method, sync and async,
+  against a `respx`-mocked platform — error mapping pinned to
+  `FilesystemBackend`'s own output, fail-closed), `test_delegation.py`
+  (client, refresh, keep-alive), `test_chat_delegation.py` (exchange at
+  connect, re-mint per turn and resume, revoked session `4401`, platform
+  down `1011`, token never in the model's context or the checkpointer),
   `test_execute_code_tool.py`, `test_execute_code_integration.py`,
   `test_web_tools.py` (M7-05, `respx`-mocked `web-fetch`),
   `test_checkpointer_pg.py`, `test_threads_pg.py`, `test_fake_model.py`,
@@ -589,9 +618,11 @@ what another doc says it should be.
   JWKS outage), `test_auth_enforcement.py` (M10-04: every non-health
   route `401`s without a real identity, WS `4401`/`4404`, two-user thread
   and settings isolation, orphan hand-over),
-  plus the `fake_model/`/`fake_exec_manager/`/`fake_web_fetch/` test
-  doubles used to keep most of the suite deterministic and independent of
-  the real model/Docker/web-fetch. Most tests sign in through
+  plus the `fake_model/`/`fake_exec_manager/`/`fake_web_fetch/`/
+  `fake_platform/` test doubles used to keep most of the suite
+  deterministic and independent of the real model/Docker/web-fetch/
+  platform (`fake_platform/` is an in-memory files API plus delegation
+  endpoints with revocable sessions). Most tests sign in through
   `tests/fake_identity.py` (`identity_verifier_override=
   FixedIdentityVerifier()` on `create_app`, a fixed test user).
   Run: `cd services/agent-server && uv run ruff check . && uv run pytest`
@@ -749,11 +780,12 @@ what another doc says it should be.
   and the recovery CLI. As of M10-05: spaces, memberships, the user
   directory, and each space's directory tree under `SPACES_DIR`. As of
   M11-01: the files and media API over virtual paths (`/personal/…`,
-  `/spaces/<slug>/…`) that the Files tab uses and that M11-02's agent
-  backend will call, and the one-shot legacy `FILES_DIR` migration (off by
-  default). As of M12-02: the app registry — the `app.json` schema and
-  package check, apps / versions / instances, and each instance's
-  `apps/<instance_id>/` dir (§3 "Apps"). It also holds the Ed25519 signing key every
+  `/spaces/<slug>/…`) that the Files tab uses, and the one-shot legacy
+  `FILES_DIR` migration. As of M11-02: delegation tokens, which the
+  agent's file tools present on that same API. As of M12-02: the app
+  registry — the `app.json` schema and package check, apps / versions /
+  instances, and each instance's `apps/<instance_id>/` dir (§3 "Apps").
+  It also holds the Ed25519 signing key every
   platform token is signed with and serves the public half as a JWKS.
   API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
@@ -799,8 +831,10 @@ what another doc says it should be.
   (`HOME AI SETUP CODE: …`); once set, it deletes any leftover file. Any
   failure fails startup. Last, the legacy migration (below) if enabled.
 - **Legacy files migration** (`app/core/legacy.py`, M11-01; only when
-  `PLATFORM_MIGRATE_LEGACY_FILES=1`, and compose defaults it to `0` until
-  M11-02 moves the agent onto spaces): once a bootstrap admin exists (at
+  `PLATFORM_MIGRATE_LEGACY_FILES=1`, which compose defaults to since
+  M11-02 moved the agent onto spaces): while no bootstrap admin exists it
+  logs `legacy files: waiting for bootstrap to complete` and does nothing;
+  once one exists (at
   startup, or right after `POST /api/auth/setup`), every top-level entry of
   `/data/legacy-files` is moved into that admin's personal `files/` and
   chowned to `<admin uid>:<personal gid>` (dirs `2770`, files `0660`,
@@ -870,7 +904,8 @@ what another doc says it should be.
   (service bearers for `/internal/*` endpoints that need a caller,
   compared in constant time — `app/api/internal/service_auth.py`; an
   empty token matches nothing. Only `PLATFORM_AGENT_TOKEN` is used so far,
-  by `GET /internal/bootstrap-admin`). `PLATFORM_MIGRATE_LEGACY_FILES`
+  by `GET /internal/bootstrap-admin` and `/internal/delegations*`).
+  `PLATFORM_MIGRATE_LEGACY_FILES`
   (`0`/`1`, see above; the source dir `PLATFORM_LEGACY_FILES_DIR` defaults
   to `/data/legacy-files`). DB host/port/user/name default to
   `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
@@ -897,7 +932,11 @@ what another doc says it should be.
   `test_totp.py` (RFC 6238 vectors), `test_ratelimit.py`,
   `test_internal_api.py` (M10-04: `/internal/bootstrap-admin` and the
   service bearer — wrong/other-service/session tokens and an unset token
-  all `401`). M11-01: `test_vfs.py` (the virtual-path guard: the old
+  all `401`), `test_delegations.py` (M11-02: exchange and refresh claims
+  and TTLs, service auth, bad identity tokens, refresh grace, a revoked
+  session / disabled user can neither obtain nor refresh, and a minted
+  delegation is refused by every admin/self-service/space-management
+  route). M11-01: `test_vfs.py` (the virtual-path guard: the old
   `resolve_files_path` suite ported, plus roles, non-member vs unknown
   slug, cross-space and swapped-`files/` symlinks), `test_files_api.py`
   (every route through the guard cases, the owner/editor/viewer/non-member
@@ -1032,34 +1071,14 @@ checkpoint by id — which may be a sibling the user is not looking at.
 `GET /api/threads/{id}/messages` therefore calls `aget_state` with
 `checkpoint_id=active_checkpoint_id` when set.
 
-**Exec sandbox is per thread, not per branch.** `code-exec-manager`
-sessions and the files-directory bind-mount are keyed on `thread_id`. Forking
-the conversation does **not** branch files on disk — `execute_code` /
-`write_file` on one branch see the same files as every other branch of
-that thread.
+**Files are not per branch either.** Forking the conversation does
+**not** branch files: `write_file` on one branch changes the user's real
+file (platform spaces) for every branch and every other thread, and
+`execute_code`'s session and `/files` mount are keyed on `thread_id`.
 
-**Files**
-- `GET /api/files?path=<dir>` → `200 {"path": str, "entries": [{"name":
-  str, "path": str, "type": "file"|"dir", "size": int, "mtime": iso8601,
-  "mime": str|null}]}`, sorted dirs-first then case-insensitive by name;
-  `404` if the dir is missing
-- `POST /api/files/upload` — multipart form, field `path` (target dir),
-  field `file` (binary, may repeat) → `201 {"uploaded": ["rel/path",
-  ...]}`; overwrites existing files
-- `GET /api/files/download?path=<file>` → `200` binary,
-  `Content-Disposition: attachment`
-- `POST /api/files/mkdir` body `{"path": str}` → `201` (parents created,
-  `mkdir -p` semantics)
-- `POST /api/files/move` body `{"src": str, "dst": str}` → `200`
-  (rename == move); `409` if `dst` exists
-- `POST /api/files/copy` body `{"src": str, "dst": str}` → `200` (dirs
-  copied recursively); `409` if `dst` exists
-- `DELETE /api/files?path=<p>` → `204` (dirs deleted recursively)
-
-**Media**
-- `GET /api/media/stream?path=<file>` — `Range`-aware, `206 Partial
-  Content`, `Accept-Ranges: bytes`; see "Media file playback flow" above
-  for the exact request/response sequence.
+**Files and media** moved to the platform (`/api/platform/files*`, M11-01;
+see "Platform API" → "Files"). agent-server's `/api/files*` and
+`/api/media/*` were removed in M11-02.
 
 **Settings** — per user since M10-04 (`user_settings`, keyed by
 `(user_id, key)`); the pre-M10 global document was moved to the bootstrap
@@ -1089,8 +1108,21 @@ can't be fetched; `4404` (reason `thread not found`) unless
 thread and a nonexistent id are indistinguishable. The socket no longer
 creates threads: create one with `POST /api/threads` first (the frontend
 already does). Pre-M10 checkpoints under non-UUID ids (`smoke-1`,
-`gate-m2`, …) are therefore unreachable. An open socket isn't closed if
-the session is revoked mid-connection; the next connect is refused.
+`gate-m2`, …) are therefore unreachable.
+
+**Delegation (M11-02).** After the thread check the server exchanges the
+upgrade's identity token for a delegation (`POST /internal/delegations`,
+"Delegation contract" under Platform API): `4401` if the platform refuses
+(session revoked or expired, user disabled), `1011` (reason `platform
+unavailable`) if it can't be asked. Every `user_message` and
+`approval_response` then re-mints it (`/internal/delegations/refresh`)
+before `turn_start`; a refusal closes the socket `4401` with no
+`turn_start` and nothing run, so a session revoked mid-connection stops
+at the next turn or resume (and every file call already fails, since the
+platform re-checks the session on each). If the platform is merely
+unreachable at that point, the turn goes ahead on the current
+delegation. A background task keeps the delegation fresh (less than 5
+min left → refresh) for as long as the socket is open.
 
 Client → server:
 
@@ -1446,9 +1478,9 @@ change (`409 personal_space`), admin or not; a malformed `{id}` is `422
 invalid_request`.
 
 **Files** (`app/api/external/files.py`, `media.py`; M11-01). The same
-operations agent-server's `/api/files*` and `/api/media/*` offer (those stay
-in place, over `FILES_DIR`, until M11-02), over *virtual paths* instead of
-paths relative to one files root:
+operations agent-server's `/api/files*` and `/api/media/*` offered (removed
+in M11-02), over *virtual paths* instead of paths relative to one files
+root:
 
 - `/` lists `personal` (label "Personal") and `spaces` (label "Shared
   spaces"); `/spaces` lists the caller's shared spaces by slug. Both are
@@ -1547,7 +1579,7 @@ file (a file searches only that file), or it can be `/` or `/spaces`.
 A missing path returns empty results rather than 404. `glob` patterns are
 relative to `path`.
 
-*Which side formats what*, for M11-02, checked against deepagents 0.7.11:
+*Which side formats what* (M11-02), checked against deepagents 0.7.11:
 
 - **The server:**
   - slices lines;
@@ -1557,7 +1589,8 @@ relative to `path`.
   - runs grep and glob and filters their paths.
 - **The client (agent-server):**
   - adds the `cat -n`-style line-number gutter, which the filesystem middleware adds in 0.7.11;
-  - maps HTTP errors to deepagents' error strings and `FileOperationError` codes. For example, a 404 on read becomes `Error: File '<path>' not found`;
+  - maps HTTP errors to deepagents' error strings and `FileOperationError` codes. For example, a 404 on read becomes `File '<path>' not found` (the middleware prefixes `Error: `), a 404 on edit `Error: File '<path>' not found`, and a 404 on `ls` is told apart from "a file" with a `stat`;
+  - words what `FilesystemBackend` never had to say: `403 insufficient_role` → `Permission denied (read-only access to this space)`, `401` → `not authorized (the user's session has ended)`, and a path outside `/personal`/`/spaces` gets a `(paths start with /personal/ or /spaces/<slug>/)` hint;
   - adds the trailing `/` on directories in `ls`.
 - **Neither side** supports deepagents' `context_lines` for grep, which the agent tool doesn't expose.
 
@@ -1658,6 +1691,43 @@ from spaces and apps exist for test and e2e cleanup.
   who completed bootstrap (a CLI-created admin doesn't count) — or `404
   {"detail": "bootstrap_pending"}`. agent-server uses it to hand pre-M10
   threads and settings to that user.
+- `POST /internal/delegations` (M11-02) — service auth as above. Body
+  `{"identity_token": <JWT act=user>, "thread_id": str}` → `200 {"token":
+  <JWT>, "expires_at": ts}`. See "Delegation contract" below.
+- `POST /internal/delegations/refresh` (M11-02) — service auth. Body
+  `{"token": <delegation>}` → the same shape, a new token.
+
+**Delegation contract** (`app/core/delegations.py`; agent-server side
+`app/core/delegation.py`). A delegation is a platform JWT (format below)
+with claims `sub` (user), `sid` (the identity token's session), `role`
+(read from the database at mint time), `act="agent"`, `thr` (the thread
+id, `^[A-Za-z0-9_-]{1,64}$`), `exp` = `iat` + 15 min. It's accepted as
+`Authorization: Bearer` wherever the *user* guard is (the files API), and
+refused with `403 agent_not_allowed` by every *human*/*admin* route
+(self-service, admin, space management) and `401` by `/api/auth/*` and
+`/internal/auth/verify` (it isn't a session credential).
+
+- *Exchange* needs an unexpired identity token (`act=user`) whose session
+  is active and user enabled; `422 invalid_thread_id` for a bad
+  `thread_id`, `401 unauthenticated` for anything else. The platform
+  doesn't know threads: agent-server checks the caller owns the thread
+  before it asks.
+- *Refresh* takes a delegation that is unexpired or expired less than 5
+  min ago, and mints a new one for the same `sub`/`sid`/`thr` — again only
+  while that session is active and the user enabled (role re-read). A
+  revoked session, a logged-out session, or a disabled user is `401`, so
+  revocation reaches a long-lived chat socket at its next refresh.
+- *Every request* made with a delegation re-checks the session and user
+  too, so a revoked session's in-flight file calls fail `401` at once.
+- *agent-server* exchanges once per chat socket (the upgrade's identity
+  token, valid 5 min, is useless after that), refreshes at every turn and
+  approval resume and in the background when less than 5 min is left,
+  and hands the result to the file tools as a `Delegation` object in
+  `configurable["delegation"]`. Not the string: LangGraph copies every
+  `str`/number/bool in `configurable` into the checkpoint metadata it
+  stores (and LangChain into tracing metadata); the object is skipped, and
+  its `repr` omits the token. The model never sees it: not in the prompt,
+  messages, or tool arguments.
 
 **Token format** (`app/core/tokens.py`, `TokenService`): EdDSA JWTs with
 header `kid`, `iss="homeai-platform"`, `aud="homeai"`, `iat`, `exp`, plus
@@ -1692,7 +1762,11 @@ produces, and the spec `scripts/verify_isolation.sh` checks against:
 `user=f"{HOMEAI_UID}:{HOMEAI_GID}"`, `pids_limit=512`, a single bind mount
 `FILES_DIR (host path) -> /files (rw)`, command `sleep infinity`,
 labels `{"homeai.exec": "1", "homeai.session": session_id}`. Nothing else
-mounted; no env secrets passed in.
+mounted; no env secrets passed in. Until exec runs as the user (M11-03)
+this `/files` is **not** the agent's file-tool tree (`/personal`,
+`/spaces/<slug>`): once the legacy migration has run it's an emptied,
+shared scratch area, and the prompt and the `execute_code` description
+say so.
 
 ### `web-fetch` API (internal, port 8000)
 
@@ -1760,25 +1834,16 @@ like the `FETCH_*` caps).
 
 ### Path-traversal guard
 
-agent-server's files and media APIs (until M11-02) use:
-
-```python
-def resolve_files_path(rel: str) -> Path:
-    root = Path("/data/files").resolve()
-    p = (root / rel).resolve()          # resolves symlinks and ".."
-    if p != root and root not in p.parents:
-        raise HTTPException(400, "path escapes files root")
-    return p
-```
-
-Tested against: `../x`, absolute `/etc/passwd`, nested `a/../../x`, and a
-symlink inside the files root that points outside it (the resolved target
-must be rejected).
-
-The platform files API (M11-01) uses `vfs.resolve_virtual_path` instead —
-the same containment rule per space `files/`, plus `..` refused outright,
-membership/role checks, and cross-space symlinks refused; see §3 "Platform
-API" → "Files". The suite above is ported in `services/platform/tests/test_vfs.py`.
+Every file path — the Files tab's and, since M11-02, the agent's file
+tools' — is resolved by the platform's `vfs.resolve_virtual_path`: the
+resolved host path must stay inside that space's `files/` (symlinks
+followed first), `..` is refused outright, membership and role are
+checked, and cross-space symlinks are refused; see §3 "Platform API" →
+"Files". agent-server's old `resolve_files_path` (`/data/files`, deleted
+in M11-02) and its suite (`../x`, absolute `/etc/passwd`, nested
+`a/../../x`, a symlink pointing outside) are ported in
+`services/platform/tests/test_vfs.py`. agent-server itself has no files
+to guard.
 
 ---
 
@@ -2148,10 +2213,14 @@ design actually protects against them:
 3. **Untrusted model output.** Everything the model says — including tool
    names, tool-call arguments, and file paths — has to be treated as
    attacker-or-hallucination-influenced input, not as trusted instruction.
-   The path-traversal guard ("Contracts" above) and the files/media APIs'
-   files-root-relative path handling exist specifically because the model
-   can be prompted (by a user, or by content it reads from a file) into
-   requesting a path that tries to escape the files root.
+   The path-traversal guard ("Contracts" above) exists specifically
+   because the model can be prompted (by a user, or by content it reads
+   from a file) into requesting a path that tries to escape a space.
+   Since M11-02 the agent's file tools also carry only its user's
+   delegation, so a steered model can reach no more than that user
+   could in the Files tab (and never admin or membership actions); the
+   system prompt tells it shared-space content is data, not
+   instructions.
 4. **Untrusted executed code.** The `execute_code` tool runs arbitrary
    shell/Python/etc. the model asked for — genuinely untrusted code by
    construction, since a user (or content the model summarized) can steer
@@ -2398,17 +2467,17 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_full.sh` | Full chain — every gate script below in order, against one fresh `docker compose up -d --build` | Before/after any change that could affect multiple milestones; the M6-03 Tier A acceptance check |
 | `scripts/e2e/gate_m2.sh` | M2 (agentic chat) scripted gate | After touching agent-server's chat/agent code |
 | `scripts/e2e/gate_m3.sh` | M3 (persistence + files) scripted gate | After touching threads/files/checkpointer code |
-| `scripts/e2e/gate_m4.sh` | M4 (code execution) scripted gate | After touching code-exec-manager or the `execute_code` tool |
+| `scripts/e2e/gate_m4.sh` | M4 (code execution) scripted gate (since M11-02 its "agent writes a script with file tools, runs it with `execute_code`" steps are skipped until M11-03 — the file tools and exec's `/files` are different trees; `verify_isolation.sh` and the `gate_m2`/`gate_m3` regression still run) | After touching code-exec-manager or the `execute_code` tool |
 | `scripts/e2e/persistence_smoke.sh` | Thread/message persistence across agent-server restart, plus a pending HITL approval still on `GET /api/threads/{id}/state` after another restart (M8-08) | After touching the checkpointer, HITL interrupt state, or files storage |
-| `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view | After touching the exec ↔ files-directory file-visibility path |
-| `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`, and still checks that the agent sees `FILES_DIR`) | Quick check after a small files/threads API change |
+| `scripts/e2e/exec_crossview_smoke.sh` | Code-exec results visible from the files view (since M11-02 its "file tools read the exec-written file" step is skipped until M11-03; the exec write/host check still runs) | After touching the exec ↔ files-directory file-visibility path |
+| `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`; since M11-02 it checks the agent's `ls` sees a file put into `/personal` through that API) | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 17-check code-exec hardening suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
 | `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |
-| `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real file on the host files directory) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
+| `scripts/e2e/gate_m7.sh` (needs `sudo` + real internet — chains `verify_network.sh`/`verify_egress.sh`) | M7-07 GATE G7: milestone gate for M7 — runs `verify_network.sh` + `verify_egress.sh` + `verify_isolation.sh` + `web_research_smoke.sh`, then two new Playwright scenarios (`research_browser_smoke.mjs`, via its `research_browser_smoke.sh` wrapper): a positive "research a question, save a summary" turn (real `web_search`/`web_fetch`/`write_file` tool cards + a real `/personal/research/llamacpp.md` in the user's personal space) and a negative "post a comment online" turn (agent declines; `egress-proxy`'s log shows zero successful non-GET requests) | After touching anything M7 (`egress-proxy`, `web-fetch`, `searxng`, the network segmentation, or the `web_search`/`web_fetch` tools/UI cards); before the M7 milestone gate |
 | `scripts/e2e/gate_m8.sh` | M8-08 GATE G8: milestone gate for M8 — stack healthy, then `chat_browser_smoke.sh` (Stop, HITL approve/reject/off, edit/resend/regenerate, fork/switch, thinking on/off) and `persistence_smoke.sh` (checkpoint + pending HITL approval survive `docker compose restart agent-server`) | After touching agent controls (Stop, HITL, edit/fork, thinking) or the checkpointer interrupt path; before the M8 milestone gate |
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
@@ -2416,6 +2485,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2770` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
+| `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with HITL off — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and

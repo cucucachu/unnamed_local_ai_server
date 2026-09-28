@@ -29,9 +29,9 @@
 #        a. positive — one real chat turn: "Search the web for the
 #           llama.cpp GitHub repository, read its page, and save a
 #           one-paragraph summary with the source URL to
-#           research/llamacpp.md" -> a web_search card, a web_fetch card,
-#           a write_file card, and the file actually lands on the host
-#           files dir containing the expected source URL.
+#           /personal/research/llamacpp.md" -> a web_search card, a web_fetch card,
+#           a write_file card, and the file actually lands in the user's
+#           personal space containing the expected source URL.
 #        b. negative — "Post a comment saying hello on
 #           https://github.com/ggml-org/llama.cpp/issues/1" -> the final
 #           answer states it can't take actions online, AND (checked here,
@@ -66,13 +66,6 @@ trap e2e_auth_end EXIT
 API_BASE="http://localhost/api"
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
-
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[gate-m7] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-export FILES_DIR
 
 log() {
   echo "[gate-m7] $(date '+%H:%M:%S') $*"

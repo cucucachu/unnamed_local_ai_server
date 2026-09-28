@@ -52,6 +52,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=lib/auth.sh
 source "$SCRIPT_DIR/lib/auth.sh"
+# shellcheck source=lib/files.sh
+source "$SCRIPT_DIR/lib/files.sh"
 
 # Created once signed in (`create_thread`).
 THREAD_ID=""
@@ -65,12 +67,6 @@ RESTART_GRACE_S=5
 # Real-model write_file + interrupt; one retry on LLM nondeterminism.
 HITL_WS_TIMEOUT_S=180
 
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[persistence-smoke] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-HITL_HOST_FILE="${FILES_DIR}/${HITL_FILE_NAME}"
 
 # Empty until we successfully GET /api/settings — cleanup restores only then.
 SAVED_HITL=""
@@ -302,7 +298,7 @@ trigger_pending_approval_once() {
   local out
   out="$(mktemp)"
   HITL_WS_LOG="$out"
-  rm -f "$HITL_HOST_FILE"
+  e2e_personal_rm "$HITL_FILE_NAME"
   delete_thread "$HITL_THREAD_ID"
   HITL_THREAD_ID="$(create_thread)" || return 1
 
@@ -311,7 +307,7 @@ trigger_pending_approval_once() {
   # `{"status": "awaiting_approval"}` after approval_request.
   set +e
   WS_SMOKE_THREAD_ID="$HITL_THREAD_ID" \
-    WS_SMOKE_PROMPT="Create ${HITL_FILE_NAME} containing hi. Use write_file." \
+    WS_SMOKE_PROMPT="Create /personal/${HITL_FILE_NAME} containing hi. Use write_file." \
     PYTHONUNBUFFERED=1 \
     timeout "$HITL_WS_TIMEOUT_S" \
     uvx --from websockets python "$SCRIPT_DIR/../ws_smoke.py" >"$out" 2>&1
@@ -375,8 +371,8 @@ step_pending_approval_survived_restart() {
     log "ERROR: interrupt_id changed across restart (before=${PENDING_INTERRUPT_ID} after=${after_id}): ${body}"
     return 1
   fi
-  if [ -f "$HITL_HOST_FILE" ]; then
-    log "ERROR: ${HITL_HOST_FILE} exists — write_file ran without approval"
+  if [ "$(e2e_personal_status "$HITL_FILE_NAME")" = "200" ]; then
+    log "ERROR: /personal/${HITL_FILE_NAME} exists — write_file ran without approval"
     return 1
   fi
   log "OK: pending_approval interrupt_id=${after_id} survived the agent-server restart"
@@ -390,7 +386,7 @@ cleanup() {
   # whatever hitl_enabled was before this script forced it on.
   delete_thread "$THREAD_ID"
   delete_thread "$HITL_THREAD_ID"
-  rm -f "$HITL_HOST_FILE" 2>/dev/null || true
+  e2e_personal_rm "$HITL_FILE_NAME"
   if [ -n "$SAVED_HITL" ] && [ "$SAVED_HITL" != "true" ]; then
     rest_request PUT "${API_BASE}/settings" "{\"hitl_enabled\": ${SAVED_HITL}}" >/dev/null 2>&1 || true
   fi

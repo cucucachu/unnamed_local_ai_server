@@ -31,13 +31,12 @@
 #      it's byte-identical to the original with `cmp`.
 #   6. Deletes it via `DELETE /api/platform/files`, confirms it's gone from
 #      both the list and the disk.
-#   7. Agent-visibility cross-check: drops a SEPARATE file directly onto the
-#      host files directory (bypassing the REST API entirely), then
-#      asks the agent over WS (`scripts/ws_smoke.py`) to list the files
-#      root, and confirms the dropped-in filename appears in a `tool_end`
-#      frame's `result_preview` — proof the agent and the host see the same
-#      directory. Until M11-02 moves the agent onto spaces, the agent still
-#      works in `FILES_DIR`, not in the space steps 2-6 used.
+#   7. Agent-visibility cross-check: puts a SEPARATE file into the user's
+#      personal space via the platform files API, then asks the agent over
+#      WS (`scripts/ws_smoke.py`) to list `/personal`, and confirms the
+#      filename appears in a `tool_end` frame's `result_preview` — proof
+#      the agent's file tools (M11-02, `PlatformFilesBackend`) see the same
+#      space as the Files API.
 #   8. Cleans up both files it created so re-running this script is safe
 #      (idempotent, trap on EXIT — mirrors `gate_m2.sh`'s own convention).
 #
@@ -56,6 +55,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=lib/auth.sh
 source "$SCRIPT_DIR/lib/auth.sh"
+# shellcheck source=lib/files.sh
+source "$SCRIPT_DIR/lib/files.sh"
 
 API_BASE="http://localhost/api"
 
@@ -74,13 +75,6 @@ UPLOADED_DISK_PATH=""
 AGENT_VIS_FILE_NAME="agent-visibility-${RUN_ID}.txt"
 # Created in step 7.
 AGENT_VIS_THREAD_ID=""
-
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[files-rest-smoke] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-AGENT_VIS_HOST_PATH="${FILES_DIR}/${AGENT_VIS_FILE_NAME}"
 
 # A dedicated scratch dir (not a bare `mktemp` file) so the local upload
 # source's basename is exactly `$FILE_NAME` — the multipart filename
@@ -386,8 +380,8 @@ step_delete_and_confirm_gone() {
 }
 
 step_agent_visibility_cross_check() {
-  log "Step 7/8: agent-visibility cross-check (drop file on host -> agent ls over WS)..."
-  printf 'dropped straight onto the host files dir\n' >"$AGENT_VIS_HOST_PATH"
+  log "Step 7/8: agent-visibility cross-check (file in /personal via the API -> agent ls over WS)..."
+  e2e_personal_put "$AGENT_VIS_FILE_NAME" "put via the platform files API"
 
   local resp status body
   resp="$(rest_request POST "${API_BASE}/threads" '{}')"
@@ -402,7 +396,7 @@ step_agent_visibility_cross_check() {
   local out
   out="$(mktemp)"
   if ! WS_SMOKE_THREAD_ID="$AGENT_VIS_THREAD_ID" \
-      WS_SMOKE_PROMPT="List the files in the root directory using your ls tool." \
+      WS_SMOKE_PROMPT="List the files in /personal using your ls tool." \
       timeout "$WS_TURN_TIMEOUT_S" uvx --from websockets python3 "$SCRIPT_DIR/../ws_smoke.py" >"$out" 2>&1; then
     log "ERROR: ws_smoke.py exited non-zero:"
     cat "$out"
@@ -432,7 +426,7 @@ step_agent_visibility_cross_check() {
 
 cleanup() {
   # Always runs (success or failure) so the script is safely re-runnable.
-  rm -f "$AGENT_VIS_HOST_PATH" 2>/dev/null || true
+  e2e_personal_rm "$AGENT_VIS_FILE_NAME"
   if [ -n "$UPLOADED_PATH" ] && [ -n "${E2E_AUTH_COOKIE:-}" ]; then
     rest_request DELETE "$(url_with_path_param "$FILES_API" "$UPLOADED_PATH")" >/dev/null 2>&1 || true
   fi

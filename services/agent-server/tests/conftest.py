@@ -16,6 +16,8 @@ from tests.fake_exec_manager.server import create_fake_exec_manager_app
 from tests.fake_identity import FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel
 from tests.fake_model.server import create_fake_model_app
+from tests.fake_platform.scripting import FakePlatform
+from tests.fake_platform.server import create_fake_platform_app
 from tests.fake_web_fetch.scripting import FakeWebFetch
 from tests.fake_web_fetch.server import create_fake_web_fetch_app
 
@@ -27,7 +29,6 @@ def test_settings() -> Settings:
         model_name="test-model",
         exec_manager_url="http://code-exec-manager:8090",
         exec_default_timeout_s=1,
-        files_root="/data/files",
         postgres_password="test",
         _env_file=None,
     )
@@ -133,6 +134,23 @@ def fake_web_fetch() -> Iterator[FakeWebFetch]:
     fake = FakeWebFetch()
     app = create_fake_web_fetch_app(fake)
     runner = _UvicornThreadServer(app)
+    runner.start()
+    fake.base_url = f"http://127.0.0.1:{runner.port}"
+    try:
+        yield fake
+    finally:
+        runner.stop()
+
+
+@pytest.fixture
+def fake_platform() -> Iterator[FakePlatform]:
+    """A running fake platform (delegations + files API) on a real ephemeral
+    port, so `PlatformFilesBackend` inside an agent-level test dials it for
+    real. Point `Settings.platform_url` at `.base_url` and pass
+    `delegation_client_override=fake_platform.client()`.
+    """
+    fake = FakePlatform()
+    runner = _UvicornThreadServer(create_fake_platform_app(fake))
     runner.start()
     fake.base_url = f"http://127.0.0.1:{runner.port}"
     try:

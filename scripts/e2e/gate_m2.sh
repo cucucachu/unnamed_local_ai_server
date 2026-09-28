@@ -12,12 +12,11 @@
 #      + the agent-server API healthy (real polling loops, not fixed sleeps).
 #   2. Confirms chat streams: >=1 token frame + turn_end over the real WS.
 #   3. Sends a message asking the agent to write a real file, then polls the
-#      REAL HOST PATH for it, with one retry on failure (LLM nondeterminism
-#      allowance - 2 strikes total before the gate fails).
-#   4. Restarts agent-server and confirms the file survives (proves the
-#      bind mount persists real files, independent of the in-memory agent/
-#      checkpointer - chat memory loss on restart is expected/out of scope
-#      here, per the ticket; Postgres persistence lands in M3-01).
+#      signed-in user's personal space for it (platform files API, M11-02),
+#      with one retry on failure (LLM nondeterminism allowance - 2 strikes
+#      total before the gate fails).
+#   4. Restarts agent-server and confirms the file survives (it lives in
+#      the platform's storage, not in agent-server).
 #   5. Confirms the web root serves the built Expo bundle via Caddy.
 #   6. Cleans up the file it created so re-running this script is safe
 #      (idempotent - the acceptance criteria require two green runs in a row).
@@ -47,6 +46,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=lib/auth.sh
 source "$SCRIPT_DIR/lib/auth.sh"
+# shellcheck source=lib/files.sh
+source "$SCRIPT_DIR/lib/files.sh"
 
 # Set once signed in (`create_thread`).
 THREAD_ID=""
@@ -55,16 +56,6 @@ EXPECTED_CONTENT="GATE-OK"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
 
-# FILES_DIR is the host path bind-mounted into agent-server at
-# /data/files (see docker-compose.yml + .env) - read it from the real
-# .env rather than hardcoding, so this script tracks whatever the host is
-# actually configured with.
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[gate-m2] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-HOST_FILE_PATH="${FILES_DIR}/${FILE_NAME}"
 
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
@@ -176,21 +167,14 @@ step_chat_streams() {
 
 send_file_write_message() {
   WS_SMOKE_THREAD_ID="$THREAD_ID" \
-  WS_SMOKE_PROMPT="Create a file named ${FILE_NAME} at the files root containing exactly the text ${EXPECTED_CONTENT}. Use your file tools." \
+  WS_SMOKE_PROMPT="Create the file /personal/${FILE_NAME} containing exactly the text ${EXPECTED_CONTENT}. Use your file tools." \
     uvx --from websockets python "$SCRIPT_DIR/../ws_smoke.py"
 }
 
 check_file_content() {
-  [ -f "$HOST_FILE_PATH" ] || return 1
-  python3 -c "
-import sys
-expected = sys.argv[2]
-try:
-    content = open(sys.argv[1], encoding='utf-8').read().strip()
-except OSError:
-    sys.exit(1)
-sys.exit(0 if content == expected else 1)
-" "$HOST_FILE_PATH" "$EXPECTED_CONTENT"
+  local content
+  content="$(e2e_personal_cat "$FILE_NAME" 2>/dev/null)" || return 1
+  [ "$(printf '%s' "$content" | xargs)" = "$EXPECTED_CONTENT" ]
 }
 
 poll_file_content() {
@@ -206,8 +190,8 @@ poll_file_content() {
 }
 
 step_agent_writes_file() {
-  log "Step 3/5: agent writes a real file (same thread, ${FILE_NAME})..."
-  rm -f "$HOST_FILE_PATH"
+  log "Step 3/5: agent writes a real file (same thread, /personal/${FILE_NAME})..."
+  e2e_personal_rm "$FILE_NAME"
 
   log "Sending file-write prompt (attempt 1/2)..."
   send_file_write_message >/tmp/gate-m2-write-attempt-1.log 2>&1 || true
@@ -244,7 +228,7 @@ step_persistence_across_restart() {
     log "ERROR: ${FILE_NAME} missing or content changed after agent-server restart"
     return 1
   fi
-  log "OK: ${FILE_NAME} persisted across agent-server restart (bind mount, not in-memory agent state)"
+  log "OK: ${FILE_NAME} persisted across agent-server restart (platform storage, not agent-server state)"
 }
 
 step_web_build_serves() {
@@ -264,7 +248,7 @@ cleanup() {
   if [ -n "$SAVED_HITL" ]; then
     bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
-  rm -f "$HOST_FILE_PATH" 2>/dev/null || true
+  e2e_personal_rm "$FILE_NAME"
   # M6-03: also delete this run's thread and its checkpoints.
   if [ -n "$THREAD_ID" ]; then
     python3 -c "

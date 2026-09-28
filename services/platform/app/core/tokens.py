@@ -153,11 +153,14 @@ class TokenService:
             headers={"kid": self._signing_key.kid},
         )
 
-    def verify_token(self, token: str, *, act: str | Collection[str]) -> dict[str, Any]:
+    def verify_token(
+        self, token: str, *, act: str | Collection[str], leeway: timedelta = timedelta(0)
+    ) -> dict[str, Any]:
         """Return the claims of a valid token whose `act` is (one of) `act`.
 
         Raises `TokenError` on anything else: bad signature, unknown `kid`,
-        wrong algorithm/`iss`/`aud`, expired, missing claims, or wrong `act`.
+        wrong algorithm/`iss`/`aud`, expired (more than `leeway` ago), missing
+        claims, or wrong `act`.
         """
         allowed_acts = {act} if isinstance(act, str) else set(act)
         try:
@@ -177,6 +180,7 @@ class TokenService:
                 algorithms=[ALGORITHM],
                 audience=AUDIENCE,
                 issuer=ISSUER,
+                leeway=leeway,
                 options={"require": _REQUIRED_CLAIMS},
             )
         except jwt.PyJWTError as exc:

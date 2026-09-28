@@ -83,10 +83,8 @@ def make_execute_code_tool(settings: Settings):
     async def execute_code(command: str, config: RunnableConfig, timeout_seconds: int = 120) -> str:
         """Run a shell command in a sandboxed Linux container.
 
-        The container has NO network access. The user's files are mounted read-write at
-        /files — the exact same files your file tools see, but mounted here at /files
-        instead of at their file-tool root: your file-tool path /notes.txt is this
-        shell's /files/notes.txt.
+        The container has NO network access. /files is a persistent scratch directory; it
+        is NOT the user's /personal or /spaces files, which only your file tools can reach.
         Installed: Python 3 with pandas/numpy/pillow/matplotlib/openpyxl/pypdf, Node.js, git,
         ffmpeg, imagemagick, pandoc, ripgrep, jq. You cannot install packages. State in /tmp
         and $HOME is ephemeral; only /files persists. Long jobs: raise timeout_seconds

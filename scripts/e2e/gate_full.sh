@@ -4,7 +4,9 @@
 #
 # Chains, in this exact order (per the ticket) against ONE fresh
 # `docker compose up -d --build` for the whole run:
-#   gate_m2.sh -> tenancy_threads_smoke.sh (M10-04) -> persistence_smoke.sh
+#   gate_m2.sh -> tenancy_threads_smoke.sh (M10-04)
+#   -> agent_tenancy_smoke.sh (M11-02: the agent's file tools per user/role)
+#   -> persistence_smoke.sh
 #   -> gate_m3.sh -> exec_crossview_smoke.sh -> gate_m4.sh -> verify_isolation.sh -> verify_network.sh
 #   -> auth_browser_smoke.sh (M10-06: sign-in flow; every browser smoke
 #      after it signs in as a throwaway CLI user via auth_helpers.mjs)
@@ -102,8 +104,9 @@ log() {
   echo "[gate-full] $(date '+%H:%M:%S') $*"
 }
 
-# Not directly used by this script (each sub-script reads its own copy from
-# .env) — resolved and sanity-checked once up front so a missing/misconfigured
+# Not directly used by this script (exec_crossview_smoke.sh, gate_m4.sh and
+# verify_isolation.sh read their own copy from .env for execute_code's
+# /files mount) — resolved and sanity-checked once up front so a missing/misconfigured
 # .env fails fast with one clear message instead of 10 confusing sub-script
 # errors.
 FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
@@ -202,6 +205,7 @@ main() {
 
   run_step "gate_m2.sh"              bash "${SCRIPT_DIR}/gate_m2.sh"
   run_step "tenancy_threads_smoke.sh" bash "${SCRIPT_DIR}/tenancy_threads_smoke.sh"
+  run_step "agent_tenancy_smoke.sh"  bash "${SCRIPT_DIR}/agent_tenancy_smoke.sh"
   run_step "persistence_smoke.sh"    bash "${SCRIPT_DIR}/persistence_smoke.sh"
   run_step "gate_m3.sh"              bash "${SCRIPT_DIR}/gate_m3.sh"
   run_step "exec_crossview_smoke.sh" bash "${SCRIPT_DIR}/exec_crossview_smoke.sh"

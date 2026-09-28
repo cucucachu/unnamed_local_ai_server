@@ -11,8 +11,11 @@
 # no extra User=/permission wrangling: root can always read FILES_DIR
 # and always reach docker.sock for the pg_dump step below.
 #
-# What's backed up: the files directory (files.rest-managed content), the
-# Postgres databases (`homeai`: thread/message state; `homeai_platform`:
+# What's backed up: the spaces directory (SPACES_DIR: every user's and
+# shared space's files, including what the agent writes, M11), the legacy
+# files directory (FILES_DIR: pre-M11 files until the platform migrates
+# them into the bootstrap admin's personal space, plus execute_code's
+# /files until M11-03), the Postgres databases (`homeai`: thread/message state; `homeai_platform`:
 # users, sessions, invites — see docs/ARCHITECTURE.md), and the
 # `platform-data` volume (the platform's signing key and, before the first
 # admin exists, the setup code). The volume copy stays root-only.
@@ -47,6 +50,7 @@ env_var() {
 }
 
 FILES_DIR="$(env_var FILES_DIR /srv/homeai/files)"
+SPACES_DIR="$(env_var SPACES_DIR /srv/homeai/spaces)"
 BACKUP_DIR="$(env_var BACKUP_DIR /srv/homeai/backups)"
 HOMEAI_UID="$(env_var HOMEAI_UID 1000)"
 HOMEAI_GID="$(env_var HOMEAI_GID 1000)"
@@ -69,7 +73,17 @@ chown -R "${HOMEAI_UID}:${HOMEAI_GID}" "${BACKUP_DIR}/files" "${BACKUP_DIR}/pg"
 chown root:root "${BACKUP_DIR}/platform-data"
 chmod 0700 "${BACKUP_DIR}/platform-data"
 
-# --- 1. Files mirror ------------------------------------------------------
+# --- 1. Files mirrors ----------------------------------------------------
+# The spaces mirror keeps the source's owners and modes (per-space uid/gid,
+# 2770), so it's as private as SPACES_DIR itself - never chowned here.
+
+if [[ -d "${SPACES_DIR}" ]]; then
+  echo "Mirroring ${SPACES_DIR} -> ${BACKUP_DIR}/spaces ..."
+  rsync -a --delete "${SPACES_DIR}/" "${BACKUP_DIR}/spaces/"
+  echo "Spaces mirror done."
+else
+  echo "warning: ${SPACES_DIR} does not exist — skipping spaces mirror." >&2
+fi
 
 if [[ -d "${FILES_DIR}" ]]; then
   echo "Mirroring ${FILES_DIR} -> ${BACKUP_DIR}/files ..."
@@ -131,6 +145,7 @@ else
 fi
 
 echo "=== backup-files.sh summary ==="
+echo "Spaces mirror    : ${BACKUP_DIR}/spaces"
 echo "Files mirror     : ${BACKUP_DIR}/files"
 DUMP_COUNT="$(find "${BACKUP_DIR}/pg" -maxdepth 1 -name 'homeai-*.sql.gz' | wc -l)"
 PLATFORM_DUMP_COUNT="$(find "${BACKUP_DIR}/pg" -maxdepth 1 -name "${PLATFORM_DB}-*.sql.gz" | wc -l)"

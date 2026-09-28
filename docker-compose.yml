@@ -227,8 +227,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ${FILES_DIR}:/data/files
+    # No data mounts (M11-02, docs/PLATFORM.md §6): the agent's file tools
+    # go through the platform files API as the user, with a delegation.
     environment:
       MODEL_BASE_URL: ${MODEL_BASE_URL}
       MODEL_NAME: ${MODEL_NAME}
@@ -239,9 +239,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      # M10-04: lets agent-server ask the platform for the bootstrap admin
-      # (pre-Stage-3 threads are handed to them). Identity JWTs are checked
-      # against the platform's JWKS, which needs no secret.
+      # Service bearer for the platform's /internal/* routes: the bootstrap
+      # admin lookup (M10-04, pre-Stage-3 threads are handed to them) and
+      # delegation tokens (M11-02). Identity JWTs are checked against the
+      # platform's JWKS, which needs no secret.
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       # Only used by `tests/test_checkpointer_pg.py` (integration tests) so
       # `docker compose exec agent-server uv run pytest -m integration`
@@ -315,12 +316,12 @@ services:
     volumes:
       - platform-data:/data/platform
       - ${SPACES_DIR}:/data/spaces
-      # Pre-spaces files root, only touched when PLATFORM_MIGRATE_LEGACY_FILES=1
-      # (moved into the bootstrap admin's personal space, then left empty).
+      # Pre-spaces files root, moved into the bootstrap admin's personal space
+      # once bootstrap completes (PLATFORM_MIGRATE_LEGACY_FILES), then left empty.
       - ${FILES_DIR}:/data/legacy-files
     environment:
       PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD}
-      PLATFORM_MIGRATE_LEGACY_FILES: ${PLATFORM_MIGRATE_LEGACY_FILES:-0}
+      PLATFORM_MIGRATE_LEGACY_FILES: ${PLATFORM_MIGRATE_LEGACY_FILES:-1}
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
     healthcheck:

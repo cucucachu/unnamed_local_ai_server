@@ -327,6 +327,23 @@ class GlobOut(BaseModel):
     truncation_reason: Literal["budget"] | None
 
 
+# --- delegations (`/internal/delegations*`) -----------------------------------
+
+
+class DelegationRequest(BaseModel):
+    identity_token: Secret
+    thread_id: Short
+
+
+class DelegationRefreshRequest(BaseModel):
+    token: Secret
+
+
+class DelegationOut(BaseModel):
+    token: str
+    expires_at: datetime
+
+
 # --- apps -------------------------------------------------------------------------
 
 

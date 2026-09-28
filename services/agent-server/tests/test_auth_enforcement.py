@@ -23,6 +23,7 @@ from app.db.threads import InMemoryThreadStore
 from app.main import create_app
 from tests.fake_identity import LocalKeyPair
 from tests.fake_model.scripting import FakeModel, TextTurn
+from tests.fake_platform.scripting import FakePlatform
 
 ALICE = "aaaaaaaa-0000-4000-8000-000000000001"
 BOB = "bbbbbbbb-0000-4000-8000-000000000002"
@@ -37,6 +38,7 @@ def keys() -> LocalKeyPair:
 def _app(settings: Settings, keys: LocalKeyPair, **overrides):
     overrides.setdefault("thread_store_override", InMemoryThreadStore())
     overrides.setdefault("settings_store_override", InMemorySettingsStore())
+    overrides.setdefault("delegation_client_override", FakePlatform().client())
     return create_app(
         settings,
         checkpointer_override=MemorySaver(),
@@ -68,7 +70,9 @@ def _http_routes(app) -> list[tuple[str, str]]:
 
 def test_every_route_except_health_is_authenticated(client: TestClient, keys: LocalKeyPair):
     routes = _http_routes(client.app)
-    assert len(routes) >= 15
+    assert len(routes) >= 9
+    # M11-02: files and media are the platform's; this service serves neither.
+    assert not [p for _, p in routes if p.startswith(("/api/files", "/api/media"))]
     forged = LocalKeyPair().headers(ALICE)
     wrong_act = keys.headers(ALICE, act="agent")
     for method, path in routes:
@@ -127,10 +131,10 @@ def test_jwks_unreachable_is_503_and_ws_1011(test_settings: Settings, keys: Loca
 
 
 def test_threads_are_isolated_between_users(
-    fake_model: FakeModel, tmp_path, keys: LocalKeyPair
+    fake_model: FakeModel, keys: LocalKeyPair
 ) -> None:
     fake_model.queue(TextTurn("hello alice"))
-    settings = fake_model.settings(files_root=str(tmp_path))
+    settings = fake_model.settings()
     thread_store = InMemoryThreadStore()
     alice, bob = keys.headers(ALICE), keys.headers(BOB)
 
