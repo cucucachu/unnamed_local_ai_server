@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.main import create_app
+from tests.app_packages import write_package
 from tests.conftest import Platform, make_settings, running
 from tests.files_world import API, World, build_world
 from tests.helpers import bearer, sql
@@ -164,3 +165,90 @@ async def test_unconfigured_host_dir_refuses(pg_database, tmp_path):
         world = await build_world(Platform(app, client, pg_database, tmp_path))
         response = await _grants(world, await _delegation(world, "alice"))
     assert (response.status_code, response.json()) == (500, {"detail": "exec_unconfigured"})
+
+
+# --- app data (M13-02) ----------------------------------------------------------------------
+
+
+async def _install(world: World, username: str, space: dict, source: str) -> dict:
+    headers = world.headers[username]
+    r = await world.client.post(f"{API}/apps", json={"source_path": source}, headers=headers)
+    assert r.status_code in (200, 201), r.text
+    r = await world.client.post(
+        f"{API}/spaces/{space['id']}/instances",
+        json={"app_id": r.json()["app"]["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _ro(space: dict, inst: dict) -> str:
+    return f"{HOST_DIR}/{space['id']}/apps/{inst['id']}/ro"
+
+
+async def _app_mounts(world: World, username: str) -> dict[str, tuple[str, bool]]:
+    body = (await _grants(world, await _delegation(world, username))).json()
+    return {
+        m["container_path"]: (m["host_path"], m["read_only"])
+        for m in body["mounts"]
+        if m["container_path"].startswith("/app-data/")
+    }
+
+
+@pytest.fixture
+async def shared_app(world: World) -> dict:
+    write_package(world.family_root / "Apps" / "hello")
+    return await _install(world, "alice", world.family, "/spaces/family/Apps/hello")
+
+
+async def test_members_get_each_instance_ro_copy_read_only(world, shared_app):
+    for username in ("alice", "bob", "carol"):
+        assert await _app_mounts(world, username) == {
+            "/app-data/spaces/family/hello": (_ro(world.family, shared_app), True)
+        }, username
+    assert await _app_mounts(world, "dave") == {}
+
+
+async def test_personal_instances_mount_under_personal(world):
+    write_package(world.home("dave") / "Apps" / "notes")
+    notes = await _install(world, "dave", world.personal("dave"), "/personal/Apps/notes")
+    assert await _app_mounts(world, "dave") == {
+        "/app-data/personal/notes": (_ro(world.personal("dave"), notes), True)
+    }
+    assert await _app_mounts(world, "alice") == {}
+
+
+async def test_a_second_app_with_the_same_slug_gets_a_suffix(world, shared_app):
+    # Two same-slug apps in one space come from installing a published version; stand
+    # one in by moving alice's personal instance of her own `hello` into the family.
+    write_package(world.home("alice") / "Apps" / "hello")
+    second = await _install(world, "alice", world.personal("alice"), "/personal/Apps/hello")
+    sql(world.platform, "UPDATE app_instances SET space_id = %s WHERE id = %s",
+        (world.family["id"], second["id"]))  # fmt: skip
+    storage = world.platform.app.state.storage
+    storage.instance_dir(world.family["id"], second["id"]).joinpath("ro").mkdir(parents=True)
+    assert await _app_mounts(world, "bob") == {
+        "/app-data/spaces/family/hello": (_ro(world.family, shared_app), True),
+        f"/app-data/spaces/family/hello-{second['id'][:8]}": (_ro(world.family, second), True),
+    }
+
+
+async def test_uninstalled_instances_are_not_mounted(world, shared_app):
+    r = await world.client.delete(
+        f"{API}/spaces/{world.family['id']}/instances/{shared_app['id']}",
+        headers=world.headers["alice"],
+    )
+    assert r.status_code == 204, r.text
+    assert await _app_mounts(world, "bob") == {}
+
+
+@pytest.mark.parametrize("swapped", ["ro", "instance", "apps"])
+async def test_an_app_dir_swapped_for_a_symlink_is_not_mounted(world, shared_app, swapped):
+    storage = world.platform.app.state.storage
+    inst_dir = storage.instance_dir(world.family["id"], shared_app["id"])
+    victim = {"ro": inst_dir / "ro", "instance": inst_dir, "apps": inst_dir.parent}[swapped]
+    elsewhere = world.home("alice")
+    victim.rename(victim.with_name(victim.name + ".real"))
+    victim.symlink_to(elsewhere)
+    assert await _app_mounts(world, "bob") == {}

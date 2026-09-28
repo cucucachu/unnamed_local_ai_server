@@ -15,6 +15,7 @@ Run for real:
 
 from __future__ import annotations
 
+import sqlite3
 import stat
 import time
 
@@ -208,3 +209,39 @@ async def test_delete_removes_container_entirely(
 
     with pytest.raises(docker.errors.NotFound):
         real_docker_client.containers.get(container_name(SESSION_ID))
+
+
+async def test_app_data_is_readable_with_sqlite_but_not_writable(
+    real_manager: SessionManager, grants: Grants, tmp_path
+) -> None:
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    db = sqlite3.connect(ro / "data.sqlite")
+    db.execute("CREATE TABLE items (name TEXT)")
+    db.execute("INSERT INTO items VALUES ('Milk')")
+    db.commit()
+    db.close()
+    ro.chmod(0o755)
+    (ro / "data.sqlite").chmod(0o644)
+    target = "/app-data/spaces/family/groceries"
+    with_app = Grants(
+        grants.user_id, grants.uid, grants.gid, grants.gids,
+        (*grants.mounts, Mount(str(ro), target, True)),
+    )  # fmt: skip
+    await real_manager.ensure(SESSION_ID, with_app)
+
+    read = await real_manager.execute(
+        SESSION_ID,
+        with_app,
+        'python3 -c "import sqlite3; c = sqlite3.connect('
+        f"'file:{target}/data.sqlite?mode=ro&immutable=1', uri=True); "
+        "print(c.execute('SELECT name FROM items').fetchall())\"",
+        timeout_seconds=20,
+    )
+    write = await real_manager.execute(
+        SESSION_ID, with_app, f"touch {target}/x", timeout_seconds=10
+    )
+
+    assert read.stdout.strip() == "[('Milk',)]", read.stderr
+    assert write.exit_code != 0
+    assert "Read-only file system" in write.stderr

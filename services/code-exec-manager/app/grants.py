@@ -5,8 +5,9 @@ Fetched from the platform (`POST /internal/exec-grants`) on every
 revoked session takes effect on the next call. The platform is trusted to
 decide *what* a user may mount; this module still refuses a reply that
 could never be a valid grant (a root or system id, a relative or `..` host
-path, a mount outside `/files/personal` or `/files/spaces/<slug>`) before
-any of it reaches Docker.
+path, a mount outside `/files/personal` or `/files/spaces/<slug>`, or an
+app-data mount under `/app-data/...` that isn't read-only) before any of it
+reaches Docker.
 
 `digest` is what the container's `homeai.grants` label records; a session
 whose container carries a different one is recreated.
@@ -25,6 +26,10 @@ import httpx
 
 MIN_ID = 1000
 CONTAINER_PATH_RE = re.compile(r"^/files/(personal|spaces/[a-z0-9][a-z0-9-]{0,39})$")
+# An app instance's published read-only data (M13-02): `<app-slug>`, maybe `-<8 hex>`.
+APP_DATA_PATH_RE = re.compile(
+    r"^/app-data/(personal|spaces/[a-z0-9][a-z0-9-]{0,39})/[a-z0-9][a-z0-9-]{0,48}$"
+)
 
 
 class GrantsDenied(Exception):
@@ -79,7 +84,10 @@ def _mount(value: Any) -> Mount:
     host_path = PurePosixPath(host)
     if not host_path.is_absolute() or ".." in host_path.parts or str(host_path) != host:
         raise GrantsUnavailable(f"invalid host path in grants: {host!r}")
-    if not CONTAINER_PATH_RE.fullmatch(target):
+    if APP_DATA_PATH_RE.fullmatch(target):
+        if not read_only:
+            raise GrantsUnavailable(f"app data must be mounted read-only: {target!r}")
+    elif not CONTAINER_PATH_RE.fullmatch(target):
         raise GrantsUnavailable(f"invalid container path in grants: {target!r}")
     return Mount(host_path=host, container_path=target, read_only=read_only)
 
