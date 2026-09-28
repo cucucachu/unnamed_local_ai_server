@@ -37,10 +37,14 @@ Anything other than a well-formed `user_message` frame, received while idle
 1008 (policy violation) — this excludes `{"type": "cancel"}`, which is a
 no-op outside a turn (see `chat_ws` below) rather than a close. Any frame
 received WHILE a turn is in flight is handled by `_watch_inbound` instead:
-`{"type": "cancel"}` cancels the turn (see M8-01 notes below); every other
-frame received mid-turn is ignored (looped past), matching v1's existing
-"a well-behaved client never sends another frame before turn_end/error"
-assumption for anything other than `cancel`. While AWAITING APPROVAL (i.e.
+`{"type": "cancel"}` cancels the turn (see M8-01 notes below); an
+`approval_response` is held until the turn ends and then handled as if it
+had arrived next, but only if it names the interrupt that turn left
+pending (#181: the client can answer `approval_request` before its
+`turn_end`); every other frame received mid-turn, including a held
+`approval_response` for any other interrupt, is ignored (looped past),
+matching v1's existing "a well-behaved client never sends another frame
+before turn_end/error" assumption. While AWAITING APPROVAL (i.e.
 the previous `turn_end` had `status: "awaiting_approval"`), the only two
 valid inbound frames are `approval_response` (matching the pending
 `interrupt_id`, with one decision per pending `tool_call_id`) and `cancel`
@@ -792,13 +796,34 @@ def _is_cancel_frame(raw: object) -> bool:
     return isinstance(raw, dict) and raw.get("type") == "cancel"
 
 
-async def _watch_inbound(websocket: WebSocket) -> str:
+def _is_approval_response_frame(raw: object) -> bool:
+    return isinstance(raw, dict) and raw.get("type") == "approval_response"
+
+
+def _take_deferred_approval(deferred: list[dict], pending_approval: dict | None) -> dict | None:
+    """Pop the `approval_response` buffered mid-turn for `pending_approval`, if any.
+
+    Clears the buffer either way: a frame naming any other interrupt (a
+    repeat click for one already answered) is dropped, as it always was.
+    """
+    match = None
+    if pending_approval is not None:
+        match = next(
+            (f for f in deferred if f.get("interrupt_id") == pending_approval["interrupt_id"]),
+            None,
+        )
+    deferred.clear()
+    return match
+
+
+async def _watch_inbound(websocket: WebSocket, deferred: list[dict]) -> str:
     """Block until either the client disconnects or sends a `cancel` frame.
 
-    Returns `"disconnect"` or `"cancel"`. Any other frame received mid-turn
-    (well-formed or not) is ignored — looped past — rather than
-    misinterpreted as either of those two outcomes; v1 defines no other
-    inbound behavior mid-turn.
+    Returns `"disconnect"` or `"cancel"`. An `approval_response` is appended
+    to `deferred` (#181: the client shows the approval card on
+    `approval_request`, before this turn's `turn_end`); any other frame
+    received mid-turn (well-formed or not) is ignored — looped past — rather
+    than misinterpreted; v1 defines no other inbound behavior mid-turn.
     """
     while True:
         message = await websocket.receive()
@@ -814,6 +839,8 @@ async def _watch_inbound(websocket: WebSocket) -> str:
             continue
         if _is_cancel_frame(raw):
             return "cancel"
+        if _is_approval_response_frame(raw):
+            deferred.append(raw)
 
 
 async def _run_turn_or_interrupt(
@@ -824,6 +851,7 @@ async def _run_turn_or_interrupt(
     thinking_enabled: bool,
     checkpoint_id: str | None = None,
     delegation: Delegation | None = None,
+    deferred_approvals: list[dict] | None = None,
 ) -> tuple[str, dict | None]:
     """Run one turn (see `_run_turn`), racing it against `_watch_inbound`.
 
@@ -837,6 +865,8 @@ async def _run_turn_or_interrupt(
     socket closed mid-turn (the caller should stop processing this
     connection; no frame is sent — the socket is already gone). Propagates
     any exception the turn itself raised (unhandled model/agent error).
+    `approval_response` frames received mid-turn are appended to
+    `deferred_approvals` for the caller (see `_take_deferred_approval`).
 
     M11-02: the connection's delegation is re-minted first, so every turn
     and resume starts with a fresh one and a revoked session stops here
@@ -870,7 +900,9 @@ async def _run_turn_or_interrupt(
             delegation,
         )
     )
-    watch_task = asyncio.create_task(_watch_inbound(websocket))
+    watch_task = asyncio.create_task(
+        _watch_inbound(websocket, deferred_approvals if deferred_approvals is not None else [])
+    )
     try:
         done, _pending = await asyncio.wait(
             {turn_task, watch_task}, return_when=asyncio.FIRST_COMPLETED
@@ -1083,17 +1115,20 @@ async def _serve(
     pending_approval: dict | None = await get_pending_approval(
         websocket.app.state.agent, thread_id, record.active_checkpoint_id
     )
+    deferred_approvals: list[dict] = []
 
     while True:
-        try:
-            raw = await websocket.receive_json()
-        except WebSocketDisconnect:
-            return
-        except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
-            await _send_error_and_close(
-                websocket, "invalid frame: expected JSON text", code=1008
-            )
-            return
+        raw = _take_deferred_approval(deferred_approvals, pending_approval)
+        if raw is None:
+            try:
+                raw = await websocket.receive_json()
+            except WebSocketDisconnect:
+                return
+            except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):
+                await _send_error_and_close(
+                    websocket, "invalid frame: expected JSON text", code=1008
+                )
+                return
 
         lock = _thread_locks.setdefault(thread_id, asyncio.Lock())
 
@@ -1131,6 +1166,7 @@ async def _serve(
                         thinking_enabled,
                         resume_from,
                         delegation,
+                        deferred_approvals,
                     )
                     if outcome != "disconnected":
                         await persist_active_tip(
@@ -1219,6 +1255,7 @@ async def _serve(
                     thinking_enabled,
                     start_checkpoint,
                     delegation,
+                    deferred_approvals,
                 )
                 if outcome != "disconnected":
                     await persist_active_tip(

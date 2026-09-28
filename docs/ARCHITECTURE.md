@@ -1170,7 +1170,11 @@ Client → server:
 `cancel` (M8-01) stops the in-flight turn early. It's only meaningful while
 a turn is in flight; sent outside a turn (idle, waiting for the next
 `user_message`, and **not** awaiting approval) it's a **no-op** — ignored,
-no error/close, no frame sent in response. Any other, non-`cancel` frame
+no error/close, no frame sent in response. An `approval_response`
+received mid-turn — typically between `approval_request` and its
+`turn_end`, since the client shows the card on the former — is held and
+applied once the turn ends, if it names the interrupt that turn left
+pending; otherwise it's dropped. Any other, non-`cancel` frame
 received mid-turn is likewise ignored (looped past) rather than
 misinterpreted; sending anything other than a well-formed `user_message`
 (or `cancel`) *while idle* still gets the usual `error` frame + close (see
