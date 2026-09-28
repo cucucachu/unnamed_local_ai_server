@@ -15,7 +15,14 @@ re-test from scratch.
 
 from __future__ import annotations
 
+import asyncio
+import json
+
+import anyio
+import pytest
+
 from app.db.settings import InMemorySettingsStore
+from app.db.turn_stats import InMemoryTurnStatsStore, TurnStat
 from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.fake_platform.scripting import FakePlatform
@@ -235,6 +242,126 @@ async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, 
     assert resume_frames[0] == {"type": "turn_start"}
     _assert_turn_end(resume_frames[-1], "completed")
     assert fake_platform.personal() == {"x.txt": b"y"}
+
+
+class _GatedTurnStatsStore(InMemoryTurnStatsStore):
+    """Holds the `awaiting_approval` write — which sits between `approval_request`
+    and `turn_end` — until the test opens `gate` (from the server's loop)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+
+    async def upsert(self, stat: TurnStat) -> None:
+        if stat.status == "awaiting_approval":
+            await self.gate.wait()
+        await super().upsert(stat)
+
+
+def _receive_json_within(ws, seconds: float) -> dict:
+    """`ws.receive_json()` that fails instead of hanging the suite."""
+
+    async def receive() -> dict:
+        with anyio.fail_after(seconds):
+            return await ws._send_rx.receive()
+
+    message = ws.portal.call(receive)
+    return json.loads(message["text"])
+
+
+def _drain_turn_within(ws, seconds: float = 10) -> list[dict]:
+    frames = []
+    while True:
+        frame = _receive_json_within(ws, seconds)
+        frames.append(frame)
+        if frame["type"] in ("turn_end", "error"):
+            return frames
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_files"), [("approve", {"x.txt": b"y"}), ("reject", {})]
+)
+async def test_approval_response_sent_before_turn_end_is_applied(
+    fake_model: FakeModel, fake_platform: FakePlatform, decision: str, expected_files: dict
+) -> None:
+    """#181: the UI shows the card on `approval_request`, so a fast click can
+    land while the server is still finishing the turn (before `turn_end`)."""
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
+    stats = _GatedTurnStatsStore()
+
+    with _make_client(
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+    ) as client, client.websocket_connect("/ws/chat/hitl-race-thread") as ws:
+        client.app.state.turn_stats_store = stats
+        ws.send_json({"type": "user_message", "content": "write a file"})
+        approval = _receive_json_within(ws, 10)
+        while approval["type"] != "approval_request":
+            approval = _receive_json_within(ws, 10)
+
+        fake_model.queue(TextTurn("done"))
+        ws.send_json(
+            {
+                "type": "approval_response",
+                "interrupt_id": approval["interrupt_id"],
+                "decisions": [
+                    {"tool_call_id": approval["actions"][0]["tool_call_id"], "decision": decision}
+                ],
+            }
+        )
+        ws.portal.call(stats.gate.set)
+
+        _assert_turn_end(_drain_turn_within(ws)[-1], "awaiting_approval")
+        resume_frames = _drain_turn_within(ws)
+
+    assert resume_frames[0] == {"type": "turn_start"}
+    _assert_turn_end(resume_frames[-1], "completed")
+    assert fake_platform.personal() == expected_files
+
+
+async def test_stale_approval_response_mid_turn_is_still_ignored(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    """A repeat click for an interrupt that's already been answered arrives
+    mid-resume; it must not be replayed against the next interrupt (1008)."""
+    fake_model.queue(
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/a.txt", "content": "1"}),
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/b.txt", "content": "2"}),
+    )
+
+    with _make_client(
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+    ) as client, client.websocket_connect("/ws/chat/hitl-stale-thread") as ws:
+        ws.send_json({"type": "user_message", "content": "write two files"})
+        approval = next(f for f in _drain_turn_within(ws) if f["type"] == "approval_request")
+        response = {
+            "type": "approval_response",
+            "interrupt_id": approval["interrupt_id"],
+            "decisions": [{"tool_call_id": approval["actions"][0]["tool_call_id"], "decision": "approve"}],
+        }
+        stats = _GatedTurnStatsStore()
+        client.app.state.turn_stats_store = stats
+        ws.send_json(response)
+        assert _receive_json_within(ws, 10) == {"type": "turn_start"}
+        ws.send_json(response)
+        ws.portal.call(stats.gate.set)
+
+        second_turn = _drain_turn_within(ws)
+        _assert_turn_end(second_turn[-1], "awaiting_approval")
+        second = next(f for f in second_turn if f["type"] == "approval_request")
+        assert second["interrupt_id"] != approval["interrupt_id"]
+
+        fake_model.queue(TextTurn("done"))
+        ws.send_json(
+            {
+                "type": "approval_response",
+                "interrupt_id": second["interrupt_id"],
+                "decisions": [{"tool_call_id": second["actions"][0]["tool_call_id"], "decision": "approve"}],
+            }
+        )
+        resume_frames = _drain_turn_within(ws)
+
+    _assert_turn_end(resume_frames[-1], "completed")
+    assert fake_platform.personal() == {"a.txt": b"1", "b.txt": b"2"}
 
 
 async def test_thread_state_is_null_when_nothing_pending(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
