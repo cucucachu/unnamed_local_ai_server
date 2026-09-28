@@ -182,3 +182,20 @@ probe script as below in Chromium). Setup:
 - [ ] (M12-08) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (the fixture), and for Grocery list `--app examples/apps/grocery-list` with and without `--space <slug>` (or keep it; it's yours).
 
 > **PM sign-off: G12 passed ____**
+
+## M13
+
+Web G13 is `scripts/e2e/gate_m13.sh` (history, app-tools pytest, the
+Ask-the-agent runner smoke, then `g13_grocery_smoke.sh`: the real model
+builds a grocery list app from chat, a follow-up adds quantities, the
+runner uses it, the agent and the UI edit the same data, revert). Phone
+is Tier B. Setup: stack up with Caddy from `main`, builder image built,
+signed in as yourself (G10).
+
+- [ ] (M13-05) Phone browser or Expo Go: in chat, ask "make me a grocery list app" — the agent creates and builds it; it appears under **Apps** → Personal. **(GATE G13)**
+- [ ] (M13-05) Follow up "add quantities" — watch the running app hot-reload (or reopen it) with a quantity on each item. **(GATE G13)**
+- [ ] (M13-05) In the runner, add an item; in **Ask the agent** (or chat), ask what's on the list — the agent answers from the same database. Ask it to add a row; it appears in the open app without a manual reload. **(GATE G13)**
+- [ ] (M13-05) App info → history: revert the quantities change; the source and the running app go back. **(GATE G13)**
+
+> **PM sign-off: G13 passed ____**
+

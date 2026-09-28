@@ -17,8 +17,9 @@
 #   3. a rebuild hot-reloads the running app (same frame, same route) to v2;
 #   4. a runtime error in the app (v2's Crash button) raises the host's
 #      error overlay, whose Reload brings the app back;
-#   5. the viewer sees the app as "View only", sees the row, and a write is
-#      refused (`read_only`) with the database unchanged;
+#   5. the viewer sees the app as "View only", sees the rows, and a write is
+#      refused (`read_only`) with the database unchanged (the owner's item
+#      and the "From agent" row from 2b; no viewer write);
 #   and no request from the sandbox frame reaches anything.
 # Everything it created (users, personal spaces, the shared space, its app,
 # instance and bundles) is deleted on exit, even if node is killed.
