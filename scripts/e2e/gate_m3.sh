@@ -357,14 +357,14 @@ assert any(m['role'] == 'assistant' and m['content'] for m in messages[1:]), mes
     log "ERROR: /personal/${FILE_PATH} missing or content changed after the full restart"
     return 1
   fi
-  resp="$(rest_request GET "$(url_with_path_param "${API_BASE}/files" "$FILE_DIR")")"
+  resp="$(rest_request GET "$(url_with_path_param "${API_BASE}/platform/files" "/personal/${FILE_DIR}")")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
   if [ "$status" != "200" ] || [ "$(json_entries_contains_name "$body" "$FILE_NAME")" != "true" ]; then
     log "ERROR: '${FILE_NAME}' missing from the files API after restart: ${status} ${body}"
     return 1
   fi
-  log "OK: ${FILE_PATH} persisted on the host AND via the files API"
+  log "OK: /personal/${FILE_PATH} persisted and is listed by the files API"
 }
 
 ask_what_file_and_check_mention() {
