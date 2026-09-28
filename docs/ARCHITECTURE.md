@@ -876,7 +876,14 @@ what another doc says it should be.
   Below `<space_id>/` is group-writable, so the platform opens each child
   with `O_NOFOLLOW` relative to its parent's fd and fixes it with
   `fchown`/`fchmod`: a planted symlink fails the space instead of
-  redirecting a root chown. The host user (uid 1000) can list
+  redirecting a root chown. The same holds for everything inside
+  `files/` (M11-03a, `docs/PLATFORM.md` §5 "Race-free access"): the files
+  API, agent file tools, media, legacy migration and app-package
+  validation reach space content only through `app/core/beneath.py` — a
+  component walk on directory fds from the space's open `files/` fd
+  (`O_PATH | O_NOFOLLOW` per component, symlinks expanded by the walk and
+  refused with `EXDEV` once they'd leave the root) — and `*at` syscalls on
+  the resulting fd (`app/core/fsops.py`), never by host path. The host user (uid 1000) can list
   `SPACES_DIR` but not inside a space; use `docker compose exec platform
   ls -ln /data/spaces/<id>`.
 - **Recovery CLI** (`app/cli.py`, run in the container; the image's
@@ -937,14 +944,21 @@ what another doc says it should be.
   session / disabled user can neither obtain nor refresh, and a minted
   delegation is refused by every admin/self-service/space-management
   route). M11-01: `test_vfs.py` (the virtual-path guard: the old
-  `resolve_files_path` suite ported, plus roles, non-member vs unknown
-  slug, cross-space and swapped-`files/` symlinks), `test_files_api.py`
+  `resolve_files_path` suite ported onto `beneath.locate`, plus roles,
+  non-member vs unknown slug, cross-space and swapped-`files/` symlinks),
+  `test_races.py` (M11-03a: a symlink to another space swapped in between
+  the guard's check and the operation on every files route, mid-walk, and
+  by a thread hammering `renameat2(RENAME_EXCHANGE)` against read, write,
+  mkdir, move, copy, delete and chown — the other space's tree is
+  unchanged and nothing in it is chowned), `test_files_api.py`
   (every route through the guard cases, the owner/editor/viewer/non-member
   × user/agent matrix, cross-space move/copy, recorded ownership and
   modes), `test_media_api.py` (Range, HEAD, 416, thumbnails),
   `test_thumbnails.py`, `test_agentfs.py` (values pinned against
   deepagents 0.7.11's `FilesystemBackend`), `test_fsops.py` (real
-  ownership and modes as root in a container, like `test_storage.py`),
+  ownership and modes as root in a container, like `test_storage.py`,
+  plus a planted cross-space link redirecting neither a root write nor a
+  root chown),
   `test_legacy.py` (off by default, waits for bootstrap, idempotent,
   collisions, resume). M12-02: `test_manifest.py` (the schema — good and
   bad manifests, reserved `exports`/`reads`, pointers — and the package
@@ -1496,13 +1510,17 @@ root:
   paths; a bare `file:notes.txt` means `/personal/notes.txt`.
 
 *The guard*, `vfs.resolve_virtual_path(conn, principal, storage, vpath,
-need)` (`app/core/vfs.py`), is the only way a route gets a host path. It
-keeps agent-server's `resolve_files_path` rules and adds the space check:
+need)` (`app/core/vfs.py`), is the only way a route gets at a space. It
+keeps agent-server's `resolve_files_path` rules and adds the space check;
+it returns the space and the path's components below `files/`, not a host
+path:
 
 1. `422 invalid_path` for a null byte, any `..` segment (refused outright,
-   not normalized), or a path that — after resolving symlinks — isn't
-   inside that space's `files/` (so a symlink to another space, to the
-   space's `apps/`, or to a loop is refused too).
+   not normalized), or a path that — following symlinks — would leave
+   that space's `files/` (so a symlink to another space, to the space's
+   `apps/`, or to a loop is refused too). Relative links and absolute
+   links naming a place inside the same `files/` dir (by the platform's
+   path for it) are followed.
 2. The space is looked up (personal, or by slug; archived spaces don't
    resolve) and `authorize_space(…, need)` applies: `need` is `read` for
    list/stat/download/stream/thumbnail/read/grep/glob and `write` for the
@@ -1517,9 +1535,20 @@ Delete, move, rename, stat, and a move/copy destination resolve only the
 parent, so they act on a final symlink itself rather than its target;
 listings show a symlink as a `file` entry.
 
+*Race-free use* (M11-03a): that check is only the early error. Every
+operation reopens the space's `files/` dir and walks to its target by
+directory fd (`app/core/beneath.py`), then acts with `*at` syscalls and
+`O_NOFOLLOW` on the final name, so a component swapped for a symlink after
+the check (by an exec container, say) yields `422 invalid_path` (or
+`404`/`409` if it vanished) instead of reaching another space. Downloads
+are served from the opened fd (`/proc/self/fd/<n>`), thumbnails hand ffmpeg
+the inherited fd, grep/glob descend by fd, and a copy never descends into
+the directory it is creating.
+
 *Ownership*: everything created is `<caller uid>:<space gid>` — files
 `0660` (`0770` if copied from an executable), dirs `2770` — through
-`app/core/fsops.py` (`O_NOFOLLOW` opens, `fchown`/`fchmod` on the fd).
+`app/core/fsops.py` (`*at` calls on directory fds, `O_NOFOLLOW` opens,
+`fchown`/`fchmod` on the fd).
 Overwriting a file keeps its owner. A cross-space move re-groups the moved
 tree to the destination space (owners kept); a copy belongs to the caller
 and the destination space.
@@ -1836,10 +1865,11 @@ like the `FETCH_*` caps).
 
 Every file path — the Files tab's and, since M11-02, the agent's file
 tools' — is resolved by the platform's `vfs.resolve_virtual_path`: the
-resolved host path must stay inside that space's `files/` (symlinks
-followed first), `..` is refused outright, membership and role are
-checked, and cross-space symlinks are refused; see §3 "Platform API" →
-"Files". agent-server's old `resolve_files_path` (`/data/files`, deleted
+path must stay inside that space's `files/` (symlinks followed only while
+they stay inside), `..` is refused outright, membership and role are
+checked, and cross-space symlinks are refused; operations then reach the
+file only by directory fd below that `files/` dir, so a symlink swapped in
+after the check can't redirect them; see §3 "Platform API" → "Files". agent-server's old `resolve_files_path` (`/data/files`, deleted
 in M11-02) and its suite (`../x`, absolute `/etc/passwd`, nested
 `a/../../x`, a symlink pointing outside) are ported in
 `services/platform/tests/test_vfs.py`. agent-server itself has no files
