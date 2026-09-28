@@ -60,6 +60,8 @@ export interface AppSandboxProps {
   /** Web: the frame navigated itself and was removed. (Native refuses the
    * navigation before it starts.) */
   onKilled: () => void;
+  /** `agent.ask` from the sandbox (`askAgent`); the runner opens the panel. */
+  onAskAgent?: (prompt: string) => void;
 }
 
 /** Viewers, and anyone without a role in the space, get a read-only bridge. */

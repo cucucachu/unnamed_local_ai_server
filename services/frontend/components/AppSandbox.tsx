@@ -21,7 +21,7 @@ export function allowSandboxLoad(request: Pick<ShouldStartLoadRequest, 'url'>): 
  * never needs killing. Host -> sandbox is `injectJavaScript` (WebView's own
  * `postMessage` dispatches on `document` on Android but `window` on iOS).
  */
-export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost }: AppSandboxProps) {
+export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskAgent }: AppSandboxProps) {
   const webview = useRef<WebView>(null);
   const host = useRef<BridgeHost | null>(null);
 
@@ -30,6 +30,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost }: AppS
       send: (wire) => webview.current?.injectJavaScript(injectScriptFor(wire)),
       readOnly,
       onEvent,
+      onAskAgent,
     });
     host.current = bridge;
     onHost(bridge);
@@ -38,7 +39,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost }: AppS
       host.current = null;
       onHost(null);
     };
-  }, [instanceId, html, readOnly, onEvent, onHost]);
+  }, [instanceId, html, readOnly, onEvent, onAskAgent, onHost]);
 
   const source = useMemo(() => ({ html }), [html]);
 

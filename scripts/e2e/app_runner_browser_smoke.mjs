@@ -135,6 +135,21 @@ try {
   await waitForFrameText(page, 'count', (t) => t === '1 items', 'after a page reload the app still shows one row');
   check((await ui(page).getByText(ROW).count()) === 1, `after a page reload the row "${ROW}" is shown`);
 
+  // --- 2b. Ask the agent panel with app context; a write shows up live ------
+  await page.getByTestId('app-ask-agent').click();
+  await page.getByTestId('app-agent-panel').waitFor({ timeout: UI_TIMEOUT });
+  const context = await page.getByTestId('app-agent-context').innerText();
+  check(context.includes(instance.id), 'the panel is seeded with the instance id', context);
+  check(context.includes(SLUG), 'the panel is seeded with the space slug', context);
+  check(/Runtime check/.test(context) && /CREATE TABLE items/.test(context), 'the panel loaded app.json, AGENT.md and schema.sql', context);
+  await owner.call('POST', `/api/platform/apps/instances/${instance.id}/rpc`, {
+    json: { op: 'run', sql: 'INSERT INTO items (name) VALUES (?)', params: ['From agent'] },
+  });
+  await waitForFrameText(page, 'count', (t) => t === '2 items', 'db_changed updated the running app while the panel was open');
+  await page.getByTestId('app-agent-close').click();
+  await page.getByTestId('app-agent-panel').waitFor({ state: 'detached', timeout: UI_TIMEOUT });
+  ok('the agent panel closed');
+
   // --- 3. a rebuild hot-reloads the running app ----------------------------
   await page.locator(APP_FRAME).evaluate((f) => (f.dataset.e2e = 'first-frame'));
   await owner.call('PUT', `/api/platform/files/content?path=${encodeURIComponent(`${APP_DIR}/app/index.tsx`)}`, { raw: Buffer.from(fixtureV2()) });

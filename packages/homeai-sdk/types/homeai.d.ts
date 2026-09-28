@@ -46,6 +46,8 @@ declare module '@homeai/sdk' {
   export function useQuery<T = any>(sql: string, ...params: SQLValue[]): QueryResult<T>;
   /** Runs the named action from actions/<name>.sql in one transaction; `rows` are the last result set's. */
   export function runAction(name: string, params?: Record<string, SQLValue>): Promise<ActionResult>;
+  /** Opens the host's "Ask the agent" panel with this prompt (a new thread pre-seeded with this app's context). */
+  export function askAgent(prompt: string): Promise<void>;
   /** The space this instance is installed in; null until the host has said. */
   export function useSpace(): Space | null;
 }

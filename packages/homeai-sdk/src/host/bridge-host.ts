@@ -4,6 +4,7 @@
 // fields are passed on, and `forward` is bound by the caller to one fixed
 // instance — nothing in a message can name another.
 import {
+  HOST_METHODS,
   METHODS,
   PROTOCOL,
   WRITE_METHODS,
@@ -11,13 +12,15 @@ import {
   type BridgeError,
   type Envelope,
   type HostEvents,
+  type HostMethod,
   type Method,
   type Methods,
+  type PlatformMethod,
   type SandboxEvents,
   type Space,
 } from '../protocol';
 
-export type Forward = <M extends Method>(method: M, params: Methods[M]['params']) => Promise<Methods[M]['result']>;
+export type Forward = <M extends PlatformMethod>(method: M, params: Methods[M]['params']) => Promise<Methods[M]['result']>;
 
 export type BridgeHostOptions = {
   /** Delivers one wire string to the sandbox (postMessage on web, injectJavaScript on native). */
@@ -26,6 +29,8 @@ export type BridgeHostOptions = {
   /** Viewers: `db.run` and `action` are refused before reaching the platform (which refuses them too). */
   readOnly?: boolean;
   onEvent?: <E extends keyof SandboxEvents>(event: E, data: SandboxEvents[E]) => void;
+  /** `agent.ask`: open the host's agent panel. Viewers may ask; writes still follow their role. */
+  onAskAgent?: (prompt: string) => void | Promise<void>;
 };
 
 export type BridgeHost = {
@@ -41,7 +46,9 @@ export type BridgeHost = {
 
 export const MAX_IN_FLIGHT = 32;
 const SANDBOX_EVENTS = new Set<string>(['runtime.ready', 'runtime.error', 'nav.changed']);
+const ALLOWED_METHODS = new Set<string>([...METHODS, ...HOST_METHODS]);
 const MAX_SQL_CHARS = 100 * 1024;
+const MAX_PROMPT_CHARS = 32 * 1024;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -49,9 +56,15 @@ function hostError(code: string, message: string): BridgeError & Error {
   return Object.assign(new Error(message), { code });
 }
 
-/** The params the platform will see, rebuilt from known fields only; throws `bad_request`. */
+/** The params the platform (or host) will see, rebuilt from known fields only; throws `bad_request`. */
 export function checkParams<M extends Method>(method: M, raw: unknown): Methods[M]['params'] {
   if (!isRecord(raw)) throw hostError('bad_request', `${method} needs an object of params`);
+  if (method === 'agent.ask') {
+    if (typeof raw.prompt !== 'string' || raw.prompt.length > MAX_PROMPT_CHARS) {
+      throw hostError('bad_request', 'agent.ask needs a prompt (at most 32 KiB)');
+    }
+    return { prompt: raw.prompt } as Methods[M]['params'];
+  }
   if (method === 'action') {
     if (typeof raw.name !== 'string' || !raw.name) throw hostError('bad_request', 'action needs a name');
     const params = raw.params ?? {};
@@ -64,7 +77,7 @@ export function checkParams<M extends Method>(method: M, raw: unknown): Methods[
   return { sql: raw.sql, params } as Methods[M]['params'];
 }
 
-export function createBridgeHost({ send, forward, readOnly = false, onEvent }: BridgeHostOptions): BridgeHost {
+export function createBridgeHost({ send, forward, readOnly = false, onEvent, onAskAgent }: BridgeHostOptions): BridgeHost {
   let closed = false;
   let heard = false;
   let inFlight = 0;
@@ -84,11 +97,11 @@ export function createBridgeHost({ send, forward, readOnly = false, onEvent }: B
   };
 
   async function request(id: number, method: string, rawParams: unknown) {
-    if (!(METHODS as readonly string[]).includes(method)) {
+    if (!ALLOWED_METHODS.has(method)) {
       return reply(id, { ok: false, error: { code: 'method_not_allowed', message: `the host doesn't provide ${method}` } });
     }
     const m = method as Method;
-    if (readOnly && WRITE_METHODS.includes(m)) {
+    if (readOnly && (WRITE_METHODS as readonly string[]).includes(m)) {
       return reply(id, { ok: false, error: { code: 'read_only', message: 'you can only view this app\'s data' } });
     }
     if (inFlight >= MAX_IN_FLIGHT) {
@@ -96,7 +109,13 @@ export function createBridgeHost({ send, forward, readOnly = false, onEvent }: B
     }
     inFlight++;
     try {
-      const value = await forward(m, checkParams(m, rawParams));
+      if ((HOST_METHODS as readonly string[]).includes(m)) {
+        const params = checkParams(m as HostMethod, rawParams) as Methods['agent.ask']['params'];
+        await onAskAgent?.(params.prompt);
+        reply(id, { ok: true, value: {} });
+        return;
+      }
+      const value = await forward(m as PlatformMethod, checkParams(m as PlatformMethod, rawParams));
       reply(id, { ok: true, value });
     } catch (err: any) {
       reply(id, { ok: false, error: { code: typeof err?.code === 'string' ? err.code : 'host_error', message: String(err?.message ?? err) } });

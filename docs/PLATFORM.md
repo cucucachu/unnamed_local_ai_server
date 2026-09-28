@@ -539,7 +539,9 @@ diagnostic until added.
 - `useQuery(sql, params)` → `{ data, error, loading, refresh }`, re-runs when
   the platform reports a change to the instance's database.
 - `runAction(name, params)`; `useSpace()` → `{ id, slug, name, role }`.
-- Later: `askAgent(prompt)`, cross-instance reads, capability shims.
+- `askAgent(prompt)` — opens the host's agent panel with that prompt
+  (M13-04; a host-local bridge method, never the instance RPC).
+- Later: cross-instance reads, capability shims.
 
 > **As built (M12-05)** — `packages/homeai-sdk/` holds everything
 > SDK-versioned: the sandbox runtime (`src/runtime.tsx`, `bridge.ts`,
@@ -558,7 +560,8 @@ diagnostic until added.
 > re-run, and a write from the sandbox (`runAsync`, `runAction` with
 > `changes > 0`) refreshes that sandbox's queries without waiting for the
 > platform's event. `useSpace()` is the host's `space` from the sandbox
-> config at first render, then any `space` event. The `expo-sqlite` shim is
+> config at first render, then any `space` event. `askAgent(prompt)` is
+> host-local `agent.ask` (M13-04). The `expo-sqlite` shim is
 > `useSQLiteContext`, `openDatabaseAsync`, `SQLiteProvider` over the same
 > database; `withTransactionAsync` stays out (it throws, and it isn't in the
 > typings).
@@ -603,9 +606,10 @@ diagnostic until added.
   `space` (host → sandbox); `runtime.ready`, `runtime.error`, `nav.changed`
   (sandbox → host).
 - **The sandbox holds no credentials.** It can only send RPC requests
-  (`db.getAll`, `db.getFirst`, `db.run`, `action`). The host checks the
+  (`db.getAll`, `db.getFirst`, `db.run`, `action`, and host-local
+  `agent.ask`). The host checks the
   envelope and the method allowlist (viewers: no `db.run`/`action`) and
-  forwards them to `/api/platform/apps/instances/<instance_id>/rpc` — the
+  forwards the database methods to `/api/platform/apps/instances/<instance_id>/rpc` — the
   instance id is fixed by the host when it opens the sandbox, never taken
   from the message — using the host's own session. The platform authorizes
   against the user's role in the instance's space.
@@ -628,6 +632,7 @@ a string `method`, `evt` with a string `event`).
 | `db.getFirst` | `{sql, params}` | `{…} \| null` |
 | `db.run` | `{sql, params}` | `{changes, lastInsertRowId}` |
 | `action` | `{name, params: {…}}` | `{changes, lastInsertRowId, rows}` |
+| `agent.ask` | `{prompt}` | `{}` — host-local (M13-04): open the runner's agent panel. Not forwarded to the instance RPC. Viewers may ask. |
 
 `params` of the `db.*` methods is a list (`?` placeholders) or an object
 (named); values and results are as in the platform's RPC
@@ -1059,6 +1064,21 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > is an alias of `useDatabase` on `@homeai/sdk`. The real-model eval is
 > `scripts/eval/app_authoring/` (≥10 prompts; pass = build + smoke + a
 > scripted data-model check; bar ≥ 7/10).
+>
+> **As built (M13-04)** — the runner (`/apps/<instance_id>`) has an **Ask
+> the agent** panel (`components/AppAgentPanel.tsx`). Opening it creates a
+> regular chat thread (`POST /api/threads`, title `Ask: <app name>`; no
+> new thread kind) and shows the instance id, space, and the source
+> `app.json` / `AGENT.md` / `schema.sql` (from `GET /apps/{id}` +
+> `GET /files/stream`). The first `user_message` is those files plus the
+> prompt; the bubble shows only the prompt. `@homeai/sdk` `askAgent(prompt)`
+> is bridge method `agent.ask`, handled in `createBridgeHost` (`onAskAgent`)
+> and never sent through `platformForward`. Agent `app_sql` / `app_action`
+> / file writes still surface as this instance's existing `db_changed` on
+> `/ws/platform/events`, which the runner already relays. Tests: SDK jest
+> (jsdom) + Playwright (stub platform, fake model) and frontend jest;
+> `app_runner_browser_smoke.sh` checks the panel's context and a live
+> `db_changed` while it is open.
 
 ### System apps (D17)
 

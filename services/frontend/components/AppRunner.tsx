@@ -1,7 +1,9 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { platformEventRelay, type BridgeHost, type SandboxEvents } from '@homeai/sdk/host';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AppAgentPanel } from '@/components/AppAgentPanel';
 import { AppSandbox } from '@/components/AppSandbox';
 import { ActionButton, ErrorText } from '@/components/SettingsUI';
 import {
@@ -35,14 +37,32 @@ type Crash = { title: string; message: string };
  * `/ws/platform/events` into it (`db_changed` -> live queries re-run,
  * `app_built` -> hot reload), and covers it with an error overlay when the
  * app reports a runtime error. Reload starts a fresh sandbox from the newest
- * bundle. `instanceId` is the only instance the sandbox can reach.
+ * bundle. `instanceId` is the only instance the sandbox can reach. "Ask the
+ * agent" opens a chat thread pre-seeded with this app's files (M13-04);
+ * `askAgent` from the sandbox opens it with a prompt. Agent writes still
+ * arrive as this instance's `db_changed`.
  */
-export function AppRunner({ instanceId, space }: { instanceId: string; space: Space }) {
+export function AppRunner({
+  instanceId,
+  space,
+  appId,
+  appName = 'App',
+}: {
+  instanceId: string;
+  space: Space;
+  appId?: string;
+  appName?: string;
+}) {
   const readOnly = isReadOnly(space);
   const [generation, setGeneration] = useState(0);
   const [load, setLoad] = useState<Load>({ doc: null, error: null });
   const [host, setHost] = useState<BridgeHost | null>(null);
   const [crash, setCrash] = useState<Crash | null>(null);
+  const [agent, setAgent] = useState<{ open: boolean; prompt: string | null; seq: number }>({
+    open: false,
+    prompt: null,
+    seq: 0,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +102,16 @@ export function AppRunner({ instanceId, space }: { instanceId: string; space: Sp
     setCrash({ title: 'This app was stopped', message: 'It tried to navigate away from its sandbox.' });
   }, []);
 
+  const onAskAgent = useCallback((prompt: string) => {
+    setAgent((current) => ({ open: true, prompt, seq: current.seq + 1 }));
+  }, []);
+
+  const openAgent = useCallback(() => {
+    setAgent((current) =>
+      current.open ? { open: false, prompt: null, seq: current.seq } : { open: true, prompt: null, seq: current.seq },
+    );
+  }, []);
+
   const restart = useCallback(() => {
     setCrash(null);
     setHost(null);
@@ -96,6 +126,19 @@ export function AppRunner({ instanceId, space }: { instanceId: string; space: Sp
           View only — you can&apos;t change this app&apos;s data.
         </Text>
       ) : null}
+      <View style={styles.bar}>
+        <Pressable
+          onPress={openAgent}
+          accessibilityRole="button"
+          accessibilityLabel="Ask the agent"
+          testID="app-ask-agent"
+          style={styles.askButton}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.text} />
+          <Text style={styles.askLabel}>{agent.open ? 'Hide agent' : 'Ask the agent'}</Text>
+        </Pressable>
+      </View>
+      <View style={styles.body}>
       <View style={styles.stage}>
         {doc ? (
           <AppSandbox
@@ -106,6 +149,7 @@ export function AppRunner({ instanceId, space }: { instanceId: string; space: Sp
             onEvent={onEvent}
             onHost={setHost}
             onKilled={onKilled}
+            onAskAgent={onAskAgent}
           />
         ) : (
           <View style={styles.centered}>
@@ -134,6 +178,18 @@ export function AppRunner({ instanceId, space }: { instanceId: string; space: Sp
           </View>
         ) : null}
       </View>
+      {agent.open && (appId ?? doc?.appId) ? (
+        <AppAgentPanel
+          instanceId={instanceId}
+          space={space}
+          appId={(appId ?? doc?.appId)!}
+          appName={appName}
+          initialPrompt={agent.prompt}
+          promptSeq={agent.seq}
+          onClose={() => setAgent((current) => ({ open: false, prompt: null, seq: current.seq }))}
+        />
+      ) : null}
+      </View>
     </View>
   );
 }
@@ -154,6 +210,23 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
   },
+  bar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
+  },
+  askButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  askLabel: { color: theme.text, fontSize: 14 },
+  body: { flex: 1, flexDirection: 'row' },
   centered: {
     flex: 1,
     alignItems: 'center',

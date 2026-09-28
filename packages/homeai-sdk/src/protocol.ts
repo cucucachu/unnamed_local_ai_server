@@ -23,17 +23,26 @@ export type RunResult = { changes: number; lastInsertRowId: number };
 export type ActionResult = RunResult & { rows: Record<string, unknown>[] };
 export type Space = { id: string; slug: string; name: string; role: 'owner' | 'editor' | 'viewer' };
 
-/** Sandbox -> host requests: params and result of each method. */
-export type Methods = {
+/** Sandbox -> host requests that the host forwards to the instance RPC. */
+export type PlatformMethods = {
   'db.getAll': { params: { sql: string; params: SqlParams }; result: Record<string, unknown>[] };
   'db.getFirst': { params: { sql: string; params: SqlParams }; result: Record<string, unknown> | null };
   'db.run': { params: { sql: string; params: SqlParams }; result: RunResult };
   action: { params: { name: string; params: Record<string, unknown> }; result: ActionResult };
 };
+/** Sandbox -> host requests the host handles itself (never the platform). */
+export type HostMethods = {
+  /** Open the host's agent panel with this prompt (M13-04). */
+  'agent.ask': { params: { prompt: string }; result: Record<string, never> };
+};
+export type Methods = PlatformMethods & HostMethods;
+export type PlatformMethod = keyof PlatformMethods;
+export type HostMethod = keyof HostMethods;
 export type Method = keyof Methods;
 
-export const METHODS: readonly Method[] = ['db.getAll', 'db.getFirst', 'db.run', 'action'];
-export const WRITE_METHODS: readonly Method[] = ['db.run', 'action'];
+export const METHODS: readonly PlatformMethod[] = ['db.getAll', 'db.getFirst', 'db.run', 'action'];
+export const HOST_METHODS: readonly HostMethod[] = ['agent.ask'];
+export const WRITE_METHODS: readonly PlatformMethod[] = ['db.run', 'action'];
 
 /** Host -> sandbox events. */
 export type HostEvents = {

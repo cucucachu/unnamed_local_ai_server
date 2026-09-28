@@ -91,6 +91,11 @@ export async function runAction(name: string, params: Record<string, unknown> = 
   return r;
 }
 
+/** Open the host's "Ask the agent" panel with `prompt` (M13-04). Resolves once the host has the request. */
+export function askAgent(prompt: string): Promise<Record<string, never>> {
+  return rpc('agent.ask', { prompt });
+}
+
 let space: Space | null = null;
 const spaceListeners = new Set<() => void>();
 export function setSpace(next: Space | null) {
