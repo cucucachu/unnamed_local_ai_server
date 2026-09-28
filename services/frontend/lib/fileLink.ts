@@ -1,12 +1,13 @@
 /**
  * `file:` href → virtual files path (M9-03, M11-01).
  *
- * `/personal/...` and `/spaces/<slug>/...` are kept as they are. Anything
- * else is a pre-spaces link, relative to what used to be the single files
- * root, which is now the user's personal space: `file:notes.txt` and
- * `file:/notes.txt` both open `/personal/notes.txt`. The `/files/...` form
- * (the exec shell's mount point, which the model sometimes echoes into a
- * link; `file:///files/...` too) is stripped first, the same way.
+ * `/personal/...` and `/spaces/<slug>/...` are kept as they are, and so are
+ * their exec-shell spellings, which the model sometimes echoes into a link:
+ * `/files/personal/...` and `/files/spaces/<slug>/...` (`file:///files/...`
+ * too). Anything else is a pre-spaces link, relative to what used to be the
+ * single files root, which is now the user's personal space:
+ * `file:notes.txt`, `file:/notes.txt` and `file:/files/notes.txt` all open
+ * `/personal/notes.txt`.
  */
 export function filePathFromHref(href: string): string | null {
   if (href.startsWith('http:') || href.startsWith('https:') || href.startsWith('mailto:')) {
@@ -28,10 +29,10 @@ export function normalizeFileLink(href: string): string {
   }
 
   let stripped = path.replace(/^\/+/, '').replace(/\/+$/, '');
+  if (stripped === 'files') stripped = '';
+  else if (stripped.startsWith('files/')) stripped = stripped.slice('files/'.length);
   if (SPACE_ROOTS.some((root) => stripped === root || stripped.startsWith(`${root}/`))) {
     return `/${stripped}`;
   }
-  if (stripped === 'files') stripped = '';
-  else if (stripped.startsWith('files/')) stripped = stripped.slice('files/'.length);
   return stripped ? `/personal/${stripped}` : '/personal';
 }
