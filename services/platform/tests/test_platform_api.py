@@ -247,6 +247,7 @@ async def test_admin_lists_and_patches_users(platform):
         "display_name",
         "role",
         "totp_enabled",
+        "require_passkeys",
         "disabled_at",
         "created_at",
     }

@@ -15,6 +15,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.54.0",
     "wcmatch>=10.1",
+    "webauthn>=2.5.0",
 ]
 
 # Same as agent-server: app/ is run directly via `uvicorn app.main:app`,

@@ -69,7 +69,8 @@ async def resolve_token(conn: AsyncConnection, token: str) -> Row | None:
     cur = await conn.execute(
         "WITH hit AS ("
         "  SELECT s.id AS session_id, u.id, u.username, u.display_name, u.role, u.uid,"
-        "         (u.totp_secret IS NOT NULL) AS totp_enabled, u.disabled_at, u.created_at"
+        "         (u.totp_secret IS NOT NULL) AS totp_enabled, u.require_passkeys,"
+        "         u.disabled_at, u.created_at"
         "  FROM sessions s JOIN users u ON u.id = s.user_id"
         f" WHERE s.token_hash = %(hash)s AND {_ACTIVE}"
         "), bump AS ("

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
@@ -13,15 +13,21 @@ import {
   SettingsFrame,
   settingsStyles,
 } from '@/components/SettingsUI';
-import type { User } from '@/lib/auth';
 import {
   confirmTotp,
   disableTotp,
   enrollTotp,
+  beginPasskeyRegister,
+  finishPasskeyRegister,
+  listPasskeys,
   platformErrorMessage,
+  revokePasskey,
   updateMe,
+  type Passkey,
   type TotpEnrollment,
 } from '@/lib/platform';
+import { getAuthStatus, passkeysAvailable, type User } from '@/lib/auth';
+import { createCredential, passkeysSupported } from '@/lib/webauthn';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 
 /** Settings → Account: display name, password, and TOTP enrollment. */
@@ -38,6 +44,7 @@ export default function AccountScreen() {
       <PasswordCard />
       <SectionTitle>Two-factor authentication</SectionTitle>
       <TotpCard enabled={user.totp_enabled} onChanged={updateUser} />
+      <PasskeyCard />
     </SettingsFrame>
   );
 }
@@ -370,4 +377,101 @@ const styles = StyleSheet.create({
     fontFamily: monospaceFontFamily,
     fontSize: 11,
   },
+  passkeyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
 });
+
+function PasskeyCard() {
+  const [available, setAvailable] = useState(false);
+  const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await getAuthStatus();
+        if (cancelled) return;
+        const on = passkeysSupported() && passkeysAvailable(status.webauthn);
+        setAvailable(on);
+        if (on) setPasskeys(await listPasskeys());
+      } catch {
+        if (!cancelled) setAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!available) return null;
+
+  async function handleAdd() {
+    setBusy(true);
+    setError(null);
+    try {
+      const options = await beginPasskeyRegister();
+      const credential = await createCredential(options);
+      const created = await finishPasskeyRegister(credential, 'Browser');
+      setPasskeys((previous) => [...(previous ?? []), created]);
+    } catch (caught) {
+      setError(platformErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRevoke(id: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await revokePasskey(id);
+      setPasskeys((previous) => previous?.filter((item) => item.id !== id) ?? null);
+    } catch (caught) {
+      setError(platformErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <SectionTitle>Passkeys</SectionTitle>
+      <Card testID="account-passkey">
+        <View style={settingsStyles.cardBody}>
+          <Text style={settingsStyles.muted}>
+            Sign in and confirm admin changes with this device instead of a password.
+          </Text>
+          {(passkeys ?? []).map((item) => (
+            <View key={item.id} style={styles.passkeyRow} testID={`account-passkey-row-${item.id}`}>
+              <Text style={settingsStyles.rowTitle}>{item.name || 'Passkey'}</Text>
+              <ActionButton
+                label="Revoke"
+                variant="danger"
+                compact
+                onPress={() => handleRevoke(item.id)}
+                busy={busy}
+                disabled={busy}
+                testID={`account-passkey-revoke-${item.id}`}
+              />
+            </View>
+          ))}
+          <ErrorText testID="account-passkey-error">{error}</ErrorText>
+          <ActionButton
+            label="Add a passkey"
+            variant="primary"
+            onPress={handleAdd}
+            busy={busy}
+            disabled={busy}
+            testID="account-passkey-add"
+          />
+        </View>
+      </Card>
+    </>
+  );
+}

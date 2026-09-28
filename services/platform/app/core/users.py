@@ -25,7 +25,7 @@ ADMIN_LOCK_KEY = 0x686F6D6561690002
 
 USER_COLUMNS = (
     "id, username, display_name, role, uid, (totp_secret IS NOT NULL) AS totp_enabled, "
-    "disabled_at, created_at"
+    "require_passkeys, disabled_at, created_at"
 )
 
 Row = dict[str, Any]
@@ -115,7 +115,7 @@ async def list_directory(conn: AsyncConnection) -> list[Row]:
 
 async def get_credentials(conn: AsyncConnection, username: str) -> Row | None:
     cur = await conn.execute(
-        "SELECT id, password_hash, totp_secret, totp_last_step, disabled_at "
+        "SELECT id, password_hash, totp_secret, totp_last_step, disabled_at, require_passkeys "
         "FROM users WHERE username = %s",
         (username,),
     )
@@ -175,6 +175,7 @@ async def update_user(
     *,
     role: str | None = None,
     disabled: bool | None = None,
+    require_passkeys: bool | None = None,
 ) -> Row:
     """Change role and/or disabled state; never leaves zero enabled admins.
 
@@ -186,7 +187,8 @@ async def update_user(
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_LOCK_KEY,))
         cur = await conn.execute(
-            "SELECT role, disabled_at FROM users WHERE id = %s FOR UPDATE", (user_id,)
+            "SELECT role, disabled_at, require_passkeys FROM users WHERE id = %s FOR UPDATE",
+            (user_id,),
         )
         current = await cur.fetchone()
         if current is None:
@@ -195,6 +197,9 @@ async def update_user(
         is_admin_now = current["role"] == "admin" and current["disabled_at"] is None
         new_role = role or current["role"]
         new_disabled = (current["disabled_at"] is not None) if disabled is None else disabled
+        new_require = (
+            current["require_passkeys"] if require_passkeys is None else require_passkeys
+        )
         if is_admin_now and (new_role != "admin" or new_disabled):
             cur = await conn.execute(
                 "SELECT count(*) AS n FROM users "
@@ -205,10 +210,10 @@ async def update_user(
                 raise Conflict("last_admin")
 
         await conn.execute(
-            "UPDATE users SET role = %s, disabled_at = CASE "
+            "UPDATE users SET role = %s, require_passkeys = %s, disabled_at = CASE "
             "WHEN NOT %s THEN NULL WHEN disabled_at IS NULL THEN now() ELSE disabled_at END "
             "WHERE id = %s",
-            (new_role, new_disabled, user_id),
+            (new_role, new_require, new_disabled, user_id),
         )
         if new_disabled:
             await sessions.revoke_user_sessions(conn, user_id)

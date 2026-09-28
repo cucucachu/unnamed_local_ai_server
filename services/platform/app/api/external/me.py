@@ -6,6 +6,9 @@ from fastapi import APIRouter, Request, status
 
 from app.api.schemas import (
     MePatchRequest,
+    PasskeyList,
+    PasskeyOut,
+    PasskeyRegisterFinishRequest,
     PasswordRequest,
     SessionList,
     SessionOut,
@@ -14,8 +17,9 @@ from app.api.schemas import (
     UserOut,
 )
 from app.api.session_http import client_ip, credential_attempt
-from app.core import passwords, sessions, totp, users
+from app.core import passwords, sessions, totp, users, webauthn
 from app.core.errors import Conflict, Forbidden, InvalidInput, NotFound
+from app.core.origin import require_privileged_origin
 from app.core.principal import CurrentUser, HumanUser, Principal
 
 router = APIRouter(prefix="/me")
@@ -51,6 +55,49 @@ async def patch_me(body: MePatchRequest, request: Request, principal: HumanUser)
                 conn, principal.user_id, body.password, keep_session_id=principal.session_id
             )
         return await users.get_user(conn, principal.user_id)
+
+
+@router.get("/passkeys", response_model=PasskeyList)
+async def list_passkeys(request: Request, principal: HumanUser):
+    """Public origin allowed (same as WireGuard revoke)."""
+    webauthn.require_rp_id(request.app.state.settings)
+    async with request.app.state.db_pool.connection() as conn:
+        rows = await webauthn.list_credentials(conn, principal.user_id)
+    return PasskeyList(passkeys=[PasskeyOut(**row) for row in rows])
+
+
+@router.post("/passkeys/register/begin")
+async def passkey_register_begin(request: Request, principal: HumanUser) -> dict:
+    require_privileged_origin(request)
+    rid = webauthn.require_rp_id(request.app.state.settings)
+    webauthn.require_matching_origin(request, rid)
+    ip = client_ip(request)
+    with credential_attempt(request, f"reauth-user:{principal.user_id}", f"reauth-ip:{ip}"):
+        async with request.app.state.db_pool.connection() as conn:
+            return await webauthn.begin_register(conn, principal, rid)
+
+
+@router.post("/passkeys/register/finish", response_model=PasskeyOut)
+async def passkey_register_finish(
+    body: PasskeyRegisterFinishRequest, request: Request, principal: HumanUser
+):
+    require_privileged_origin(request)
+    rid = webauthn.require_rp_id(request.app.state.settings)
+    origin = webauthn.require_matching_origin(request, rid)
+    ip = client_ip(request)
+    with credential_attempt(request, f"reauth-user:{principal.user_id}", f"reauth-ip:{ip}"):
+        async with request.app.state.db_pool.connection() as conn:
+            return await webauthn.finish_register(
+                conn, principal, rid, origin, body.credential, body.name
+            )
+
+
+@router.delete("/passkeys/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_passkey(credential_id: UUID, request: Request, principal: HumanUser) -> None:
+    webauthn.require_rp_id(request.app.state.settings)
+    async with request.app.state.db_pool.connection() as conn:
+        if not await webauthn.delete_credential(conn, principal.user_id, credential_id):
+            raise NotFound("not_found")
 
 
 @router.get("/sessions", response_model=SessionList)

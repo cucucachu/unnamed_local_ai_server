@@ -36,7 +36,12 @@ function text(): string {
 const flush = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 
 beforeEach(async () => {
-  fetchMock = jest.fn();
+  fetchMock = jest.fn((url: string) => {
+    if (String(url).includes('/api/auth/status')) {
+      return respond(200, { setup_required: false, authenticated: true, webauthn: { origin_ok: false } });
+    }
+    return Promise.reject(new Error(`unexpected ${url}`));
+  });
   global.fetch = fetchMock as unknown as typeof fetch;
   await act(async () => {
     renderer = create(
@@ -65,10 +70,10 @@ describe('StepUpProvider', () => {
   });
 
   it('prompts for the password, POSTs /api/auth/step-up, and retries the call', async () => {
-    const call = jest.fn().mockRejectedValueOnce(new ApiError(403, 'step_up_required')).mockResolvedValueOnce('done');
+    const request = jest.fn().mockRejectedValueOnce(new ApiError(403, 'step_up_required')).mockResolvedValueOnce('done');
     let result: Promise<unknown> = Promise.resolve();
     act(() => {
-      result = withStepUp(call);
+      result = withStepUp(request);
     });
     await flush();
     expect(renderer!.root.findAll((node) => node.props.testID === 'step-up-modal').length).toBeGreaterThan(0);
@@ -79,10 +84,12 @@ describe('StepUpProvider', () => {
     await flush();
 
     await expect(result).resolves.toBe('done');
-    const [url, init] = fetchMock.mock.calls[0];
+    const stepUpCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/api/auth/step-up'));
+    expect(stepUpCall).toBeDefined();
+    const [url, init] = stepUpCall!;
     expect(url).toContain('/api/auth/step-up');
     expect(JSON.parse(init.body)).toEqual({ password: 'hunter22' });
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(renderer!.root.findAll((node) => node.props.testID === 'step-up-modal')).toHaveLength(0);
   });
 
@@ -110,7 +117,7 @@ describe('StepUpProvider', () => {
     await act(async () => byTestId('step-up-cancel').props.onPress());
 
     await expect(result).resolves.toBeInstanceOf(StepUpCancelledError);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/auth/step-up'))).toBe(false);
   });
 
   it('concurrent calls share one prompt', async () => {
@@ -128,6 +135,58 @@ describe('StepUpProvider', () => {
     await flush();
 
     await expect(results).resolves.toEqual(['a', 'b']);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/api/auth/step-up')).length).toBe(1);
+  });
+
+  it('offers a passkey button and retries after navigator.credentials.get', async () => {
+    const { Platform } = require('react-native');
+    Platform.OS = 'web';
+    const get = jest.fn().mockResolvedValue({
+      id: 'cred',
+      rawId: new Uint8Array([1]).buffer,
+      type: 'public-key',
+      response: {
+        clientDataJSON: new Uint8Array([2]).buffer,
+        authenticatorData: new Uint8Array([3]).buffer,
+        signature: new Uint8Array([4]).buffer,
+        userHandle: null,
+      },
+      getClientExtensionResults: () => ({}),
+    });
+    Object.defineProperty(navigator, 'credentials', {
+      configurable: true,
+      value: { create: jest.fn(), get },
+    });
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/api/auth/status')) {
+        return respond(200, {
+          setup_required: false,
+          authenticated: true,
+          webauthn: { rp_id: 'localhost', origin_ok: true },
+        });
+      }
+      if (String(url).includes('/api/auth/passkey/step-up/begin')) {
+        return respond(200, { challenge: 'Y2hhbGxlbmdl', rpId: 'localhost', allowCredentials: [] });
+      }
+      if (String(url).includes('/api/auth/passkey/step-up/finish')) {
+        return respond(200, { stepped_up_until: '2026-01-01T00:05:00Z' });
+      }
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+
+    const request = jest.fn().mockRejectedValueOnce(new ApiError(403, 'step_up_required')).mockResolvedValueOnce('done');
+    let result: Promise<unknown> = Promise.resolve();
+    act(() => {
+      result = withStepUp(request);
+    });
+    await flush();
+    expect(renderer!.root.findAll((node) => node.props.testID === 'step-up-passkey').length).toBeGreaterThan(0);
+
+    await act(async () => byTestId('step-up-passkey').props.onPress());
+    await flush();
+
+    await expect(result).resolves.toBe('done');
+    expect(get).toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

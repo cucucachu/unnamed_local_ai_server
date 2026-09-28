@@ -198,8 +198,10 @@ platform's `/internal/*` routes are never routed by Caddy.
   (`403 public_origin`; M15-02). Public HTTPS (M15-05) does not invent a
   second policy.
 - **Step-up**: admin endpoints require `act=user`, `role=admin`, and
-  `stepped_up_until > now` (re-enter password, or passkey in domain mode;
-  5-minute window).
+  `stepped_up_until > now` (re-enter password, or a passkey in domain mode
+  / when `WEBAUTHN_RP_ID` is set; 5-minute window, this session). Native
+  clients (`X-HomeAI-Client: native`) stay on password (+ optional TOTP)
+  and are exempt from `require_passkeys` until M15-06 device pairing.
 - Login attempts are rate-limited per username and per client IP.
 
 ### Identity token (Caddy → services)
@@ -1268,6 +1270,33 @@ with that app's context.
 > local CA. Live check: `scripts/verify_caddy_domain.sh` (compose config
 > + Caddyfile validate; does not obtain a real cert; does not set
 > `HOMEAI_DOMAIN` on the live stack).
+>
+> **As built (M15-04)** — browser passkeys (WebAuthn) when an RP ID is
+> configured: `WEBAUTHN_RP_ID` if set, else `HOMEAI_DOMAIN`. Both empty
+> (the default), or `homeai.local`, means passkeys are **off**
+> (`409 {"detail":"domain_required"}` on register/login/step-up passkey
+> routes). Never use `homeai.local` as the RP ID. `http://localhost` is a
+> secure context: tests set `WEBAUTHN_RP_ID=localhost` without setting
+> `HOMEAI_DOMAIN` (setting the domain would start ACME). The browser
+> origin must match the RP ID (`X-Forwarded-Host` / `Host` hostname; a
+> mismatch is `422 passkey_rp_mismatch`). Attestation is `none`.
+> Credentials and short-lived challenges live in Postgres
+> (`webauthn_credentials`, `webauthn_challenges`, migration `0009`).
+> Register is LAN/VPN-only (`403 public_origin`) and human-only
+> (`403 agent_not_allowed`); list/revoke stay allowed from public (like
+> WireGuard revoke). Login and step-up passkey paths are not origin-blocked
+> (M15-05 will tighten public login). Password login/setup/invite stay as
+> they are when passkeys are optional. If an admin sets
+> `users.require_passkeys` (needs an RP ID, else `422 domain_required`),
+> browser `POST /api/auth/login` with a password returns `403 passkey_required`
+> without checking the password; native is exempt. TOTP still applies after
+> a successful passkey assertion. Password step-up remains as a fallback
+> unless passkeys are required. `GET /api/auth/status` includes
+> `webauthn: { rp_id, origin_ok }` (no secrets). Live check:
+> `scripts/e2e/passkey_browser_smoke.sh` (Playwright CDP virtual
+> authenticator through Caddy at `http://localhost`; restores
+> `WEBAUTHN_RP_ID` empty afterwards). Public HTTPS / passkey-only-when-public
+> is M15-05; native device pairing is M15-06.
 >
 > Settings → Remote access lists devices, creates a named profile (QR +
 > wg-quick text **once**), and revokes with confirm. Routes

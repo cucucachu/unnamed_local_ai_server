@@ -15,6 +15,7 @@ SHIPPED = [
     (6, "app_sharing"),
     (7, "app_exports"),
     (8, "wireguard"),
+    (9, "webauthn"),
 ]
 
 
@@ -60,11 +61,12 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0006_app_sharing.sql",
             "0007_app_exports.sql",
             "0008_wireguard.sql",
+            "0009_webauthn.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
         tables |= {"app_migrations", "app_catalog"}
-        tables |= {"wireguard_peers"}
+        tables |= {"wireguard_peers", "webauthn_credentials", "webauthn_challenges"}
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
 

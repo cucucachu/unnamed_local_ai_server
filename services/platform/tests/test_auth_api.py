@@ -35,7 +35,9 @@ async def test_setup_code_flow(platform):
     code_file = platform.data_dir / "setup-code"
     assert stat.S_IMODE(code_file.stat().st_mode) == 0o600
     status = (await client.get("/api/auth/status")).json()
-    assert status == {"setup_required": True, "authenticated": False}
+    assert status["setup_required"] is True
+    assert status["authenticated"] is False
+    assert status["webauthn"]["origin_ok"] is False
 
     wrong = await client.post("/api/auth/setup", json=_setup_body("AAAA-AAAA-AAAA-AAAA"))
     assert (wrong.status_code, wrong.json()) == (401, {"detail": "invalid_setup_code"})

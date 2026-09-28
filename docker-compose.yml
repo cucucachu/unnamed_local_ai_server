@@ -376,6 +376,12 @@ services:
       # Settings; no extra .env required. VPN is matched first.
       ORIGIN_VPN_SUBNETS: ${ORIGIN_VPN_SUBNETS:-10.13.13.0/24}
       ORIGIN_LAN_SUBNETS: "${ORIGIN_LAN_SUBNETS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1,fc00::/7,fe80::/10}"
+      # M15-04: WebAuthn RP ID. WEBAUTHN_RP_ID wins if set, else HOMEAI_DOMAIN.
+      # Both empty → passkeys off. Tests may set WEBAUTHN_RP_ID=localhost
+      # without HOMEAI_DOMAIN. Never a secret. Do not set HOMEAI_DOMAIN just
+      # to try passkeys (that would start ACME).
+      HOMEAI_DOMAIN: ${HOMEAI_DOMAIN:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
     healthcheck:
       # python:3.12-slim has no curl.
       test:

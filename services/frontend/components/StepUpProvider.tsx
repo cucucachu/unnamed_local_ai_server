@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
-import { stepUp } from '@/lib/auth';
+import { beginPasskeyStepUp, finishPasskeyStepUp, getAuthStatus, passkeysAvailable, stepUp } from '@/lib/auth';
 import { platformErrorMessage } from '@/lib/platform';
 import { withStepUp as runWithStepUp } from '@/lib/stepUp';
 import { theme } from '@/lib/theme';
+import { getCredential, passkeysSupported } from '@/lib/webauthn';
 
 interface StepUpContextValue {
   /** `fn`, retried once after a password prompt if it answers `403
@@ -66,6 +67,19 @@ function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offerPasskey, setOfferPasskey] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAuthStatus()
+      .then((status) => {
+        if (!cancelled) setOfferPasskey(passkeysSupported() && passkeysAvailable(status.webauthn));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit() {
     if (busy || !password) return;
@@ -80,12 +94,31 @@ function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
     }
   }
 
+  async function handlePasskey() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const options = await beginPasskeyStepUp();
+      const credential = await getCredential(options);
+      await finishPasskeyStepUp(credential);
+      onDone(true);
+    } catch (caught) {
+      setError(platformErrorMessage(caught));
+      setBusy(false);
+    }
+  }
+
   return (
     <Modal visible transparent animationType="fade" onRequestClose={() => onDone(false)}>
       <AppKeyboardAvoidingView style={styles.overlay}>
         <View style={styles.card} testID="step-up-modal">
-          <Text style={styles.title}>Confirm your password</Text>
-          <Text style={styles.subtitle}>Admin changes need your password again (good for 5 minutes).</Text>
+          <Text style={styles.title}>Confirm it's you</Text>
+          <Text style={styles.subtitle}>
+            {offerPasskey
+              ? 'Admin changes need your password or a passkey again (good for 5 minutes).'
+              : 'Admin changes need your password again (good for 5 minutes).'}
+          </Text>
           <TextInput
             style={styles.input}
             value={password}
@@ -116,6 +149,17 @@ function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
             >
               <Text style={styles.buttonText}>Cancel</Text>
             </Pressable>
+            {offerPasskey ? (
+              <Pressable
+                style={styles.button}
+                onPress={handlePasskey}
+                disabled={busy}
+                accessibilityRole="button"
+                testID="step-up-passkey"
+              >
+                {busy ? <ActivityIndicator color={theme.text} /> : <Text style={styles.buttonText}>Passkey</Text>}
+              </Pressable>
+            ) : null}
             <Pressable
               style={[styles.button, styles.primaryButton, (!password || busy) && styles.buttonDisabled]}
               onPress={handleSubmit}

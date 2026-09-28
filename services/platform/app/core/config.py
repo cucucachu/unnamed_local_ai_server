@@ -82,6 +82,12 @@ class Settings(BaseSettings):
         "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1,fc00::/7,fe80::/10"
     )
 
+    # M15-04: WebAuthn RP ID. `WEBAUTHN_RP_ID` wins if set, else
+    # `HOMEAI_DOMAIN`. Both empty (or `homeai.local`) → passkeys off.
+    # Tests may set `WEBAUTHN_RP_ID=localhost` without a domain. Never a secret.
+    homeai_domain: str = ""
+    webauthn_rp_id: str = ""
+
     @field_validator("origin_vpn_subnets", "origin_lan_subnets")
     @classmethod
     def _origin_cidrs(cls, value: str) -> str:
