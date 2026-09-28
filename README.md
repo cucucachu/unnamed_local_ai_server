@@ -262,7 +262,7 @@ Users created with the CLI **don't** complete bootstrap — the setup code keeps
 
 ## Backups
 
-**What's covered**: the files directory (`FILES_DIR` — every file the agent/you create, upload, or edit), both Postgres databases (`homeai`: thread/message history; `homeai_platform`: users, sessions, invites, spaces and memberships), and the `platform-data` volume (the platform's token-signing key, plus the setup code until the first admin exists). Together these are the only genuinely irreplaceable state this stack holds.
+**What's covered**: the spaces directory (`SPACES_DIR` — every personal and shared space's files, whatever the agent or you create, upload, or edit), the legacy files directory (`FILES_DIR` — pre-M11 files until the platform migrates them into the first admin's personal space, and `execute_code`'s `/files` until M11-03), both Postgres databases (`homeai`: thread/message history; `homeai_platform`: users, sessions, invites, spaces and memberships), and the `platform-data` volume (the platform's token-signing key, plus the setup code until the first admin exists). Together these are the only genuinely irreplaceable state this stack holds.
 
 **What's not covered**: model weights (`services/model-runner/models/*.gguf` — multi-GB, re-downloadable any time via `./services/model-runner/fetch-model.sh`, not user data) and `.env` (holds `POSTGRES_PASSWORD` — a secret, deliberately not swept into a backup dir; back it up yourself, out of band, if you want to). v1 backup is a full local mirror only — no off-site/cloud copy, no encryption, no incremental snapshots (see `infra/host/backup-files.sh`'s docstring and M6-03's ticket for the explicit out-of-scope list).
 
@@ -272,7 +272,7 @@ Users created with the CLI **don't** complete bootstrap — the setup code keeps
 sudo infra/host/backup-files.sh
 ```
 
-Mirrors `FILES_DIR` into `$BACKUP_DIR/files` (`rsync -a --delete` — exact mirror, not additive); if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` and `$BACKUP_DIR/pg/homeai_platform-<date>.sql.gz` (keeps the last 14 of each by count; skipped with a warning, not an error, if the stack is down); and mirrors the `homeai_platform-data` volume into `$BACKUP_DIR/platform-data` (root-only, `0700` — it contains the private signing key; works with the stack down too). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
+Mirrors `SPACES_DIR` into `$BACKUP_DIR/spaces` (owners and modes kept, so it's as private as the original) and `FILES_DIR` into `$BACKUP_DIR/files` (`rsync -a --delete` — exact mirrors, not additive); if the stack is up, dumps Postgres into `$BACKUP_DIR/pg/homeai-<date>.sql.gz` and `$BACKUP_DIR/pg/homeai_platform-<date>.sql.gz` (keeps the last 14 of each by count; skipped with a warning, not an error, if the stack is down); and mirrors the `homeai_platform-data` volume into `$BACKUP_DIR/platform-data` (root-only, `0700` — it contains the private signing key; works with the stack down too). `BACKUP_DIR` defaults to `/srv/homeai/backups` — override in `.env`.
 
 **Automatic daily backups** (03:00, via a systemd timer):
 
@@ -287,6 +287,7 @@ systemctl list-timers homeai-backup.timer            # check it's scheduled
 ```bash
 # Files: rsync back (stop the stack first so nothing's writing to it mid-restore)
 docker compose down
+sudo rsync -a --delete "$BACKUP_DIR/spaces/" "$SPACES_DIR/"
 sudo rsync -a --delete "$BACKUP_DIR/files/" "$FILES_DIR/"
 docker compose up -d
 
