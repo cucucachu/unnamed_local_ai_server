@@ -14,6 +14,7 @@ import docker
 from fastapi import FastAPI
 
 from app.api import router
+from app.builds import BuildRunner
 from app.core.config import Settings
 from app.delegation import DelegationVerifier, JwksDelegationVerifier, http_jwks_fetcher
 from app.grants import GrantsClient, HttpGrantsClient
@@ -63,6 +64,8 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client = docker_client_override or docker.from_env()
         app.state.session_manager = SessionManager(client, app.state.settings)
+        app.state.build_runner = BuildRunner(client, app.state.settings)
+        await app.state.build_runner.remove_stale()
         reaper_task = asyncio.create_task(reap_loop(app.state.session_manager))
         try:
             yield
