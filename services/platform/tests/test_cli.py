@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from app import cli
 from app.core import passwords
 from app.db.migrate import run_migrations
+from tests.app_packages import manifest, write_package
 from tests.conftest import make_settings
 
 
@@ -151,3 +152,37 @@ def test_spaces_commands(run, settings, chowns):
         "error: slug_taken\n",
     )
     assert run("create-space", "x", "--owner", "ghost")[::2] == (1, "error: not_found\n")
+
+
+def test_app_commands(run, settings, chowns):
+    for name in ("e2e-alice", "e2e-bob"):
+        assert run("create-user", name, "--password-stdin", stdin="long enough\n")[0] == 0
+    run("create-space", "e2e-family", "--owner", "e2e-alice")
+    run("add-member", "e2e-family", "e2e-bob", "--role", "viewer")
+    listed = {s["slug"]: s for s in json.loads(run("list-spaces", "--json")[1])}
+    home = settings.platform_spaces_dir / listed["e2e-alice"]["id"] / "files"
+    write_package(home / "Apps" / "hello")
+
+    code, out, err = run("register-app", "e2e-alice", "/personal/Apps/hello")
+    assert code == 0, err
+    assert out.startswith("registered app hello 1.0.0 (id ")
+    (app,) = json.loads(run("list-apps", "--json")[1])
+    assert (app["slug"], app["space"], app["instances"]) == ("hello", "e2e-alice", 0)
+
+    code, out, err = run("install-app", "e2e-alice", str(app["id"]))
+    assert code == 0, err
+    assert out.startswith("installed hello in e2e-alice (instance ")
+    assert json.loads(run("list-apps", "--json")[1])[0]["instances"] == 1
+    assert "hello" in run("list-apps")[1]
+
+    # The CLI goes through the same space checks as the API.
+    assert run("install-app", "e2e-bob", str(app["id"]), "--space", "e2e-family")[::2] == (
+        1,
+        "error: insufficient_role\n",
+    )
+    assert run("install-app", "e2e-alice", "nope")[::2] == (1, "error: invalid_app_id\n")
+    write_package(home / "Apps" / "broken", doc=manifest("other"), files={})
+    code, _, err = run("register-app", "e2e-alice", "/personal/Apps/broken")
+    assert code == 1
+    assert err.startswith("error: invalid_app\n")
+    assert "  app.json /slug: " in err and "  AGENT.md: AGENT.md is missing" in err

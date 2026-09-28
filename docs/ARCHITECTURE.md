@@ -751,7 +751,9 @@ what another doc says it should be.
   M11-01: the files and media API over virtual paths (`/personal/…`,
   `/spaces/<slug>/…`) that the Files tab uses and that M11-02's agent
   backend will call, and the one-shot legacy `FILES_DIR` migration (off by
-  default). It also holds the Ed25519 signing key every
+  default). As of M12-02: the app registry — the `app.json` schema and
+  package check, apps / versions / instances, and each instance's
+  `apps/<instance_id>/` dir (§3 "Apps"). It also holds the Ed25519 signing key every
   platform token is signed with and serves the public half as a JWKS.
   API contract: §3 "Platform API".
 - **Image/base**: `python:3.12-slim` + `uv`. Dockerfile:
@@ -847,7 +849,9 @@ what another doc says it should be.
   `python` is the venv's, and it needs nothing writable):
   `docker compose exec platform python -m app.cli
   {create-user,reset-password,set-role,disable-user,enable-user,list-users,
-  create-space,add-member,list-spaces}`
+  create-space,add-member,list-spaces,register-app,install-app,list-apps}`
+  (the app commands act *as* a named user, through the same space checks
+  as the API)
   — see `README.md` "Accounts and recovery".
 - **Migrations**: `services/platform/app/db/migrations/NNNN_name.sql`,
   forward-only, applied by `app/db/migrate.py` in one transaction after
@@ -857,7 +861,8 @@ what another doc says it should be.
   startup error. `0001_init` creates `schema_migrations` and
   `platform_state` (key → JSONB); `0002_accounts` creates `users`,
   `sessions`, `invites`; `0003_spaces` creates `spaces`, `space_members`,
-  and the personal-space member trigger.
+  and the personal-space member trigger; `0004_apps` creates `apps`,
+  `app_versions`, `app_instances` (§3 "Apps").
 - **Healthcheck**: `GET /internal/health` via the image's `python`
   (`SELECT 1` against the pool; `503` if the database is unreachable).
 - **Env vars consumed** (cross-checked against `app/core/config.py`):
@@ -902,11 +907,18 @@ what another doc says it should be.
   deepagents 0.7.11's `FilesystemBackend`), `test_fsops.py` (real
   ownership and modes as root in a container, like `test_storage.py`),
   `test_legacy.py` (off by default, waits for bootstrap, idempotent,
-  collisions, resume). Unprivileged
+  collisions, resume). M12-02: `test_manifest.py` (the schema — good and
+  bad manifests, reserved `exports`/`reads`, pointers — and the package
+  layout: required files, route rules, action names, symlinks),
+  `test_apps_api.py` (registration and install owner/editor/viewer/
+  non-member × user/agent, source-path rules, diagnostics, visibility,
+  validate, one instance per app and space, instance dir + trash, the
+  reserved `Apps` folder); `test_storage.py` also checks instance and trash
+  dirs as root. Unprivileged
   tests record space-dir chowns via the autouse `chowns` fixture instead
   of performing them. Live: `scripts/e2e/platform_auth_smoke.sh`,
   `scripts/e2e/platform_spaces_smoke.sh`,
-  `scripts/e2e/platform_files_smoke.sh`.
+  `scripts/e2e/platform_files_smoke.sh`, `scripts/e2e/platform_apps_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
@@ -1276,9 +1288,12 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
 
 - JSON in and out. Timestamps are ISO 8601 with offset; ids are UUIDs.
 - **Every error** body is `{"detail": "<code>"}` with a stable, lower-snake
-  `code` (the one exception: a malformed body — wrong types, missing
-  fields — is `422 {"detail": "invalid_request", "errors": [{"loc": [...],
-  "msg": "..."}]}`). Status meanings: `401` no valid credential; `403`
+  `code`. Exceptions, each adding fields next to `detail`: a malformed
+  body — wrong types, missing fields — is `422 {"detail":
+  "invalid_request", "errors": [{"loc": [...], "msg": "..."}]}`; agent
+  file-tool failures add `message` (see "Files"); an app package that fails
+  validation is `422 {"detail": "invalid_app", "diagnostics":
+  [Diagnostic]}` (see "Apps"). Status meanings: `401` no valid credential; `403`
   authenticated but not allowed; `404` unknown id; `409` conflicts with
   current state; `422` a value breaks a rule; `429` rate limited (with a
   `Retry-After: <seconds>` header).
@@ -1497,12 +1512,20 @@ is a query parameter unless the request column says otherwise.
 | `POST /api/platform/files/upload` | write | multipart: `path` (target dir) + one or more `file` parts | `201 {"uploaded": [vpath]}`. Stored under each part's basename; existing files are overwritten; streamed to disk. | `404 not_found` (dir missing), `422 invalid_filename` (empty, `.`, `..`), `409 is_a_directory` |
 | `GET /api/platform/files/download` | read | `?path=` | `200` bytes, `Content-Disposition: attachment` | `404 not_found` (missing, a dir, or not a regular file) |
 | `POST /api/platform/files/mkdir` | write | `{"path"}` | `201 {"path"}` — `mkdir -p`; an existing dir is fine | `409 not_a_directory`/`already_exists` (a file in the way), `403 read_only` |
-| `POST /api/platform/files/move` | write on both | `{"src", "dst"}` (`dst` is the new full path) | `200 {"src", "dst"}`; within or across spaces | `404 not_found` (src), `409 already_exists` (dst), `404 parent_not_found` (dst's parent), `422 invalid_destination` (into itself), `403 read_only` (a space root either side) |
+| `POST /api/platform/files/move` | write on both | `{"src", "dst"}` (`dst` is the new full path) | `200 {"src", "dst"}`; within or across spaces | `404 not_found` (src), `409 already_exists` (dst), `404 parent_not_found` (dst's parent), `422 invalid_destination` (into itself), `403 read_only` (a space root either side), `403 reserved` (src is a space's top-level `Apps` folder) |
 | `POST /api/platform/files/rename` | write | `{"path", "name"}` | `200 {"src", "dst"}` — a move within the same dir | move's errors, `422 invalid_name` (empty, `.`, `..`, `/`, NUL) |
 | `POST /api/platform/files/copy` | write on both | `{"src", "dst"}` | `200 {"src", "dst"}`; dirs recursively, symlinks inside a copied tree are copied as links; a whole space root may be copied | move's errors except `read_only` on `src` |
-| `DELETE /api/platform/files` | write | `?path=` | `204`; dirs recursively; a symlink is removed, never its target | `404 not_found`, `403 read_only` (a space root) |
+| `DELETE /api/platform/files` | write | `?path=` | `204`; dirs recursively; a symlink is removed, never its target | `404 not_found`, `403 read_only` (a space root), `403 reserved` (a space's top-level `Apps` folder) |
 | `GET`/`HEAD /api/platform/files/stream` | read | `?path=`, optional `Range: bytes=a-b` / `a-` / `-n` | `200` whole file or `206` + `Content-Range: bytes a-b/size`; always `Accept-Ranges: bytes`, `Cache-Control: no-store`, a guessed `Content-Type`. A non-`bytes` unit or a multi-range request gets the whole file (200). | `416` + `Content-Range: bytes */size` (malformed or unsatisfiable `bytes=` range, or an empty file), `404 not_found` |
 | `GET /api/platform/files/thumbnail` | read | `?path=` (a video) | `200 image/jpeg` poster frame, `Cache-Control: private, max-age=86400`; generated once per path+mtime+size | `415 unsupported_media` (not a video extension), `404 not_found`, `500 thumbnail_failed` (ffmpeg failed) |
+
+*Reserved `Apps` folder* (M12-02): the top-level `Apps` directory of every
+space (`/personal/Apps`, `/spaces/<slug>/Apps`) holds app sources, so
+delete, rename and move refuse it with `403 reserved` (after the role
+check, so a viewer still gets `insufficient_role`). Anyone with write can
+create it (`mkdir`), and registering an app creates it if missing. Copying
+it, and everything inside it, are ordinary operations; a *file* or symlink
+named `Apps` isn't protected, so it can be cleared away.
 
 Agent-backend routes — the server half of M11-02's `PlatformFilesBackend`,
 matching `deepagents==0.7.11`'s `FilesystemBackend` (`app/core/agentfs.py`
@@ -1537,6 +1560,82 @@ relative to `path`.
   - maps HTTP errors to deepagents' error strings and `FileOperationError` codes. For example, a 404 on read becomes `Error: File '<path>' not found`;
   - adds the trailing `/` on directories in `ls`.
 - **Neither side** supports deepagents' `context_lines` for grep, which the agent tool doesn't expose.
+
+**Apps** (`app/core/manifest.py`, `app/core/apps.py`,
+`app/api/external/apps.py`; M12-02; design in `docs/PLATFORM.md` §7).
+
+*Package*: an app is the folder `/<space>/Apps/<slug>/` of its source
+space, containing `app.json`, `AGENT.md`, `schema.sql` (may be empty),
+`app/_layout.tsx` and `app/index.tsx`, optionally `actions/*.sql`, plus
+any other folders (components, helpers). Checked here: `app.json` against
+the schema below and its `slug` equal to the folder name; the required
+files are regular files (symlinks refused); under `app/` only `.ts`/`.tsx`
+files (not `.d.ts`), segments a name (`^[A-Za-z0-9][A-Za-z0-9_-]*$`),
+`index`, `[param]`, or a final-file `[...rest]`, the one `app/_layout.tsx`
+(no nested layouts, `(group)` folders or `+special` files), no two files
+for the same route and no two differently named dynamic routes in one
+folder; `actions/` holds only files named `^[a-z][a-zA-Z0-9_]*\.sql$`.
+Dotfiles are ignored; at most 1000 entries are walked and 50 diagnostics
+returned. Content (imports, types, SQL) is the builder's (M12-04).
+
+*`app.json` schema* (JSON Schema draft 2020-12, served at `GET
+/api/platform/apps/schema`): required `name` (1–64 chars), `slug`
+(`^[a-z0-9][a-z0-9-]{0,39}$`), `version` (semver, e.g. `1.0.0`),
+`homeai`; other top-level (Expo) keys are allowed and ignored. `homeai` is
+strict (unknown keys rejected): required `sdk` (one of `"1"`), `icon`
+(vector-icon name, `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 64); optional
+`description` (≤ 500), `permissions` (object; SDK 1 defines no keys, so it
+must be `{}`), `exports` / `reads` (reserved until M14-04: arrays that must
+be empty). Nodes carry an `errorMessage` (the ajv-errors keyword) with the
+sentence the validator reports.
+
+*Objects*:
+
+- `Diagnostic`: `{"file": str (relative to the package; "" for the package
+  itself), "path": JSON pointer into that file ("" for non-JSON files or
+  the whole file; a missing property's pointer names the property),
+  "message": str}`.
+- `AppVersion`: `{"id", "version" (app.json's), "kind":
+  "working"|"published", "commit": str|null (M13), "manifest": object,
+  "bundle_path": str|null (M12-04), "created_at", "published_at": ts|null}`.
+- `App`: `{"id", "slug", "name", "source_space_id", "source_path":
+  vpath|null, "working_version": AppVersion|null, "created_by": id|null,
+  "created_at", "archived_at": ts|null}`. `source_path` is the virtual
+  path as the source space's members see it (`/personal/Apps/<slug>` or
+  `/spaces/<s>/Apps/<slug>`, no trailing slash). `source_path` and
+  `working_version` are `null` when the caller sees the app only through
+  an install in one of their spaces (not a member of the source space).
+- `Instance`: `{"id", "app_id", "space_id", "tracks": "working"|<version
+  id>, "installed_by": id|null, "granted_permissions": object,
+  "created_at", "app": {"id", "slug", "name", "version", "icon"}}` (`app`
+  from the tracked version). `granted_permissions` is the manifest's
+  `permissions` at install (always `{}` for now).
+
+*Visible apps* (caller): apps whose source space they can read, plus apps
+with a live instance in a space they belong to; archived apps and apps
+whose source space is archived and have no such instance are hidden.
+
+All routes: guard *user* — an agent delegation has its user's rights here
+(PLATFORM D6); space errors as in "Spaces authorization".
+
+| Method + path | Need | Request | Success | Errors |
+|---|---|---|---|---|
+| `GET /api/platform/apps/schema` | — | — | `200` the `app.json` JSON Schema | — |
+| `GET /api/platform/apps` | — | — | `200 {"apps": [App]}` — visible apps, by name | — |
+| `POST /api/platform/apps` | write on the source space | `{"source_path"}` — exactly `/personal/Apps/<slug>` or `/spaces/<s>/Apps/<slug>` (trailing slash optional) | `201 {"app": App, "valid": true, "diagnostics": []}`; creates the app and its `working` version from `app.json`. The space's `Apps` folder is created first if missing (`<caller uid>:<gid>` `2770`). | `422 invalid_source_path` (any other shape, a slug that isn't a valid slug, or a symlinked `Apps`/app folder), space errors, `409 apps_folder_not_a_directory`, `422 invalid_app` + `diagnostics` (incl. a missing folder), `409 app_exists` (that slug is already registered in that space) |
+| `GET /api/platform/apps/{id}` | visible | — | `200 App` | `404 not_found` |
+| `POST /api/platform/apps/{id}/validate` | write on the source space | — | `200 {"app": App, "valid": bool, "diagnostics": [Diagnostic]}`. When valid, the working version takes the current `app.json` (and the app its `name`); when not, nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors |
+| `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
+| `POST /api/platform/spaces/{id}/instances` | write | `{"app_id", "tracks": "working" (default) \| <published version id>}` | `201 Instance`; creates `${SPACES_DIR}/<space_id>/apps/<instance_id>/` (`root:<gid>` `2770`) | space errors, `404 not_found` (app not visible), `422 working_requires_source_space` (`working` outside the app's source space), `422 invalid_tracks` (neither `working` nor a UUID), `422 unknown_version` (not a published version of this app), `409 already_installed` (one live instance per app and space) |
+| `DELETE /api/platform/spaces/{id}/instances/{instance_id}` | write | — | `204`; the row is kept with `uninstalled_at`, and the instance dir moves to `apps/.trash/<instance_id>-<UTC stamp>/` (its final snapshot; a missing dir is fine). The app can be installed again (a new instance). | space errors, `404 not_found` (no live instance with that id in that space) |
+
+*Tables* (`0004_apps`): `apps` (`UNIQUE (source_space_id, slug)`),
+`app_versions` (at most one `working` per app; published versions unique
+per `(app_id, version)`; `published_at` set iff `published`),
+`app_instances` (`tracks` `working`|`version` + `version_id`, set iff
+`version`; `uninstalled_at`; unique `(app_id, space_id)` among live
+rows). Nothing is hard-deleted by the product; the `ON DELETE CASCADE`s
+from spaces and apps exist for test and e2e cleanup.
 
 **`/internal/*`** (never routed by Caddy)
 
@@ -2314,6 +2413,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/`/`apps/` are `0:<gid> 2770`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
+| `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2770` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Chat (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |

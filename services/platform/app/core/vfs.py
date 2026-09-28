@@ -19,6 +19,7 @@ than resolved, so a path can't hop between spaces lexically either.
 
 from __future__ import annotations
 
+import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -32,6 +33,8 @@ from app.core.storage import SpaceStorage
 
 PERSONAL = "personal"
 SPACES = "spaces"
+# Top-level folder of every space holding app sources (`/<space>/Apps/<slug>/`).
+APPS = "Apps"
 
 Kind = Literal["root", "spaces", "space"]
 
@@ -87,6 +90,19 @@ class Resolved:
     @property
     def is_space_root(self) -> bool:
         return self.kind == "space" and self.host_path == self.files_root
+
+    @property
+    def is_apps_folder(self) -> bool:
+        """The space's reserved top-level `Apps` directory (never deleted, renamed or moved).
+
+        A file or symlink squatting on the name isn't protected, so it can be cleared away.
+        """
+        if self.kind != "space" or self.host_path != self.files_root / APPS:
+            return False
+        try:
+            return stat.S_ISDIR(self.host_path.lstat().st_mode)
+        except FileNotFoundError:
+            return False
 
     def vpath_of(self, host: Path) -> str:
         """Virtual path of a host path inside this space's `files/` dir."""

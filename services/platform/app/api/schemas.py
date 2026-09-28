@@ -9,7 +9,7 @@ they produce specific error codes.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -325,3 +325,79 @@ class GlobOut(BaseModel):
     matches: list[GlobMatchOut]
     truncated: bool
     truncation_reason: Literal["budget"] | None
+
+
+# --- apps -------------------------------------------------------------------------
+
+
+class DiagnosticOut(BaseModel):
+    file: str
+    path: str
+    message: str
+
+
+class AppVersionOut(BaseModel):
+    id: UUID
+    version: str
+    kind: Literal["working", "published"]
+    commit: str | None
+    manifest: dict[str, Any]
+    bundle_path: str | None
+    created_at: datetime
+    published_at: datetime | None
+
+
+class AppOut(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    source_space_id: UUID
+    # Both None when the caller sees the app only through an install.
+    source_path: str | None
+    working_version: AppVersionOut | None
+    created_by: UUID | None
+    created_at: datetime
+    archived_at: datetime | None
+
+
+class AppList(BaseModel):
+    apps: list[AppOut]
+
+
+class AppRegisterRequest(BaseModel):
+    source_path: VPath
+
+
+class AppValidationOut(BaseModel):
+    app: AppOut
+    valid: bool
+    diagnostics: list[DiagnosticOut]
+
+
+class InstanceAppOut(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    version: str | None
+    icon: str | None
+
+
+class InstanceOut(BaseModel):
+    id: UUID
+    app_id: UUID
+    space_id: UUID
+    # "working", or the pinned published version's id.
+    tracks: str
+    installed_by: UUID | None
+    granted_permissions: dict[str, Any]
+    created_at: datetime
+    app: InstanceAppOut
+
+
+class InstanceList(BaseModel):
+    instances: list[InstanceOut]
+
+
+class InstallRequest(BaseModel):
+    app_id: UUID
+    tracks: Short = "working"

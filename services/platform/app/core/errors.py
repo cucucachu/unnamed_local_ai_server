@@ -24,6 +24,14 @@ class InvalidInput(PlatformError):
     """422: a well-formed request whose values break a rule (username format, ...)."""
 
 
+class InvalidApp(InvalidInput):
+    """422 `invalid_app`: an app package that fails validation; the body adds `diagnostics`."""
+
+    def __init__(self, diagnostics: list[dict[str, str]]) -> None:
+        super().__init__("invalid_app")
+        self.diagnostics = diagnostics
+
+
 class Conflict(PlatformError):
     """409: the request conflicts with current state (username taken, last admin, ...)."""
 
