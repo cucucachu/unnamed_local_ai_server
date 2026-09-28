@@ -169,9 +169,13 @@ async def test_thumbnail_served_from_cache(world: World, monkeypatch, tmp_path) 
     assert response.content == jpeg.read_bytes()
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg (in the platform image)")
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None, reason="needs ffmpeg: scripts/platform_image_tests.sh"
+)
 async def test_thumbnail_real_ffmpeg(world: World, monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(thumbnails, "thumbnail_cache_dir", lambda: tmp_path / "cache")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(thumbnails, "thumbnail_cache_dir", lambda: cache)
     clip = world.family_root / "clip.mp4"
     subprocess.run(  # noqa: ASYNC221 - fixture setup
         ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=64x48:rate=5",

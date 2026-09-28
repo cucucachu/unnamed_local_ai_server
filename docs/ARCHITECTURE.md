@@ -805,7 +805,8 @@ what another doc says it should be.
   the read-only root at runtime, with `--workers 1` (the rate limiter and
   the in-memory setup code are per-process). The image carries `ffmpeg`
   (Debian's) for video thumbnails, cached under `/tmp/media-thumbnails`
-  (the tmpfs, so a restart empties it).
+  (the tmpfs, so a restart empties it); it is installed in the
+  Dockerfile's `base` stage, which the ffmpeg tests also run in.
 - **Published port**: none.
 - **Internal port**: `8100`. Caddy routes `/api/auth/*` (no auth, since
   M10-06), `/api/platform/*` and `/ws/platform/*` (behind `forward_auth`
@@ -995,7 +996,12 @@ what another doc says it should be.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
   `postgres:17` container per session on a random loopback port (removed
-  afterwards) and gives each test a fresh database.
+  afterwards) and gives each test a fresh database. The host has no
+  `ffmpeg`, so the 7 tests that need a real one skip there; run them with
+  `scripts/platform_image_tests.sh` (the Dockerfile's `base` stage, your
+  uid, a throwaway Postgres on a private network via `TEST_PG_HOST`;
+  touches no compose service), which runs `test_thumbnails.py` and
+  `test_media_api.py` by default or any pytest arguments given.
 
 ### Host-level pieces (not containers)
 
