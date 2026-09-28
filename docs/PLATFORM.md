@@ -695,7 +695,7 @@ The sandbox config (`window.__homeai_config`, in the document) is
 
 > **As built (M12-06)** — the app host is in `services/frontend`
 > (`ARCHITECTURE.md` §3 "App host"): an **Apps** tab (installed instances
-> grouped by space, a placeholder until the M14 Home launcher) and a runner
+> grouped by space; M14-02 turned this into the Home launcher) and a runner
 > at `/apps/<instance_id>`. The runner fixes the instance id from the route
 > and uses `@homeai/sdk/host` unchanged: `platformForward(instanceId)` is the
 > only `forward` either transport gets, `readOnly` is the user's role in the
@@ -1117,6 +1117,17 @@ the platform image, described by the same manifest/`AGENT.md`/actions
 format, with privileged capabilities only image-shipped apps can hold. They
 render natively. Every app gets an "ask the agent" panel that opens a thread
 with that app's context.
+
+> **As built (M14-02)** — Home is a **native host screen**, not a sandboxed
+> system-app package (`services/frontend/src/app/(tabs)/apps/index.tsx`;
+> tab title Home; `/` redirects here). Chat, Files, and Settings stay native
+> host screens too: Settings moved from a sibling modal into the tab bar
+> (Home, Chat, Files, Settings). Home shows system tiles that open those
+> screens, installed apps grouped by space, a space switcher (All + each
+> live space), catalog, and update badges. Runner/catalog/install/update/info
+> stay under `/apps`. `app.json`/`AGENT.md` and privileged capabilities for
+> image-shipped apps are M14-03; this ticket does not invent that framework
+> or ship Chat/Files/Settings as packages.
 
 ## 8. Remote access
 

@@ -22,13 +22,13 @@ M2-06, the files UI in M3-05.
 
 ```
 src/app/_layout.tsx          root layout (dark theme, no header)
-src/app/(tabs)/_layout.tsx   tab navigator (Chat, Files)
-src/app/(tabs)/chat.tsx      placeholder — "Chat — coming M2-06"
-src/app/(tabs)/files.tsx     placeholder — "Files — coming M3-05"
+src/app/(tabs)/_layout.tsx   tab navigator (Home, Chat, Files, Settings)
+src/app/(tabs)/apps/         Home launcher (M14-02): system tiles + installed instances by space; [instanceId] is the app runner
+src/app/(tabs)/chat/         Chat tab (thread list + [threadId])
+src/app/(tabs)/files.tsx     Files tab
+src/app/(tabs)/settings/     Settings tab stack (M10-07 hub; a tab since M14-02): account, sessions, spaces, users + invites (admins)
 src/app/login.tsx            signed-out entry: Setup (bootstrap open) or Login
 src/app/invite.tsx           invite accept (/invite?token=…, homeai://invite?token=…)
-src/app/settings/            Settings modal stack (M10-07): hub (chat settings + links), account (name,
-                             password, TOTP), sessions, spaces/ (+ [spaceId] members), users + invites (admins)
 lib/platform.ts              platform /api/platform/* client (me, sessions, TOTP, spaces, members, admin)
 lib/stepUp.ts                withStepUp(): retry once after a password prompt on 403 step_up_required;
                              components/StepUpProvider.tsx owns the prompt for the Settings stack
@@ -39,7 +39,6 @@ lib/session.ts               in-memory session token + authHeaders() + onUnautho
 lib/tokenStore.ts            native token persistence (expo-secure-store); tokenStore.web.ts is a no-op
 components/AuthProvider.tsx  app-root auth state; AuthGate.tsx holds the app until status answers
 lib/chatSocket.ts             typed WS client for /ws/chat/{thread_id} (M2-06 imports its frame types)
-src/app/(tabs)/apps/         Apps tab (M12-06): installed instances by space; [instanceId] is the app runner
 components/AppRunner.tsx     runner: sandbox + /ws/platform/events relay + hot reload + error overlay
 components/AppSandbox.tsx    native sandbox (react-native-webview); AppSandbox.web.tsx is the iframe
 lib/appHost.ts               @homeai/sdk/host glue: bridge bound to one instance, sandbox document
@@ -52,8 +51,8 @@ lib/__tests__/               Jest (jest-expo) unit tests for the above
 
 The app asks the platform (`GET /api/auth/status`) who's signed in before
 showing anything. `src/app/_layout.tsx` guards routes with
-`Stack.Protected`: the tabs, media, and settings exist only while signed in,
-`/login` only while signed out, and `/invite` always. While the server still
+`Stack.Protected`: the tabs (Home, Chat, Files, Settings) and media exist
+only while signed in, `/login` only while signed out, and `/invite` always. While the server still
 wants its first admin, `/login` shows Setup (setup code from `docker compose
 logs platform` or `docker compose exec platform cat /data/platform/setup-code`),
 with a link to sign in instead for accounts made with the recovery CLI.

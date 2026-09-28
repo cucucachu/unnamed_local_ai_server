@@ -123,7 +123,7 @@ export default function ThreadListScreen() {
         options={{
           headerRight: () => (
             <View style={styles.headerButtons}>
-              {/* M8-02: opens the settings modal screen. */}
+              {/* Opens the Settings tab (M8-02 hub; a tab since M14-02). */}
               <Pressable
                 onPress={() => router.push('/settings')}
                 accessibilityRole="button"

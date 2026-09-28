@@ -1,30 +1,39 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Badge, Card, LoadState, SectionTitle, settingsStyles, ActionButton } from '@/components/SettingsUI';
 import { listInstalledApps, type Instance } from '@/lib/apps';
-import { isReadOnly } from '@/lib/platform';
+import { isReadOnly, type Space } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
+const ALL_SPACES = 'all';
+
 function appIcon(icon: string | null): IconName {
   return icon && icon in Ionicons.glyphMap ? (icon as IconName) : 'apps-outline';
 }
 
+function spaceLabel(space: Space): string {
+  return space.kind === 'personal' ? 'Personal' : space.name;
+}
+
 /**
- * Installed app instances, grouped by space. Catalog and update badges are
- * M14-01; the Home launcher (M14-02) still replaces this tab later.
+ * Home launcher (M14-02): native host screen, not a sandboxed system-app
+ * package (those manifests/privileged caps are M14-03). System tiles open
+ * the existing Chat, Files, and Settings host screens; installed apps stay
+ * grouped by space with a switcher, catalog entry, and update badges.
  * Tapping an instance opens the runner (`[instanceId].tsx`).
  * Reloads whenever the tab regains focus, so a newly installed app shows up.
  */
-export default function AppsScreen() {
+export default function HomeScreen() {
   const router = useRouter();
   const { data, error, reload } = useLoad(listInstalledApps);
+  const [spaceId, setSpaceId] = useState(ALL_SPACES);
 
   const focused = useRef(false);
   useFocusEffect(
@@ -42,22 +51,70 @@ export default function AppsScreen() {
     );
   }
 
-  const groups = data.filter((group) => group.instances.length > 0);
-  const updates = groups.reduce((n, group) => n + group.instances.filter((i) => i.update).length, 0);
+  const spaces = data.map((group) => group.space);
+  const selected = spaceId === ALL_SPACES || spaces.some((space) => space.id === spaceId) ? spaceId : ALL_SPACES;
+  const groups =
+    selected === ALL_SPACES
+      ? data.filter((group) => group.instances.length > 0)
+      : data.filter((group) => group.space.id === selected);
+  const updates = data.reduce((n, group) => n + group.instances.filter((i) => i.update).length, 0);
+  const installedEmpty = groups.every((group) => group.instances.length === 0);
 
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.body}
       refreshControl={<RefreshControl refreshing={false} onRefresh={reload} tintColor={theme.textMuted} />}
-      testID="apps-list"
+      testID="home-launcher"
     >
       <ActionButton
         label={updates ? `Catalog · ${updates} update${updates === 1 ? '' : 's'}` : 'Catalog'}
         onPress={() => router.push('/apps/catalog')}
         testID="apps-catalog"
       />
-      {groups.length === 0 ? (
+
+      {spaces.length > 1 ? (
+        <ScrollView
+          horizontal
+          nestedScrollEnabled
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.switcher}
+          testID="home-space-switcher"
+        >
+          <SpaceChip label="All" selected={selected === ALL_SPACES} onPress={() => setSpaceId(ALL_SPACES)} testID="home-space-all" />
+          {spaces.map((space) => (
+            <SpaceChip
+              key={space.id}
+              label={spaceLabel(space)}
+              selected={selected === space.id}
+              onPress={() => setSpaceId(space.id)}
+              testID={`home-space-${space.slug}`}
+            />
+          ))}
+        </ScrollView>
+      ) : null}
+
+      <View style={styles.group} testID="home-system">
+        <SectionTitle>System</SectionTitle>
+        <Card>
+          <SystemRow
+            icon="chatbubbles-outline"
+            title="Chat"
+            first
+            onPress={() => router.push('/chat')}
+            testID="home-open-chat"
+          />
+          <SystemRow icon="folder-outline" title="Files" onPress={() => router.push('/files')} testID="home-open-files" />
+          <SystemRow
+            icon="settings-outline"
+            title="Settings"
+            onPress={() => router.push('/settings')}
+            testID="home-open-settings"
+          />
+        </Card>
+      </View>
+
+      {installedEmpty ? (
         <View style={styles.empty} testID="apps-empty">
           <Ionicons name="apps-outline" size={40} color={theme.textMuted} />
           <Text style={styles.emptyTitle}>No apps yet</Text>
@@ -66,7 +123,7 @@ export default function AppsScreen() {
       ) : (
         groups.map(({ space, instances }) => (
           <View key={space.id} style={styles.group} testID={`apps-space-${space.slug}`}>
-            <SectionTitle>{space.kind === 'personal' ? 'Personal' : space.name}</SectionTitle>
+            <SectionTitle>{spaceLabel(space)}</SectionTitle>
             <Card>
               {instances.map((instance, index) => (
                 <AppRow
@@ -91,6 +148,59 @@ export default function AppsScreen() {
         ))
       )}
     </ScrollView>
+  );
+}
+
+function SpaceChip({
+  label,
+  selected,
+  onPress,
+  testID,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  testID: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.chip, selected && styles.chipSelected]}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      testID={testID}
+    >
+      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function SystemRow({
+  icon,
+  title,
+  first,
+  onPress,
+  testID,
+}: {
+  icon: IconName;
+  title: string;
+  first?: boolean;
+  onPress: () => void;
+  testID: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[settingsStyles.row, first && settingsStyles.firstRow]}
+      accessibilityRole="button"
+      testID={testID}
+    >
+      <Ionicons name={icon} size={22} color={theme.accent} />
+      <View style={settingsStyles.rowMain}>
+        <Text style={settingsStyles.rowTitle}>{title}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+    </Pressable>
   );
 }
 
@@ -146,6 +256,31 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     padding: 16,
     gap: 12,
+  },
+  switcher: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+  },
+  chipSelected: {
+    backgroundColor: theme.accent,
+    borderColor: theme.accent,
+  },
+  chipText: {
+    color: theme.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  chipTextSelected: {
+    color: theme.text,
   },
   group: {
     gap: 8,

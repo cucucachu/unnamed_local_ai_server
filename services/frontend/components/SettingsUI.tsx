@@ -6,7 +6,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { theme } from '@/lib/theme';
 
-/** Shared chrome for the Settings stack (`src/app/settings/`): a header
+/** Shared chrome for the Settings stack (`src/app/(tabs)/settings/`): a header
  * with a back (sub-screens) or close (the hub) button, and a scrolling,
  * keyboard-aware body capped to a phone-ish width on wide screens. */
 export function SettingsFrame({

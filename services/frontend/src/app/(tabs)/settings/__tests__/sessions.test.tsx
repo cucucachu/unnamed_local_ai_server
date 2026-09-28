@@ -2,7 +2,7 @@ import { act, type ReactTestRenderer } from 'react-test-renderer';
 
 import type { Session } from '@/lib/platform';
 
-import { exists, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../test-utils/screen';
+import { exists, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../../test-utils/screen';
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ back: jest.fn(), push: jest.fn(), replace: jest.fn(), canGoBack: () => true }),

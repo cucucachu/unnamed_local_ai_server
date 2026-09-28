@@ -8,7 +8,7 @@
 #   1. App info → Publish into the family catalog
 #   2. The editor opens Catalog, confirms permissions, installs
 #   3. The author bumps the version, rebuilds, publishes again
-#   4. The editor's Apps tab shows an update badge; they approve it
+#   4. The editor's Home launcher shows an update badge; they approve it
 # Everything it created (users, personal spaces, the shared space, apps,
 # instances, bundles, git repos, app-releases) is deleted on exit.
 #

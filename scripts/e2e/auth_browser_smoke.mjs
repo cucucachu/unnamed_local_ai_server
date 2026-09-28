@@ -6,12 +6,12 @@
 //      NEVER submitted — the maintainer must become the first admin.
 //      Once bootstrap is done, the Login screen shows instead.
 //   2. A wrong password shows the `invalid_credentials` message.
-//   3. A CLI-created member signs in -> the Chat tab loads; a reload keeps
+//   3. A CLI-created member signs in -> the Home tab loads; a reload keeps
 //      the session (the `homeai_session` cookie).
 //   4. Settings -> Log out -> Login screen; the session is revoked
 //      server-side and a reload stays signed out.
 //   5. An e2e admin creates an invite; `/invite?token=…` creates a member
-//      and lands on Chat; reusing the token shows `invalid_invite`.
+//      and lands on Home; reusing the token shows `invalid_invite`.
 // Every throwaway account and the invite are deleted on exit.
 
 import { execFileSync } from 'node:child_process';
@@ -35,9 +35,9 @@ async function authStatus(request) {
   return response.json();
 }
 
-async function expectChatLoaded(page) {
+async function expectHomeLoaded(page) {
   await page.getByTestId('auth-authenticated').waitFor({ timeout: TIMEOUT_MS });
-  await page.getByTestId('new-chat-header-button').waitFor({ timeout: TIMEOUT_MS });
+  await page.getByTestId('home-launcher').waitFor({ timeout: TIMEOUT_MS });
 }
 
 async function stepSetupOrLogin(browser, setupRequired) {
@@ -81,16 +81,16 @@ async function stepLoginLogout(browser, member) {
     console.log('  OK wrong password -> "Incorrect username or password."');
 
     await loginThroughUi(page, member);
-    await expectChatLoaded(page);
+    await expectHomeLoaded(page);
     const cookies = await context.cookies();
     assert(cookies.some((c) => c.name === 'homeai_session' && c.httpOnly), 'no HttpOnly homeai_session cookie');
-    console.log('  OK CLI user signs in -> chat tab loads (HttpOnly session cookie set)');
+    console.log('  OK CLI user signs in -> Home tab loads (HttpOnly session cookie set)');
 
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await expectChatLoaded(page);
+    await expectHomeLoaded(page);
     console.log('  OK reload keeps the session');
 
-    await page.getByTestId('settings-header-button').click();
+    await page.getByRole('tab', { name: 'Settings' }).click();
     const account = await page.getByTestId('settings-account').innerText({ timeout: TIMEOUT_MS });
     assert(account.includes(member.username), `settings shows "${account}"`);
     await page.getByTestId('settings-logout').click();
@@ -126,11 +126,11 @@ async function stepInvite(browser, admin, invitee) {
   try {
     const first = await acceptInviteInBrowser(browser, invite.token, invitee);
     try {
-      await expectChatLoaded(first.page);
-      assert(new URL(first.page.url()).pathname.startsWith('/chat'), `landed on ${first.page.url()}`);
+      await expectHomeLoaded(first.page);
+      assert(/\/(apps)?$/.test(new URL(first.page.url()).pathname), `landed on ${first.page.url()}`);
       const status = await authStatus(first.context.request);
       assert(status.user?.username === invitee.username && status.user?.role === 'member', 'invitee not signed in as a member');
-      console.log('  OK /invite?token=… creates a member and lands on chat');
+      console.log('  OK /invite?token=… creates a member and lands on Home');
     } finally {
       await first.context.close();
     }
