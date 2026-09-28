@@ -344,6 +344,27 @@ class DelegationOut(BaseModel):
     expires_at: datetime
 
 
+class ExecGrantsRequest(BaseModel):
+    delegation: Secret
+
+
+class ExecMountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    host_path: str
+    container_path: str
+    read_only: bool
+
+
+class ExecGrantsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    uid: int
+    gid: int
+    gids: list[int]
+    mounts: list[ExecMountOut]
+
+
 # --- apps -------------------------------------------------------------------------
 
 
