@@ -91,6 +91,9 @@ try {
   const editorUser = directory.find((u) => u.username === EDITOR.username);
   await author.call('POST', `/api/platform/spaces/${shared.id}/members`, { json: { user_id: editorUser.id, role: 'editor' } });
   const app = await uploadAndBuild(author.call, personal);
+  // Home was already open (empty) during the REST install; reload so the
+  // new instance is on the launcher (same pattern as home_launcher_smoke).
+  await author.page.goto(`${BASE}/apps`);
 
   await publishFromInfo(author.page, shared.slug);
 
