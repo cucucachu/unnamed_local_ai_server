@@ -10,14 +10,16 @@ from contextlib import asynccontextmanager
 
 import anyio.to_thread
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool
 
 from app.api import internal
-from app.api.external import auth, platform
+from app.api.external import auth, events, platform
 from app.core import appbuild, legacy, spaces
 from app.core.agentfs import AgentFsError
+from app.core.appdata import AppData
 from app.core.bootstrap import Bootstrap
 from app.core.config import Settings
 from app.core.errors import (
@@ -25,13 +27,16 @@ from app.core.errors import (
     Forbidden,
     InvalidApp,
     InvalidInput,
+    MigrationFailed,
     NotFound,
     PlatformError,
     ServerError,
+    SqlFailed,
     Unauthorized,
     Unavailable,
     UnsupportedMedia,
 )
+from app.core.events import EventHub
 from app.core.ratelimit import RateLimited, RateLimiter
 from app.core.storage import SpaceStorage, StorageError
 from app.core.tokens import TokenService, load_or_create_signing_key
@@ -62,6 +67,18 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(InvalidApp)
     async def invalid_app(request: Request, exc: InvalidApp) -> JSONResponse:
         return JSONResponse({"detail": exc.code, "diagnostics": exc.diagnostics}, status_code=422)
+
+    @app.exception_handler(SqlFailed)
+    async def sql_failed(request: Request, exc: SqlFailed) -> JSONResponse:
+        body = {"detail": exc.code, "message": exc.message}
+        if exc.index is not None:
+            body["index"] = exc.index
+        return JSONResponse(body, status_code=503 if exc.code == "db_busy" else 422)
+
+    @app.exception_handler(MigrationFailed)
+    async def migration_failed(request: Request, exc: MigrationFailed) -> JSONResponse:
+        body = {"detail": exc.code, "migration": jsonable_encoder(exc.migration)}
+        return JSONResponse(body, status_code=422)
 
     @app.exception_handler(AgentFsError)
     async def agent_fs_error(request: Request, exc: AgentFsError) -> JSONResponse:
@@ -156,12 +173,16 @@ def create_app(
             app.state.builder = appbuild.ExecManagerBuilder(
                 s.exec_manager_url, s.platform_exec_token, s.platform_build_timeout_s
             )
+            app.state.events = EventHub()
+            app.state.appdata = AppData(pool, storage, app.state.events)
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s
             )
             await legacy.maybe_migrate(app)
             yield
         finally:
+            if hasattr(app.state, "appdata"):
+                await app.state.appdata.aclose()
             if db_pool_override is None:
                 await pool.close()
 
@@ -172,6 +193,7 @@ def create_app(
     app.include_router(internal.router)
     app.include_router(auth.router)
     app.include_router(platform.router)
+    app.include_router(events.router)
 
     return app
 

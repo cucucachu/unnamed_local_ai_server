@@ -25,11 +25,32 @@ class InvalidInput(PlatformError):
 
 
 class InvalidApp(InvalidInput):
-    """422 `invalid_app`: an app package that fails validation; the body adds `diagnostics`."""
+    """422 `invalid_app`: an app package that fails validation; the body adds `diagnostics`.
 
-    def __init__(self, diagnostics: list[dict[str, str]]) -> None:
-        super().__init__("invalid_app")
+    Also `invalid_schema`, for a `schema.sql` a migration can't use.
+    """
+
+    def __init__(self, diagnostics: list[dict[str, str]], code: str = "invalid_app") -> None:
+        super().__init__(code)
         self.diagnostics = diagnostics
+
+
+class SqlFailed(InvalidInput):
+    """422 (503 for `db_busy`): an app-data statement failed; the body adds `message`
+    and, in a batch or action, the failing statement's `index`."""
+
+    def __init__(self, code: str, message: str, index: int | None = None) -> None:
+        super().__init__(code)
+        self.message = message
+        self.index = index
+
+
+class MigrationFailed(InvalidInput):
+    """422 `migration_failed`: applying a migration rolled back; the body adds `migration`."""
+
+    def __init__(self, migration: dict) -> None:
+        super().__init__("migration_failed")
+        self.migration = migration
 
 
 class Conflict(PlatformError):

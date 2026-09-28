@@ -21,8 +21,9 @@ COMPOSE_FILE = Path(__file__).resolve().parents[3] / "docker-compose.yml"
 PLATFORM_CAPS = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID")
 
 SCRIPT = r"""
-import json, os, stat, uuid
+import json, os, sqlite3, stat, uuid
 from pathlib import Path
+from app.core import appdb
 from app.core.storage import SpaceStorage
 
 def describe(path):
@@ -55,12 +56,25 @@ out["bait"] = describe(bait)
 # App instance dirs: created, then trashed (kept, moved under apps/.trash/).
 i = uuid.uuid4()
 out["instance"] = describe(storage.ensure_instance(a, 30001, i))
+out["instance_subdirs"] = [describe(root / str(a) / "apps" / str(i) / d) for d in ("ro", "snapshots")]
 (root / str(a) / "apps" / str(i) / "data.sqlite").write_text("rows")
 kept = storage.trash_instance(a, 30001, i, "20260101T000000Z")
 out["trash"] = describe(kept.parent)
 out["trashed"] = {"name": kept.name, "data": (kept / "data.sqlite").read_text(),
                   "gone": not (root / str(a) / "apps" / str(i)).exists()}
 out["trash_missing"] = storage.trash_instance(a, 30001, uuid.uuid4(), "x")
+
+# App data: the live database and its published read-only copy.
+j = uuid.uuid4()
+fd = storage.open_instance(a, 30001, j)
+with appdb.connect(fd) as con:
+    con.execute("CREATE TABLE t (x)")
+    con.execute("INSERT INTO t VALUES (1)")
+    appdb.publish(con, fd)
+    appdb.snapshot(con, fd, "m1")
+    live = root / str(a) / "apps" / str(j)
+    out["appdata"] = {n: describe(live / n) for n in ("data.sqlite", "data.sqlite-wal", "ro/data.sqlite")}
+os.close(fd)
 
 # A file created by a member (primary gid elsewhere) inherits the space gid.
 os.setgroups([30001])
@@ -69,6 +83,26 @@ os.setuid(20000)
 f = root / str(a) / "files" / "note.txt"
 f.write_text("hi")
 out["file"] = describe(f)
+
+def attempt(fn):
+    try:
+        fn()
+        return "ok"
+    except PermissionError:
+        return "denied"
+
+ro = sqlite3.connect(f"file:{live}/ro/data.sqlite?mode=ro&immutable=1", uri=True)
+out["member"] = {
+    "ro_rows": ro.execute("SELECT x FROM t").fetchall(),
+    "open_live": attempt(lambda: open(live / "data.sqlite", "rb").close()),
+    "create_in_instance": attempt(lambda: (live / "x").write_text("x")),
+    "create_in_ro": attempt(lambda: (live / "ro" / "x").write_text("x")),
+    "replace_ro": attempt(lambda: os.symlink("/etc/passwd", live / "ro" / "evil")),
+    "create_in_apps": attempt(lambda: os.mkdir(root / str(a) / "apps" / "x")),
+    "list_snapshots": attempt(lambda: os.listdir(live / "snapshots")),
+    "read_snapshot": attempt(lambda: [open(live / "snapshots" / n, "rb").close()
+                                      for n in os.listdir(live / "snapshots")]),
+}
 print(json.dumps(out))
 """
 
@@ -105,25 +139,55 @@ def result(tmp_path_factory) -> dict:
         )  # fmt: skip
 
 
-def test_created_tree_is_root_space_gid_2770(result):
+def _tree_modes(tree: dict) -> dict:
+    return {p: node["mode"] for p, node in tree.items()}
+
+
+TREE = {"": "0o2770", "files": "0o2770", "apps": "0o2750"}
+
+
+def test_created_tree_is_root_space_gid_2770_apps_2750(result):
     for node in result["created"].values():
-        assert node == {"uid": 0, "gid": 30001, "mode": "0o2770"}
+        assert (node["uid"], node["gid"]) == (0, 30001)
+    assert _tree_modes(result["created"]) == TREE
 
 
 def test_reconcile_fixes_drift_and_refuses_symlinks(result):
     assert result["reconcile"] == [1, 1]
     for node in result["reconciled"].values():
-        assert node == {"uid": 0, "gid": 30001, "mode": "0o2770"}
+        assert (node["uid"], node["gid"]) == (0, 30001)
+    assert _tree_modes(result["reconciled"]) == TREE
     assert result["bait"]["gid"] == 0
     assert result["bait"]["mode"] != "0o2770"
 
 
-def test_instance_dirs_are_root_space_gid_2770_and_trash_keeps_them(result):
-    assert result["instance"] == {"uid": 0, "gid": 30001, "mode": "0o2770"}
-    assert result["trash"] == {"uid": 0, "gid": 30001, "mode": "0o2770"}
+def test_instance_dirs_are_root_space_gid_2750_and_trash_keeps_them(result):
+    assert result["instance"] == {"uid": 0, "gid": 30001, "mode": "0o2750"}
+    assert result["instance_subdirs"] == [{"uid": 0, "gid": 30001, "mode": "0o2750"}] * 2
+    assert result["trash"] == {"uid": 0, "gid": 30001, "mode": "0o2750"}
     assert result["trashed"]["name"].endswith("-20260101T000000Z")
     assert (result["trashed"]["data"], result["trashed"]["gone"]) == ("rows", True)
     assert result["trash_missing"] is None
+
+
+def test_app_data_is_platform_only_except_the_read_only_copy(result):
+    node = {"uid": 0, "gid": 30001}
+    assert result["appdata"] == {
+        "data.sqlite": {**node, "mode": "0o600"},
+        "data.sqlite-wal": {**node, "mode": "0o600"},
+        "ro/data.sqlite": {**node, "mode": "0o444"},
+    }
+    member = result["member"]
+    assert member.pop("ro_rows") == [[1]]
+    assert member == {
+        "open_live": "denied",
+        "create_in_instance": "denied",
+        "create_in_ro": "denied",
+        "replace_ro": "denied",
+        "create_in_apps": "denied",
+        "list_snapshots": "ok",
+        "read_snapshot": "denied",
+    }
 
 
 def test_member_files_inherit_the_space_gid(result):

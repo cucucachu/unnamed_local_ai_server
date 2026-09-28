@@ -10,7 +10,7 @@ import pytest
 from app.core import spaces
 from app.core.errors import Forbidden, NotFound
 from app.core.principal import Principal
-from app.core.storage import DIR_MODE, SUBDIRS
+from app.core.storage import DIR_MODE, SUBDIR_MODES, SUBDIRS
 from app.db.migrate import MIGRATIONS_DIR, run_migrations
 from app.main import create_app
 from tests.conftest import make_settings, running
@@ -207,8 +207,8 @@ async def test_backfill_for_users_created_before_spaces(pg_database, tmp_path, c
     ]
     for _, _, space_id, gid, _ in rows:
         root = settings.platform_spaces_dir / str(space_id)
-        for path in (root, *(root / sub for sub in SUBDIRS)):
-            assert stat.S_IMODE(path.stat().st_mode) == DIR_MODE
+        for path, want in ((root, DIR_MODE), *((root / s, SUBDIR_MODES[s]) for s in SUBDIRS)):
+            assert stat.S_IMODE(path.stat().st_mode) == want
             assert chowns[path] == (0, gid)
 
 
@@ -220,9 +220,9 @@ async def test_space_dirs_created_setgid_and_group_owned(platform, chowns):
     space = await _create_space(platform, headers)
     root = platform.app.state.storage.space_dir(UUID(space["id"]))
     assert sorted(p.name for p in root.iterdir()) == sorted(SUBDIRS)
-    for path in (root, *(root / sub for sub in SUBDIRS)):
+    for path, want in ((root, 0o2770), *((root / sub, SUBDIR_MODES[sub]) for sub in SUBDIRS)):
         mode = path.stat().st_mode
-        assert stat.S_ISDIR(mode) and stat.S_IMODE(mode) == 0o2770
+        assert stat.S_ISDIR(mode) and stat.S_IMODE(mode) == want
         assert mode & stat.S_ISGID
         assert chowns[path] == (0, space["gid"])
 
@@ -239,8 +239,8 @@ async def test_startup_reconciles_missing_dirs_and_modes(platform, chowns):
 
     async with running(create_app(platform.app.state.settings)):
         pass
-    for path in (root, root / "files", root / "apps"):
-        assert stat.S_IMODE(path.stat().st_mode) == DIR_MODE
+    for path, want in ((root, DIR_MODE), (root / "files", DIR_MODE), (root / "apps", 0o2750)):
+        assert stat.S_IMODE(path.stat().st_mode) == want
         assert chowns[path] == (0, space["gid"])
 
 
