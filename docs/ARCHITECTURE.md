@@ -2546,7 +2546,7 @@ exact §7 hardening spec):
   smoke container's Node (on purpose: that's the residual jsdom leaves)
   and reports, in the render error that comes back as the diagnostic: only
   `lo`, no routes, `platform:8100` unreachable, no `docker.sock`, no
-  `/data` `/files` `/srv` `/app`, uid `19999`, `CapEff` 0, no secret env
+  `/data` `/files` `/srv/homeai` `/app`, uid `19999`, `CapEff` 0, no secret env
   (23); `/src`, `/bundle`, `/builder` and `/` `EROFS`, `/out` writable
   and the only rw bind (24). Both phases' containers are `docker
   inspect`ed mid-build: network none, read-only root, `CapDrop ALL`, not

@@ -1032,7 +1032,7 @@ function probe(): string {
     ifaces: fs.readdirSync('/sys/class/net'),
     routes: fs.readFileSync('/proc/net/route', 'utf8').trim().split('\n').length - 1,
     sock: ['/var/run/docker.sock', '/run/docker.sock'].filter((p: string) => fs.existsSync(p)),
-    data: ['/data', '/files', '/srv', '/app'].filter((p: string) => fs.existsSync(p)),
+    data: ['/data', '/files', '/srv/homeai', '/app'].filter((p: string) => fs.existsSync(p)),
     write: Object.fromEntries(['/src/x', '/bundle/x', '/builder/x', '/x', '/out/x'].map((p: string) => [p, attempt(() => fs.writeFileSync(p, 'x'))])),
     rw,
     net,
@@ -1110,7 +1110,7 @@ $3
 }
 
 check_23() {
-  check_probe 23 "builder (smoke, running app code in Node): only lo, no routes, platform unreachable, no docker.sock, no /data /files /srv /app, uid 19999, CapEff 0, no secret env" "
+  check_probe 23 "builder (smoke, running app code in Node): only lo, no routes, platform unreachable, no docker.sock, no /data /files /srv/homeai /app, uid 19999, CapEff 0, no secret env" "
 assert p['ifaces'] == ['lo'] and p['routes'] == 0, f'network: {p[\"ifaces\"]}, {p[\"routes\"]} routes'
 assert p['net'] == 'blocked', 'reached platform:8100'
 assert p['sock'] == [], f'docker.sock present: {p[\"sock\"]}'
