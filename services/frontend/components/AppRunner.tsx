@@ -58,7 +58,11 @@ export function AppRunner({
   const [load, setLoad] = useState<Load>({ doc: null, error: null });
   const [host, setHost] = useState<BridgeHost | null>(null);
   const [crash, setCrash] = useState<Crash | null>(null);
-  const [agent, setAgent] = useState<{ open: boolean; prompt: string | null }>({ open: false, prompt: null });
+  const [agent, setAgent] = useState<{ open: boolean; prompt: string | null; seq: number }>({
+    open: false,
+    prompt: null,
+    seq: 0,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -99,11 +103,13 @@ export function AppRunner({
   }, []);
 
   const onAskAgent = useCallback((prompt: string) => {
-    setAgent({ open: true, prompt });
+    setAgent((current) => ({ open: true, prompt, seq: current.seq + 1 }));
   }, []);
 
   const openAgent = useCallback(() => {
-    setAgent((current) => (current.open ? { open: false, prompt: null } : { open: true, prompt: null }));
+    setAgent((current) =>
+      current.open ? { open: false, prompt: null, seq: current.seq } : { open: true, prompt: null, seq: current.seq },
+    );
   }, []);
 
   const restart = useCallback(() => {
@@ -179,7 +185,8 @@ export function AppRunner({
           appId={(appId ?? doc?.appId)!}
           appName={appName}
           initialPrompt={agent.prompt}
-          onClose={() => setAgent({ open: false, prompt: null })}
+          promptSeq={agent.seq}
+          onClose={() => setAgent((current) => ({ open: false, prompt: null, seq: current.seq }))}
         />
       ) : null}
       </View>

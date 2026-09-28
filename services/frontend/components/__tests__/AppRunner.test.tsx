@@ -14,6 +14,7 @@ jest.mock('@/components/AppAgentPanel', () => {
         View,
         { testID: 'app-agent-panel' },
         React.createElement(Text, { testID: 'app-agent-prompt' }, props.initialPrompt ?? ''),
+        React.createElement(Text, { testID: 'app-agent-seq' }, `promptSeq=${props.promptSeq ?? 0}`),
         React.createElement(Text, { testID: 'app-agent-app' }, `${props.appName} ${props.appId} ${props.instanceId}`),
       ),
   };
@@ -171,5 +172,10 @@ describe('AppRunner', () => {
     await act(async () => mockSandboxes[0].onAskAgent('Add Milk via app_sql'));
     expect(exists(r, 'app-agent-panel')).toBe(true);
     expect(textOf(r)).toContain('Add Milk via app_sql');
+    expect(textOf(r)).toContain('promptSeq=1');
+
+    await act(async () => mockSandboxes[0].onAskAgent('Add milk'));
+    expect(textOf(r)).toContain('Add milk');
+    expect(textOf(r)).toContain('promptSeq=2');
   });
 });

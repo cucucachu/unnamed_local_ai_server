@@ -66,7 +66,7 @@ const ctx: AppContext = {
 let renderer: ReactTestRenderer | null = null;
 let n = 0;
 
-async function mount(prompt?: string) {
+async function mount(prompt?: string, promptSeq = 0) {
   n += 1;
   const instanceId = `${INSTANCE.slice(0, -1)}${n.toString(16)}`;
   const loaded = { ...ctx, instanceId };
@@ -80,6 +80,7 @@ async function mount(prompt?: string) {
         appId={APP}
         appName="Runtime check"
         initialPrompt={prompt ?? null}
+        promptSeq={promptSeq}
         onClose={jest.fn()}
       />,
     );
@@ -87,6 +88,18 @@ async function mount(prompt?: string) {
   await flush();
   await flush();
   return { renderer: renderer!, instanceId, ctx: loaded };
+}
+
+function panelProps(instanceId: string, prompt: string | null, promptSeq: number) {
+  return {
+    instanceId,
+    space,
+    appId: APP,
+    appName: 'Runtime check',
+    initialPrompt: prompt,
+    promptSeq,
+    onClose: jest.fn(),
+  };
 }
 
 beforeEach(() => {
@@ -122,9 +135,29 @@ describe('AppAgentPanel', () => {
   });
 
   it('auto-sends askAgent’s prompt once the thread is ready', async () => {
-    await mount('Add Milk via app_sql');
+    await mount('Add Milk via app_sql', 1);
     expect(mockSend).toHaveBeenCalledTimes(1);
     expect(mockSend.mock.calls[0][0]).toContain('Add Milk via app_sql');
     expect(mockSend.mock.calls[0][0]).toContain('schema.sql');
+  });
+
+  it('sends a later askAgent prompt as a new turn without re-seeding', async () => {
+    const { renderer: r, instanceId, ctx: loaded } = await mount('Add eggs', 1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toBe(seedUserMessage(loaded, 'Add eggs'));
+
+    await act(async () => {
+      r.update(<AppAgentPanel {...panelProps(instanceId, 'Add milk', 2)} />);
+    });
+    await flush();
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockSend.mock.calls[1][0]).toBe('Add milk');
+
+    await act(async () => {
+      r.update(<AppAgentPanel {...panelProps(instanceId, 'Add milk', 3)} />);
+    });
+    await flush();
+    expect(mockSend).toHaveBeenCalledTimes(3);
+    expect(mockSend.mock.calls[2][0]).toBe('Add milk');
   });
 });

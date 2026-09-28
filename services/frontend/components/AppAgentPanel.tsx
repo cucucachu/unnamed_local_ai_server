@@ -35,6 +35,7 @@ export function AppAgentPanel({
   appId,
   appName,
   initialPrompt,
+  promptSeq = 0,
   onClose,
 }: {
   instanceId: string;
@@ -42,6 +43,8 @@ export function AppAgentPanel({
   appId: string;
   appName: string;
   initialPrompt?: string | null;
+  /** Bumps on every `askAgent` so a repeated prompt is still a new turn. */
+  promptSeq?: number;
   onClose: () => void;
 }) {
   const [ctx, setCtx] = useState<AppContext | null>(null);
@@ -79,7 +82,7 @@ export function AppAgentPanel({
   }, [instanceId, appName, threadId]);
 
   return (
-    <View style={styles.panel} testID="app-agent-panel" accessibilityRole="complementary" accessibilityLabel="Ask the agent">
+    <View style={styles.panel} testID="app-agent-panel" accessibilityLabel="Ask the agent">
       <View style={styles.header}>
         <Text style={styles.title} numberOfLines={1}>
           Ask the agent
@@ -91,7 +94,12 @@ export function AppAgentPanel({
       {error ? <ErrorText testID="app-agent-error">{error}</ErrorText> : null}
       {ctx ? <ContextCard ctx={ctx} /> : <ActivityIndicator color={theme.accent} style={styles.spinner} />}
       {ctx && threadId ? (
-        <AgentChat threadId={threadId} ctx={ctx} initialPrompt={initialPrompt ?? null} />
+        <AgentChat
+          threadId={threadId}
+          ctx={ctx}
+          initialPrompt={initialPrompt ?? null}
+          promptSeq={promptSeq}
+        />
       ) : (
         <View style={styles.flex} />
       )}
@@ -118,11 +126,22 @@ function ContextCard({ ctx }: { ctx: AppContext }) {
   );
 }
 
-function AgentChat({ threadId, ctx, initialPrompt }: { threadId: string; ctx: AppContext; initialPrompt: string | null }) {
+function AgentChat({
+  threadId,
+  ctx,
+  initialPrompt,
+  promptSeq,
+}: {
+  threadId: string;
+  ctx: AppContext;
+  initialPrompt: string | null;
+  promptSeq: number;
+}) {
   const { turns, sendMessage, busy, hydrationState, pendingApproval, respondToApproval } = useChat(threadId);
   const [draft, setDraft] = useState('');
   const seeded = useRef(false);
-  const sentInitial = useRef(false);
+  const queued = useRef<string[]>([]);
+  const consumedSeq = useRef<number | null>(null);
 
   useEffect(() => {
     if (hydrationState !== 'done') return;
@@ -141,11 +160,15 @@ function AgentChat({ threadId, ctx, initialPrompt }: { threadId: string; ctx: Ap
   );
 
   useEffect(() => {
-    if (sentInitial.current || !initialPrompt?.trim()) return;
+    const prompt = initialPrompt?.trim() ?? '';
+    if (prompt && consumedSeq.current !== promptSeq) {
+      queued.current.push(prompt);
+      consumedSeq.current = promptSeq;
+    }
     if (hydrationState !== 'done' || busy || pendingApproval) return;
-    sentInitial.current = true;
-    send(initialPrompt);
-  }, [busy, hydrationState, initialPrompt, pendingApproval, send]);
+    const next = queued.current.shift();
+    if (next) send(next);
+  }, [busy, hydrationState, initialPrompt, pendingApproval, promptSeq, send]);
 
   const canSend = !busy && pendingApproval === null && hydrationState === 'done' && draft.trim().length > 0;
 
@@ -236,8 +259,6 @@ function PanelApproval({
     </View>
   );
 }
-
-void (null as unknown as ChatItem);
 
 const styles = StyleSheet.create({
   panel: {
