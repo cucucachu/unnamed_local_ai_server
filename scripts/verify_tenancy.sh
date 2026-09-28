@@ -542,7 +542,8 @@ except urllib.error.HTTPError as e:
 
 # ---- invariant 5: agent-server holds no user data or platform credentials ----
 
-# Env file values, never printed: POSTGRES_PASSWORD, PLATFORM_DB_PASSWORD, PLATFORM_EXEC_TOKEN.
+# Env file values, never printed: POSTGRES_PASSWORD, PLATFORM_DB_PASSWORD, PLATFORM_EXEC_TOKEN,
+# PLATFORM_BUILD_TOKEN.
 SECRETS_PY="$(cat <<'EOF'
 import json, pathlib, re, sys
 env = {}
@@ -550,7 +551,7 @@ for line in pathlib.Path(".env").read_text().splitlines():
     m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line)
     if m:
         env[m.group(1)] = m.group(2).strip()
-forbidden = {k: env[k] for k in ("POSTGRES_PASSWORD", "PLATFORM_DB_PASSWORD", "PLATFORM_EXEC_TOKEN") if env.get(k)}
+forbidden = {k: env[k] for k in ("POSTGRES_PASSWORD", "PLATFORM_DB_PASSWORD", "PLATFORM_EXEC_TOKEN", "PLATFORM_BUILD_TOKEN") if env.get(k)}
 superuser = env.get("POSTGRES_USER", "homeai")
 EOF
 )"

@@ -21,8 +21,11 @@ import pytest
 from app.core import appbuild
 from app.core.appbuild import Builds, ExecManagerBuilder, PhaseRun
 from app.core.errors import Unavailable
+from app.main import create_app
 from tests.app_packages import manifest, write_package
+from tests.conftest import make_settings, running
 from tests.files_world import API, World
+from tests.helpers import sql
 from tests.ws import WsClient
 
 APPS = f"{API}/apps"
@@ -186,6 +189,59 @@ async def test_a_build_takes_the_manifest_like_validate_does(world, builder) -> 
 
     assert body["app"]["name"] == "Hello Again"
     assert body["app"]["working_version"]["version"] == "1.2.0"
+
+
+async def _archive_family(world: World) -> None:
+    response = await world.client.delete(
+        f"{API}/spaces/{world.family['id']}", headers=world.headers["alice"]
+    )
+    assert response.status_code == 204, response.text
+
+
+async def test_archiving_the_source_space_removes_its_apps_bundles(world, builder) -> None:
+    app = await _registered(world)
+    bundle_path = (await _build(world, app["id"])).json()["build"]["bundle_path"]
+    write_package(world.home("alice") / "Apps" / "mine")
+    response = await world.client.post(
+        APPS, json={"source_path": "/personal/Apps/mine"}, headers=world.headers["alice"]
+    )
+    mine = response.json()["app"]
+    kept = (await _build(world, mine["id"])).json()["build"]["bundle_path"]
+
+    await _archive_family(world)
+
+    assert not (_data(world) / "app-bundles" / app["id"]).exists()
+    assert (_data(world) / kept).is_file()
+    rows = sql(
+        world.platform,
+        "SELECT app_id::text, bundle_path FROM app_versions WHERE kind = 'working' ORDER BY app_id",
+    )
+    assert {r["app_id"]: r["bundle_path"] for r in rows} == {app["id"]: None, mine["id"]: kept}
+    assert bundle_path != kept
+
+
+async def test_a_build_that_lands_after_the_archive_keeps_no_bundle(world, builder) -> None:
+    app = await _registered(world)
+
+    def archive_meanwhile(phase: str, build: Path) -> None:
+        succeed(phase, build)
+        if phase == "smoke":
+            sql(
+                world.platform,
+                "UPDATE spaces SET archived_at = now() WHERE id = %s",
+                (world.family["id"],),
+            )
+
+    builder.script = archive_meanwhile
+
+    response = await _build(world, app["id"])
+
+    assert response.status_code == 404
+    assert not any((_data(world) / "app-bundles").rglob("app.js"))
+    (row,) = sql(
+        world.platform, "SELECT bundle_path FROM app_versions WHERE app_id = %s", (app["id"],)
+    )
+    assert row["bundle_path"] is None
 
 
 # --- failures ---------------------------------------------------------------------------
@@ -493,6 +549,27 @@ async def test_manager_failures_are_unavailable(respond) -> None:
     builder = ExecManagerBuilder("http://m", "tok", 5, transport=httpx.MockTransport(respond))
     with pytest.raises(Unavailable):
         await builder.run("ab" * 16, "compile")
+
+
+async def test_the_app_calls_the_manager_with_the_build_token_not_the_exec_token(
+    pg_database, tmp_path
+) -> None:
+    app = create_app(
+        make_settings(
+            pg_database, tmp_path, platform_exec_token="exec-tok", platform_build_token="build-tok"
+        )
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"exit_code": 0, "timed_out": False})
+
+    async with running(app):
+        app.state.builder._transport = httpx.MockTransport(handler)
+        await app.state.builder.run("ab" * 16, "compile")
+
+    assert seen[0].headers["authorization"] == "Bearer build-tok"
 
 
 async def test_no_token_means_no_call() -> None:

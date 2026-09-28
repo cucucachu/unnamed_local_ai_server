@@ -17,7 +17,7 @@ one, `403` for another thread's or for a session held by another user,
 has ended is refused there (`401`).
 
 `/builds/{build_id}/{phase}` instead needs `Authorization: Bearer
-<platform_exec_token>` (`401` otherwise, `503` while unset). Its only
+<platform_build_token>` (`401` otherwise, `503` while unset). Its only
 caller-controlled values are the id and phase, both pattern-checked (`422`).
 """
 
@@ -157,10 +157,10 @@ async def list_sessions(request: Request) -> list[SessionListEntry]:
 
 def platform_service(request: Request) -> None:
     settings = request.app.state.settings
-    if not settings.platform_exec_token or not settings.app_builds_host_dir:
+    if not settings.platform_build_token or not settings.app_builds_host_dir:
         raise HTTPException(503, "builds are not configured")
     presented = _bearer(request) or ""
-    if not hmac.compare_digest(presented.encode(), settings.platform_exec_token.encode()):
+    if not hmac.compare_digest(presented.encode(), settings.platform_build_token.encode()):
         raise HTTPException(401, "unauthenticated")
 
 

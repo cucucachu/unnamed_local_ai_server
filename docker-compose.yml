@@ -337,6 +337,7 @@ services:
       PLATFORM_MIGRATE_LEGACY_FILES: ${PLATFORM_MIGRATE_LEGACY_FILES:-1}
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
+      PLATFORM_BUILD_TOKEN: ${PLATFORM_BUILD_TOKEN}
       # The host-side path of the /data/spaces mount above: exec grants name
       # bind sources as the Docker daemon sees them.
       SPACES_HOST_DIR: ${SPACES_DIR}
@@ -375,12 +376,13 @@ services:
     # session call carries the run's delegation, verified against the
     # platform's JWKS; the platform's /internal/exec-grants (this service
     # token) answers which uid, space gids and space dirs the exec
-    # container gets. The same token authenticates the platform's own
+    # container gets. PLATFORM_BUILD_TOKEN authenticates the platform's own
     # POST /builds calls (M12-04), whose builder containers get only that
     # build's dirs under APP_BUILDS_HOST_DIR (the host path of the
     # platform's /data/builds; not mounted here).
     environment:
       PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
+      PLATFORM_BUILD_TOKEN: ${PLATFORM_BUILD_TOKEN}
       EXEC_IDLE_MINUTES: ${EXEC_IDLE_MINUTES}
       EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}
       APP_BUILDS_HOST_DIR: ${APP_BUILDS_DIR:-/srv/homeai/builds}

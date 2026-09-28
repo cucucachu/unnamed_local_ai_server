@@ -36,9 +36,10 @@ class Settings(BaseSettings):
     # App builds (`app/core/appbuild.py`): the staging root (`${APP_BUILDS_DIR}`
     # bind mount; code-exec-manager mounts its per-build dirs into builder
     # containers by the matching host path), and the manager that runs them,
-    # authenticated with `platform_exec_token`.
+    # authenticated with `platform_build_token` (empty: builds are 503).
     platform_builds_dir: Path = Path("/data/builds")
     exec_manager_url: str = "http://code-exec-manager:8090"
+    platform_build_token: str = ""
     # Per phase, including any wait for a free builder slot.
     platform_build_timeout_s: float = 600.0
 

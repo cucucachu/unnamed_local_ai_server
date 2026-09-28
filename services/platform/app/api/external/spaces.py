@@ -8,6 +8,7 @@ human-only (`manage` is never granted to an agent delegation).
 
 from uuid import UUID
 
+import anyio.to_thread
 from fastapi import APIRouter, Request, status
 
 from app.api.schemas import (
@@ -20,7 +21,7 @@ from app.api.schemas import (
     SpaceOut,
     SpacePatchRequest,
 )
-from app.core import spaces
+from app.core import appbuild, spaces
 from app.core.principal import CurrentUser, HumanUser
 
 router = APIRouter(prefix="/spaces")
@@ -69,7 +70,12 @@ async def patch_space(
 async def archive_space(space_id: UUID, request: Request, principal: CurrentUser) -> None:
     async with request.app.state.db_pool.connection() as conn:
         access = await spaces.authorize_space(conn, principal, space_id, "manage")
-        await spaces.archive_space(conn, access.space)
+        async with conn.transaction():
+            await spaces.archive_space(conn, access.space)
+            bundles = await appbuild.release_space_bundles(conn, space_id)
+    await anyio.to_thread.run_sync(
+        appbuild.drop_bundles, request.app.state.settings.platform_data_dir, bundles
+    )
 
 
 @router.get("/{space_id}/members", response_model=MemberList)

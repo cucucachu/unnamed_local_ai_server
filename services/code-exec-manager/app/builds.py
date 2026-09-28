@@ -2,7 +2,7 @@
 
 The platform stages an app's source under `{app_builds_host_dir}/{build_id}/`
 and calls `POST /builds/{build_id}/{phase}` (`app/api.py`), authenticated
-with the service token. The caller supplies only the id and the phase;
+with its build token. The caller supplies only the id and the phase;
 the image, the mounts and every hardening flag are fixed here, the same way
 `app.sessions.build_run_kwargs` fixes an exec container. Nothing the build
 runs can reach the network, docker.sock, or anything on the host outside

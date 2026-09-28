@@ -777,7 +777,7 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 > too) copies the source by fd walk into a platform-owned staging dir,
 > never mounting the space itself, and calls code-exec-manager's
 > additive, platform-only `POST /builds/{build_id}/{compile|smoke}`
-> (`PLATFORM_EXEC_TOKEN`; the caller names only the id, the manager
+> (`PLATFORM_BUILD_TOKEN` since #192; the caller names only the id, the manager
 > derives the mounts). The builder image (`services/app-builder`) carries
 > the whole toolchain offline. Diagnostics are `manifest.Diagnostic`
 > plus `step`, `line`, `column` and optional `source`, capped at 50. The
@@ -801,8 +801,13 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 >   copies in (build context: the repo root).
 > - Typing is `strict` minus `noImplicitAny`. RN's typings declare
 >   `fetch`, `XMLHttpRequest`, `WebSocket` and `require` as globals, so a
->   checker pass refuses references to those (and the DOM names);
->   `globalThis.x` stays reachable, and the CSP remains the boundary.
+>   checker pass refuses references to those (and the DOM names), also
+>   through `globalThis` (#192: by name, computed, or `globalThis` used as
+>   a value); the CSP remains the boundary.
+> - Archiving the source space deletes its apps' working bundles (#192).
+>   There is no app archive endpoint yet (`apps.archived_at` is never
+>   set); whatever adds one should delete the app's bundles the same way
+>   (`appbuild.release_space_bundles` + `drop_bundles`).
 
 ### Registry, lifecycle, sharing
 
