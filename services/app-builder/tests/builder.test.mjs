@@ -13,6 +13,7 @@ import { compilePhase, smokePhase } from '../src/cli.mjs';
 import { ALLOWED_MODULES, BANNER } from '../src/compile.mjs';
 import { MAX_DIAGNOSTICS, writeResult } from '../src/diagnostics.mjs';
 import { RUNTIME_DEV } from '../src/smoke.mjs';
+import { SDK_TYPES } from '../src/sdk.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GROCERIES = path.join(here, 'fixtures', 'groceries');
@@ -217,7 +218,7 @@ test('the runtime provides exactly the allowed modules', () => {
   });
   for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
   for (const m of ['react-dom', 'react-dom/client', 'fs', 'react-native-web']) assert.throws(() => req(m), /not available in the app sandbox/);
-  const typings = fs.readFileSync(path.join(here, '..', 'types', 'homeai.d.ts'), 'utf8');
+  const typings = fs.readFileSync(SDK_TYPES, 'utf8');
   const declared = [...typings.matchAll(/declare module '([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual(declared.sort(), ALLOWED_MODULES.filter((m) => !m.startsWith('react')).sort());
   dom.window.close();

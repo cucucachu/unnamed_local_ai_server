@@ -1,5 +1,5 @@
 // `tsc --noEmit` of the app against React, React Native and the SDK/shim
-// typings (types/homeai.d.ts), with the ES2020 lib only: no DOM, no Node.
+// typings (packages/homeai-sdk/types/homeai.d.ts), with the ES2020 lib only: no DOM, no Node.
 //
 // React Native's own typings declare `fetch`, `XMLHttpRequest`, `WebSocket`
 // and `require` as globals (they exist in a real RN app), so leaving out the
@@ -13,10 +13,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { diagnostic, relative } from './diagnostics.mjs';
+import { SDK_TYPES } from './sdk.mjs';
 
 const builderRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const modules = path.join(builderRoot, 'node_modules');
-export const SDK_TYPES = path.join(builderRoot, 'types', 'homeai.d.ts');
+export { SDK_TYPES };
 
 const NO_NETWORK = 'the app sandbox has no network; read and write data with useQuery / useDatabase / runAction from @homeai/sdk';
 // "Cannot find name" and its variants that suggest adding the DOM or Node typings.

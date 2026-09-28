@@ -108,16 +108,19 @@ async function renderRoute({ runtime, app, appRoot, schema, route, settleMs, tim
       pending++;
       queueMicrotask(() => {
         try {
-          const st = db.prepare(env.params.sql);
-          const args = env.params.params ?? [];
           let result;
-          if (env.method === 'db.getAll') result = st.all(...args);
-          else if (env.method === 'db.getFirst') result = st.get(...args) ?? null;
-          else if (env.method === 'db.run') {
-            const r = st.run(...args);
-            result = { changes: Number(r.changes), lastInsertRowId: Number(r.lastInsertRowid) };
-          } else if (env.method === 'action') result = null;
-          else throw new Error(`unknown method ${env.method}`);
+          if (env.method === 'action') result = { changes: 0, lastInsertRowId: 0, rows: [] };
+          else {
+            const st = db.prepare(env.params.sql);
+            const p = env.params.params ?? [];
+            const args = Array.isArray(p) ? p : [p];
+            if (env.method === 'db.getAll') result = st.all(...args);
+            else if (env.method === 'db.getFirst') result = st.get(...args) ?? null;
+            else if (env.method === 'db.run') {
+              const r = st.run(...args);
+              result = { changes: Number(r.changes), lastInsertRowId: Number(r.lastInsertRowid) };
+            } else throw new Error(`unknown method ${env.method}`);
+          }
           reply({ homeai: 1, kind: 'res', id: env.id, ok: true, result });
         } catch (err) {
           const sql = String(env.params?.sql ?? '');
