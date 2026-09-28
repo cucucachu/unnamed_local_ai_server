@@ -422,6 +422,8 @@ EOF
 
 # argv[2]: comma-separated targets that must be the ONLY rw binds.
 # argv[3]: comma-separated targets that must be the ONLY ro binds under /files.
+# Isolation does not install apps, so /app-data may be absent; if a bind at
+# /app-data (or under it) is present, it must be read-only (M14-05).
 VALIDATOR_MOUNTS="$(cat <<'EOF'
 import json, re, sys
 
@@ -436,12 +438,16 @@ PSEUDO_FS = {"proc", "sysfs", "cgroup", "cgroup2", "devpts", "mqueue", "overlay"
 PATTERN = re.compile(r"^(?P<source>.*) on (?P<target>.*) type (?P<fstype>\S+) \((?P<opts>[^)]*)\)$")
 
 rw, ro = set(), set()
+appdata_not_ro = []
 for line in data.get("stdout", "").splitlines():
     m = PATTERN.match(line.strip())
     if not m or m.group("fstype") == "tmpfs" or m.group("fstype") in PSEUDO_FS:
         continue
     opts = m.group("opts").split(",")
     target = m.group("target")
+    if target == "/app-data" or target.startswith("/app-data/"):
+        if "ro" not in opts or "rw" in opts:
+            appdata_not_ro.append(f"{target} opts={m.group('opts')}")
     if "rw" in opts:
         rw.add(target)
     elif target == "/files" or target.startswith("/files/"):
@@ -452,6 +458,8 @@ if rw != want_rw:
     errors.append(f"rw binds {sorted(rw)} != expected {sorted(want_rw)}")
 if ro != want_ro:
     errors.append(f"ro binds under /files {sorted(ro)} != expected {sorted(want_ro)}")
+if appdata_not_ro:
+    errors.append("app-data mounts must be read-only: " + "; ".join(appdata_not_ro))
 if errors:
     print("; ".join(errors))
     sys.exit(1)
@@ -731,37 +739,9 @@ check_14() {
     rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
-    pass 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}"
+    pass 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}; /app-data is ro if mounted"
   else
-    fail 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}" "$out"
-  fi
-  # M14-05: isolation does not install apps; if /app-data exists anyway it
-  # must be read-only. Full tenancy is verify_tenancy.sh check 29.
-  if out="$(python3 -c '
-import json, re, sys
-data = json.loads(sys.argv[1])
-if data.get("exit_code") != 0:
-    print(f"mount failed: {data}")
-    sys.exit(1)
-PATTERN = re.compile(r"^(?P<source>.*) on (?P<target>.*) type (?P<fstype>\S+) \((?P<opts>[^)]*)\)$")
-bad = []
-for line in data.get("stdout", "").splitlines():
-    m = PATTERN.match(line.strip())
-    if not m:
-        continue
-    target = m.group("target")
-    if target != "/app-data" and not target.startswith("/app-data/"):
-        continue
-    opts = m.group("opts").split(",")
-    if "ro" not in opts or "rw" in opts:
-        bad.append(f"{target} opts={m.group(\"opts\")}")
-if bad:
-    print("; ".join(bad))
-    sys.exit(1)
-' "$json" 2>&1)"; then
-    pass 14 "if /app-data is mounted, it is read-only"
-  else
-    fail 14 "if /app-data is mounted, it is read-only" "$out"
+    fail 14 "the only rw non-tmpfs mounts are /files/personal and ${SHARED}; /app-data is ro if mounted" "$out"
   fi
 }
 
@@ -853,8 +833,12 @@ assert spaces.split() == ['${SPACE}'], f'/files/spaces lists {spaces.split()}'
 assert '${MARK}' not in personal, f'A\\'s marker in B\\'s /files/personal: {personal!r}'
 assert not hits.strip(), f'A\\'s marker found under B\\'s /files: {hits!r}'
 " b "ls /files/spaces; echo ---; ls -a /files/personal; echo ---; grep -rl ${MARK} /files 2>/dev/null; true"
-  # M14-05: B has no path to A's personal app-data (isolation installs no
-  # grocery; verify_tenancy.sh check 29 covers the installed-app case).
+  # M14-05: B has no path to A's personal app-data. Isolation installs no
+  # grocery, so /app-data is usually absent — find/grep are then non-zero;
+  # trailing `true` makes that a pass (same reason the /files probe ends
+  # with `true`). If /app-data exists, B still must not have
+  # /app-data/personal or A's marker. Installed-app tenancy is
+  # verify_tenancy.sh check 29.
   check_exec_py 18 "B has no path to A's personal app-data" "
 out = r.get('stdout', '')
 assert r.get('exit_code') == 0, f'exit_code {r.get(\"exit_code\")}: {r.get(\"stderr\")!r}'
