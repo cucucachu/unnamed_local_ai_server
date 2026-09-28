@@ -111,3 +111,12 @@ agent run.
 
 > **PM sign-off: G10 passed ____**
 
+## M11
+
+- [ ] (M11-05) `sudo scripts/verify_network.sh` on the host: all checks green (`gate_m11.sh` skips it when not run as root).
+- [ ] (M11-05) From two phones signed in as two different people (you and an invited member): each uploads a file to Personal; neither sees the other's file in Files, and asking your own agent to read the other's file finds nothing. **(GATE G11)**
+- [ ] (M11-05) Settings → Spaces: add the second person to a shared space as a **viewer**. From your phone, upload a file there (or ask your agent to write one); it shows up on both phones. **(GATE G11)**
+- [ ] (M11-05) On the viewer's phone: the space is marked read-only, with no Upload/New folder and only Download on a file; asking their agent to write or edit a file in the space is refused and nothing appears on your phone. **(GATE G11)**
+
+> **PM sign-off: G11 passed ____**
+
