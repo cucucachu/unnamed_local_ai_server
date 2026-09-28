@@ -39,6 +39,12 @@ lib/session.ts               in-memory session token + authHeaders() + onUnautho
 lib/tokenStore.ts            native token persistence (expo-secure-store); tokenStore.web.ts is a no-op
 components/AuthProvider.tsx  app-root auth state; AuthGate.tsx holds the app until status answers
 lib/chatSocket.ts             typed WS client for /ws/chat/{thread_id} (M2-06 imports its frame types)
+src/app/(tabs)/apps/         Apps tab (M12-06): installed instances by space; [instanceId] is the app runner
+components/AppRunner.tsx     runner: sandbox + /ws/platform/events relay + hot reload + error overlay
+components/AppSandbox.tsx    native sandbox (react-native-webview); AppSandbox.web.tsx is the iframe
+lib/appHost.ts               @homeai/sdk/host glue: bridge bound to one instance, sandbox document
+lib/apps.ts                  installed-instance listing; lib/platformEvents.ts the events socket
+metro.config.js              watches ../../packages/homeai-sdk (the file: dependency @homeai/sdk)
 lib/__tests__/               Jest (jest-expo) unit tests for the above
 ```
 

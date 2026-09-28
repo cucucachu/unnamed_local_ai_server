@@ -254,7 +254,10 @@ what another doc says it should be.
   be spoofed. `/internal/*` is never routed. Range and `HEAD` requests to
   `/api/platform/files/stream` pass through unchanged (206 + `Content-Range`).
 - **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
-  `npx expo export --platform web` against `services/frontend/`), a
+  `npx expo export --platform web` against `services/frontend/`, in
+  `/repo/services/frontend` with `packages/homeai-sdk/` beside it at
+  `/repo/packages/` since M12-06, so the lockfile's `@homeai/sdk` link
+  resolves), a
   second one (M12-05) that builds the app sandbox runtime from
   `packages/homeai-sdk/` into `/srv/app-runtime/1/`, final
   stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
@@ -278,7 +281,7 @@ what another doc says it should be.
   script that goes through it (`scripts/e2e/chat_browser_smoke.sh`,
   `files_browser_smoke.sh`, `media_browser_smoke.sh`,
   `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh`,
-  `auth_browser_smoke.sh`), by `scripts/e2e/tenancy_threads_smoke.sh`
+  `auth_browser_smoke.sh`, `app_runner_browser_smoke.sh`), by `scripts/e2e/tenancy_threads_smoke.sh`
   (unauthenticated `401` over REST and WS, a forged or replayed
   `X-HomeAI-Identity` ignored) and by
   `scripts/verify_network.sh`'s "end-to-end reachability" check. The
@@ -774,7 +777,9 @@ what another doc says it should be.
   "Bridge protocol"): what runs in the app sandbox, what app code is
   type-checked against, and the host's side of the bridge. Not a service
   or an image; the app-builder image and the Caddy image each build the
-  runtime from it, and the frontend (M12-06) imports `@homeai/sdk/host`.
+  runtime from it, and the frontend (M12-06) depends on it as
+  `file:../../packages/homeai-sdk` and imports `@homeai/sdk/host` and
+  `@homeai/sdk/host/web` (§3 "App host").
 - **Layout**: `src/runtime.tsx` (runtime IIFE entry: module registry,
   error boundary, boot and `bundle.load`), `bridge.ts` (sandbox transport),
   `sdk.ts` (`@homeai/sdk` + the `expo-sqlite` shim), `router.tsx` (the
@@ -2134,6 +2139,43 @@ user's rights. The host then sends RPC and relays events as in
 `docs/PLATFORM.md` §7 "Bridge protocol"; the sandbox never sees a
 credential or an instance id.
 
+**App host** (`services/frontend`; M12-06; deviations in `docs/PLATFORM.md`
+§7 "As built (M12-06)")
+
+- **Apps tab** (`src/app/(tabs)/apps/index.tsx`, a Stack like `chat/`):
+  `GET /api/platform/spaces`, then `GET …/spaces/{id}/instances` for each
+  unarchived space (`lib/apps.ts`); sections Personal first, then shared
+  spaces by name, empty ones hidden; a viewer's rows say "View only".
+  Reloads on focus and pull-to-refresh. A placeholder until M14's launcher.
+- **Runner** (`/apps/<instance_id>`, `src/app/(tabs)/apps/[instanceId].tsx`
+  → `components/AppRunner.tsx`): looks the instance up the same way (its
+  space and the user's role come from the platform, `404 not_found`
+  otherwise), then `lib/appHost.ts` fetches the bundle and
+  `/app-runtime/<sdk>/runtime.js` and builds the document with the space
+  (`{id, slug, name, role}`) in its config. `components/AppSandbox.web.tsx`
+  mounts it with `mountSandboxFrame` into the View's DOM node;
+  `components/AppSandbox.tsx` (native) is a `react-native-webview` with the
+  M12-01 settings (`originWhitelist={['*']}`, `onShouldStartLoadWithRequest`
+  only `about:*`, no multiple windows, DOM storage, cache, cookies or file
+  access, `incognito`) and `injectScriptFor` as `send`. Both get their
+  `forward` from `instanceForward(instanceId)` — `platformForward` with
+  `apiBase()` and `authHeaders()` (cookie on web, bearer on native); a `401`
+  signs out as `apiFetch` does.
+- **Events** (`lib/platformEvents.ts`): one `/ws/platform/events` socket
+  per open runner (the bearer as a header on native), reconnecting with
+  backoff 1/2/5/10/30 s; frames go to `platformEventRelay`, which sends
+  `db.changed` on `ready` and the instance's `db_changed`, and hot-reloads
+  on the app's `app_built`.
+- **Errors**: `runtime.error` → overlay over the sandbox (`app-error-overlay`:
+  the message, Reload = remount from the newest bundle, Dismiss);
+  `runtime.ready` clears it; a web frame removed for navigating itself shows
+  it too. A bundle that can't load shows `no_bundle` / `not_found` text and
+  Retry.
+- **Packaging**: `"@homeai/sdk": "file:../../packages/homeai-sdk"`
+  (`metro.config.js` adds the package to `watchFolders`, keeps its own
+  `node_modules` out, and resolves from the frontend's; jest's `modulePaths`
+  does the same), `react-native-webview` 13.16.1.
+
 **`/internal/*`** (never routed by Caddy)
 
 - `GET /internal/health` → `200 {"status":"ok"}`, or `503
@@ -3138,6 +3180,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_auth_smoke.sh` | M10-03: live accounts round-trip straight to `platform:8100` from a throwaway `curlimages/curl` container on `homeai-internal` — status, setup code in logs + file (while setup is pending; never completes it), CLI-created `e2e-auth-*` member, web + native login, verify (cookie and bearer) → identity → `/api/platform/me`, member refused on admin routes, logout → verify `401`; deletes the member (and its personal space row + dir) on exit | After touching `services/platform/` auth/session code |
 | `scripts/e2e/platform_spaces_smoke.sh` | M10-05: same transport as above — CLI-created `e2e-sp-*` members, a shared space and a viewer membership; on the host every `${SPACES_DIR}/<id>` is `drwxrws--- 0:<gid>` and in the container `files/` is `0:<gid> 2770` and `apps/` `2750`; API roles, personal space `404` to others, viewer can't add members, promote to editor, last owner `409`, directory; deletes its rows and dirs on exit | After touching `services/platform/` spaces/storage code |
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
+| `scripts/e2e/app_runner_browser_smoke.sh` | M12-06: through Caddy in headless Chromium — CLI-created owner and viewer of a throwaway `e2e-runner-*` shared space; the owner uploads the SDK's `runtime-check` fixture to the space's `Apps` folder, registers, installs and builds it; then in the web app: Apps tab → the instance under its space → the runner at `/apps/<id>` in an `<iframe sandbox="allow-scripts">`; a row written in the app is in the instance database (REST) and shown after a page reload; a rebuild (v2, from `app_fixture.mjs`) hot-reloads in the same frame; v2's Crash button raises the host's error overlay with the message and its Reload brings the app back in a fresh frame; the viewer sees "View only", the row, and a write refused `read_only` with the database unchanged; no sandbox-frame request got a response. Deletes the space (apps and instances cascade), bundles, users on exit. Also in `gate_full.sh`. `scripts/e2e/app_fixture.mjs` installs the same fixture as your own user for trying it by hand (`HOST-CHECKS.md` M12) | After touching the Apps tab / runner (`services/frontend`), `@homeai/sdk/host`, or the Caddy image |
 | `scripts/e2e/app_build_smoke.sh` | M12-04: (re)builds `homeai-app-builder:latest`, then with the same transport a CLI-created owner uploads and registers the fixture `hello` and builds it: `ok`, `bundle_path` = `app-bundles/<app>/<build>/app.js` in the API and an `__homeai_define(` bundle + map on disk, staging dir and builder containers gone. A missing import, a disallowed import (`fs`), a type error and a render throw in `app/index.tsx` each give exactly one diagnostic with the expected step, file, line and column and leave the bundle as it was; a bad `app.json` gives one `manifest` diagnostic and never reaches the builder; an outsider's build is `404`; a rebuild replaces the bundle and deletes the old one; deletes its rows, dirs and bundles on exit. Also in `gate_full.sh` | After touching `services/app-builder/`, `app/builds.py` or the platform's `appbuild.py` |
 | `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; then (builder image rebuilt first) a column added in the source's `schema.sql` → `POST /apps/{id}/build` → the build's `migrations` show it applied, the column exists and the viewer's socket gets `app_built`; dropping it → build → `pending` in the build response and the migration list, column kept; deletes its rows, bundles and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2750` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
