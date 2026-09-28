@@ -8,7 +8,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /app
 
 # ffmpeg: video poster frames for /api/platform/files/thumbnail.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# git: app source history (app/core/apphistory.py); it writes only to the
+# repos and HOME under /data/platform/app-git, so read_only stays intact.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base

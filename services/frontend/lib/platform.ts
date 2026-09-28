@@ -219,6 +219,10 @@ const MESSAGES: Record<string, string> = {
   admin_required: 'Only admins can do that.',
   step_up_required: 'Confirm your password to continue.',
   not_found: 'Not found. It may have been removed.',
+  unknown_commit: "That version isn't in this app's history.",
+  history_unavailable: "App history isn't available on this server right now.",
+  history_failed: "Couldn't read this app's history.",
+  builder_unavailable: "The app builder isn't available right now. Try again later.",
 };
 
 /** Human-readable text for a failed platform call. */

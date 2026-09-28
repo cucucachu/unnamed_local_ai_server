@@ -132,6 +132,50 @@ def _mkdir_at(dir_fd: int, name: str, owner: Owner) -> int:
     return fd
 
 
+def open_dir_at(dir_fd: int, name: str, owner: Owner) -> int:
+    """An fd on directory `name` of `dir_fd`, made for `owner` if missing.
+
+    Anything else by that name, a symlink included, is removed first, never followed.
+    """
+    try:
+        return os.open(name, _OPEN_DIR, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        if exc.errno not in (errno.ELOOP, errno.ENOTDIR):
+            raise
+        remove_at(dir_fd, name)
+    return _mkdir_at(dir_fd, name, owner)
+
+
+def replace_file_at(dir_fd: int, name: str, data: bytes, owner: Owner) -> None:
+    """Make `name` of `dir_fd` a new regular file of `owner` holding `data`.
+
+    Written under a temporary name and renamed over what was there: a file or
+    symlink is replaced (a link, not what it points at), a directory removed.
+    """
+    tmp = f".homeai-{os.urandom(8).hex()}"
+    fd = os.open(tmp, _OPEN_NEW, FILE_MODE, dir_fd=dir_fd)
+    try:
+        try:
+            _adopt(fd, owner, FILE_MODE)
+            with os.fdopen(fd, "wb", closefd=False) as f:
+                f.write(data)
+        finally:
+            os.close(fd)
+        try:
+            os.rename(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except IsADirectoryError:
+            remove_at(dir_fd, name)
+            os.rename(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        try:
+            os.unlink(tmp, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def make_dirs(root: Root, parts: Parts, owner: Owner) -> None:
     """`mkdir -p` below `root`.
 

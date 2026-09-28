@@ -4,21 +4,25 @@ Contract: docs/ARCHITECTURE.md §3 "Apps"; rules: `app.core.apps`. Every
 route takes an agent delegation too (D6).
 """
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 
 from app.api.schemas import (
     AppBuildOut,
+    AppHistoryOut,
     AppList,
     AppOut,
     AppRegisterRequest,
+    AppRevertOut,
+    AppRevertRequest,
     AppValidationOut,
     InstallRequest,
     InstanceList,
     InstanceOut,
 )
-from app.core import appbuild, apps, manifest
+from app.core import appbuild, apphistory, apps, manifest
 from app.core.errors import Unavailable
 from app.core.principal import CurrentUser
 
@@ -67,9 +71,51 @@ async def build_app(app_id: UUID, request: Request, principal: CurrentUser):
         raise Unavailable("builder_unavailable")
     app, build, diagnostics, migrations = await appbuild.build_app(
         state.db_pool, principal, state.storage, state.builds, state.builder,
-        state.settings.platform_data_dir, state.appdata, app_id,
+        state.settings.platform_data_dir, state.appdata, state.history, app_id,
     )  # fmt: skip
     return AppBuildOut(
+        app=app,
+        ok=build is not None and build.ok,
+        build=None if build is None else vars(build),
+        diagnostics=diagnostics,
+        migrations=migrations,
+    )
+
+
+@router.get("/apps/{app_id}/history", response_model=AppHistoryOut)
+async def app_history(
+    app_id: UUID,
+    request: Request,
+    principal: CurrentUser,
+    offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+    limit: Annotated[int, Query(ge=1, le=apphistory.MAX_LOG_LIMIT)] = 50,
+):
+    """The app's source history, newest first (`app.core.apphistory`)."""
+    state = request.app.state
+    if state.history is None:
+        raise Unavailable("history_unavailable")
+    commits, next_offset = await apphistory.list_history(
+        state.db_pool, principal, state.history, app_id, offset, limit
+    )
+    return AppHistoryOut(commits=commits, next_offset=next_offset)
+
+
+@router.post("/apps/{app_id}/revert", response_model=AppRevertOut)
+async def revert_app(
+    app_id: UUID, body: AppRevertRequest, request: Request, principal: CurrentUser
+):
+    """Restore the source as of `commit`, as a new commit, and rebuild."""
+    state = request.app.state
+    if state.builds is None:
+        raise Unavailable("builder_unavailable")
+    if state.history is None:
+        raise Unavailable("history_unavailable")
+    commit, app, build, diagnostics, migrations = await appbuild.revert_app(
+        state.db_pool, principal, state.storage, state.builds, state.builder,
+        state.settings.platform_data_dir, state.appdata, state.history, app_id, body.commit,
+    )  # fmt: skip
+    return AppRevertOut(
+        commit=commit,
         app=app,
         ok=build is not None and build.ok,
         build=None if build is None else vars(build),

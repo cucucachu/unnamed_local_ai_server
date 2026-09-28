@@ -24,10 +24,16 @@ is where a successful build's bundle goes; `bundle_path` is that path
 relative to the platform data dir. A failed build leaves the previous one
 in place; archiving the app's source space removes it
 (`release_space_bundles`).
+
+A successful build also commits the staged `src/` to the app's history
+(`app.core.apphistory`) and records the commit as the working version's
+`commit`; a failed one commits nothing. `revert_app` commits an earlier
+tree again, writes it back into the source folder by fd, and rebuilds.
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -46,9 +52,10 @@ import httpx
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import apps, appschema, fsops, manifest, spaces, vfs
+from app.core import apphistory, apps, appschema, fsops, manifest, spaces, vfs
 from app.core.appdata import AppData
-from app.core.errors import NotFound, Unavailable
+from app.core.apphistory import AppHistory, HistoryError
+from app.core.errors import InvalidInput, NotFound, ServerError, Unavailable
 from app.core.principal import Principal
 from app.core.storage import SpaceStorage
 
@@ -354,6 +361,7 @@ class Build:
     duration_ms: int
     bundle_path: str | None = None
     bundle_bytes: int | None = None
+    commit: str | None = None
 
 
 def _bundle(builds: Builds, build_id: str) -> tuple[bytes, bytes] | None:
@@ -444,6 +452,20 @@ def drop_bundles(data_dir: Path, bundle_paths: list[str]) -> None:
                 pass
 
 
+def _staged_tree(history: AppHistory | None, app_id: UUID, builds: Builds, build_id: str):
+    if history is None:
+        return None
+    try:
+        return history.write_tree(app_id, builds.root / build_id / "src")
+    except HistoryError as exc:
+        logger.error("history: app %s: build %s not stored: %s", app_id, build_id, exc)
+        return None
+
+
+def _thread_id(principal: Principal) -> str | None:
+    return principal.thread_id if principal.is_agent else None
+
+
 async def build_app(
     pool: AsyncConnectionPool,
     principal: Principal,
@@ -452,14 +474,17 @@ async def build_app(
     builder: Builder,
     data_dir: Path,
     appdata: AppData,
+    history: AppHistory | None,
     app_id: UUID,
 ) -> tuple[dict[str, Any], Build | None, list[Diagnostic], list[dict[str, Any]]]:
     """(app, the build or None if the builder never ran, diagnostics, instance migrations).
 
     Needs `write` on the source space. The database connection isn't held
-    while the builder runs. A successful build then migrates the instances
-    that track the working version to the `schema.sql` it built
-    (`AppData.built`), which also emits `app_built`.
+    while the builder runs. A successful build commits what it built to the
+    app's history (unless that is already the head), then migrates the
+    instances that track the working version to the `schema.sql` it built
+    (`AppData.built`), which also emits `app_built`. Without a usable
+    history (logged) the build still succeeds, with no commit.
     """
     async with pool.connection() as conn:
         app = await apps.get_visible_app(conn, principal, app_id)
@@ -469,23 +494,30 @@ async def build_app(
     if build_id is None:
         return app, None, found, []
     start = time.monotonic()
-    schema_sql = None
+    schema_sql = tree = None
     try:
         if found:
             return app, None, found, []
         found, output = await _run(builds, builder, build_id)
         if output is not None:
             schema_sql = await anyio.to_thread.run_sync(_staged_schema, builds, build_id)
+            tree = await anyio.to_thread.run_sync(_staged_tree, history, app_id, builds, build_id)
     finally:
         await anyio.to_thread.run_sync(builds.discard, build_id)
     duration_ms = int((time.monotonic() - start) * 1000)
     if output is None:
         return app, Build(build_id, False, duration_ms), found, []
 
+    thread_id = _thread_id(principal)
+    subject = f"Build {doc['version']}" + (" by the agent" if thread_id else "")
+    text = apphistory.message(
+        subject, version=doc["version"], user=principal.username, thread_id=thread_id
+    )
+    commit = (history, tree, text) if history is not None and tree is not None else None
     bundle_path = await anyio.to_thread.run_sync(_store_bundle, data_dir, app_id, build_id, output)
     try:
         async with pool.connection() as conn:
-            previous = await _record(conn, principal, app_id, doc, bundle_path)
+            previous, commit_id = await _record(conn, principal, app_id, doc, bundle_path, commit)
     except BaseException:
         await anyio.to_thread.run_sync(_drop_bundle, data_dir, bundle_path)
         raise
@@ -493,29 +525,61 @@ async def build_app(
     async with pool.connection() as conn:
         app = await apps.get_visible_app(conn, principal, app_id)
     migrations = await appdata.built(principal, app, doc["version"], schema_sql)
-    return app, Build(build_id, True, duration_ms, bundle_path, len(output[0])), [], migrations
+    build = Build(build_id, True, duration_ms, bundle_path, len(output[0]), commit_id)
+    return app, build, [], migrations
+
+
+async def _lock_working(conn, principal: Principal, app: dict[str, Any]) -> dict[str, Any]:
+    """The working version's row, locked for the transaction; then `write` on the source space.
+
+    The lock serializes builds and reverts of one app, commits to its history included.
+    """
+    cur = await conn.execute(
+        "SELECT id, bundle_path FROM app_versions "
+        "WHERE app_id = %s AND kind = 'working' FOR UPDATE",
+        (app["id"],),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise NotFound("not_found")
+    # After the row lock: a space archived meanwhile has released its bundles.
+    await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
+    return row
+
+
+async def _commit(app_id: UUID, commit: tuple[AppHistory, str, str] | None) -> str | None:
+    if commit is None:
+        return None
+    history, tree, text = commit
+    try:
+        commit_id, _new = await anyio.to_thread.run_sync(history.commit, app_id, tree, text)
+    except HistoryError as exc:
+        logger.error("history: app %s: commit failed: %s", app_id, exc)
+        return None
+    return commit_id
 
 
 async def _record(
-    conn, principal: Principal, app_id: UUID, doc: Any, bundle_path: str
-) -> str | None:
-    """Make `bundle_path` the working version's; returns the one it replaced if nothing else uses it."""
+    conn,
+    principal: Principal,
+    app_id: UUID,
+    doc: Any,
+    bundle_path: str,
+    commit: tuple[AppHistory, str, str] | None,
+) -> tuple[str | None, str | None]:
+    """Make `bundle_path` (and the commit of `(history, tree, message)`) the working version's.
+
+    (the bundle it replaced if nothing else uses it, the commit id).
+    """
     app = await apps.get_visible_app(conn, principal, app_id)
     async with conn.transaction():
-        cur = await conn.execute(
-            "SELECT id, bundle_path FROM app_versions "
-            "WHERE app_id = %s AND kind = 'working' FOR UPDATE",
-            (app_id,),
-        )
-        row = await cur.fetchone()
-        if row is None:
-            raise NotFound("not_found")
-        # After the row lock: a space archived meanwhile has released its bundles.
-        await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
+        row = await _lock_working(conn, principal, app)
+        commit_id = await _commit(app_id, commit)
         await conn.execute("UPDATE apps SET name = %s WHERE id = %s", (doc["name"], app_id))
         await conn.execute(
-            "UPDATE app_versions SET version = %s, manifest = %s, bundle_path = %s WHERE id = %s",
-            (doc["version"], Jsonb(doc), bundle_path, row["id"]),
+            "UPDATE app_versions SET version = %s, manifest = %s, bundle_path = %s, commit = %s "
+            "WHERE id = %s",
+            (doc["version"], Jsonb(doc), bundle_path, commit_id, row["id"]),
         )
         previous = row["bundle_path"]
         if previous and previous != bundle_path:
@@ -523,8 +587,135 @@ async def _record(
                 "SELECT 1 FROM app_versions WHERE bundle_path = %s", (previous,)
             )
             if await cur.fetchone() is None:
-                return previous
-    return None
+                return previous, commit_id
+    return None, commit_id
+
+
+# --- reverting ------------------------------------------------------------------------
+
+
+def _as_tree(files: dict[str, bytes]) -> dict[str, Any]:
+    """{name: bytes | {name: ...}} of a commit's `{path: content}`."""
+    tree: dict[str, Any] = {}
+    for path, data in files.items():
+        *dirs, name = path.split("/")
+        node = tree
+        for part in [*dirs, name]:
+            if part in ("", ".", "..") or part.startswith(".") or "\x00" in part:
+                raise HistoryError("a path in the commit isn't a staged path")
+        for part in dirs:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise HistoryError("a path in the commit is both a file and a folder")
+        if name in node:
+            raise HistoryError("a path in the commit is both a file and a folder")
+        node[name] = data
+    return tree
+
+
+def _prune(dir_fd: int, name: str, owner: fsops.Owner) -> None:
+    """Remove entry `name`, except for the dotfiles in it: a folder holding some stays."""
+    try:
+        fd = os.open(name, _OPEN_DIR, dir_fd=dir_fd)
+    except OSError as exc:
+        if exc.errno not in (errno.ELOOP, errno.ENOTDIR):
+            raise
+        fsops.remove_at(dir_fd, name)
+        return
+    try:
+        _sync(fd, {}, owner)
+    finally:
+        os.close(fd)
+    try:
+        os.rmdir(name, dir_fd=dir_fd)
+    except OSError as exc:
+        if exc.errno != errno.ENOTEMPTY:
+            raise
+
+
+def _sync(dir_fd: int, tree: dict[str, Any], owner: fsops.Owner) -> None:
+    """Make the folder open as `dir_fd` hold exactly `tree`, dotfiles aside, by fd only."""
+    with os.scandir(dir_fd) as it:
+        present = [entry.name for entry in it]
+    for name in present:
+        if not name.startswith(".") and name not in tree:
+            _prune(dir_fd, name, owner)
+    for name, want in sorted(tree.items()):
+        if isinstance(want, dict):
+            fd = fsops.open_dir_at(dir_fd, name, owner)
+            try:
+                _sync(fd, want, owner)
+            finally:
+                os.close(fd)
+        else:
+            fsops.replace_file_at(dir_fd, name, want, owner)
+
+
+def _write_source(r: vfs.Resolved, files: dict[str, bytes], owner: fsops.Owner) -> None:
+    tree = _as_tree(files)
+    fd = apps.open_source(r)
+    if fd is None:
+        with r.open_root() as root:
+            fsops.make_dirs(root, r.rel, owner)
+        fd = apps.open_source(r)
+        if fd is None:
+            raise NotFound("not_found")
+    try:
+        _sync(fd, tree, owner)
+    finally:
+        os.close(fd)
+
+
+async def revert_app(
+    pool: AsyncConnectionPool,
+    principal: Principal,
+    storage: SpaceStorage,
+    builds: Builds,
+    builder: Builder,
+    data_dir: Path,
+    appdata: AppData,
+    history: AppHistory,
+    app_id: UUID,
+    rev: str,
+) -> tuple[str, dict[str, Any], Build | None, list[Diagnostic], list[dict[str, Any]]]:
+    """(the history's head after the revert, then what `build_app` returns for the rebuild).
+
+    Needs `write` on the source space. `rev` must be a commit on the app's
+    branch (else 422 `unknown_commit`). A new commit gets `rev`'s tree (none
+    if the head has it already); that tree is written back into the source
+    folder by fd (`fsops`), replacing what's there except dotfiles, never
+    following a link; then the app is rebuilt, which commits nothing more
+    unless the folder changed meanwhile.
+    """
+    async with pool.connection() as conn:
+        app = await apps.get_visible_app(conn, principal, app_id)
+        await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
+        r, _slug = await apps.resolve_source(conn, principal, storage, app["source_path"])
+    try:
+        target = await anyio.to_thread.run_sync(history.resolve, app_id, rev)
+        if target is None:
+            raise InvalidInput("unknown_commit")
+        files = await anyio.to_thread.run_sync(
+            history.read_tree, app_id, target, manifest.MAX_PACKAGE_ENTRIES, MAX_SOURCE_BYTES
+        )
+        original = await anyio.to_thread.run_sync(history.get, app_id, target)
+        text = apphistory.message(
+            f"Revert to {target[:12]}" + (f" ({original.version})" if original.version else ""),
+            version=original.version or "", user=principal.username,
+            thread_id=_thread_id(principal), reverts=target,
+        )  # fmt: skip
+        async with pool.connection() as conn, conn.transaction():
+            await _lock_working(conn, principal, app)
+            head, _new = await anyio.to_thread.run_sync(history.commit_revert, app_id, target, text)
+    except HistoryError as exc:
+        logger.error("history: app %s: revert to %s failed: %s", app_id, rev, exc)
+        raise ServerError("history_failed") from exc
+    owner = fsops.Owner(principal.uid, r.space["gid"])
+    await anyio.to_thread.run_sync(_write_source, r, files, owner)
+    result = await build_app(
+        pool, principal, storage, builds, builder, data_dir, appdata, history, app_id
+    )
+    return head, *result
 
 
 # --- serving -------------------------------------------------------------------------

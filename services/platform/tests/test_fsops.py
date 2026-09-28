@@ -105,6 +105,20 @@ fsops.adopt_at(A.fd, "evil", {SPACE_A}, {ALICE})
 out["planted_chown"] = {{"b": describe(b), "b_before": before, "link": describe(a / "evil")}}
 out["planted_listing"] = sorted(os.listdir(b))
 
+# Writing a tree back (app revert): links planted where a file or folder goes
+# are replaced, never followed; a folder where a file goes is removed.
+os.symlink(str(b / "moved"), a / "as_dir")
+os.symlink(str(b / "moved" / "y" / "f.txt"), a / "as_file")
+(a / "was_dir" / "sub").mkdir(parents=True)
+fd = fsops.open_dir_at(A.fd, "as_dir", alice)
+fsops.replace_file_at(fd, "inner.txt", b"in", alice)
+os.close(fd)
+fsops.replace_file_at(A.fd, "as_file", b"file", alice)
+fsops.replace_file_at(A.fd, "was_dir", b"dir", alice)
+out["replaced"] = {{p: describe(a / p) for p in ("as_dir", "as_dir/inner.txt", "as_file", "was_dir")}}
+out["replaced_kept"] = [sorted(os.listdir(b / "moved")), (b / "moved" / "y" / "f.txt").read_text(),
+                        sorted(n for n in os.listdir(a) if n.startswith(".homeai-"))]
+
 # Another member of space b (not the owner) can use what was created there.
 os.setgroups([{SPACE_B}])
 os.setgid(40000)
@@ -198,6 +212,16 @@ def test_planted_link_to_another_space_redirects_nothing(result):
     assert chown["b"] == chown["b_before"] == _node(0, SPACE_B, "0o2770")
     assert (chown["link"]["uid"], chown["link"]["gid"]) == (ALICE, SPACE_A)
     assert "pwn.txt" not in result["planted_listing"]
+
+
+def test_replacing_a_planted_link_writes_in_place_and_follows_nothing(result):
+    assert result["replaced"] == {
+        "as_dir": _node(ALICE, SPACE_A, "0o2770"),
+        "as_dir/inner.txt": _node(ALICE, SPACE_A, "0o660"),
+        "as_file": _node(ALICE, SPACE_A, "0o660"),
+        "was_dir": _node(ALICE, SPACE_A, "0o660"),
+    }
+    assert result["replaced_kept"] == [["y"], "again", []]
 
 
 def test_other_members_can_use_it(result):
