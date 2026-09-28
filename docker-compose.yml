@@ -20,10 +20,12 @@
 # default rather than something merely unused:
 #   homeai-net      -> the egress-capable network (default Docker NAT, a
 #                      route to the internet). Reserved for `caddy` (needs
-#                      it to keep the published port) and the M7-02
-#                      `egress-proxy` (the sole other service allowed a
-#                      route out - see docs/ARCHITECTURE.md §5). No other
-#                      service may ever join this network.
+#                      it to keep the published port, and M15-03 ACME
+#                      DNS-01 outbound HTTPS to the CA + DuckDNS API) and
+#                      the M7-02 `egress-proxy` (the sole other service
+#                      allowed a route out - see docs/ARCHITECTURE.md §5).
+#                      No other service may ever join this network. Do not
+#                      put Caddy on a third internet network.
 #   homeai-internal -> `internal: true` - Docker refuses to attach any
 #                      default route/NAT to this network, so no container
 #                      on it can reach the public internet at the network
@@ -64,7 +66,8 @@ networks:
 volumes:
   pgdata:
   # Caddy's data dir (`/data`) — holds the local CA (`tls internal`) so
-  # the root stays stable across container recreates. M9-05.
+  # the root stays stable across container recreates (M9-05), and ACME
+  # certs when HOMEAI_DOMAIN is set (M15-03 DNS-01).
   caddy-data:
   # mitmproxy's own generated CA (private key + cert), written to
   # ~/.mitmproxy inside the egress-proxy container on its first start - not
@@ -93,7 +96,12 @@ services:
     volumes:
       - caddy-data:/data
     # Only service on BOTH networks (see the top-of-file comment): needs
-    # homeai-net for the published ports, homeai-internal to reach agent-server.
+    # homeai-net for the published ports and ACME DNS-01 egress, homeai-internal
+    # to reach agent-server. Optional domain (M15-03): empty HOMEAI_DOMAIN
+    # keeps :80 + https://homeai.local. Token is a secret — never log it.
+    environment:
+      HOMEAI_DOMAIN: ${HOMEAI_DOMAIN:-}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
     networks:
       - homeai-net
       - homeai-internal
@@ -386,11 +394,15 @@ services:
   # Peers live in Postgres; this service never talks to the platform DB.
   # UDP 51820 is the one new published port (not on homeai-net — no
   # default route out). HTTP/HTTPS for tunnel clients is proxied to
-  # `caddy` on 10.13.13.1; DNS for `homeai.local` is the same address.
-  # homeai-wg is the published-port netns (return path); homeai-internal
-  # is how this sidecar reaches `caddy` by name.
+  # `caddy` on 10.13.13.1; DNS for `homeai.local` (and HOMEAI_DOMAIN when
+  # set, M15-03) is the same address. homeai-wg is the published-port
+  # netns (return path); homeai-internal is how this sidecar reaches
+  # `caddy` by name.
   wireguard:
-    build: ./services/wireguard
+    build:
+      context: ./services/wireguard
+      additional_contexts:
+        hostlib: ./infra/lib
     restart: unless-stopped
     networks: [homeai-internal, homeai-wg]
     depends_on:
@@ -405,6 +417,11 @@ services:
       - "51820:51820/udp"
     volumes:
       - wireguard-config:/data/wireguard:ro
+    environment:
+      # When set, sidecar dnsmasq also answers this name → 10.13.13.1
+      # (M15-03). Empty = homeai.local only. Still --no-resolv (not a
+      # recursive resolver for the public internet).
+      HOMEAI_DOMAIN: ${HOMEAI_DOMAIN:-}
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
 

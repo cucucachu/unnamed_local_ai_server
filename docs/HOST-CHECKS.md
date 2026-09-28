@@ -222,6 +222,12 @@ on the LAN":
       named for this phone → scan the QR in a WireGuard app → the tunnel
       comes up and `http://homeai.local` (or `http://10.13.13.1`) loads
       the UI. Revoke the device; the tunnel no longer reaches the box.
+- [ ] (M15-03) Optional: if you already have a DuckDNS name and token,
+      split-DNS `HOMEAI_DOMAIN` to this host's LAN IPv4
+      (`docs/NETWORKING.md`) and open `https://$HOMEAI_DOMAIN` on the LAN.
+      Do not forward TCP 80/443. Not required to close the ticket (Tier A
+      is `scripts/verify_caddy_domain.sh`; default `HOMEAI_DOMAIN` stays
+      empty so live `https://homeai.local` is not disturbed).
 
 > **PM sign-off: G15 passed ____**
 

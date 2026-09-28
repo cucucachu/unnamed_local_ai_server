@@ -1,3 +1,12 @@
+# xcaddy + DuckDNS first so `docker build --target caddy-dns` (used by
+# scripts/verify_caddy_domain.sh) does not run the frontend/runtime stages.
+FROM caddy:2-builder-alpine AS caddy-builder
+RUN xcaddy build --with github.com/caddy-dns/duckdns
+
+# Plugin-enabled alpine binary, no frontend — throwaway validate image.
+FROM caddy:2-alpine AS caddy-dns
+COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
+
 # Stage name/`/out` output path are a contract with the final stage below
 # (and were with M2-05, which replaced this stage's placeholder body with
 # the real `expo export` build) — keep both stable.
@@ -27,6 +36,12 @@ COPY packages/homeai-sdk/ ./
 RUN node build.mjs --out /out/app-runtime/1
 
 FROM caddy:2-alpine
+COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY infra/caddy/Caddyfile /etc/caddy/Caddyfile
+COPY infra/caddy/entrypoint.sh /entrypoint.sh
+COPY infra/lib/valid_hostname.sh /usr/local/lib/homeai-valid-hostname.sh
+RUN chmod 755 /entrypoint.sh && printf '%s\n' '# domain mode off' > /etc/caddy/domain.caddy
 COPY --from=frontend-build /out /srv/www
 COPY --from=runtime-build /out/app-runtime /srv/app-runtime
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

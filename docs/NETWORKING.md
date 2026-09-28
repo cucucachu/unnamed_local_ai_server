@@ -82,10 +82,12 @@ Three independent layers, because no single one is sufficient on its own:
    the host by name without router DNS changes — this is a convenience, not
    a security boundary.
 
-Also out of scope for v1 by design (see README): public ACME
-certificates, forcing HTTPS / HSTS, auth, docker-socket-proxy,
-router/VLAN changes. Local HTTPS for `homeai.local` (Caddy internal CA)
-is in — see "Local HTTPS (Caddy internal CA)" below.
+Also out of scope for v1 by design (see README): forcing HTTPS / HSTS,
+public WAN listeners (M15-05), auth, docker-socket-proxy, router/VLAN
+changes. Local HTTPS for `homeai.local` (Caddy internal CA) is in — see
+"Local HTTPS (Caddy internal CA)" below. Optional real certificates via
+ACME DNS-01 (no inbound 80/443) shipped in M15-03 — see "Split DNS
+(optional real domain)" below.
 
 ### Known gotcha: `avahi-daemon` doesn't notice a live hostname change
 
@@ -385,7 +387,8 @@ distinction is M15-05 — until then, do not forward TCP 80/443.
 only) on `homeai-wg` (not `homeai-net`; masquerade off so it is not a
 second internet path). Platform stores peers and the server key; Settings → Remote access
 issues a QR while you are on the LAN. Client DNS is `10.13.13.1`
-(`homeai.local` only in v1; split DNS is M15-03).
+(`homeai.local`, and `HOMEAI_DOMAIN` when set — M15-03; still not a
+recursive resolver).
 
 **Human host steps** (agents must not run these against the live firewall
 or router): `infra/host/setup-wireguard.md` — `modprobe wireguard`,
@@ -395,6 +398,58 @@ optional `ufw allow 51820/udp`, router UDP 51820 forward, then set
 Public HTTPS (opt-in, passkey-only) is M15-05, not this. The v1 security
 model (home-grade sign-in, `execute_code`, plain HTTP on the LAN) is
 unchanged for anything that is not the WireGuard UDP port.
+
+## Split DNS (optional real domain)
+
+Optional `HOMEAI_DOMAIN` (M15-03) is a **real DNS name** (typically a
+DuckDNS hostname) that Caddy serves with a Let's Encrypt certificate
+obtained via **ACME DNS-01**. That challenge talks outbound to the CA and
+to DuckDNS's API. It does **not** require inbound TCP 80 or 443. Do not
+punch those holes — public HTTPS / WAN listeners are M15-05.
+
+LAN clients should resolve `HOMEAI_DOMAIN` to **this host's LAN IPv4**,
+not to DuckDNS's public address. That is split DNS: the same name, a
+private answer on the LAN (and on the WireGuard tunnel), so phones and
+laptops hit the box directly without hairpin NAT and without forwarding
+TCP 80/443 on the router.
+
+Leave `HOMEAI_DOMAIN` empty (the default) unless you want this. Setting it
+on a live stack makes Caddy attempt ACME; keep it unset until the token
+and split-DNS record are ready (`https://homeai.local` stays `tls
+internal` either way). HTTP `:80` is never redirected and has no HSTS.
+`http://homeai.local/ca.crt` remains for the local CA.
+
+Find the LAN IPv4 with `ip -4 addr show` (or `scripts/verify_network.sh`
+check 1). Then add a host override on whichever resolver your LAN uses:
+
+**dnsmasq / Pi-hole / AdGuard Home** — an A record (or dnsmasq
+`address=/`) from `HOMEAI_DOMAIN` to that IPv4. Pi-hole: Local DNS → DNS
+Records. AdGuard: Filters → DNS rewrites. Restart/reload so clients pick
+it up.
+
+**pfSense / OPNsense** — Services → DNS Resolver (Unbound) → Host
+Overrides: hostname + domain matching `HOMEAI_DOMAIN`, IPv4 = this box.
+Save/apply.
+
+**UniFi** — Settings → Networks → the LAN network → DHCP / DNS, or
+Settings → Policy Table → DNS → a local DNS record mapping the FQDN to
+this host's LAN IPv4 (wording varies by controller version).
+
+**Generic ISP / consumer router** — if the UI has "LAN DNS", "static
+DNS", "host mapping", or "address reservation + name", map the FQDN to
+this host. Some ISP boxes cannot override public names at all; in that
+case use Pi-hole/AdGuard on the LAN, or keep using `homeai.local`
+(mDNS) and only use the real name from clients that can point at a
+resolver you control.
+
+**WireGuard** — client configs already set `DNS = 10.13.13.1`. The
+sidecar answers `homeai.local` and, when `HOMEAI_DOMAIN` is set, that
+name too, both to `10.13.13.1`. It is not a recursive resolver for the
+public internet (`--no-resolv`).
+
+After split DNS is in place, open `https://$HOMEAI_DOMAIN` on the LAN
+(public CA, no local-CA install). `https://homeai.local` keeps working
+with the Caddy internal CA. Passkeys / WebAuthn are M15-04, not this.
 
 ## Verifying from a phone
 

@@ -1248,8 +1248,26 @@ with that app's context.
 > Tunnel subnet **10.13.13.0/24** (server **10.13.13.1**), chosen not to
 > collide with home LAN `192.168.x` or Docker `172.x`. Client configs set
 > `DNS = 10.13.13.1` and `AllowedIPs = 10.13.13.0/24`; the sidecar answers
-> `homeai.local` and proxies `:80`/`:443` to Caddy. Split/recursive DNS is
-> M15-03.
+> `homeai.local` (and `HOMEAI_DOMAIN` when set) and proxies `:80`/`:443`
+> to Caddy. It is not a recursive resolver (`--no-resolv`).
+>
+> **As built (M15-03)** — optional `HOMEAI_DOMAIN` + `DUCKDNS_TOKEN`.
+> Empty domain (the default; not required in `.env`) keeps `:80` and
+> `https://homeai.local { tls internal }`. When set to a valid hostname,
+> Caddy also serves `https://$HOMEAI_DOMAIN` with ACME DNS-01 via the
+> DuckDNS plugin (`github.com/caddy-dns/duckdns`, xcaddy-built into the
+> existing alpine final stage). No HTTP-01, no extra published ports.
+> Certs persist in the `caddy-data` volume (`/data`). An empty token with
+> a non-empty domain is a hard start failure, not silent HTTP. Hostname
+> is validated before it is interpolated into a Caddyfile. Split DNS:
+> LAN resolvers map the name to this host's LAN IPv4
+> (`docs/NETWORKING.md`); the WireGuard sidecar answers it → `10.13.13.1`
+> when the env is set. DNS-01 uses existing `homeai-net` egress; do not
+> forward TCP 80/443. Passkeys / WebAuthn / RP ID are M15-04. Public
+> HTTPS / HSTS / WAN listeners are M15-05. `/ca.crt` still serves the
+> local CA. Live check: `scripts/verify_caddy_domain.sh` (compose config
+> + Caddyfile validate; does not obtain a real cert; does not set
+> `HOMEAI_DOMAIN` on the live stack).
 >
 > Settings → Remote access lists devices, creates a named profile (QR +
 > wg-quick text **once**), and revokes with confirm. Routes
