@@ -619,10 +619,9 @@ what another doc says it should be.
   service bearer for `GET /internal/bootstrap-admin` and, since M11-02,
   `/internal/delegations*` — unset means pre-M10 threads/settings stay
   unassigned and every chat socket closes `1011`, with a startup warning;
-  `PLATFORM_URL` defaults to `http://platform:8100`), and `TEST_PG_DSN`
-  (only read by `tests/test_checkpointer_pg.py`'s integration fixture,
-  not by the application itself — compose's own comment on this line
-  says so). **Nuance**: `HOMEAI_UID`/`HOMEAI_GID` are used by *compose*
+  `PLATFORM_URL` defaults to `http://platform:8100`). (`TEST_PG_DSN` is
+  gone since #194: the Postgres tests start their own throwaway server.)
+  **Nuance**: `HOMEAI_UID`/`HOMEAI_GID` are used by *compose*
   to set this service's `user:` field — they are never injected into the
   container's own environment.
 - **Tests**: `services/agent-server/tests/` — `test_health.py`,
@@ -635,7 +634,12 @@ what another doc says it should be.
   down `1011`, token never in the model's context or the checkpointer),
   `test_execute_code_tool.py`, `test_execute_code_integration.py`,
   `test_web_tools.py` (M7-05, `respx`-mocked `web-fetch`),
-  `test_checkpointer_pg.py`, `test_threads_pg.py`, `test_fake_model.py`,
+  `test_checkpointer_pg.py`, `test_threads_pg.py`, `test_settings_pg.py`,
+  `test_rls_pg.py` (#194: row-level security — cross-user reads and writes
+  of every table invisible or refused, even as raw SQL on the app's pool;
+  no bound user sees nothing; a returned connection carries no user;
+  concurrent users on one pool; hand-over through `agent_rls_bypass`;
+  thread delete removes every checkpoint), `test_fake_model.py`,
   `test_identity.py` (M10-04: real JWT verification — valid, forged,
   expired, wrong `aud`/`iss`, `act=agent`, `alg` confusion, key rotation,
   JWKS outage), `test_auth_enforcement.py` (M10-04: every non-health
@@ -648,12 +652,12 @@ what another doc says it should be.
   endpoints with revocable sessions). Most tests sign in through
   `tests/fake_identity.py` (`identity_verifier_override=
   FixedIdentityVerifier()` on `create_app`, a fixed test user).
-  Run: `cd services/agent-server && uv run ruff check . && uv run pytest`
-  (the default marker selection skips the `integration` tests). The
-  Postgres-backed integration tests need a real reachable Postgres via
-  `TEST_PG_DSN`: `uv run pytest -m integration`, or the already-wired
-  container form `docker compose exec agent-server uv run pytest -m
-  integration` (per `docker-compose.yml`'s own comment on `TEST_PG_DSN`).
+  Run: `cd services/agent-server && uv run ruff check . && uv run pytest`.
+  The Postgres-backed tests (marker `integration`) start a throwaway
+  `postgres:17` with the host's `docker` CLI, run
+  `infra/postgres/db-init.sh` against it, and connect as `agent` like the
+  live stack (`tests/conftest.py`'s `pg_server`); without `docker` they
+  skip. Select them alone with `uv run pytest -m integration`.
 
 ### `model-runner`
 
@@ -853,8 +857,9 @@ what another doc says it should be.
   `POSTGRES_DB` — confirmed directly in `docker compose config`'s
   `postgres.environment` block.
 - **Tests**: no tests of its own; exercised via `agent-server`'s
-  `test_checkpointer_pg.py` / `test_threads_pg.py` (`-m integration`, needs
-  `TEST_PG_DSN`) and the `scripts/e2e/gate_m3.sh` / `persistence_smoke.sh`
+  `test_checkpointer_pg.py` / `test_threads_pg.py` / `test_rls_pg.py`
+  (`-m integration`, a throwaway `postgres:17`) and the
+  `scripts/e2e/gate_m3.sh` / `persistence_smoke.sh`
   scripts.
 
 ### `db-init`
@@ -870,7 +875,11 @@ what another doc says it should be.
   and re-asserts the database owner. `CREATE DATABASE` can't run inside a
   transaction/`DO` block, so the script uses psql's `\gexec`.
   Since M11-04 it also creates role `agent` (same attributes, password
-  from `AGENT_DB_PASSWORD`) for agent-server. The `homeai` database
+  from `AGENT_DB_PASSWORD`) for agent-server, and since #194 role
+  `agent_rls_bypass` (`NOLOGIN BYPASSRLS`, owns nothing), which `agent`
+  may `SET ROLE` to but doesn't inherit from — the one deliberate way past
+  agent-server's row-level security (only a superuser can create a
+  `BYPASSRLS` role). The `homeai` database
   (`POSTGRES_DB`) stays owned by the superuser, so `agent` can't drop or
   alter it; `agent` gets `CONNECT`/`TEMPORARY` on it and `USAGE`/`CREATE`
   on schema `public`, and every table, sequence, view, type and routine in
@@ -906,7 +915,8 @@ what another doc says it should be.
   superuser-owned tables/sequences/identity columns/types/functions with
   rows handed over intact and usable (insert, `ALTER TABLE ... ADD
   COLUMN`, `CREATE INDEX`, new tables), `agent` unable to drop or take
-  over a database, and the missing-password/wrong-database refusals.
+  over a database, and the missing-password/wrong-database refusals; and
+  (#194) `agent_rls_bypass`'s attributes and `agent`'s SET-only membership.
 
 ### `platform`
 
@@ -2846,7 +2856,13 @@ What the design defends against, and how:
    sliding; logins are rate-limited per username and client IP.
    - Threads, checkpoints, settings and turn stats belong to a user;
      agent-server checks ownership on every REST and WebSocket call, and a
-     foreign thread looks exactly like a nonexistent one.
+     foreign thread looks exactly like a nonexistent one. Underneath
+     (#194), Postgres row-level security, forced on every agent-server
+     table, shows a connection only the rows of the user agent-server
+     authenticated for that request or socket (`app.user_id`, set per pool
+     checkout and cleared on return), so a query that forgets its
+     ownership check still returns nothing foreign
+     (`services/agent-server/app/db/rls.py`).
    - Files live in spaces (a personal space per user, shared spaces with
      owner/editor/viewer members). One authorization helper decides every
      access — non-members get `404`, viewers can't write — and the
@@ -2915,10 +2931,13 @@ and the model weights.
 
 **Known limits, stated rather than hidden**:
 
-- Thread tenancy is enforced by agent-server's ownership checks, not by
-  Postgres: the `agent` role can read every user's threads and
-  checkpoints in `homeai` (no row-level security), so a compromised
-  agent-server process would see all chat history — though still no
+- Thread tenancy is enforced by agent-server: its ownership checks, and
+  (#194) row-level security keyed on a setting agent-server itself
+  chooses. That is defence in depth against a missed ownership check, not
+  a boundary against a compromised agent-server: the `agent` role owns
+  the tables (so it could turn the policies off), can set `app.user_id`
+  to anyone, and can switch to `agent_rls_bypass`. A compromised
+  agent-server process would still see all chat history — though no
   files, no platform database, and no admin actions.
 - All users share one `model-runner`; there's no fair-share scheduling
   (D1), so one user can slow others down, and request timing isn't
@@ -3010,8 +3029,9 @@ code-exec-manager's grants handling, or the compose config of
 `agent-server`/`platform`/`db-init`. It's in `gate_full.sh`, right after
 `verify_isolation.sh`, and needs no `sudo` and no model.
 
-Three throwaway users (A owns a shared space B views; an admin) and 25
-checks, grouped by `docs/PLATFORM.md` §9 invariant:
+Three throwaway users (A owns a shared space B views; an admin) and 28
+checks, grouped by `docs/PLATFORM.md` §9 invariant (and, last,
+agent-server's row-level security):
 
 1. **Sessions and identity headers** (1-4): without a session every
    `/api/*`, `/api/platform/*` route and the chat socket is `401` at Caddy,
@@ -3074,6 +3094,18 @@ checks, grouped by `docs/PLATFORM.md` §9 invariant:
    members (the viewer too) and is `404` for non-members and their
    delegations, `401` without a session. Both instances' rows are
    unchanged throughout.
+8. **agent-server's row-level security** (26-28, #194): every one of its
+   7 tables in `homeai` has RLS enabled and forced and is owned by
+   `agent` (6 with the `owner_only` policy, the legacy `settings` with
+   none); `agent` isn't `BYPASSRLS`; `agent_rls_bypass` is `NOLOGIN`,
+   `agent` may only `SET ROLE` to it (no inherit, no admin), and it owns
+   nothing. Raw SQL with agent-server's own credentials in the live
+   container and no `app.user_id` counts 0 rows in every table (while the
+   superuser sees the real ones) and can't insert a thread. A creates a
+   thread through Caddy: with B's `app.user_id` that connection sees 0
+   rows of it, with A's 1; and a one-connection `RlsConnectionPool` (the
+   app's own class) checked out for A, returned, then checked out unbound
+   and by B is the same backend with no trace of A's setting or rows.
 
 Same conventions as the isolation suite: every failure is printed and the
 rest still run, the exit code is 1 if anything failed, and everything it
@@ -3280,7 +3312,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/files_rest_smoke.sh`, `threads_rest_smoke.sh` | Narrow REST-only smoke checks (since M11-01 `files_rest_smoke.sh` uses the platform files API on `/personal`; since M11-02 it checks the agent's `ls` sees a file put into `/personal` through that API) | Quick check after a small files/threads API change |
 | `scripts/e2e/files_browser_smoke.sh`, `chat_browser_smoke.sh`, `media_browser_smoke.sh`, `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh` | Real headless-browser UI smoke tests. Each signs in first as a throwaway recovery-CLI `e2e-*` user via `scripts/e2e/auth_helpers.mjs` (deleted on exit); the Files-tab smokes seed through the platform files API as that user (`files_helpers.mjs`), never into host dirs | After frontend changes to the corresponding tab, or before a milestone gate |
 | `scripts/verify_isolation.sh` | 22-check code-exec hardening and per-user exec suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
-| `scripts/verify_tenancy.sh` | M11-04: 25-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-7 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants, and (M12-08) the app sandbox holding no credentials plus app RPC/bundle scoping (see "Security model" above). Also in `gate_full.sh` and `gate_m12.sh` | After touching auth routing, the platform's auth/spaces/files/apps code, delegations, exec grants, the app host or runtime, or the agent-server/platform/db-init compose blocks |
+| `scripts/verify_tenancy.sh` | M11-04: 28-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-7 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants, and (M12-08) the app sandbox holding no credentials plus app RPC/bundle scoping, and (#194) row-level security on agent-server's tables: enabled and forced, the roles' attributes, raw SQL as `agent` without `app.user_id` seeing nothing, and no user's setting surviving a pooled connection's return (see "Security model" above). Also in `gate_full.sh` and `gate_m12.sh` | After touching auth routing, the platform's auth/spaces/files/apps code, delegations, exec grants, the app host or runtime, or the agent-server/platform/db-init compose blocks |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
