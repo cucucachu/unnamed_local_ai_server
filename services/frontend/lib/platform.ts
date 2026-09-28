@@ -41,6 +41,11 @@ export interface Space {
   archived_at: string | null;
 }
 
+/** Viewers, and anyone without a role in the space, cannot write. */
+export function isReadOnly(space: Space): boolean {
+  return space.role !== 'owner' && space.role !== 'editor';
+}
+
 export interface Member {
   user_id: string;
   username: string;
@@ -223,6 +228,15 @@ const MESSAGES: Record<string, string> = {
   history_unavailable: "App history isn't available on this server right now.",
   history_failed: "Couldn't read this app's history.",
   builder_unavailable: "The app builder isn't available right now. Try again later.",
+  not_built: 'Build the app before publishing it.',
+  version_exists: 'That version is already published. Bump the version in app.json and build again.',
+  not_in_catalog: "This app isn't listed in that space's catalog.",
+  permissions_required: 'Confirm the permissions this app is asking for.',
+  permissions_changed: 'This update asks for different permissions. Review them and confirm.',
+  permissions_mismatch: "The permissions you granted don't match what the app requested.",
+  working_not_updatable: 'The working copy updates when you build. Publish a version to update other installs.',
+  already_on_version: 'This install is already on that version.',
+  not_published: "This app hasn't been published, so it can't be copied without its source.",
 };
 
 /** Human-readable text for a failed platform call. */

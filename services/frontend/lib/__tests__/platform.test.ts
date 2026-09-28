@@ -9,6 +9,7 @@ import {
   createSpace,
   enrollTotp,
   inviteLink,
+  isReadOnly,
   listSessions,
   platformErrorMessage,
   removeMember,
@@ -89,6 +90,28 @@ describe('slugify', () => {
     ['a'.repeat(50), 'a'.repeat(40)],
   ])('%s -> %s', (name, slug) => {
     expect(slugify(name)).toBe(slug);
+  });
+});
+
+describe('isReadOnly', () => {
+  it('is true for viewers and anyone without a role', () => {
+    const space = (role: 'owner' | 'editor' | 'viewer' | null) => ({
+      id: 's1',
+      slug: 'home',
+      name: 'Home',
+      kind: 'shared' as const,
+      gid: 3000,
+      owner_user_id: null,
+      role,
+      created_at: '',
+      archived_at: null,
+    });
+    expect([isReadOnly(space('owner')), isReadOnly(space('editor')), isReadOnly(space('viewer')), isReadOnly(space(null))]).toEqual([
+      false,
+      false,
+      true,
+      true,
+    ]);
   });
 });
 

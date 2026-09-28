@@ -166,6 +166,19 @@ describe('AppInfoScreen', () => {
     renderer = await render(AppInfoScreen);
     expect(exists(renderer, 'app-info-no-source')).toBe(true);
   });
+
+  it('publishes the working version into selected spaces', async () => {
+    const fetchMock = routes('owner', {
+      'POST /api/platform/apps/a1/publish': {
+        body: { version: { id: 'v1', version: '1.1.0' }, space_ids: ['s1'] },
+      },
+    });
+    renderer = await render(AppInfoScreen);
+    expect(exists(renderer, 'app-publish')).toBe(true);
+    await press(renderer, 'app-publish-confirm');
+    expect(requestsTo(fetchMock, 'POST', '/apps/a1/publish')).toEqual([{ space_ids: ['s1'] }]);
+    expect(textOf(renderer)).toContain('Published 1.1.0.');
+  });
 });
 
 describe('AppRunnerScreen', () => {
@@ -185,6 +198,7 @@ describe('AppRunnerScreen', () => {
               granted_permissions: {},
               created_at: '',
               app: { id: 'a1', slug: 'groceries', name: 'Groceries', version: '1.0.0', icon: null },
+              update: null,
             },
           ],
         },

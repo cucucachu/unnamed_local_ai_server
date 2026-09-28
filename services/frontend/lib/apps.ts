@@ -25,6 +25,7 @@ export interface Instance {
   granted_permissions: Record<string, unknown>;
   created_at: string;
   app: InstanceApp;
+  update: { id: string; version: string; permissions: Record<string, unknown> } | null;
 }
 
 export interface SpaceApps {
@@ -108,4 +109,92 @@ export async function findInstance(instanceId: string): Promise<{ space: Space; 
     if (instance) return { space, instance };
   }
   throw new ApiError(404, 'not_found');
+}
+
+export interface AppVersion {
+  id: string;
+  version: string;
+  kind: 'working' | 'published';
+  commit: string | null;
+  manifest: {
+    name?: string;
+    homeai?: { description?: string; icon?: string; permissions?: Record<string, unknown> };
+  };
+  bundle_path: string | null;
+  created_at: string;
+  published_at: string | null;
+}
+
+export interface CatalogEntry {
+  app: InstanceApp;
+  version: AppVersion;
+  installed: boolean;
+  instance_id: string | null;
+}
+
+export function listCatalog(spaceId: string): Promise<{ entries: CatalogEntry[] }> {
+  return apiFetch<{ entries: CatalogEntry[] }>(`/api/platform/spaces/${encodeURIComponent(spaceId)}/catalog`);
+}
+
+export function publishApp(appId: string, spaceIds: string[]): Promise<{ version: AppVersion; space_ids: string[] }> {
+  return apiFetch(`/api/platform/apps/${encodeURIComponent(appId)}/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ space_ids: spaceIds }),
+  });
+}
+
+export function installApp(
+  spaceId: string,
+  appId: string,
+  tracks: string,
+  grantedPermissions?: Record<string, unknown>,
+): Promise<Instance> {
+  return apiFetch(`/api/platform/spaces/${encodeURIComponent(spaceId)}/instances`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      app_id: appId,
+      tracks,
+      ...(grantedPermissions === undefined ? {} : { granted_permissions: grantedPermissions }),
+    }),
+  });
+}
+
+export function updateInstance(
+  spaceId: string,
+  instanceId: string,
+  versionId: string,
+  grantedPermissions?: Record<string, unknown>,
+): Promise<{ instance: Instance; migration: { status: string } }> {
+  return apiFetch(
+    `/api/platform/spaces/${encodeURIComponent(spaceId)}/instances/${encodeURIComponent(instanceId)}/update`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version_id: versionId,
+        ...(grantedPermissions === undefined ? {} : { granted_permissions: grantedPermissions }),
+      }),
+    },
+  );
+}
+
+export function forkApp(appId: string, spaceId: string, slug?: string): Promise<{ app: App; instance: Instance }> {
+  return apiFetch(`/api/platform/apps/${encodeURIComponent(appId)}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ space_id: spaceId, ...(slug ? { slug } : {}) }),
+  });
+}
+
+export function permissionsOf(manifest: AppVersion['manifest'] | undefined): Record<string, unknown> {
+  const perms = manifest?.homeai?.permissions;
+  return perms && typeof perms === 'object' ? perms : {};
+}
+
+export function describePermissions(perms: Record<string, unknown>): string[] {
+  return Object.entries(perms).map(([key, value]) =>
+    Array.isArray(value) ? `${key}: ${value.join(', ')}` : `${key}: ${JSON.stringify(value)}`,
+  );
 }

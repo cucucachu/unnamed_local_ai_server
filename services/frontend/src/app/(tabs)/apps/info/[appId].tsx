@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   ActionButton,
@@ -11,9 +11,9 @@ import {
   SectionTitle,
   settingsStyles,
 } from '@/components/SettingsUI';
-import { isReadOnly } from '@/lib/appHost';
-import { getApp, getAppHistory, revertApp, type App, type AppCommit, type RevertResult } from '@/lib/apps';
-import { listSpaces } from '@/lib/platform';
+import { isReadOnly } from '@/lib/platform';
+import { getApp, getAppHistory, publishApp, revertApp, type App, type AppCommit, type RevertResult } from '@/lib/apps';
+import { listSpaces, type Space } from '@/lib/platform';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
@@ -21,6 +21,8 @@ interface AppInfo {
   app: App;
   /** Owner or editor of the app's source space. */
   canRevert: boolean;
+  /** Writable spaces the author can list this app in. */
+  catalogSpaces: Space[];
   /** null when the user sees the app only through an install. */
   commits: AppCommit[] | null;
   nextOffset: number | null;
@@ -29,11 +31,15 @@ interface AppInfo {
 async function loadAppInfo(appId: string): Promise<AppInfo> {
   const [app, spaces] = await Promise.all([getApp(appId), listSpaces()]);
   const space = spaces.find((s) => s.id === app.source_space_id);
-  if (app.source_path === null) return { app, canRevert: false, commits: null, nextOffset: null };
+  const catalogSpaces = spaces.filter((s) => s.archived_at === null && !isReadOnly(s));
+  if (app.source_path === null) {
+    return { app, canRevert: false, catalogSpaces: [], commits: null, nextOffset: null };
+  }
   const page = await getAppHistory(appId);
   return {
     app,
     canRevert: space !== undefined && !isReadOnly(space),
+    catalogSpaces,
     commits: page.commits,
     nextOffset: page.next_offset,
   };
@@ -85,6 +91,7 @@ export default function AppInfoScreen() {
   const load = useCallback(() => loadAppInfo(appId), [appId]);
   const { data, error, reload, setData } = useLoad(load);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+  const [selected, setSelected] = useState<string[] | null>(null);
   const onError = useCallback((text: string) => setNotice({ text, ok: false }), []);
   const { busyKey, run } = useAction(onError);
 
@@ -97,7 +104,8 @@ export default function AppInfoScreen() {
     );
   }
 
-  const { app, canRevert, commits, nextOffset } = data;
+  const { app, canRevert, catalogSpaces, commits, nextOffset } = data;
+  const listed = selected ?? catalogSpaces.filter((s) => s.kind === 'shared').map((s) => s.id);
 
   const revert = async (commit: AppCommit) => {
     if (!(await confirmRevert(commit))) return;
@@ -113,6 +121,16 @@ export default function AppInfoScreen() {
       if (nextOffset === null || commits === null) return;
       const page = await getAppHistory(app.id, nextOffset);
       setData({ ...data, commits: [...commits, ...page.commits], nextOffset: page.next_offset });
+    });
+
+  const toggleSpace = (id: string) =>
+    setSelected(listed.includes(id) ? listed.filter((s) => s !== id) : [...listed, id]);
+
+  const publish = () =>
+    run('publish', async () => {
+      setNotice(null);
+      const result = await publishApp(app.id, listed);
+      setNotice({ text: `Published ${result.version.version}.`, ok: true });
     });
 
   return (
@@ -140,6 +158,37 @@ export default function AppInfoScreen() {
         ) : (
           <ErrorText testID="app-info-error">{notice.text}</ErrorText>
         )
+      ) : null}
+
+      {canRevert && catalogSpaces.length > 0 ? (
+        <>
+          <SectionTitle>Publish</SectionTitle>
+          <Card testID="app-publish">
+            {catalogSpaces.map((space, index) => (
+              <Pressable
+                key={space.id}
+                onPress={() => toggleSpace(space.id)}
+                style={[settingsStyles.row, index === 0 && settingsStyles.firstRow]}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: listed.includes(space.id) }}
+                testID={`app-publish-space-${space.slug}`}
+              >
+                <View style={settingsStyles.rowMain}>
+                  <Text style={settingsStyles.rowTitle}>{space.kind === 'personal' ? 'Personal' : space.name}</Text>
+                </View>
+                <Badge label={listed.includes(space.id) ? 'On' : 'Off'} tone={listed.includes(space.id) ? 'accent' : 'muted'} />
+              </Pressable>
+            ))}
+          </Card>
+          <ActionButton
+            label="Publish this version"
+            variant="primary"
+            onPress={publish}
+            busy={busyKey === 'publish'}
+            disabled={listed.length === 0 || busyKey !== null}
+            testID="app-publish-confirm"
+          />
+        </>
       ) : null}
 
       <SectionTitle>History</SectionTitle>
