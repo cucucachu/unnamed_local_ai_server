@@ -6,8 +6,8 @@ Access is the instance's space's (`spaces.authorize_space`): `read` for
 for an unknown instance. Agent delegations have their user's rights (D6).
 
 Actions (`actions/<name>.sql`) and `schema.sql` are read from the app's
-source at call time (the working copy, D15; pinned versions come with M14),
-below the source space's `files/` fd like any package read.
+source at call time (the working copy, D15) or, for a pinned published
+version, from that version's package snapshot (`app-releases/…`).
 
 Writes and migrations of one instance are serialized by an in-process lock
 (the platform runs one worker). A write that changed rows, or an applied
@@ -33,6 +33,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
@@ -69,8 +70,11 @@ PUBLISH_INTERVAL_S = 1.0
 _OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 _INSTANCE = """
-SELECT i.id, i.app_id, i.space_id, i.tracks, a.slug, a.source_path
-FROM app_instances i JOIN apps a ON a.id = i.app_id
+SELECT i.id, i.app_id, i.space_id, i.tracks, i.version_id, a.slug, a.source_path,
+       v.source_snapshot
+FROM app_instances i
+JOIN apps a ON a.id = i.app_id
+LEFT JOIN app_versions v ON v.id = i.version_id
 WHERE i.id = %s AND i.uninstalled_at IS NULL
 """
 
@@ -111,6 +115,29 @@ def _up_to_date(instance_id: UUID) -> Row:
     }  # fmt: skip
 
 
+def _read_package_fd(dir_fd: int, parts: tuple[str, ...], limit: int) -> bytes | None:
+    """`parts` below an already-open package directory, or None if missing/not a file."""
+    current = dir_fd
+    opened: list[int] = []
+    try:
+        for name in parts[:-1]:
+            sub = os.open(name, _OPEN_DIR, dir_fd=current)
+            opened.append(sub)
+            current = sub
+        with fsops.open_regular_at(current, parts[-1]) as f:
+            data = f.read(limit + 1)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EISDIR):
+            return None
+        raise
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+    if len(data) > limit:
+        raise InvalidInput("file_too_large")
+    return data
+
+
 def _read_package_file(r: vfs.Resolved, parts: tuple[str, ...], limit: int) -> bytes | None:
     """`parts` below the package folder, or None if it (or the folder) isn't a regular file."""
     with r.open_root() as root:
@@ -121,28 +148,23 @@ def _read_package_file(r: vfs.Resolved, parts: tuple[str, ...], limit: int) -> b
                 return None
             raise
         try:
-            for name in parts[:-1]:
-                sub = os.open(name, _OPEN_DIR, dir_fd=dir_fd)
-                os.close(dir_fd)
-                dir_fd = sub
-            with fsops.open_regular_at(dir_fd, parts[-1]) as f:
-                data = f.read(limit + 1)
-        except OSError as exc:
-            if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EISDIR):
-                return None
-            raise
+            return _read_package_fd(dir_fd, parts, limit)
         finally:
             os.close(dir_fd)
-    if len(data) > limit:
-        raise InvalidInput("file_too_large")
-    return data
 
 
 class AppData:
-    def __init__(self, pool: AsyncConnectionPool, storage: SpaceStorage, hub: EventHub) -> None:
+    def __init__(
+        self,
+        pool: AsyncConnectionPool,
+        storage: SpaceStorage,
+        hub: EventHub,
+        data_dir: Path | None = None,
+    ) -> None:
         self.pool = pool
         self.storage = storage
         self.hub = hub
+        self.data_dir = data_dir
         self._locks: dict[UUID, asyncio.Lock] = {}
         self._publishing: dict[UUID, asyncio.Task] = {}
         self._published_at: dict[UUID, float] = {}
@@ -184,21 +206,36 @@ class AppData:
             logger.error("instance %s: %s", target.id, exc)
             raise ServerError("instance_storage_invalid") from exc
 
-    async def _source(self, conn: AsyncConnection, principal: Principal, target: Target):
-        if target.instance["tracks"] != "working":
+    async def _read_from_package(
+        self, conn: AsyncConnection, principal: Principal, target: Target, parts: tuple[str, ...]
+    ) -> bytes | None:
+        limit = appschema.MAX_SCHEMA_BYTES if parts[-1] == "schema.sql" else MAX_ACTION_BYTES
+        if target.instance["tracks"] == "working":
+            r = await vfs.resolve_virtual_path(
+                conn, principal, self.storage, target.instance["source_path"], "read"
+            )
+            return await anyio.to_thread.run_sync(_read_package_file, r, parts, limit)
+        rel = target.instance.get("source_snapshot")
+        if not rel or self.data_dir is None:
             raise Conflict("pinned_versions_unsupported")
-        return await vfs.resolve_virtual_path(
-            conn, principal, self.storage, target.instance["source_path"], "read"
-        )
+
+        def _read() -> bytes | None:
+            fd = apps.open_snapshot(self.data_dir, rel)
+            try:
+                return _read_package_fd(fd, parts, limit)
+            finally:
+                os.close(fd)
+
+        try:
+            return await anyio.to_thread.run_sync(_read)
+        except OSError as exc:
+            raise ServerError("release_invalid") from exc
 
     async def _read_schema(
         self, conn: AsyncConnection, principal: Principal, target: Target
     ) -> str:
-        r = await self._source(conn, principal, target)
         try:
-            data = await anyio.to_thread.run_sync(
-                _read_package_file, r, ("schema.sql",), appschema.MAX_SCHEMA_BYTES
-            )
+            data = await self._read_from_package(conn, principal, target, ("schema.sql",))
         except InvalidInput as exc:
             raise _schema_diagnostic("schema.sql is larger than 256 KiB") from exc
         if data is None:
@@ -213,10 +250,7 @@ class AppData:
     ) -> str:
         if not ACTION_NAME_RE.fullmatch(name):
             raise InvalidInput("invalid_action")
-        r = await self._source(conn, principal, target)
-        data = await anyio.to_thread.run_sync(
-            _read_package_file, r, ("actions", f"{name}.sql"), MAX_ACTION_BYTES
-        )
+        data = await self._read_from_package(conn, principal, target, ("actions", f"{name}.sql"))
         if data is None:
             raise NotFound("unknown_action")
         try:

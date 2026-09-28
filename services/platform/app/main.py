@@ -189,7 +189,7 @@ def create_app(
                 s.exec_manager_url, s.platform_build_token, s.platform_build_timeout_s
             )
             app.state.events = EventHub()
-            app.state.appdata = AppData(pool, storage, app.state.events)
+            app.state.appdata = AppData(pool, storage, app.state.events, s.platform_data_dir)
             app.state.hitl = HitlApprovals()
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s

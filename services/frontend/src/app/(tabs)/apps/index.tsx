@@ -4,8 +4,9 @@ import type { ComponentProps } from 'react';
 import { useCallback, useRef } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Badge, Card, LoadState, SectionTitle, settingsStyles } from '@/components/SettingsUI';
+import { Badge, Card, LoadState, SectionTitle, settingsStyles, ActionButton } from '@/components/SettingsUI';
 import { listInstalledApps, type Instance } from '@/lib/apps';
+import { isReadOnly } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
@@ -16,8 +17,9 @@ function appIcon(icon: string | null): IconName {
 }
 
 /**
- * Installed app instances, grouped by space — a placeholder until the M14
- * Home launcher. Tapping one opens the runner (`[instanceId].tsx`).
+ * Installed app instances, grouped by space. Catalog and update badges are
+ * M14-01; the Home launcher (M14-02) still replaces this tab later.
+ * Tapping an instance opens the runner (`[instanceId].tsx`).
  * Reloads whenever the tab regains focus, so a newly installed app shows up.
  */
 export default function AppsScreen() {
@@ -41,6 +43,7 @@ export default function AppsScreen() {
   }
 
   const groups = data.filter((group) => group.instances.length > 0);
+  const updates = groups.reduce((n, group) => n + group.instances.filter((i) => i.update).length, 0);
 
   return (
     <ScrollView
@@ -49,11 +52,16 @@ export default function AppsScreen() {
       refreshControl={<RefreshControl refreshing={false} onRefresh={reload} tintColor={theme.textMuted} />}
       testID="apps-list"
     >
+      <ActionButton
+        label={updates ? `Catalog · ${updates} update${updates === 1 ? '' : 's'}` : 'Catalog'}
+        onPress={() => router.push('/apps/catalog')}
+        testID="apps-catalog"
+      />
       {groups.length === 0 ? (
         <View style={styles.empty} testID="apps-empty">
           <Ionicons name="apps-outline" size={40} color={theme.textMuted} />
           <Text style={styles.emptyTitle}>No apps yet</Text>
-          <Text style={settingsStyles.muted}>Apps installed in your spaces show up here.</Text>
+          <Text style={settingsStyles.muted}>Install an app from the catalog, or ask the agent to make one.</Text>
         </View>
       ) : (
         groups.map(({ space, instances }) => (
@@ -65,8 +73,17 @@ export default function AppsScreen() {
                   key={instance.id}
                   instance={instance}
                   first={index === 0}
-                  viewOnly={space.role !== 'owner' && space.role !== 'editor'}
+                  viewOnly={isReadOnly(space)}
                   onPress={() => router.push({ pathname: '/apps/[instanceId]', params: { instanceId: instance.id } })}
+                  onUpdate={
+                    instance.update && !isReadOnly(space)
+                      ? () =>
+                          router.push({
+                            pathname: '/apps/update',
+                            params: { spaceId: space.id, instanceId: instance.id },
+                          })
+                      : undefined
+                  }
                 />
               ))}
             </Card>
@@ -82,11 +99,13 @@ function AppRow({
   first,
   viewOnly,
   onPress,
+  onUpdate,
 }: {
   instance: Instance;
   first: boolean;
   viewOnly: boolean;
   onPress: () => void;
+  onUpdate?: () => void;
 }) {
   return (
     <Pressable
@@ -100,6 +119,16 @@ function AppRow({
         <Text style={settingsStyles.rowTitle}>{instance.app.name}</Text>
         {instance.app.version ? <Text style={settingsStyles.muted}>Version {instance.app.version}</Text> : null}
       </View>
+      {instance.update ? (
+        <Pressable
+          onPress={onUpdate}
+          accessibilityRole="button"
+          testID={`apps-update-${instance.app.slug}`}
+          style={styles.updateHit}
+        >
+          <Badge label={`Update ${instance.update.version}`} tone="accent" testID={`apps-update-badge-${instance.app.slug}`} />
+        </Pressable>
+      ) : null}
       {viewOnly ? <Badge label="View only" /> : null}
       <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
     </Pressable>
@@ -130,5 +159,9 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 16,
     fontWeight: '600',
+  },
+  updateHit: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
   },
 });

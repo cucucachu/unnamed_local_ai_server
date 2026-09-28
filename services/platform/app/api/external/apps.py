@@ -18,9 +18,16 @@ from app.api.schemas import (
     AppRevertOut,
     AppRevertRequest,
     AppValidationOut,
+    CatalogList,
+    ForkOut,
+    ForkRequest,
     InstallRequest,
     InstanceList,
     InstanceOut,
+    PublishOut,
+    PublishRequest,
+    UpdateInstanceOut,
+    UpdateInstanceRequest,
 )
 from app.core import appbuild, apphistory, apps, manifest
 from app.core.errors import Unavailable
@@ -140,7 +147,13 @@ async def install_app(
 ):
     async with request.app.state.db_pool.connection() as conn:
         return await apps.install_app(
-            conn, principal, request.app.state.storage, space_id, body.app_id, body.tracks
+            conn,
+            principal,
+            request.app.state.storage,
+            space_id,
+            body.app_id,
+            body.tracks,
+            body.granted_permissions,
         )
 
 
@@ -149,3 +162,59 @@ async def uninstall_app(
     space_id: UUID, instance_id: UUID, request: Request, principal: CurrentUser
 ) -> None:
     await request.app.state.appdata.uninstall(principal, space_id, instance_id)
+
+
+@router.post("/apps/{app_id}/publish", response_model=PublishOut)
+async def publish_app(app_id: UUID, body: PublishRequest, request: Request, principal: CurrentUser):
+    """Snapshot the working copy as a published version listed in `space_ids`."""
+    async with request.app.state.db_pool.connection() as conn:
+        app, version, space_ids = await apps.publish_app(
+            conn,
+            principal,
+            request.app.state.storage,
+            request.app.state.settings.platform_data_dir,
+            app_id,
+            body.space_ids,
+        )
+    return PublishOut(app=app, version=version, space_ids=space_ids)
+
+
+@router.get("/spaces/{space_id}/catalog", response_model=CatalogList)
+async def space_catalog(space_id: UUID, request: Request, principal: CurrentUser):
+    async with request.app.state.db_pool.connection() as conn:
+        return CatalogList(entries=await apps.list_catalog(conn, principal, space_id))
+
+
+@router.post("/spaces/{space_id}/instances/{instance_id}/update", response_model=UpdateInstanceOut)
+async def update_instance(
+    space_id: UUID,
+    instance_id: UUID,
+    body: UpdateInstanceRequest,
+    request: Request,
+    principal: CurrentUser,
+):
+    """Pin a published install to a newer version and migrate its database."""
+    state = request.app.state
+    async with state.db_pool.connection() as conn:
+        instance = await apps.update_instance(
+            conn, principal, space_id, instance_id, body.version_id, body.granted_permissions
+        )
+    migration = await state.appdata.migrate(principal, instance_id)
+    state.events.app_built([instance["space_id"]], instance["app_id"], instance["app"]["version"])
+    return UpdateInstanceOut(instance=instance, migration=migration)
+
+
+@router.post("/apps/{app_id}/fork", response_model=ForkOut, status_code=status.HTTP_201_CREATED)
+async def fork_app(app_id: UUID, body: ForkRequest, request: Request, principal: CurrentUser):
+    """Copy source (or the latest published snapshot) into `space_id` as a new app."""
+    async with request.app.state.db_pool.connection() as conn:
+        app, instance = await apps.fork_app(
+            conn,
+            principal,
+            request.app.state.storage,
+            request.app.state.settings.platform_data_dir,
+            app_id,
+            body.space_id,
+            body.slug,
+        )
+    return ForkOut(app=app, instance=instance)

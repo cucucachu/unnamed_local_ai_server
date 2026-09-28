@@ -13,8 +13,10 @@ import {
 } from '@homeai/sdk/host';
 
 import { apiBase } from './api';
-import type { Space } from './platform';
+import { isReadOnly, type Space } from './platform';
 import { authHeaders, notifyUnauthorized } from './session';
+
+export { isReadOnly };
 
 /**
  * The app host's use of `@homeai/sdk/host` (`docs/PLATFORM.md` §7 "Runtime
@@ -62,11 +64,6 @@ export interface AppSandboxProps {
   onKilled: () => void;
   /** `agent.ask` from the sandbox (`askAgent`); the runner opens the panel. */
   onAskAgent?: (prompt: string) => void;
-}
-
-/** Viewers, and anyone without a role in the space, get a read-only bridge. */
-export function isReadOnly(space: Space): boolean {
-  return space.role !== 'owner' && space.role !== 'editor';
 }
 
 export function sandboxSpace(space: Space): SandboxSpace {

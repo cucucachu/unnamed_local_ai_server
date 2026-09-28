@@ -495,6 +495,12 @@ class InstanceAppOut(BaseModel):
     icon: str | None
 
 
+class UpdateAvailableOut(BaseModel):
+    id: UUID
+    version: str
+    permissions: dict[str, Any]
+
+
 class InstanceOut(BaseModel):
     id: UUID
     app_id: UUID
@@ -505,6 +511,8 @@ class InstanceOut(BaseModel):
     granted_permissions: dict[str, Any]
     created_at: datetime
     app: InstanceAppOut
+    # Newer published version of the same app, when this instance pins one.
+    update: UpdateAvailableOut | None = None
 
 
 class InstanceList(BaseModel):
@@ -514,6 +522,43 @@ class InstanceList(BaseModel):
 class InstallRequest(BaseModel):
     app_id: UUID
     tracks: Short = "working"
+    granted_permissions: dict[str, Any] | None = None
+
+
+class PublishRequest(BaseModel):
+    space_ids: Annotated[list[UUID], Field(min_length=1, max_length=100)]
+
+
+class PublishOut(BaseModel):
+    app: AppOut
+    version: AppVersionOut
+    space_ids: list[UUID]
+
+
+class CatalogEntryOut(BaseModel):
+    app: InstanceAppOut
+    version: AppVersionOut
+    installed: bool
+    instance_id: UUID | None
+
+
+class CatalogList(BaseModel):
+    entries: list[CatalogEntryOut]
+
+
+class UpdateInstanceRequest(BaseModel):
+    version_id: UUID
+    granted_permissions: dict[str, Any] | None = None
+
+
+class ForkRequest(BaseModel):
+    space_id: UUID
+    slug: Short | None = None
+
+
+class ForkOut(BaseModel):
+    app: AppOut
+    instance: InstanceOut
 
 
 # --- app data (M12-03) ------------------------------------------------------------
@@ -608,3 +653,8 @@ class InstanceMigrationOut(BaseModel):
     # None when it couldn't be planned (`error` says why).
     migration: MigrationOut | None
     error: str | None
+
+
+class UpdateInstanceOut(BaseModel):
+    instance: InstanceOut
+    migration: MigrationOut
