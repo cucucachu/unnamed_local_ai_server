@@ -3,6 +3,9 @@
 # the real `expo export` build) — keep both stable.
 FROM node:22-alpine AS frontend-build
 WORKDIR /app
+# The app host imports `@homeai/sdk/host` (`file:../../packages/homeai-sdk`,
+# which from /app is /packages/homeai-sdk); only its sources are used.
+COPY packages/homeai-sdk/ /packages/homeai-sdk/
 COPY services/frontend/package.json services/frontend/package-lock.json ./
 RUN npm ci
 COPY services/frontend/ ./

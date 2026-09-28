@@ -33,6 +33,19 @@ export default function TabsLayout() {
           ),
         }}
       />
+      {/* M12-06: installed apps and the app runner, a nested Stack like
+          `chat` (so no outer header here). A placeholder until the M14
+          Home launcher. */}
+      <Tabs.Screen
+        name="apps"
+        options={{
+          title: 'Apps',
+          headerShown: false,
+          tabBarIcon: ({ color, focused, size }) => (
+            <Ionicons name={focused ? 'apps' : 'apps-outline'} color={color} size={size} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }
