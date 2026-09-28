@@ -14,6 +14,13 @@
 //   node scripts/e2e/app_fixture.mjs uninstall --user <you> [--space <slug>]
 //       uninstall the instance (the platform keeps its data in apps/.trash)
 //
+// --app <dir> installs (or uninstalls) another app package instead, e.g. the
+// reference app (M12-07, examples/apps/README.md):
+//
+//   node scripts/e2e/app_fixture.mjs install --app examples/apps/grocery-list --user <you> [--space <slug>]
+//       upload to <space>/Apps/<slug from app.json>, register, install, build;
+//       re-running it uploads your edits and rebuilds
+//
 // --space defaults to your Personal space; a shared space's slug installs
 // it there (you must be an owner or editor). --base defaults to
 // $HOMEAI_BASE_URL or http://homeai.local. The password comes from
@@ -26,8 +33,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURE = path.resolve(SCRIPT_DIR, '../../packages/homeai-sdk/tests/fixtures/runtime-check');
-export const FIXTURE_SLUG = 'runtime-check';
-
 export function fixtureFiles(dir = FIXTURE, prefix = '') {
   return fs.readdirSync(path.join(dir, prefix), { withFileTypes: true }).flatMap((d) => {
     const rel = path.posix.join(prefix, d.name);
@@ -55,15 +60,18 @@ export function fixtureV2(index = fs.readFileSync(path.join(FIXTURE, 'app/index.
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
-  const opts = { command, base: process.env.HOMEAI_BASE_URL ?? 'http://homeai.local', user: null, space: null };
+  const opts = { command, base: process.env.HOMEAI_BASE_URL ?? 'http://homeai.local', user: null, space: null, app: FIXTURE };
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i]?.replace(/^--/, '');
-    if (!['base', 'user', 'space'].includes(key) || rest[i + 1] === undefined) throw new Error(`unknown or incomplete option ${rest[i]}`);
+    if (!['base', 'user', 'space', 'app'].includes(key) || rest[i + 1] === undefined) throw new Error(`unknown or incomplete option ${rest[i]}`);
     opts[key] = rest[i + 1];
   }
   if (!['install', 'v1', 'v2', 'uninstall'].includes(command) || !opts.user) {
-    throw new Error('usage: node scripts/e2e/app_fixture.mjs install|v2|v1|uninstall --user <name> [--space <slug>] [--base <url>]');
+    throw new Error('usage: node scripts/e2e/app_fixture.mjs install|v2|v1|uninstall --user <name> [--space <slug>] [--app <dir>] [--base <url>]');
   }
+  opts.app = path.resolve(opts.app);
+  if (['v1', 'v2'].includes(command) && opts.app !== FIXTURE) throw new Error(`${command} only applies to the runtime-check fixture`);
+  opts.slug = JSON.parse(fs.readFileSync(path.join(opts.app, 'app.json'), 'utf8')).slug;
   opts.base = opts.base.replace(/\/$/, '');
   return opts;
 }
@@ -124,7 +132,7 @@ async function main() {
     const space = opts.space ? spaces.find((s) => s.slug === opts.space) : spaces.find((s) => s.kind === 'personal');
     if (!space) throw new Error(`no space ${opts.space ?? '(personal)'} for ${opts.user}`);
     const root = space.kind === 'personal' ? '/personal' : `/spaces/${space.slug}`;
-    const dir = `${root}/Apps/${FIXTURE_SLUG}`;
+    const dir = `${root}/Apps/${opts.slug}`;
     const put = (rel, content) => call('PUT', `/api/platform/files/content?path=${encodeURIComponent(`${dir}/${rel}`)}`, { raw: content });
     const findApp = async () => (await call('GET', '/api/platform/apps')).apps.find((a) => a.source_path === dir);
     const findInstance = async (app) => (await call('GET', `/api/platform/spaces/${space.id}/instances`)).instances.find((i) => i.app_id === app.id);
@@ -135,7 +143,7 @@ async function main() {
     };
 
     if (opts.command === 'install') {
-      for (const rel of fixtureFiles()) await put(rel, fs.readFileSync(path.join(FIXTURE, rel)));
+      for (const rel of fixtureFiles(opts.app)) await put(rel, fs.readFileSync(path.join(opts.app, rel)));
       const registered = await call('POST', '/api/platform/apps', { json: { source_path: dir }, allow: ['app_exists'] });
       const app = registered.error ? await findApp() : registered.app;
       const installed = await call('POST', `/api/platform/spaces/${space.id}/instances`, { json: { app_id: app.id }, allow: ['already_installed'] });

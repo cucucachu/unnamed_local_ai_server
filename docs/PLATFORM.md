@@ -836,6 +836,19 @@ an instance the user can access; destructive writes in shared spaces → HITL),
 `app_action`. Editing source uses the normal file tools. The agent reads an
 app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 
+> **As built (M12-07)** — the first template is the hand-written reference
+> app [`examples/apps/grocery-list/`](../examples/apps/grocery-list/): one
+> `items` table, two actions (`addItem` with a `:name` param,
+> `clearChecked`), `app/index.tsx` (live list via `useQuery`, writes via
+> `db.runAsync` / `runAction`) and `app/item/[id].tsx` (edit one row), UI
+> hidden from viewers via `useSpace().role`, and an `AGENT.md` that
+> describes the files, the table, each action and how to extend it
+> safely. `create_app` should copy it. Until M13 it is installed with
+> `scripts/e2e/app_fixture.mjs install --app examples/apps/grocery-list`
+> (`examples/apps/README.md`). The builder's `groceries` test fixture stays
+> as a minimal, line-number-stable input for the diagnostics tests; the
+> builder suite also builds the reference app.
+
 ### System apps (D17)
 
 Chat, Files, Settings/Admin, and Home (launcher) ship in the host app and

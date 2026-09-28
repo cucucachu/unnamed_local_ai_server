@@ -134,6 +134,8 @@ unnamed_local_ai/
     ARCHITECTURE.md
     NETWORKING.md
     HOST-CHECKS.md
+  examples/
+    apps/grocery-list/         # reference app + first template (install: examples/apps/README.md)
   scripts/
     e2e/
 ```
