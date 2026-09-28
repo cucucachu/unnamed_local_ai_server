@@ -318,6 +318,85 @@ async def test_approval_response_sent_before_turn_end_is_applied(
     assert fake_platform.personal() == expected_files
 
 
+async def test_cancel_before_turn_end_reannounces_pending_approval(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    """#189: a `cancel` between `approval_request` and `turn_end` can't
+    un-pause the graph; the connection must end up awaiting approval again,
+    with nothing rejected on the user's behalf."""
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
+    stats = _GatedTurnStatsStore()
+
+    with _make_client(
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+    ) as client, client.websocket_connect("/ws/chat/hitl-cancel-race-thread") as ws:
+        client.app.state.turn_stats_store = stats
+        ws.send_json({"type": "user_message", "content": "write a file"})
+        approval = _receive_json_within(ws, 10)
+        while approval["type"] != "approval_request":
+            approval = _receive_json_within(ws, 10)
+
+        ws.send_json({"type": "cancel"})
+        _assert_turn_end(_receive_json_within(ws, 10), "cancelled")
+        ws.portal.call(stats.gate.set)
+
+        reannounced = _drain_turn_within(ws)
+        assert [f["type"] for f in reannounced] == ["approval_request", "turn_end"]
+        assert reannounced[0] == approval
+        _assert_turn_end(reannounced[-1], "awaiting_approval")
+        assert fake_platform.personal() == {}
+
+        fake_model.queue(TextTurn("done"))
+        ws.send_json(
+            {
+                "type": "approval_response",
+                "interrupt_id": approval["interrupt_id"],
+                "decisions": [{"tool_call_id": approval["actions"][0]["tool_call_id"], "decision": "approve"}],
+            }
+        )
+        resume_frames = _drain_turn_within(ws)
+
+    assert resume_frames[0] == {"type": "turn_start"}
+    _assert_turn_end(resume_frames[-1], "completed")
+    assert fake_platform.personal() == {"x.txt": b"y"}
+
+
+async def test_cancel_after_approval_response_mid_turn_applies_the_answer(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    """#189: when the card was already answered before the cancel, the held
+    answer is applied rather than re-asking."""
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
+    stats = _GatedTurnStatsStore()
+
+    with _make_client(
+        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+    ) as client, client.websocket_connect("/ws/chat/hitl-cancel-answered-thread") as ws:
+        client.app.state.turn_stats_store = stats
+        ws.send_json({"type": "user_message", "content": "write a file"})
+        approval = _receive_json_within(ws, 10)
+        while approval["type"] != "approval_request":
+            approval = _receive_json_within(ws, 10)
+
+        fake_model.queue(TextTurn("done"))
+        ws.send_json(
+            {
+                "type": "approval_response",
+                "interrupt_id": approval["interrupt_id"],
+                "decisions": [{"tool_call_id": approval["actions"][0]["tool_call_id"], "decision": "approve"}],
+            }
+        )
+        ws.send_json({"type": "cancel"})
+        _assert_turn_end(_receive_json_within(ws, 10), "cancelled")
+        ws.portal.call(stats.gate.set)
+
+        resume_frames = _drain_turn_within(ws)
+
+    assert resume_frames[0] == {"type": "turn_start"}
+    _assert_turn_end(resume_frames[-1], "completed")
+    assert fake_platform.personal() == {"x.txt": b"y"}
+
+
 async def test_stale_approval_response_mid_turn_is_still_ignored(
     fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:

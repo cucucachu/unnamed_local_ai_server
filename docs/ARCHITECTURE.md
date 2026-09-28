@@ -1446,7 +1446,15 @@ On `cancel` mid-turn: the server cancels the turn task, awaits it, sends
 `turn_end {"status": "cancelled"}`, and — unlike a client disconnect —
 **keeps the connection open**; the per-thread lock is released normally
 and the thread's `updated_at` is still bumped, so the very next
-`user_message` on the same socket runs a normal turn. The `error` frame
+`user_message` on the same socket runs a normal turn. If the `cancel`
+lands after the turn already paused on an interrupt (between
+`approval_request` and its `turn_end`), the interrupt stays pending, so
+right after `turn_end {"status": "cancelled"}` the server re-announces it
+— the same `approval_request` followed by `turn_end {"status":
+"awaiting_approval"}` — and the connection is awaiting approval, not
+idle. Nothing is rejected on the user's behalf; if the client already
+sent an `approval_response` for that interrupt, that is applied instead
+and there is no re-announce (#189). The `error` frame
 path (unhandled model/agent exception) is unchanged by any of this — it
 still ends the turn with `error` + close code 1011, never a `turn_end`.
 
