@@ -1,0 +1,11 @@
+{
+  "name": "Grocery list",
+  "slug": "grocery-list",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "cart-outline",
+    "description": "A shared shopping list: add items, check them off in the store, clear what's in the cart.",
+    "permissions": {}
+  }
+}
