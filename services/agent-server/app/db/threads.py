@@ -41,6 +41,8 @@ from typing import Protocol
 
 from psycopg_pool import AsyncConnectionPool
 
+from app.db.rls import system_transaction
+
 DEFAULT_TITLE = "New chat"
 
 
@@ -161,7 +163,8 @@ class PgThreadStore:
         return cur.rowcount > 0
 
     async def adopt_orphans(self, owner_user_id: str) -> int:
-        async with self._pool.connection() as conn:
+        # Ownerless rows are invisible to every user, so this needs the bypass.
+        async with system_transaction(self._pool) as conn:
             cur = await conn.execute(
                 "UPDATE threads SET owner_user_id = %s WHERE owner_user_id IS NULL",
                 (owner_user_id,),

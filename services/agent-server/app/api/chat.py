@@ -434,8 +434,10 @@ async def set_active_branch(
 @router.delete("/threads/{thread_id}", status_code=204)
 async def delete_thread(thread_id: str, request: Request, user: CurrentUser) -> None:
     store = _thread_store(request)
-    if not await store.delete(thread_id, user.user_id):
+    if await store.get(thread_id, user.user_id) is None:
         return
+    # Row-level security shows a thread's checkpoints and stats only while
+    # its `threads` row exists, so that row goes last.
     turn_stats = _turn_stats_store(request)
     if turn_stats is not None:
         await turn_stats.delete_for_thread(thread_id)
@@ -450,3 +452,4 @@ async def delete_thread(thread_id: str, request: Request, user: CurrentUser) -> 
     # idempotent-204 contract.
     checkpointer = request.app.state.checkpointer
     await checkpointer.adelete_thread(thread_id)
+    await store.delete(thread_id, user.user_id)

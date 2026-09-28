@@ -30,6 +30,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import Depends, HTTPException, Request
 from jwt.algorithms import OKPAlgorithm
 
+from app.db.rls import bind_user
+
 logger = logging.getLogger(__name__)
 
 IDENTITY_HEADER = "X-HomeAI-Identity"
@@ -159,14 +161,19 @@ class JwksIdentityVerifier:
 
 
 async def current_user(request: Request) -> Identity:
-    """FastAPI dependency: the verified caller, else `401` (or `503` without keys)."""
+    """FastAPI dependency: the verified caller, else `401` (or `503` without keys).
+
+    Also binds the caller for row-level security (`app.db.rls.bind_user`).
+    """
     verifier: IdentityVerifier = request.app.state.identity_verifier
     try:
-        return await verifier.verify(request.headers.get(IDENTITY_HEADER))
+        identity = await verifier.verify(request.headers.get(IDENTITY_HEADER))
     except KeysUnavailable as exc:
         raise HTTPException(status_code=503, detail="identity keys unavailable") from exc
     except IdentityError as exc:
         raise HTTPException(status_code=401, detail="unauthenticated") from exc
+    bind_user(identity.user_id)
+    return identity
 
 
 CurrentUser = Annotated[Identity, Depends(current_user)]

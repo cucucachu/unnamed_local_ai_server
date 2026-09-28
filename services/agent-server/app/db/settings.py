@@ -33,6 +33,8 @@ from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
+from app.db.rls import system_transaction
+
 
 class SettingsDocument(BaseModel):
     """The whole settings document. Defaults apply to any key missing from storage.
@@ -128,7 +130,8 @@ class PgSettingsStore:
         return merged
 
     async def adopt_legacy(self, user_id: str) -> int:
-        async with self._pool.connection() as conn, conn.transaction():
+        # `settings` has no policy: only the bypass role can read it.
+        async with system_transaction(self._pool) as conn:
             cur = await conn.execute(
                 """
                 INSERT INTO user_settings (user_id, key, value, updated_at)
