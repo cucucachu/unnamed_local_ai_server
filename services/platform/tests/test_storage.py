@@ -52,6 +52,16 @@ out["reconcile"] = storage.reconcile([(a, 30001), (b, 30002)])
 out["reconciled"] = tree(a)
 out["bait"] = describe(bait)
 
+# App instance dirs: created, then trashed (kept, moved under apps/.trash/).
+i = uuid.uuid4()
+out["instance"] = describe(storage.ensure_instance(a, 30001, i))
+(root / str(a) / "apps" / str(i) / "data.sqlite").write_text("rows")
+kept = storage.trash_instance(a, 30001, i, "20260101T000000Z")
+out["trash"] = describe(kept.parent)
+out["trashed"] = {"name": kept.name, "data": (kept / "data.sqlite").read_text(),
+                  "gone": not (root / str(a) / "apps" / str(i)).exists()}
+out["trash_missing"] = storage.trash_instance(a, 30001, uuid.uuid4(), "x")
+
 # A file created by a member (primary gid elsewhere) inherits the space gid.
 os.setgroups([30001])
 os.setgid(20000)
@@ -106,6 +116,14 @@ def test_reconcile_fixes_drift_and_refuses_symlinks(result):
         assert node == {"uid": 0, "gid": 30001, "mode": "0o2770"}
     assert result["bait"]["gid"] == 0
     assert result["bait"]["mode"] != "0o2770"
+
+
+def test_instance_dirs_are_root_space_gid_2770_and_trash_keeps_them(result):
+    assert result["instance"] == {"uid": 0, "gid": 30001, "mode": "0o2770"}
+    assert result["trash"] == {"uid": 0, "gid": 30001, "mode": "0o2770"}
+    assert result["trashed"]["name"].endswith("-20260101T000000Z")
+    assert (result["trashed"]["data"], result["trashed"]["gone"]) == ("rows", True)
+    assert result["trash_missing"] is None
 
 
 def test_member_files_inherit_the_space_gid(result):

@@ -1,0 +1,11 @@
+{
+  "name": "Hello",
+  "slug": "hello",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "happy-outline",
+    "description": "A tiny fixture app for the registry smoke test.",
+    "permissions": {}
+  }
+}

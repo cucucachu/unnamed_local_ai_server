@@ -251,6 +251,9 @@ docker compose exec platform python -m app.cli enable-user alice
 docker compose exec platform python -m app.cli list-spaces [--json]                 # every space, its GID and members
 docker compose exec platform python -m app.cli create-space family --name Family --owner alice
 docker compose exec platform python -m app.cli add-member family bob --role viewer  # owner|editor|viewer
+docker compose exec platform python -m app.cli register-app alice /personal/Apps/groceries  # as alice; prints the app id
+docker compose exec platform python -m app.cli install-app alice <app-id> [--space family]  # default: alice's personal space
+docker compose exec platform python -m app.cli list-apps [--json]
 
 # Non-interactive (scripts): first line of stdin is the password; note -T.
 printf '%s\n' "$PW" | docker compose exec -T platform python -m app.cli create-user e2e-bob --password-stdin

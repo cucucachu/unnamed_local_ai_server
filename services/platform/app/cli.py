@@ -8,6 +8,8 @@ Run inside the running container (the image's `python` is the venv's):
         python -m app.cli create-user e2e-bob --password-stdin
     docker compose exec platform python -m app.cli create-space family --owner alice
     docker compose exec platform python -m app.cli add-member family e2e-bob --role viewer
+    docker compose exec platform python -m app.cli register-app alice /personal/Apps/groceries
+    docker compose exec platform python -m app.cli install-app alice <app id> [--space family]
 
 Users created here never complete bootstrap (`POST /api/auth/setup` stays
 open until someone uses the setup code). Errors print `error: <code>` and
@@ -22,13 +24,15 @@ import getpass
 import json
 import sys
 from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
-from app.core import spaces, users
+from app.core import apps, spaces, users
 from app.core.config import Settings
-from app.core.errors import PlatformError
+from app.core.errors import Conflict, InvalidInput, PlatformError
+from app.core.principal import Principal
 from app.core.storage import SpaceStorage
 
 
@@ -125,6 +129,57 @@ async def _list_spaces(conn: AsyncConnection, args: argparse.Namespace) -> None:
         )
 
 
+async def _acting_as(conn: AsyncConnection, username: str) -> Principal:
+    """`username` as a principal, so the CLI goes through the same space checks as the API."""
+    row = await users.get_user_by_username(conn, username)
+    if row["disabled_at"] is not None:
+        raise Conflict("user_disabled")
+    return Principal(
+        user_id=row["id"],
+        session_id=UUID(int=0),
+        username=row["username"],
+        display_name=row["display_name"],
+        role=row["role"],
+        act="user",
+        stepped_up=False,
+        uid=row["uid"],
+    )
+
+
+async def _register_app(conn: AsyncConnection, args: argparse.Namespace) -> None:
+    principal = await _acting_as(conn, args.username)
+    row = await apps.register_app(conn, principal, args.storage, args.source_path)
+    version = row["working_version"]["version"]
+    print(f"registered app {row['slug']} {version} (id {row['id']}) from {row['source_path']}")
+
+
+async def _install_app(conn: AsyncConnection, args: argparse.Namespace) -> None:
+    principal = await _acting_as(conn, args.username)
+    if args.space:
+        space = await spaces.get_space_by_slug(conn, args.space)
+    else:
+        space = await spaces.get_personal_space(conn, principal.user_id)
+    try:
+        app_id = UUID(args.app_id)
+    except ValueError as exc:
+        raise InvalidInput("invalid_app_id") from exc
+    row = await apps.install_app(conn, principal, args.storage, space["id"], app_id, args.tracks)
+    print(f"installed {row['app']['slug']} in {space['slug']} (instance {row['id']})")
+
+
+async def _list_apps(conn: AsyncConnection, args: argparse.Namespace) -> None:
+    rows = await apps.list_all_apps(conn)
+    if args.json:
+        print(json.dumps(rows, default=str, indent=2))
+        return
+    print(f"{'SLUG':<24} {'VERSION':<10} {'SPACE':<24} {'INST':<5} {'ID':<37} SOURCE")
+    for row in rows:
+        print(
+            f"{row['slug']:<24} {row['version'] or '-':<10} {row['space']:<24} "
+            f"{row['instances']:<5} {row['id']!s:<37} {row['source_path']}"
+        )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -181,6 +236,22 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("list-spaces", help="list every space (archived included) and its members")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=_list_spaces)
+
+    p = sub.add_parser("register-app", help="register an app package as USERNAME")
+    p.add_argument("username")
+    p.add_argument("source_path", metavar="SOURCE_PATH", help="/personal/Apps/<slug> etc.")
+    p.set_defaults(run=_register_app)
+
+    p = sub.add_parser("install-app", help="install an app as USERNAME")
+    p.add_argument("username")
+    p.add_argument("app_id", metavar="APP_ID")
+    p.add_argument("--space", metavar="SLUG", help="defaults to the user's personal space")
+    p.add_argument("--tracks", default="working", help="working (default) or a version id")
+    p.set_defaults(run=_install_app)
+
+    p = sub.add_parser("list-apps", help="list every registered app")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(run=_list_apps)
     return parser
 
 
@@ -201,6 +272,11 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
         asyncio.run(_main(args.run, args, settings.database_dsn))
     except PlatformError as exc:
         print(f"error: {exc.code}", file=sys.stderr)
+        for d in getattr(exc, "diagnostics", ()):
+            print(
+                f"  {d['file'] or '.'}{d['path'] and ' ' + d['path']}: {d['message']}",
+                file=sys.stderr,
+            )
         return 1
     return 0
 

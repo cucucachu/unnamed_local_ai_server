@@ -301,12 +301,20 @@ ${SPACES_DIR}/                       # default /srv/homeai/spaces
     apps/<instance_id>/data.sqlite   # app data, platform-only writer (D12)
     apps/<instance_id>/snapshots/    # pre-migration snapshots
     apps/<instance_id>/ro/data.sqlite  # read-only snapshot published for exec (§7 Data); only ro/ is ever mounted
+    apps/.trash/<instance_id>-<stamp>/ # an uninstalled instance's dir, kept as its final snapshot (M12-02)
 ```
 
 App **source** lives inside the files tree at `/<space>/Apps/<app-slug>/`
 (D14, M13) so the agent edits it with its ordinary file tools; `Apps` is a
 reserved top-level folder the platform protects from deletion/rename, and
 `.git` is hidden from every file API.
+
+> **As built (M12-02):** the files API refuses delete, rename and move of a
+> space's top-level `Apps` *directory* with `403 reserved`; copying it and
+> everything inside it stay ordinary, and a file or symlink squatting on
+> the name can be removed. `Apps` isn't pre-created: users (and agents) may
+> `mkdir` it, and registering an app creates it if missing. Hiding `.git`
+> comes with the git repos (M13).
 
 Ownership: directories are group-owned by the space GID with the setgid bit;
 files created on behalf of a user are owned `user_uid:space_gid`, mode
@@ -379,6 +387,17 @@ Until then they're visible to nobody.
 `permissions` (e.g. `{"net": ["api.weather.gov"]}`, added as capabilities
 grow), `exports` / `reads` (phase 2, D13). Validated against a JSON Schema
 the platform publishes.
+
+> **As built (M12-02)** — schema and package rules in `ARCHITECTURE.md` §3
+> "Apps". Where it narrows the text above: `sdk` is a string (`"1"` is the
+> only one); `homeai` also takes an optional `description`, and unknown
+> `homeai` keys are rejected while other top-level (Expo) keys are ignored;
+> SDK 1 defines no permissions, so `permissions` must be `{}` until the
+> first capability lands (then the schema grows the key); `exports` and
+> `reads` are reserved as arrays that must be empty until M14-04 defines
+> them. Diagnostics are `{file, path (JSON pointer), message}`. Route names
+> are `^[A-Za-z0-9][A-Za-z0-9_-]*$` segments, and a `[...rest]` catch-all
+> must be a file.
 
 ### Allowed imports (D9)
 
@@ -512,6 +531,19 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
   `app_versions` (app_id, version, commit, manifest, bundle, published_at),
   `app_instances` (id, app_id, space_id, `tracks` = `working` | pinned
   version, installed_by, granted permissions).
+
+  > **As built (M12-02)** (contract: `ARCHITECTURE.md` §3 "Apps"): slugs
+  > are unique per source space, and `source_path` is the virtual path as
+  > that space's members see it. Each app has one `working` version row
+  > (the source as last validated) next to future `published` ones;
+  > `bundle` is `bundle_path`. `tracks` is stored as `tracks` +
+  > `version_id` (a real FK) and shown as `"working"` or the version id.
+  > For now `working` installs only in the app's own source space, and
+  > there's at most one live instance per app and space. Uninstall keeps
+  > the row (`uninstalled_at`) and moves `apps/<instance_id>/` to
+  > `apps/.trash/<instance_id>-<stamp>/` instead of deleting it; there is
+  > no purge yet. Agents may register, install and uninstall with their
+  > user's rights (D6: none of this is an admin or auth action).
 - Author's instance in the source space tracks the working copy (D15).
   Publishing a version makes it installable from a space's catalog;
   installs pin versions; updates require approval; permission changes
