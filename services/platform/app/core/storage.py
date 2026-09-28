@@ -3,6 +3,8 @@
     <root>/<space_id>/          root:<gid> 2770
     <root>/<space_id>/files/    root:<gid> 2770
     <root>/<space_id>/apps/     root:<gid> 2770
+    <root>/<space_id>/apps/<instance_id>/                 root:<gid> 2770
+    <root>/<space_id>/apps/.trash/<instance_id>-<stamp>/  an uninstalled instance, kept
 
 `<root>` itself is root-owned and not group-writable, so `<space_id>` can be
 trusted; everything below it is writable by the space's group (exec
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 OWNER_UID = 0
 DIR_MODE = 0o2770
 SUBDIRS = ("files", "apps")
+TRASH_DIR = ".trash"
 
 _OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -80,6 +83,43 @@ class SpaceStorage:
                 os.close(_ensure_dir(sub, gid, dir_fd=space_fd))
         finally:
             os.close(space_fd)
+
+    def _open_apps(self, space_id: UUID, gid: int) -> int:
+        space_fd = _ensure_dir(str(self.space_dir(space_id)), gid)
+        try:
+            return _ensure_dir("apps", gid, dir_fd=space_fd)
+        finally:
+            os.close(space_fd)
+
+    def instance_dir(self, space_id: UUID, instance_id: UUID) -> Path:
+        return self.space_dir(space_id) / "apps" / str(instance_id)
+
+    def ensure_instance(self, space_id: UUID, gid: int, instance_id: UUID) -> Path:
+        """`apps/<instance_id>/`, root:<gid> 2770."""
+        apps_fd = self._open_apps(space_id, gid)
+        try:
+            os.close(_ensure_dir(str(instance_id), gid, dir_fd=apps_fd))
+        finally:
+            os.close(apps_fd)
+        return self.instance_dir(space_id, instance_id)
+
+    def trash_instance(
+        self, space_id: UUID, gid: int, instance_id: UUID, stamp: str
+    ) -> Path | None:
+        """Move `apps/<instance_id>/` to `apps/.trash/<instance_id>-<stamp>/`; None if it's gone."""
+        apps_fd = self._open_apps(space_id, gid)
+        try:
+            trash_fd = _ensure_dir(TRASH_DIR, gid, dir_fd=apps_fd)
+            name = f"{instance_id}-{stamp}"
+            try:
+                os.rename(str(instance_id), name, src_dir_fd=apps_fd, dst_dir_fd=trash_fd)
+            except FileNotFoundError:
+                return None
+            finally:
+                os.close(trash_fd)
+        finally:
+            os.close(apps_fd)
+        return self.space_dir(space_id) / "apps" / TRASH_DIR / name
 
     def reconcile(self, spaces: Iterable[tuple[UUID, int]]) -> tuple[int, int]:
         """`ensure` every (space_id, gid); returns (ok, failed). Failures are logged, not raised."""

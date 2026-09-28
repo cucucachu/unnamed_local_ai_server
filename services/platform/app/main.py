@@ -22,6 +22,7 @@ from app.core.config import Settings
 from app.core.errors import (
     Conflict,
     Forbidden,
+    InvalidApp,
     InvalidInput,
     NotFound,
     PlatformError,
@@ -54,6 +55,10 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(PlatformError)
     async def platform_error(request: Request, exc: PlatformError) -> JSONResponse:
         return JSONResponse({"detail": exc.code}, status_code=STATUS_BY_ERROR.get(type(exc), 400))
+
+    @app.exception_handler(InvalidApp)
+    async def invalid_app(request: Request, exc: InvalidApp) -> JSONResponse:
+        return JSONResponse({"detail": exc.code, "diagnostics": exc.diagnostics}, status_code=422)
 
     @app.exception_handler(AgentFsError)
     async def agent_fs_error(request: Request, exc: AgentFsError) -> JSONResponse:

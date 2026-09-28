@@ -254,6 +254,8 @@ async def mkdir(body: PathBody, request: Request, principal: CurrentUser) -> Pat
 def _check_destination(src: vfs.Resolved, dst: vfs.Resolved, *, moving: bool) -> None:
     if dst.is_space_root or (moving and src.is_space_root):
         raise Forbidden("read_only")
+    if moving and src.is_apps_folder:
+        raise Forbidden("reserved")
     if not os.path.lexists(src.host_path):
         raise NotFound("not_found")
     if os.path.lexists(dst.host_path):
@@ -313,6 +315,8 @@ async def delete(request: Request, principal: CurrentUser, path: str) -> None:
     r = await resolve(request, principal, path, "write", follow=False)
     if r.is_space_root:
         raise Forbidden("read_only")
+    if r.is_apps_folder:
+        raise Forbidden("reserved")
     if not os.path.lexists(r.host_path):
         raise NotFound("not_found")
     with _fs_errors():
