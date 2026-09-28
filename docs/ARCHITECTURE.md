@@ -235,6 +235,7 @@ what another doc says it should be.
   | `/api/health` | public | `agent-server:8000` |
   | `/api/platform/*`, `/ws/platform/*` | `forward_auth` | `platform:8100` |
   | every other `/api/*`, `/ws/*` | `forward_auth` | `agent-server:8000` |
+  | `/app-runtime/*` (M12-05) | public | static (`/srv/app-runtime/<sdk>/runtime.js`, `Cache-Control: no-cache`, no SPA fallback) |
   | `/ca.crt` (`:80` only), everything else | public | static (`/srv/www`, SPA fallback to `index.html`) |
 
   `forward_auth` sends each request's headers to `GET
@@ -253,7 +254,9 @@ what another doc says it should be.
   be spoofed. `/internal/*` is never routed. Range and `HEAD` requests to
   `/api/platform/files/stream` pass through unchanged (206 + `Content-Range`).
 - **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
-  `npx expo export --platform web` against `services/frontend/`), final
+  `npx expo export --platform web` against `services/frontend/`), a
+  second one (M12-05) that builds the app sandbox runtime from
+  `packages/homeai-sdk/` into `/srv/app-runtime/1/`, final
   stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
 - **Published ports**: `80` and `443` — confirmed via `docker compose
   config`; the *only* service in the stack with a `ports:` entry. 443 is
@@ -739,18 +742,23 @@ what another doc says it should be.
 - **Image/base**: `node:22-alpine` with pinned, build-time-installed
   (`npm ci --omit=dev --ignore-scripts`) esbuild 0.25.12, TypeScript 6.0.3,
   jsdom 26.1.0, React / react-dom 19.2.3, react-native-web 0.21.2,
-  `@types/react` and react-native 0.86.3 (typings only), and the SDK 1
-  runtime prebuilt into `dist/` (`runtime.js`, the ≈468 KB IIFE the app
-  host will serve, and `runtime.dev.js` for the smoke render). Nothing is
+  `@types/react` and react-native 0.86.3 (typings only), the SDK
+  (`packages/homeai-sdk/`, copied to `/packages/homeai-sdk`, M12-05) and
+  its runtime prebuilt into `dist/` (`runtime.js`, and `runtime.dev.js`
+  for the smoke render). Nothing is
   fetched at build time of an app; the containers have no network. Runs as
-  uid `19999`. Dockerfile: `services/app-builder/Dockerfile`.
+  uid `19999`. Dockerfile: `services/app-builder/Dockerfile`; build
+  context: the repo root (for the SDK), trimmed by the root
+  `.dockerignore`.
 - **Layout**: `src/cli.mjs` (`compile` / `smoke` entry points; always
   writes `result.json`), `compile.mjs` (route table, import-allowlist
   plugin, esbuild `__homeai_define` bundle, prod + dev), `typecheck.mjs`
-  (TS API against `types/homeai.d.ts` and the React / RN typings),
+  (TS API against the SDK's `types/homeai.d.ts` and the React / RN typings),
   `smoke.mjs` (jsdom + `react-dom/client` + node:sqlite behind the real
-  bridge transport), `routes.mjs`, `diagnostics.mjs`, `build-runtime.mjs`;
-  `runtime/` (runtime, router shim, SDK, bridge — from the M12-01 spike).
+  bridge transport), `routes.mjs`, `diagnostics.mjs`, `build-runtime.mjs`
+  (the SDK's `runtimeBuildOptions` with this image's esbuild and
+  `node_modules`), `sdk.mjs` (where the SDK is: its allowed modules,
+  typings, runtime build).
 - **Build**: `./services/app-builder/build-builder-image.sh` →
   `homeai-app-builder:latest` (≈120 MB content, 561 MB on disk).
 - **Tests**: `cd services/app-builder && npm ci --ignore-scripts && npm run
@@ -759,6 +767,43 @@ what another doc says it should be.
   runtime/allowlist/typings agreeing). The same suite runs inside the
   image offline: `docker run --rm --network none --read-only --tmpfs /tmp
   homeai-app-builder:latest node --test tests/builder.test.mjs`.
+
+### `packages/homeai-sdk/` (`@homeai/sdk`, M12-05)
+
+- **Purpose**: SDK 1 in one place (`docs/PLATFORM.md` §7 "`@homeai/sdk`",
+  "Bridge protocol"): what runs in the app sandbox, what app code is
+  type-checked against, and the host's side of the bridge. Not a service
+  or an image; the app-builder image and the Caddy image each build the
+  runtime from it, and the frontend (M12-06) imports `@homeai/sdk/host`.
+- **Layout**: `src/runtime.tsx` (runtime IIFE entry: module registry,
+  error boundary, boot and `bundle.load`), `bridge.ts` (sandbox transport),
+  `sdk.ts` (`@homeai/sdk` + the `expo-sqlite` shim), `router.tsx` (the
+  expo-router shim), `protocol.ts` (bridge v1 types, shared by both
+  sides); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
+  `bridge-host.ts`, `platform.ts`, `document.ts`, and `web.ts`
+  (`@homeai/sdk/host/web`, the iframe); `types/homeai.d.ts` (app typings);
+  `modules.json` (the allowed modules); `build.mjs` (`runtimeBuildOptions`;
+  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈469 KB /
+  1.8 MB).
+- **Tests**: `cd packages/homeai-sdk && npm ci --ignore-scripts && npm run
+  lint && npm test` (`npx playwright install chromium` first).
+  `lint` is `tsc` for the sandbox side and again for `src/host/index.ts`
+  without the DOM lib. `tests/sdk.test.mjs`: the dev runtime and the
+  fixture app (`tests/fixtures/runtime-check`) in jsdom over the WebView
+  transport, behind the real host library and a stand-in platform
+  (`tests/helpers.mjs`, node:sqlite speaking the RPC contract) — reads,
+  writes, bind forms, live queries and their coalescing, actions, routes,
+  `useSpace`, errors, read-only, `bundle.load` delivery, the module
+  registry against `modules.json` and the typings, junk envelopes.
+  `tests/host.test.mjs`: the host's refusals, param rebuilding, in-flight
+  cap, message queueing, RPC/bundle/runtime URLs and error mapping, the
+  event relay, the document and `injectScriptFor`.
+  `tests/runtime.browser.test.mjs`: the runtime harness
+  (`tests/harness/harness.mjs`, a static host page plus its checks) in
+  Chromium against the stand-in platform at a fake origin, events pushed
+  into the page (Playwright's `routeWebSocket` would fake `WebSocket`
+  inside the sandbox too, past its CSP). `scripts/e2e/app_runtime_smoke.sh`
+  runs the same harness against the live stack.
 
 ### exec-toolbox image (`services/code-exec-manager/exec-image/`)
 
@@ -2069,6 +2114,25 @@ re-queries on `ready`. The server re-reads the subscriber's session and
 spaces every 10 s: a removed member stops getting a space's events within
 that window, and a revoked session or a missing/invalid credential closes
 with code `4401`. Client frames are ignored.
+
+**App runtime** (`app/core/appbuild.py` `instance_bundle`,
+`app/api/external/appdata.py`; M12-05; design in `docs/PLATFORM.md` §7
+"Runtime and bridge")
+
+A host opens an instance by fetching two things and inlining both into
+the sandbox document (`@homeai/sdk/host`'s `sandboxDocument`):
+
+| Method + path | Need | Success | Errors |
+|---|---|---|---|
+| `GET /api/platform/apps/instances/{id}/bundle` | read on the instance's space | `200 {"app_id", "version", "sdk", "bundle_id", "code"}` — the bundle of the version the instance tracks (`working` today): `version` and `sdk` from its `app.json`, `bundle_id` the build id in its `bundle_path`, `code` the `app.js` text | `404 not_found` (unknown or uninstalled instance, non-member), `404 no_bundle` (never built, or the file isn't a regular file starting `__homeai_define(`, ≤ 16 MB) |
+| `GET /app-runtime/<sdk>/runtime.js` | public (Caddy static) | the SDK's runtime IIFE (`text/javascript`, `no-cache`) | `404` |
+
+The bundle is read below an fd on the platform data dir, the last
+component `O_NOFOLLOW`; a rebuild that removes the old bundle between the
+row lookup and the read is retried once. An agent delegation has its
+user's rights. The host then sends RPC and relays events as in
+`docs/PLATFORM.md` §7 "Bridge protocol"; the sandbox never sees a
+credential or an instance id.
 
 **`/internal/*`** (never routed by Caddy)
 

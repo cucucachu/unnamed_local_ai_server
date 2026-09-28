@@ -505,6 +505,28 @@ diagnostic until added.
 - `runAction(name, params)`; `useSpace()` → `{ id, slug, name, role }`.
 - Later: `askAgent(prompt)`, cross-instance reads, capability shims.
 
+> **As built (M12-05)** — `packages/homeai-sdk/` holds everything
+> SDK-versioned: the sandbox runtime (`src/runtime.tsx`, `bridge.ts`,
+> `sdk.ts`, `router.tsx`), the app typings (`types/homeai.d.ts`), the
+> allowed modules (`modules.json`, which the builder's import allowlist and
+> the runtime's `require` both read), the runtime build options
+> (`build.mjs`), and the host library `@homeai/sdk/host` (below). The
+> builder image and the Caddy image each build the runtime from it. Beyond
+> the text above: `getAllAsync` / `getFirstAsync` / `runAsync` / `useQuery`
+> take expo-sqlite's three bind forms — a list, an object for `:x` / `$x` /
+> `@x` names, or values one by one; `runAction` resolves to `{changes,
+> lastInsertRowId, rows}` (the last result set's rows); every rejection
+> carries a `code` (the platform's, e.g. `sql_error`, or the host's, e.g.
+> `read_only`, `timeout`), typed as `SDKError`. `useQuery` keeps one query
+> in flight per hook and folds changes that arrive meanwhile into one
+> re-run, and a write from the sandbox (`runAsync`, `runAction` with
+> `changes > 0`) refreshes that sandbox's queries without waiting for the
+> platform's event. `useSpace()` is the host's `space` from the sandbox
+> config at first render, then any `space` event. The `expo-sqlite` shim is
+> `useSQLiteContext`, `openDatabaseAsync`, `SQLiteProvider` over the same
+> database; `withTransactionAsync` stays out (it throws, and it isn't in the
+> typings).
+
 ### Runtime and bridge
 
 - **Runtime bundle**: one IIFE per SDK version (≈468 KB, ≈146 KB gzip),
@@ -556,6 +578,79 @@ diagnostic until added.
   reload = `bundle.load` with the new app bundle: the runtime re-evaluates it
   and re-renders, keeping the navigation stack (component state is not
   preserved).
+
+#### Bridge protocol (v1)
+
+Types: `packages/homeai-sdk/src/protocol.ts`. A message is one JSON string
+of at most 2^20 UTF-16 units; either side drops anything that doesn't parse
+as a v1 envelope (`homeai: 1`; `req`/`res` with an integer `id`, `req` with
+a string `method`, `evt` with a string `event`).
+
+| Sandbox → host `req` | `params` | `result` |
+|---|---|---|
+| `db.getAll` | `{sql, params}` | `[{column: value}]` |
+| `db.getFirst` | `{sql, params}` | `{…} \| null` |
+| `db.run` | `{sql, params}` | `{changes, lastInsertRowId}` |
+| `action` | `{name, params: {…}}` | `{changes, lastInsertRowId, rows}` |
+
+`params` of the `db.*` methods is a list (`?` placeholders) or an object
+(named); values and results are as in the platform's RPC
+(`ARCHITECTURE.md` §3 "App data": a BLOB comes back as `{"$blob":
+base64}`). A failure is `ok: false, error: {code, message}`: `code` is the
+platform's `detail` (`sql_error`, `sql_not_allowed`, `too_many_rows`,
+`unknown_action`, `not_found`, …, or `http_<status>` without one), or the
+host's own: `method_not_allowed` (not in the table), `read_only` (a viewer's
+`db.run` / `action`), `bad_request` (params of the wrong shape, `sql` over
+100 KiB), `busy` (more than 32 requests in flight), `unavailable` (the
+platform unreachable), `host_error`. The sandbox adds `timeout` (no answer
+in 15 s).
+
+| Event | Direction | `data` |
+|---|---|---|
+| `db.changed` | host → sandbox | `{}` — re-run live queries (the host sends it for this instance's `db_changed` and on every events `ready`, since nothing is replayed) |
+| `bundle.load` | host → sandbox | `{code}` — a new app bundle; the runtime evaluates it and re-renders on the current route |
+| `space` | host → sandbox | `{id, slug, name, role}` |
+| `runtime.ready` | sandbox → host | `{version, renderMs}` — after each (re)mount's commit |
+| `runtime.error` | sandbox → host | `{message, stack, componentStack}` |
+| `nav.changed` | sandbox → host | `{path}` |
+
+The sandbox config (`window.__homeai_config`, in the document) is
+`{initialPath?, space?}`.
+
+> **As built (M12-05)** — the host side is the library
+> `@homeai/sdk/host` (DOM-free, so the native host can use it as is;
+> `tsconfig.host.json` type-checks it without the DOM lib):
+> `createBridgeHost({send, forward, readOnly, onEvent})` applies the rules
+> above and rebuilds `params` from their known fields only, so nothing in a
+> message can name an instance or a URL; `platformForward(instanceId,
+> {baseUrl, fetch, headers})` is the `forward` that maps the methods onto
+> `POST /api/platform/apps/instances/{id}/rpc` with the host's own
+> credentials; `platformEventRelay({instanceId, appId, host, reload})`
+> turns `/ws/platform/events` frames into `db.changed` / `bundle.load` (the
+> caller owns the socket); `sandboxDocument({runtime, app, config})` builds
+> the document (CSP first; `</script` can't appear in the inline scripts;
+> the config JSON has `<` escaped); `injectScriptFor(wire)` is native's
+> `send`. `@homeai/sdk/host/web`'s `mountSandboxFrame(container, …)` is the
+> web transport: the iframe, the `event.source` check, and removal on a
+> second `load`. The host holds messages it sends until the sandbox has
+> sent its first one (before that the frame's window may still be the
+> initial `about:blank`, and a message would be lost). Deviations:
+>
+> - **The platform serves the parts, not an assembled page.** The runtime
+>   is static at `/app-runtime/<sdk>/runtime.js` (Caddy, public: it holds
+>   no data; `Cache-Control: no-cache`, so hosts revalidate by ETag), the
+>   app bundle is `GET /api/platform/apps/instances/{id}/bundle`
+>   (`ARCHITECTURE.md` §3 "App runtime"), and the host builds the document
+>   with `sandboxDocument`. The document has to be an inline string anyway
+>   (`srcdoc`, `source={{ html }}`), and an HTML page served from the
+>   platform's own origin would run app code with the session if someone
+>   opened its URL directly.
+> - The envelope is the M12-01 spike's `{homeai: 1, kind, id, method,
+>   params}`, not the issue's `{v, id, op, args}`.
+> - The RPC's `transaction` op isn't a bridge method (it is the shape
+>   `withTransactionAsync` would need; deferred with it).
+> - Hot reload is in the host library (`app_built` for the instance's app →
+>   `fetchBundle` → `bundle.load`); wiring it into the frontend is M12-06.
 
 ### Data (D10–D12)
 
@@ -661,11 +756,11 @@ repo, stored as a version artifact, and pushed as a hot-reload event.
 >   bundle, type, render, sql, build), not `kind`; the component stack is
 >   in the render message.
 > - A successful build migrates the instances tracking `working` and emits
->   `app_built` (wired in M12-03); no hot reload yet (M12-05) and no git
+>   `app_built` (wired in M12-03); hot reload is the host's (M12-05) and no git
 >   commit (M13), so `commit` stays null.
-> - The runtime and SDK/shim typings live in the builder
->   (`services/app-builder/runtime`, `types/homeai.d.ts`) until M12-05's
->   `packages/homeai-sdk/`.
+> - The runtime and SDK/shim typings lived in the builder until M12-05
+>   moved them to `packages/homeai-sdk/`, which the builder image now
+>   copies in (build context: the repo root).
 > - Typing is `strict` minus `noImplicitAny`. RN's typings declare
 >   `fetch`, `XMLHttpRequest`, `WebSocket` and `require` as globals, so a
 >   checker pass refuses references to those (and the DOM names);
@@ -784,7 +879,14 @@ The full dependency graph and ordered backlog are on the
   `location`/`window` out of app code, but a deliberately malicious app can
   leak data it can already read, once per open. WebRTC-based egress was not
   tested. Native blocks navigation before any request
-  (`onShouldStartLoadWithRequest`).
+  (`onShouldStartLoadWithRequest`). M12-05's runtime harness
+  (`scripts/e2e/app_runtime_smoke.sh`) re-checks this on the live stack:
+  19 escape probes blocked, the one self-navigation request, the frame
+  removed.
+- **Runtime caching**: `/app-runtime/1/runtime.js` is one path per SDK
+  version, not content-hashed, so hosts revalidate it (`no-cache` + ETag)
+  rather than caching it forever. A hashed name (and a way for the host to
+  learn it) can come with M12-06 if the ≈146 KB gzip matters.
 - **App code in the smoke render** (M12-04): jsdom/`vm` doesn't contain
   it, so a build's `smoke` container runs untrusted code with Node's full
   API. It has no network, no socket, a read-only root and source, 2 GB /
