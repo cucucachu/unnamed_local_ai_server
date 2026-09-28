@@ -1,8 +1,14 @@
 import asyncio
+import os
+import shutil
+import subprocess
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
+from pathlib import Path
 
+import psycopg
 import pytest
 import uvicorn
 from httpx import ASGITransport, AsyncClient
@@ -157,3 +163,85 @@ def fake_platform() -> Iterator[FakePlatform]:
         yield fake
     finally:
         runner.stop()
+
+
+# --- a throwaway Postgres, initialized like the live one ---------------------
+
+PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "postgres:17")
+PG_SUPERUSER = "homeai"
+PG_SUPERUSER_PASSWORD = "test-superuser-password"
+PG_AGENT_PASSWORD = "test-agent-password"
+DB_INIT = Path(__file__).resolve().parents[3] / "infra" / "postgres" / "db-init.sh"
+
+
+@dataclass(frozen=True)
+class PgServer:
+    host: str
+    port: int
+
+    def dsn(self, user: str, password: str) -> str:
+        return f"postgresql://{user}:{password}@{self.host}:{self.port}/{PG_SUPERUSER}"
+
+    @property
+    def agent_dsn(self) -> str:
+        """What agent-server connects as in the live stack."""
+        return self.dsn("agent", PG_AGENT_PASSWORD)
+
+    @property
+    def super_dsn(self) -> str:
+        """For arranging and inspecting rows behind row-level security's back."""
+        return self.dsn(PG_SUPERUSER, PG_SUPERUSER_PASSWORD)
+
+
+def _docker(*args: str) -> str:
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.fixture(scope="session")
+def pg_server() -> Iterator[PgServer]:
+    """`postgres:17` on a random loopback port, after `infra/postgres/db-init.sh`.
+
+    Superuser `homeai` and database `homeai` like the live volume, so db-init
+    creates `agent` and `agent_rls_bypass` exactly as compose runs it. Skips
+    the requesting tests when there's no `docker` CLI.
+    """
+    if shutil.which("docker") is None:
+        pytest.skip("no docker CLI to start a throwaway Postgres")
+    container = _docker(
+        "run", "-d", "--rm",
+        "--label", "homeai.test=agent-server",
+        "-e", f"POSTGRES_USER={PG_SUPERUSER}",
+        "-e", f"POSTGRES_PASSWORD={PG_SUPERUSER_PASSWORD}",
+        "-p", "127.0.0.1::5432",
+        PG_IMAGE,
+    )  # fmt: skip
+    try:
+        host, _, port = _docker("port", container, "5432/tcp").splitlines()[0].rpartition(":")
+        server = PgServer(host, int(port))
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                psycopg.connect(server.super_dsn, connect_timeout=2).close()
+                break
+            except psycopg.OperationalError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.3)
+        init = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", f"container:{container}",
+                "--user", "postgres", "-v", f"{DB_INIT}:/db-init.sh:ro",
+                "-e", "PGHOST=127.0.0.1", "-e", f"PGUSER={PG_SUPERUSER}",
+                "-e", f"PGPASSWORD={PG_SUPERUSER_PASSWORD}", "-e", f"PGDATABASE={PG_SUPERUSER}",
+                "-e", "PLATFORM_DB_PASSWORD=test-platform-password",
+                "-e", f"AGENT_DB_PASSWORD={PG_AGENT_PASSWORD}",
+                "--entrypoint", "bash", PG_IMAGE, "/db-init.sh",
+            ],
+            capture_output=True, text=True, check=False,
+        )  # fmt: skip
+        assert init.returncode == 0, init.stdout + init.stderr
+        yield server
+    finally:
+        subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)

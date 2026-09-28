@@ -29,6 +29,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.db.rls import RlsConnectionPool, rls_ddl
 from app.db.settings import LEGACY_SETTINGS_TABLE_DDL, USER_SETTINGS_TABLE_DDL
 from app.db.turn_stats import TURN_STATS_TABLE_DDL
 
@@ -89,6 +90,10 @@ class PostgresCheckpointer:
 async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
     """Open a pool, build+migrate an `AsyncPostgresSaver`, and ensure `threads` exists.
 
+    Also (re)applies row-level security to every table (`app/db/rls.py`), so
+    the pool's connections see only the rows of the user bound to the task
+    that checks them out.
+
     Called once at app startup (real Postgres path only - tests inject a
     `MemorySaver` via `create_app(checkpointer_override=...)` instead and
     never call this). `autocommit=True` + `prepare_threshold=0` +
@@ -98,7 +103,7 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
     `from_conn_string` reference implementation, which opens connections with
     these exact same three kwargs.
     """
-    pool = AsyncConnectionPool(
+    pool = RlsConnectionPool(
         dsn,
         open=False,
         kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
@@ -116,5 +121,9 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
         await conn.execute(LEGACY_SETTINGS_TABLE_DDL)
         await conn.execute(USER_SETTINGS_TABLE_DDL)
         await conn.execute(TURN_STATS_TABLE_DDL)
+        async with conn.transaction():
+            await conn.execute("SET LOCAL lock_timeout = '60s'")
+            for statement in rls_ddl():
+                await conn.execute(statement)
 
     return PostgresCheckpointer(pool=pool, saver=saver)

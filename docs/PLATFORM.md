@@ -442,6 +442,40 @@ Until then they're visible to nobody.
 >   tmpfs; agent-server also drops every capability.
 > - `scripts/verify_tenancy.sh` checks §9 invariants 1-7 (`docs/ARCHITECTURE.md`
 >   §5 "Tenancy verification").
+
+> **As built (#194): row-level security under the ownership checks.**
+> - agent-server's startup DDL enables and **forces** RLS (forced, because
+>   `agent` owns the tables and owners otherwise bypass it) on `threads`,
+>   `user_settings`, `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
+>   `turn_stats` and the legacy `settings`. Policy `owner_only` admits a row
+>   for reading and writing only while `app.user_id` names its owner:
+>   `threads.owner_user_id` / `user_settings.user_id` directly, and the
+>   thread-keyed tables by `thread_id` being one of that user's threads.
+>   `settings` has no policy, so it's invisible. `checkpoint_migrations`
+>   holds no user data and has none.
+> - `app.user_id` comes from the verified identity: the REST dependency
+>   and the chat socket bind it per request/socket (a context variable
+>   inherited by the turn's tasks), and agent-server's `RlsConnectionPool`
+>   sets it with `set_config(..., false)` on each checkout and a `reset`
+>   hook clears it before the connection rejoins the pool. (`SET LOCAL`
+>   isn't usable: the pool is autocommit and LangGraph's saver issues its
+>   own statements.) With nothing bound, a connection sees and writes
+>   nothing.
+> - The one bypass is role `agent_rls_bypass` (`db-init`, `NOLOGIN
+>   BYPASSRLS`, SET-only membership for `agent`), used inside one
+>   transaction (`SET LOCAL ROLE`) to hand ownerless pre-Stage-3 threads
+>   and the legacy settings to the bootstrap admin (§5 "Legacy
+>   migration"). Startup DDL and LangGraph's migrations need no bypass.
+> - Thread delete removes checkpoints and stats before the `threads` row,
+>   since they're only visible while it exists.
+> - **Scope:** defence in depth against an agent-server code path that
+>   misses an ownership check. It is *not* a boundary against a
+>   compromised agent-server, which owns the tables, chooses
+>   `app.user_id`, and can use the bypass role.
+> - Cost: +2–8 ms per chat turn (a fake-model turn on a thread with a few
+>   hundred messages; the budget is 15 ms), from +0.05–0.4 ms on each
+>   checkpointer and store query — see `spikes/rls_194/README.md`. `scripts/verify_tenancy.sh` checks 26-28
+>   cover it live.
 - **Model**: all users share one `model-runner`; llama.cpp queues requests.
   No fair-share scheduling in this stage (D1).
 

@@ -146,6 +146,30 @@ def test_agent_role_is_unprivileged(initialized):
         assert owner == (SUPERUSER,)
 
 
+
+def test_rls_bypass_role_is_set_only_and_cannot_log_in(initialized):
+    """#194: agent-server's one way past row-level security."""
+    with psycopg.connect(initialized.database("postgres").dsn) as conn:
+        role = conn.execute(
+            "SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, "
+            "rolbypassrls FROM pg_roles WHERE rolname = 'agent_rls_bypass'"
+        ).fetchone()
+        assert role == (False, False, False, False, False, True)
+        grant = conn.execute(
+            "SELECT m.inherit_option, m.set_option, m.admin_option FROM pg_auth_members m "
+            "WHERE m.roleid = 'agent_rls_bypass'::regrole AND m.member = 'agent'::regrole"
+        ).fetchone()
+        assert grant == (False, True, False)
+        owns = conn.execute(
+            "SELECT count(*) FROM pg_class WHERE relowner = 'agent_rls_bypass'::regrole"
+        ).fetchone()
+        assert owns == (0,)
+    with psycopg.connect(_agent_db(initialized).dsn) as conn:
+        conn.execute("SET ROLE agent_rls_bypass")
+        assert conn.execute("SELECT current_user").fetchone() == ("agent_rls_bypass",)
+    with pytest.raises(psycopg.OperationalError):
+        psycopg.connect(initialized.database(SUPERUSER, "agent_rls_bypass", "").dsn)
+
 @pytest.mark.parametrize(
     ("user", "password", "dbname"),
     [

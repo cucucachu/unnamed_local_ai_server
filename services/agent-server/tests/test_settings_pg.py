@@ -1,43 +1,32 @@
 """Integration test for `PgSettingsStore` (M8-02) against a real Postgres.
 
-Mirrors `tests/test_threads_pg.py`'s skip-marker pattern exactly: requires a
-real Postgres reachable via the `TEST_PG_DSN` env var, SKIPPED (not failed)
-otherwise.
-
-Run it:
-
-    TEST_PG_DSN=postgresql://user:pass@host:5432/db uv run pytest -m integration
-
-or, against the real compose Postgres (`TEST_PG_DSN` already set there via
-`docker-compose.yml`'s `agent-server.environment` block):
-
-    docker compose exec agent-server uv run pytest -m integration
+Runs against the throwaway Postgres from `tests/conftest.py`'s `pg_server`
+(initialized by `infra/postgres/db-init.sh`, connected to as `agent` like
+the live stack), so row-level security applies: each test binds the user it
+acts as, and arranges or cleans up rows as the superuser. Skipped without
+the `docker` CLI.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 
+import psycopg
 import pytest
 
+from app.db import rls
 from app.db.checkpointer import build_postgres_checkpointer
 from app.db.settings import PgSettingsStore
+from tests.conftest import PgServer
 
-TEST_PG_DSN = os.environ.get("TEST_PG_DSN")
-
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        not TEST_PG_DSN, reason="TEST_PG_DSN not set - no real Postgres to test against"
-    ),
-]
+pytestmark = pytest.mark.integration
 
 
-async def test_pg_settings_store_round_trip() -> None:
-    pg = await build_postgres_checkpointer(TEST_PG_DSN)
+async def test_pg_settings_store_round_trip(pg_server: PgServer) -> None:
+    pg = await build_postgres_checkpointer(pg_server.agent_dsn)
     store = PgSettingsStore(pg.pool)
     user, other = str(uuid.uuid4()), str(uuid.uuid4())
+    rls.bind_user(user)
     try:
         # get_document(): defaults applied when nothing is stored.
         defaults = await store.get_document(user)
@@ -66,21 +55,20 @@ async def test_pg_settings_store_round_trip() -> None:
         # Per user: someone else still has the defaults.
         assert await store.get_document(other) == defaults
     finally:
-        async with pg.pool.connection() as conn:
-            await conn.execute("DELETE FROM user_settings WHERE user_id IN (%s, %s)", (user, other))
+        with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM user_settings WHERE user_id IN (%s, %s)", (user, other))
         await pg.close()
 
 
-async def test_pg_adopt_legacy_settings() -> None:
-    pg = await build_postgres_checkpointer(TEST_PG_DSN)
+async def test_pg_adopt_legacy_settings(pg_server: PgServer) -> None:
+    pg = await build_postgres_checkpointer(pg_server.agent_dsn)
     store = PgSettingsStore(pg.pool)
     admin = str(uuid.uuid4())
+    rls.bind_user(admin)
     try:
-        async with pg.pool.connection() as conn:
-            cur = await conn.execute("SELECT count(*) AS n FROM settings")
-            if (await cur.fetchone())["n"]:
-                pytest.skip("database has real legacy settings; adopting them would move them")
-            await conn.execute(
+        with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM settings")
+            conn.execute(
                 "INSERT INTO settings (key, value) VALUES "
                 "('hitl_enabled', 'false'), ('edit_mode_default', '\"fork\"')"
             )
@@ -90,11 +78,10 @@ async def test_pg_adopt_legacy_settings() -> None:
         document = await store.get_document(admin)
         assert document.hitl_enabled is False
         assert document.edit_mode_default == "truncate"
-        async with pg.pool.connection() as conn:
-            cur = await conn.execute("SELECT count(*) AS n FROM settings")
-            assert (await cur.fetchone())["n"] == 0
+        with psycopg.connect(pg_server.super_dsn) as conn:
+            assert conn.execute("SELECT count(*) FROM settings").fetchone() == (0,)
         assert await store.adopt_legacy(admin) == 0
     finally:
-        async with pg.pool.connection() as conn:
-            await conn.execute("DELETE FROM user_settings WHERE user_id = %s", (admin,))
+        with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM user_settings WHERE user_id = %s", (admin,))
         await pg.close()

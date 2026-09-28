@@ -312,6 +312,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from app.agent.build import MUTATING_TOOL_NAMES
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, IdentityError, KeysUnavailable
+from app.db.rls import bind_user
 from app.db.turn_stats import TurnStat
 
 logger = logging.getLogger(__name__)
@@ -1094,6 +1095,7 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
         await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
         return
     user_id = identity.user_id
+    bind_user(user_id)
 
     thread_store = websocket.app.state.thread_store
     record = await thread_store.get(thread_id, user_id)

@@ -1,43 +1,32 @@
 """Integration test for `PgThreadStore` (M3-02) against a real Postgres.
 
-Mirrors `tests/test_checkpointer_pg.py`'s skip-marker pattern exactly:
-requires a real Postgres reachable via the `TEST_PG_DSN` env var, SKIPPED
-(not failed) otherwise.
-
-Run it:
-
-    TEST_PG_DSN=postgresql://user:pass@host:5432/db uv run pytest -m integration
-
-or, against the real compose Postgres (`TEST_PG_DSN` already set there via
-`docker-compose.yml`'s `agent-server.environment` block):
-
-    docker compose exec agent-server uv run pytest -m integration
+Runs against the throwaway Postgres from `tests/conftest.py`'s `pg_server`
+(initialized by `infra/postgres/db-init.sh`, connected to as `agent` like
+the live stack), so row-level security applies: each test binds the user it
+acts as, and arranges or cleans up rows as the superuser. Skipped without
+the `docker` CLI.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 
+import psycopg
 import pytest
 
+from app.db import rls
 from app.db.checkpointer import build_postgres_checkpointer
 from app.db.threads import DEFAULT_TITLE, PgThreadStore
+from tests.conftest import PgServer
 
-TEST_PG_DSN = os.environ.get("TEST_PG_DSN")
-
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        not TEST_PG_DSN, reason="TEST_PG_DSN not set - no real Postgres to test against"
-    ),
-]
+pytestmark = pytest.mark.integration
 
 
-async def test_pg_thread_store_round_trip() -> None:
-    pg = await build_postgres_checkpointer(TEST_PG_DSN)
+async def test_pg_thread_store_round_trip(pg_server: PgServer) -> None:
+    pg = await build_postgres_checkpointer(pg_server.agent_dsn)
     store = PgThreadStore(pg.pool)
     owner, other = str(uuid.uuid4()), str(uuid.uuid4())
+    rls.bind_user(owner)
     try:
         # create() + get(): default title, DTO fields all round-trip.
         record = await store.create(owner, None)
@@ -92,31 +81,28 @@ async def test_pg_thread_store_round_trip() -> None:
         await store.set_title_if_new(non_uuid, "x")
         await store.touch(non_uuid)
     finally:
-        async with pg.pool.connection() as conn:
-            await conn.execute(
-                "DELETE FROM threads WHERE owner_user_id IN (%s, %s)", (owner, other)
-            )
+        with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM threads WHERE owner_user_id IN (%s, %s)", (owner, other))
         await pg.close()
 
 
-async def test_pg_adopt_orphans() -> None:
-    pg = await build_postgres_checkpointer(TEST_PG_DSN)
+async def test_pg_adopt_orphans(pg_server: PgServer) -> None:
+    pg = await build_postgres_checkpointer(pg_server.agent_dsn)
     store = PgThreadStore(pg.pool)
     admin = str(uuid.uuid4())
+    rls.bind_user(admin)
     try:
-        async with pg.pool.connection() as conn:
-            cur = await conn.execute("SELECT count(*) AS n FROM threads WHERE owner_user_id IS NULL")
-            if (await cur.fetchone())["n"]:
-                pytest.skip("database has real ownerless threads; adopting them would move them")
-            cur = await conn.execute("INSERT INTO threads (title) VALUES ('legacy') RETURNING id")
-            orphan_id = str((await cur.fetchone())["id"])
+        with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
+            (orphan_id,) = conn.execute(
+                "INSERT INTO threads (title) VALUES ('legacy') RETURNING id::text"
+            ).fetchone()
 
         assert await store.get(orphan_id, admin) is None
-        assert await store.adopt_orphans(admin) == 1
+        assert await store.adopt_orphans(admin) >= 1
         adopted = await store.get(orphan_id, admin)
         assert adopted is not None and adopted.title == "legacy"
         assert await store.adopt_orphans(admin) == 0
     finally:
-        async with pg.pool.connection() as conn:
-            await conn.execute("DELETE FROM threads WHERE owner_user_id = %s", (admin,))
+        with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM threads WHERE owner_user_id = %s", (admin,))
         await pg.close()

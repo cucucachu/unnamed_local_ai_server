@@ -118,6 +118,8 @@ agent run.
 - [ ] (M11-05) Settings → Spaces: add the second person to a shared space as a **viewer**. From your phone, upload a file there (or ask your agent to write one); it shows up on both phones. **(GATE G11)**
 - [ ] (M11-05) On the viewer's phone: the space is marked read-only, with no Upload/New folder and only Download on a file; asking their agent to write or edit a file in the space is refused and nothing appears on your phone. **(GATE G11)**
 
+- [ ] (#194) When you complete Setup (M10-08): the three pre-Stage-3 threads appear under your account, each opens with its full history, and one of them takes a new turn. The hand-over now runs through the `agent_rls_bypass` role, which the automated checks can't reach without completing bootstrap.
+
 > **PM sign-off: G11 passed ____**
 
 ## M12

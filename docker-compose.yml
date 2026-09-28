@@ -252,10 +252,6 @@ services:
       # delegation tokens (M11-02). Identity JWTs are checked against the
       # platform's JWKS, which needs no secret.
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
-      # Only used by `tests/test_checkpointer_pg.py` (integration tests) so
-      # `docker compose exec agent-server uv run pytest -m integration`
-      # "just works" without hand-typing a DSN. Not read by the app itself.
-      TEST_PG_DSN: postgresql://agent:${AGENT_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
   postgres:
     image: postgres:17
