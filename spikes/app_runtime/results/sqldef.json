@@ -1,0 +1,401 @@
+{
+  "sqlite3def": "3.11.24 (ae528e5)",
+  "sqlite": "3.46.1",
+  "cases": [
+    {
+      "case": "noop",
+      "expected": "none",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [],
+      "check_exit": 0,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "add_table",
+      "expected": "additive",
+      "dry_run_safe": [
+        "CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL);"
+      ],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [
+        "CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL);"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1,
+          "tags": 0
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "add_column_nullable",
+      "expected": "additive",
+      "dry_run_safe": [
+        "ALTER TABLE \"items\" ADD COLUMN \"qty\" integer;"
+      ],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [
+        "ALTER TABLE \"items\" ADD COLUMN \"qty\" integer;"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note",
+          "qty"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "add_column_notnull_default",
+      "expected": "additive",
+      "dry_run_safe": [
+        "ALTER TABLE \"items\" ADD COLUMN \"qty\" integer NOT NULL DEFAULT 1;"
+      ],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [
+        "ALTER TABLE \"items\" ADD COLUMN \"qty\" integer NOT NULL DEFAULT 1;"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note",
+          "qty"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "add_column_notnull_no_default",
+      "expected": "invalid/rebuild",
+      "dry_run_safe": [
+        "ALTER TABLE \"items\" ADD COLUMN \"qty\" integer NOT NULL;"
+      ],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [
+        "ALTER TABLE \"items\" ADD COLUMN \"qty\" integer NOT NULL;"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 1,
+      "apply_error": "-- Apply --\nBEGIN;\nALTER TABLE \"items\" ADD COLUMN \"qty\" integer NOT NULL;\nROLLBACK;\n2026/09/28 00:09:31 SQL logic error: Cannot add a NOT NULL column with default value NULL (1)",
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": false
+    },
+    {
+      "case": "add_column_fk",
+      "expected": "additive",
+      "dry_run_safe": [
+        "ALTER TABLE \"items\" ADD COLUMN \"list_id\" integer;",
+        "ALTER TABLE \"items\" ADD CONSTRAINT \"\" FOREIGN KEY (\"list_id\") REFERENCES \"lists\" (\"id\");"
+      ],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [
+        "ALTER TABLE \"items\" ADD COLUMN \"list_id\" integer;",
+        "ALTER TABLE \"items\" ADD CONSTRAINT \"\" FOREIGN KEY (\"list_id\") REFERENCES \"lists\" (\"id\");"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 1,
+      "apply_error": "-- Apply --\nBEGIN;\nALTER TABLE \"items\" ADD COLUMN \"list_id\" integer;\nALTER TABLE \"items\" ADD CONSTRAINT \"\" FOREIGN KEY (\"list_id\") REFERENCES \"lists\" (\"id\");\nROLLBACK;\n2026/09/28 00:09:31 SQL logic error: near \"FOREIGN\": syntax error (1)",
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": false
+    },
+    {
+      "case": "add_index",
+      "expected": "additive",
+      "dry_run_safe": [
+        "CREATE INDEX items_done ON items (done);"
+      ],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [
+        "CREATE INDEX items_done ON items (done);"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "drop_index",
+      "expected": "destructive(cheap)",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [
+        "-- Skipped: DROP INDEX \"items_name\";"
+      ],
+      "dry_run_enable_drop": [
+        "DROP INDEX \"items_name\";"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "drop_column",
+      "expected": "destructive",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [
+        "-- Skipped: ALTER TABLE \"items\" DROP COLUMN \"note\";"
+      ],
+      "dry_run_enable_drop": [
+        "ALTER TABLE \"items\" DROP COLUMN \"note\";"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "drop_table",
+      "expected": "destructive",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [
+        "-- Skipped: DROP TABLE \"lists\";"
+      ],
+      "dry_run_enable_drop": [
+        "DROP TABLE \"lists\";"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "type_change",
+      "expected": "destructive(rebuild)",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [],
+      "check_exit": 0,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "rename_column",
+      "expected": "destructive(ambiguous)",
+      "dry_run_safe": [
+        "ALTER TABLE \"items\" ADD COLUMN \"title\" text NOT NULL;"
+      ],
+      "dry_run_safe_skipped": [
+        "-- Skipped: DROP INDEX \"items_name\";",
+        "-- Skipped: CREATE INDEX items_name ON items (title);",
+        "-- Skipped: ALTER TABLE \"items\" DROP COLUMN \"name\";"
+      ],
+      "dry_run_enable_drop": [
+        "ALTER TABLE \"items\" ADD COLUMN \"title\" text NOT NULL;",
+        "DROP INDEX \"items_name\";",
+        "CREATE INDEX items_name ON items (title);",
+        "ALTER TABLE \"items\" DROP COLUMN \"name\";"
+      ],
+      "check_exit": 2,
+      "apply_enable_drop_exit": 1,
+      "apply_error": "-- Apply --\nBEGIN;\nALTER TABLE \"items\" ADD COLUMN \"title\" text NOT NULL;\nROLLBACK;\n2026/09/28 00:09:31 SQL logic error: Cannot add a NOT NULL column with default value NULL (1)",
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": false
+    },
+    {
+      "case": "add_unique",
+      "expected": "destructive(rebuild)",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [],
+      "check_exit": 0,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "nullable_to_notnull",
+      "expected": "destructive(rebuild)",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [],
+      "check_exit": 0,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    },
+    {
+      "case": "change_default",
+      "expected": "rebuild(safe)",
+      "dry_run_safe": [],
+      "dry_run_safe_skipped": [],
+      "dry_run_enable_drop": [],
+      "check_exit": 0,
+      "apply_enable_drop_exit": 0,
+      "apply_error": null,
+      "after_apply": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items_columns": [
+          "id",
+          "name",
+          "done",
+          "note"
+        ]
+      },
+      "idempotent_after_apply": true
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "app-runtime-spike",
+  "private": true,
+  "type": "module",
+  "description": "M12-01 risk-gate spike: sandboxed app runtime (esbuild + react-native-web in a sandboxed iframe / WebView), sqlite3def, WAL read-only. See README.md.",
+  "dependencies": {
+    "@jridgewell/trace-mapping": "^0.3.25",
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "playwright": "1.62.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native-web": "0.21.2",
+    "react-native-webview": "13.16.1"
+  },
+  "scripts": {
+    "build": "node build/build-runtime.mjs && node build/build-runtime.mjs --dev && node build/compile-app.mjs apps/groceries --out dist/groceries.app.js",
+    "exp:compile": "node tests/compile.e2e.mjs",
+    "exp:sandbox": "node tests/sandbox.e2e.mjs",
+    "exp:expo-web": "node build/gen-expo-assets.mjs && cd expo-host && npx expo export -p web && cd .. && node tests/expo-web.e2e.mjs",
+    "exp:webview": "node tests/webview-emulation.e2e.mjs",
+    "exp:router": "bash tests/router-size.sh",
+    "exp:smoke": "bash smoke/run-docker.sh",
+    "exp:schema": "bash schema/run.sh",
+    "exp:wal": "bash wal/run.sh",
+    "expo:prepare": "node build/gen-expo-assets.mjs",
+    "exp:all": "npm run exp:compile && npm run exp:sandbox && npm run exp:expo-web && npm run exp:webview && npm run exp:router && npm run exp:smoke && npm run exp:schema && npm run exp:wal"
+  }
+}

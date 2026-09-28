@@ -1,0 +1,162 @@
+[
+  {
+    "phase": "concurrent",
+    "sqlite": "3.46.1",
+    "files": [
+      "app.sqlite",
+      "app.sqlite-shm",
+      "app.sqlite-wal",
+      "snapshots"
+    ],
+    "modes": {
+      "mode=ro": {
+        "ok": 433,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 6.5,
+        "lag_ms_p95": 13.8,
+        "lag_ms_max": 83.6
+      },
+      "mode=ro (long-lived conn)": {
+        "ok": 433,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 5.9,
+        "lag_ms_p95": 13.8,
+        "lag_ms_max": 63.2
+      },
+      "immutable=1": {
+        "ok": 291,
+        "invariant_violations": 7,
+        "errors": {
+          "DatabaseError: database disk image is malformed": 142
+        },
+        "lag_ms_p50": 36.2,
+        "lag_ms_p95": 59.7,
+        "lag_ms_max": 88.6
+      },
+      "snapshot VACUUM INTO + immutable=1": {
+        "ok": 433,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 536.6,
+        "lag_ms_p95": 972.1,
+        "lag_ms_max": 1053.3
+      },
+      "snapshot backup API + immutable=1": {
+        "ok": 433,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 550.1,
+        "lag_ms_p95": 981.6,
+        "lag_ms_max": 1065.6
+      }
+    }
+  },
+  {
+    "phase": "after-clean",
+    "sqlite": "3.46.1",
+    "files": [
+      "app.sqlite",
+      "snapshots"
+    ],
+    "modes": {
+      "mode=ro": {
+        "ok": 0,
+        "invariant_violations": 0,
+        "errors": {
+          "OperationalError: unable to open database file": 229
+        },
+        "lag_ms_p50": null,
+        "lag_ms_p95": null,
+        "lag_ms_max": null
+      },
+      "mode=ro (long-lived conn)": {
+        "ok": 0,
+        "invariant_violations": 0,
+        "errors": {
+          "OperationalError: unable to open database file": 229
+        },
+        "lag_ms_p50": null,
+        "lag_ms_p95": null,
+        "lag_ms_max": null
+      },
+      "immutable=1": {
+        "ok": 229,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 1848.0,
+        "lag_ms_p95": 3124.5,
+        "lag_ms_max": 3253.8
+      },
+      "snapshot VACUUM INTO + immutable=1": {
+        "ok": 229,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 2849.1,
+        "lag_ms_p95": 4124.9,
+        "lag_ms_max": 4254.9
+      },
+      "snapshot backup API + immutable=1": {
+        "ok": 229,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 2851.2,
+        "lag_ms_p95": 4126.9,
+        "lag_ms_max": 4256.6
+      }
+    }
+  },
+  {
+    "phase": "after-crash",
+    "sqlite": "3.46.1",
+    "files": [
+      "app.sqlite",
+      "app.sqlite-shm",
+      "app.sqlite-wal",
+      "snapshots"
+    ],
+    "modes": {
+      "mode=ro": {
+        "ok": 150,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 1890.9,
+        "lag_ms_p95": 3123.2,
+        "lag_ms_max": 3251.7
+      },
+      "mode=ro (long-lived conn)": {
+        "ok": 150,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 1893.7,
+        "lag_ms_p95": 3125.7,
+        "lag_ms_max": 3254.4
+      },
+      "immutable=1": {
+        "ok": 150,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 1899.4,
+        "lag_ms_p95": 3131.0,
+        "lag_ms_max": 3260.2
+      },
+      "snapshot VACUUM INTO + immutable=1": {
+        "ok": 150,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 2897.5,
+        "lag_ms_p95": 4129.3,
+        "lag_ms_max": 4258.0
+      },
+      "snapshot backup API + immutable=1": {
+        "ok": 150,
+        "invariant_violations": 0,
+        "errors": {},
+        "lag_ms_p50": 2899.9,
+        "lag_ms_p95": 4131.4,
+        "lag_ms_max": 4260.0
+      }
+    }
+  }
+]

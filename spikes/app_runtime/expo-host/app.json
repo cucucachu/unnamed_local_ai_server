@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "HomeAI sandbox spike",
+    "slug": "homeai-sandbox-spike",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "web": { "output": "single" }
+  }
+}

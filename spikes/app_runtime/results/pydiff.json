@@ -1,0 +1,784 @@
+{
+  "sqlite": "3.46.1",
+  "cases": [
+    {
+      "case": "noop",
+      "expected": "none",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 0
+      },
+      "steps": [],
+      "sql": [],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "add_table",
+      "expected": "additive",
+      "summary": {
+        "additive": 1,
+        "safe": 0,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "additive",
+          "create_table",
+          "new table"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL)"
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1,
+          "tags": 0
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "add_column_nullable",
+      "expected": "additive",
+      "summary": {
+        "additive": 1,
+        "safe": 0,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "additive",
+          "add_column",
+          "new column qty"
+        ]
+      ],
+      "sql": [
+        "ALTER TABLE \"items\" ADD COLUMN qty INTEGER"
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%",
+            null
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye",
+            null
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "add_column_notnull_default",
+      "expected": "additive",
+      "summary": {
+        "additive": 1,
+        "safe": 0,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "additive",
+          "add_column",
+          "new column qty"
+        ]
+      ],
+      "sql": [
+        "ALTER TABLE \"items\" ADD COLUMN qty INTEGER NOT NULL DEFAULT 1"
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%",
+            1
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null,
+            1
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye",
+            1
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "add_column_notnull_no_default",
+      "expected": "invalid/rebuild",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "rebuild",
+          "adds column qty that can't be added in place (NOT NULL without a default; fails if the table has rows \u2014 add a DEFAULT)"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE \"_homeai_new_items\" (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  done INTEGER NOT NULL DEFAULT 0,\n  note TEXT,\n  qty INTEGER NOT NULL\n)",
+        "INSERT INTO \"_homeai_new_items\" (\"id\", \"name\", \"done\", \"note\") SELECT \"id\", \"name\", \"done\", \"note\" FROM \"items\"",
+        "DROP TABLE \"items\"",
+        "ALTER TABLE \"_homeai_new_items\" RENAME TO \"items\"",
+        "CREATE INDEX items_name ON items (name)"
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": false,
+      "error": "IntegrityError: NOT NULL constraint failed: _homeai_new_items.qty",
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": false
+    },
+    {
+      "case": "add_column_fk",
+      "expected": "additive",
+      "summary": {
+        "additive": 1,
+        "safe": 0,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "additive",
+          "add_column",
+          "new column list_id"
+        ]
+      ],
+      "sql": [
+        "ALTER TABLE \"items\" ADD COLUMN list_id INTEGER REFERENCES lists (id)"
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%",
+            null
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye",
+            null
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "add_index",
+      "expected": "additive",
+      "summary": {
+        "additive": 1,
+        "safe": 0,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "additive",
+          "create_index",
+          "new index items_done"
+        ]
+      ],
+      "sql": [
+        "CREATE INDEX items_done ON items (done)"
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "drop_index",
+      "expected": "destructive(cheap)",
+      "summary": {
+        "additive": 0,
+        "safe": 1,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "safe",
+          "drop_index",
+          "index items_name removed (no data loss)"
+        ]
+      ],
+      "sql": [
+        "DROP INDEX \"items_name\""
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "drop_column",
+      "expected": "destructive",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "drop_column",
+          "drops column note and its data"
+        ]
+      ],
+      "sql": [
+        "ALTER TABLE \"items\" DROP COLUMN \"note\""
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0
+          ],
+          [
+            2,
+            "Eggs",
+            1
+          ],
+          [
+            3,
+            "Bread",
+            0
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "drop_table",
+      "expected": "destructive",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "drop_table",
+          "drops table lists and all its rows"
+        ]
+      ],
+      "sql": [
+        "DROP TABLE \"lists\""
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "items": 3
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "type_change",
+      "expected": "destructive(rebuild)",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "rebuild",
+          "done: type 'integer' -> 'text'; done: default 0 -> 'no'"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE \"_homeai_new_items\" (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  done TEXT NOT NULL DEFAULT 'no',\n  note TEXT\n)",
+        "INSERT INTO \"_homeai_new_items\" (\"id\", \"name\", \"done\", \"note\") SELECT \"id\", \"name\", \"done\", \"note\" FROM \"items\"",
+        "DROP TABLE \"items\"",
+        "ALTER TABLE \"_homeai_new_items\" RENAME TO \"items\"",
+        "CREATE INDEX items_name ON items (name)"
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "lists": 1,
+          "items": 3
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            "0",
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            "1",
+            null
+          ],
+          [
+            3,
+            "Bread",
+            "0",
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "rename_column",
+      "expected": "destructive(ambiguous)",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "rebuild",
+          "drops column(s) ['name']; adds column title that can't be added in place (NOT NULL without a default; fails if the table has rows \u2014 add a DEFAULT); hint: if ['name'] -> ['title'] is a rename, data in ['name'] is lost; renames are drop+add"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE \"_homeai_new_items\" (\n  id INTEGER PRIMARY KEY,\n  title TEXT NOT NULL,\n  done INTEGER NOT NULL DEFAULT 0,\n  note TEXT\n)",
+        "INSERT INTO \"_homeai_new_items\" (\"id\", \"done\", \"note\") SELECT \"id\", \"done\", \"note\" FROM \"items\"",
+        "DROP TABLE \"items\"",
+        "ALTER TABLE \"_homeai_new_items\" RENAME TO \"items\"",
+        "CREATE INDEX items_name ON items (title)"
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": false,
+      "error": "IntegrityError: NOT NULL constraint failed: _homeai_new_items.title",
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": false
+    },
+    {
+      "case": "add_unique",
+      "expected": "destructive(rebuild)",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "rebuild",
+          "name: definition 'name text not null' -> 'name text not null unique'; table constraints change (UNIQUE/CHECK/PK/FK)"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE \"_homeai_new_items\" (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL UNIQUE,\n  done INTEGER NOT NULL DEFAULT 0,\n  note TEXT\n)",
+        "INSERT INTO \"_homeai_new_items\" (\"id\", \"name\", \"done\", \"note\") SELECT \"id\", \"name\", \"done\", \"note\" FROM \"items\"",
+        "DROP TABLE \"items\"",
+        "ALTER TABLE \"_homeai_new_items\" RENAME TO \"items\"",
+        "CREATE INDEX items_name ON items (name)"
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "lists": 1,
+          "items": 3
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    },
+    {
+      "case": "nullable_to_notnull",
+      "expected": "destructive(rebuild)",
+      "summary": {
+        "additive": 0,
+        "safe": 0,
+        "destructive": 1
+      },
+      "steps": [
+        [
+          "destructive",
+          "rebuild",
+          "note: adds NOT NULL; note: default None -> ''"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE \"_homeai_new_items\" (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  done INTEGER NOT NULL DEFAULT 0,\n  note TEXT NOT NULL DEFAULT ''\n)",
+        "INSERT INTO \"_homeai_new_items\" (\"id\", \"name\", \"done\", \"note\") SELECT \"id\", \"name\", \"done\", \"note\" FROM \"items\"",
+        "DROP TABLE \"items\"",
+        "ALTER TABLE \"_homeai_new_items\" RENAME TO \"items\"",
+        "CREATE INDEX items_name ON items (name)"
+      ],
+      "without_approval": "destructive changes need approval",
+      "with_approval_applied": false,
+      "error": "IntegrityError: NOT NULL constraint failed: _homeai_new_items.note",
+      "after": {
+        "rows": {
+          "items": 3,
+          "lists": 1
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": false
+    },
+    {
+      "case": "change_default",
+      "expected": "rebuild(safe)",
+      "summary": {
+        "additive": 0,
+        "safe": 1,
+        "destructive": 0
+      },
+      "steps": [
+        [
+          "safe",
+          "rebuild",
+          "done: default 0 -> 1"
+        ]
+      ],
+      "sql": [
+        "CREATE TABLE \"_homeai_new_items\" (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  done INTEGER NOT NULL DEFAULT 1,\n  note TEXT\n)",
+        "INSERT INTO \"_homeai_new_items\" (\"id\", \"name\", \"done\", \"note\") SELECT \"id\", \"name\", \"done\", \"note\" FROM \"items\"",
+        "DROP TABLE \"items\"",
+        "ALTER TABLE \"_homeai_new_items\" RENAME TO \"items\"",
+        "CREATE INDEX items_name ON items (name)"
+      ],
+      "without_approval": "applied",
+      "with_approval_applied": true,
+      "error": null,
+      "after": {
+        "rows": {
+          "lists": 1,
+          "items": 3
+        },
+        "items": [
+          [
+            1,
+            "Milk",
+            0,
+            "2%"
+          ],
+          [
+            2,
+            "Eggs",
+            1,
+            null
+          ],
+          [
+            3,
+            "Bread",
+            0,
+            "rye"
+          ]
+        ]
+      },
+      "idempotent": true
+    }
+  ],
+  "rejected_schema": [
+    {
+      "schema": "ATTACH '/tmp/x.db' AS x;",
+      "verdict": "rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)"
+    },
+    {
+      "schema": "CREATE TABLE t (a); INSERT INTO t VALUES (1);",
+      "verdict": "rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)"
+    },
+    {
+      "schema": "PRAGMA writable_schema=1;",
+      "verdict": "rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)"
+    },
+    {
+      "schema": "CREATE TABLE t (a); CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;",
+      "verdict": "rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)"
+    },
+    {
+      "schema": "CREATE TABLE t (a); CREATE VIEW v AS SELECT * FROM t;",
+      "verdict": "rejected: schema.sql: not authorized (only CREATE TABLE / CREATE INDEX statements are allowed)"
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "checks": [
+    {
+      "name": "top-level document has an opaque origin like source={{html}}",
+      "pass": true
+    },
+    {
+      "name": "renders + navigates + writes over ReactNativeWebView.postMessage / injectJavaScript",
+      "pass": true
+    },
+    {
+      "name": "bench 200 round trips (emulated transport)",
+      "pass": true,
+      "detail": {
+        "echo": {
+          "n": 200,
+          "p50": 0.7,
+          "p95": 1,
+          "p99": 1.5,
+          "max": 2.1,
+          "mean": 0.704
+        },
+        "dbGetAll": {
+          "n": 200,
+          "p50": 0.7,
+          "p95": 1,
+          "p99": 1.9,
+          "max": 2,
+          "mean": 0.747
+        }
+      }
+    },
+    {
+      "name": "RN WebView.postMessage-style MessageEvents are ignored (single, platform-neutral inbound path)",
+      "pass": true
+    },
+    {
+      "name": "hot reload via injectJavaScript(bundle.load) keeps route",
+      "pass": true,
+      "detail": {
+        "ms": 8,
+        "bundleBytes": 3346
+      }
+    },
+    {
+      "name": "CSP blocks network: fetch host /api/secret credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "CSP blocks network: XMLHttpRequest",
+      "pass": true,
+      "detail": "Error: xhr error"
+    },
+    {
+      "name": "CSP blocks network: WebSocket",
+      "pass": true,
+      "detail": "Error: ws error"
+    },
+    {
+      "name": "CSP blocks network: image beacon",
+      "pass": true,
+      "detail": "Error: img error"
+    },
+    {
+      "name": "CSP blocks network: fetch no-cors",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    }
+  ],
+  "note": "Emulation in desktop Chromium; latency includes a CDP round trip per host->page message and is not representative of a phone.",
+  "firstRenderMs": 100,
+  "latencyMs_echo": {
+    "n": 200,
+    "p50": 0.7,
+    "p95": 1,
+    "p99": 1.5,
+    "max": 2.1,
+    "mean": 0.704
+  },
+  "latencyMs_db.getAll": {
+    "n": 200,
+    "p50": 0.7,
+    "p95": 1,
+    "p99": 1.9,
+    "max": 2,
+    "mean": 0.747
+  },
+  "hotReloadMs": 8,
+  "probes": {
+    "self.origin": {
+      "succeeded": true,
+      "value": "null"
+    },
+    "document.cookie": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read the 'cookie' property from 'Document': Cookies are disabled inside 'data:' URLs."
+    },
+    "localStorage": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read the 'localStorage' property from 'Window': Storage is disabled inside 'data:' URLs."
+    },
+    "sessionStorage": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read the 'sessionStorage' property from 'Window': Storage is disabled inside 'data:' URLs."
+    },
+    "indexedDB": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to execute 'open' on 'IDBFactory': access to the Indexed Database API is denied in this context."
+    },
+    "parent.document": {
+      "succeeded": true,
+      "value": ""
+    },
+    "parent.location.href": {
+      "succeeded": true,
+      "value": "data:text/html;base64,PCFkb2N0eXBlIGh0bWw+CjxodG1sPjxoZWFkPjxtZXRhIGNoYXJzZXQ9InV0Zi04Ij4KPG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1TZWN1cml0eS1Qb2xpY3kiIGNvbnRlbnQ9Im"
+    },
+    "parent.homeHost": {
+      "succeeded": false,
+      "error": "TypeError: Cannot read properties of undefined (reading 'send')"
+    },
+    "top.location navigate": {
+      "succeeded": true,
+      "value": "assigned (check host URL)"
+    },
+    "fetch host /api/secret credentials:include": {
+      "succeeded": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    "fetch host /api/rpc credentials:include": {
+      "succeeded": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    "fetch no-cors": {
+      "succeeded": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    "XMLHttpRequest": {
+      "succeeded": false,
+      "error": "Error: xhr error"
+    },
+    "WebSocket": {
+      "succeeded": false,
+      "error": "Error: ws error"
+    },
+    "image beacon": {
+      "succeeded": false,
+      "error": "Error: img error"
+    },
+    "window.open": {
+      "succeeded": true,
+      "value": "opened"
+    },
+    "form submit": {
+      "succeeded": true,
+      "value": "submitted (check server log)"
+    }
+  }
+}

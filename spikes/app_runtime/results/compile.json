@@ -1,0 +1,163 @@
+{
+  "runtime": {
+    "bytes": 468171,
+    "gzip": 145602,
+    "brotli": 123607,
+    "buildMs": 689.3,
+    "byPackage": {
+      "react-native-web": 248418,
+      "react-dom": 180763,
+      "runtime (shim+sdk+bridge)": 8274,
+      "react": 8077,
+      "css-in-js-utils": 5734,
+      "inline-style-prefixer": 5473,
+      "scheduler": 3711,
+      "@babel/runtime": 2441,
+      "styleq": 1697,
+      "fbjs": 837,
+      "nullthrows": 239,
+      "hyphenate-style-name": 228
+    }
+  },
+  "runtimeCuratedRN": {
+    "bytes": 439790,
+    "gzip": 137081,
+    "brotli": 116525
+  },
+  "app": {
+    "bytes": 3341,
+    "gzip": 1482,
+    "compileMs": 6.8
+  },
+  "appCompileMs": {
+    "n": 20,
+    "p50": 4.5,
+    "p95": 6.7,
+    "p99": 6.7,
+    "max": 6.7,
+    "mean": 4.555
+  },
+  "diagnostics": {
+    "badImports": [
+      {
+        "severity": "error",
+        "code": "import-not-allowed",
+        "file": "app/index.tsx",
+        "line": 2,
+        "column": 30,
+        "message": "Import \"react-dom\" is not allowed in apps. Allowed: react, react-native, expo-router, expo-sqlite, @homeai/sdk",
+        "lineText": "import { createPortal } from 'react-dom';"
+      },
+      {
+        "severity": "error",
+        "code": "import-escape",
+        "file": "app/index.tsx",
+        "line": 4,
+        "column": 21,
+        "message": "Import \"../../groceries/schema.sql\" resolves outside the app directory",
+        "lineText": "import secrets from '../../groceries/schema.sql';"
+      },
+      {
+        "severity": "error",
+        "code": "import-not-allowed",
+        "file": "app/index.tsx",
+        "line": 6,
+        "column": 20,
+        "message": "Import \"fs\" is not allowed in apps. Allowed: react, react-native, expo-router, expo-sqlite, @homeai/sdk",
+        "lineText": "const fs = require('fs');"
+      },
+      {
+        "severity": "error",
+        "code": "import-not-allowed",
+        "file": "lib/helper.ts",
+        "line": 1,
+        "column": 16,
+        "message": "Import \"node:os\" is not allowed in apps. Allowed: react, react-native, expo-router, expo-sqlite, @homeai/sdk",
+        "lineText": "import os from 'node:os';"
+      }
+    ],
+    "badSymlink": [
+      {
+        "severity": "error",
+        "code": "import-escape",
+        "file": "app/index.tsx",
+        "line": 2,
+        "column": 21,
+        "message": "File \"../../runtime/bridge.ts\" is a link outside the app directory",
+        "lineText": "import { rpc } from '../lib/linked';"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "name": "app bundle only requires allowlisted runtime modules",
+      "pass": true,
+      "detail": [
+        "expo-router",
+        "react/jsx-runtime",
+        "react",
+        "react-native",
+        "@homeai/sdk"
+      ]
+    },
+    {
+      "name": "app bundle contains no React/RN code (externals really external)",
+      "pass": true,
+      "detail": {
+        "bytes": 3341,
+        "gzip": 1482,
+        "compileMs": 6.8
+      }
+    },
+    {
+      "name": "route table generated from app/**",
+      "pass": true,
+      "detail": [
+        {
+          "name": "index",
+          "segments": []
+        },
+        {
+          "name": "item/[id]",
+          "segments": [
+            "item",
+            "[id]"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "allowlist rejects react-dom at app/index.tsx:2:30",
+      "pass": true,
+      "detail": "Import \"react-dom\" is not allowed in apps. Allowed: react, react-native, expo-router, expo-sqlite, @homeai/sdk"
+    },
+    {
+      "name": "allowlist rejects ../../groceries/schema.sql at app/index.tsx:4:21",
+      "pass": true,
+      "detail": "Import \"../../groceries/schema.sql\" resolves outside the app directory"
+    },
+    {
+      "name": "allowlist rejects \"fs\" at app/index.tsx:6:20",
+      "pass": true,
+      "detail": "Import \"fs\" is not allowed in apps. Allowed: react, react-native, expo-router, expo-sqlite, @homeai/sdk"
+    },
+    {
+      "name": "allowlist rejects node:os at lib/helper.ts:1:16",
+      "pass": true,
+      "detail": "Import \"node:os\" is not allowed in apps. Allowed: react, react-native, expo-router, expo-sqlite, @homeai/sdk"
+    },
+    {
+      "name": "symlink escaping the app dir is rejected",
+      "pass": true,
+      "detail": {
+        "severity": "error",
+        "code": "import-escape",
+        "file": "app/index.tsx",
+        "line": 2,
+        "column": 21,
+        "message": "File \"../../runtime/bridge.ts\" is a link outside the app directory",
+        "lineText": "import { rpc } from '../lib/linked';"
+      }
+    }
+  ]
+}

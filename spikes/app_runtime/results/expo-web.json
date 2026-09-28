@@ -1,0 +1,158 @@
+{
+  "checks": [
+    {
+      "name": "Expo web host renders <iframe sandbox=\"allow-scripts\">",
+      "pass": true
+    },
+    {
+      "name": "app renders, navigates to /item/3, writes through host RPC",
+      "pass": true
+    },
+    {
+      "name": "bench: 200 echo + 200 db.getAll round trips",
+      "pass": true,
+      "detail": {
+        "echo": {
+          "n": 200,
+          "p50": 0,
+          "p95": 0.1,
+          "max": 0.1
+        },
+        "dbGetAll": {
+          "n": 200,
+          "p50": 1.1,
+          "p95": 2.5,
+          "max": 4.4
+        }
+      }
+    },
+    {
+      "name": "hot reload keeps host page and route",
+      "pass": true,
+      "detail": {
+        "hotReloadMs": 29
+      }
+    },
+    {
+      "name": "sandbox cannot: document.cookie",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "sandbox cannot: localStorage",
+      "pass": true,
+      "detail": "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    {
+      "name": "sandbox cannot: parent.document",
+      "pass": true,
+      "detail": "SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    {
+      "name": "sandbox cannot: fetch host /api/secret credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "sandbox cannot: fetch host /api/rpc credentials:include",
+      "pass": true,
+      "detail": "TypeError: Failed to fetch"
+    },
+    {
+      "name": "sandbox cannot: image beacon",
+      "pass": true,
+      "detail": "Error: img error"
+    },
+    {
+      "name": "no sandbox request reached the server",
+      "pass": true,
+      "detail": []
+    }
+  ],
+  "firstRenderMs": 158,
+  "latencyMs": {
+    "echo": {
+      "n": 200,
+      "p50": 0,
+      "p95": 0.1,
+      "max": 0.1
+    },
+    "dbGetAll": {
+      "n": 200,
+      "p50": 1.1,
+      "p95": 2.5,
+      "max": 4.4
+    }
+  },
+  "hotReloadMs": 29,
+  "probes": {
+    "self.origin": {
+      "succeeded": true,
+      "value": "null"
+    },
+    "document.cookie": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read the 'cookie' property from 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    "localStorage": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    "sessionStorage": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read the 'sessionStorage' property from 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag."
+    },
+    "indexedDB": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to execute 'open' on 'IDBFactory': access to the Indexed Database API is denied in this context."
+    },
+    "parent.document": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read a named property 'document' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    "parent.location.href": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    "parent.homeHost": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to read a named property 'homeHost' from 'Window': Blocked a frame with origin \"null\" from accessing a cross-origin frame."
+    },
+    "top.location navigate": {
+      "succeeded": false,
+      "error": "SecurityError: Failed to set a named property 'href' on 'Location': The current window does not have permission to navigate the target frame to 'http://127.0.0.1:33525/pwned-top'."
+    },
+    "fetch host /api/secret credentials:include": {
+      "succeeded": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    "fetch host /api/rpc credentials:include": {
+      "succeeded": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    "fetch no-cors": {
+      "succeeded": false,
+      "error": "TypeError: Failed to fetch"
+    },
+    "XMLHttpRequest": {
+      "succeeded": false,
+      "error": "Error: xhr error"
+    },
+    "WebSocket": {
+      "succeeded": false,
+      "error": "Error: ws error"
+    },
+    "image beacon": {
+      "succeeded": false,
+      "error": "Error: img error"
+    },
+    "window.open": {
+      "succeeded": false,
+      "error": "Error: returned null"
+    },
+    "form submit": {
+      "succeeded": true,
+      "value": "submitted (check server log)"
+    }
+  }
+}

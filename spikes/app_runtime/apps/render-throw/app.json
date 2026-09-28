@@ -1,0 +1,6 @@
+{
+  "name": "Groceries",
+  "slug": "groceries",
+  "version": "0.1.0",
+  "homeai": { "sdk": "0.1", "icon": "cart" }
+}
