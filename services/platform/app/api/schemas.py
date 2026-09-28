@@ -658,3 +658,35 @@ class InstanceMigrationOut(BaseModel):
 class UpdateInstanceOut(BaseModel):
     instance: InstanceOut
     migration: MigrationOut
+
+
+class SystemActionOut(BaseModel):
+    name: str
+    description: str
+    params: dict[str, Any]
+
+
+class SystemAppOut(BaseModel):
+    slug: str
+    name: str
+    version: str
+    icon: str
+    description: str
+    native: bool
+    read_only_source: bool
+    privileged: list[str]
+    actions: list[SystemActionOut]
+    agent_md: str
+
+
+class SystemAppList(BaseModel):
+    apps: list[SystemAppOut]
+
+
+class SystemActionRequest(BaseModel):
+    params: dict[str, str | int | float | bool | None] = {}
+
+
+class SystemActionResult(BaseModel):
+    ok: bool = True
+    result: dict[str, Any]

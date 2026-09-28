@@ -1,0 +1,11 @@
+{
+  "name": "Chat",
+  "slug": "chat",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "chatbubbles-outline",
+    "description": "The host Chat tab: threads with the household agent.",
+    "permissions": {}
+  }
+}

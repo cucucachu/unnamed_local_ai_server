@@ -99,6 +99,41 @@ async def test_list_apps_shows_instances_sources_and_data_paths(fake_model, fake
     assert f"instance id: {notes['id']}" in out
     assert "source: /personal/Apps/notes (app id" in out and "not built yet" in out
     assert "/app-data/personal/notes/data.sqlite" in out
+    assert "image-shipped system app" in out
+    assert "instance id: files" in out
+    assert "moveToSpace(src, dst)" in out
+
+
+async def test_app_action_files_move_to_space(fake_model, fake_platform):
+    _family(fake_platform)
+    fake_platform.personal()["notes.txt"] = b"hello"
+    fake_model.queue(
+        ToolCallTurn(
+            "app_action",
+            {
+                "instance": "files",
+                "name": "moveToSpace",
+                "params": {"src": "/personal/notes.txt", "dst": "/spaces/family/notes.txt"},
+            },
+        ),
+        TextTurn("moved"),
+    )
+    with (
+        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        client.websocket_connect("/ws/chat/files-move") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "move notes into family"})
+        frames = _drain_turn(ws)
+    _assert_turn_end(frames[-1], "completed")
+    assert not any(f["type"] == "approval_request" for f in frames)
+    assert _tool_results(fake_model) == [
+        "OK: moved /personal/notes.txt to /spaces/family/notes.txt."
+    ]
+    assert "notes.txt" not in fake_platform.personal()
+    assert fake_platform.tree("family")["notes.txt"] == b"hello"
+    assert fake_platform.system_action_calls == [
+        ("files", "moveToSpace", {"src": "/personal/notes.txt", "dst": "/spaces/family/notes.txt"})
+    ]
 
 
 async def test_create_app_copies_the_template_registers_and_installs(fake_model, fake_platform):
@@ -437,7 +472,7 @@ async def test_parallel_writes_are_one_card_and_resume_together(fake_model, fake
     assert runs == [first]
     results = _tool_results(fake_model)
     assert results[0] == "OK: 1 row(s) changed; lastInsertRowId 7."
-    assert results[1].startswith("Apps (an instance")
+    assert results[1].startswith("Apps (system apps are native host screens")
     assert results[2].startswith("The user rejected this statement")
 
 

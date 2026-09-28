@@ -23,8 +23,9 @@ function spaceLabel(space: Space): string {
 }
 
 /**
- * Home launcher (M14-02): native host screen, not a sandboxed system-app
- * package (those manifests/privileged caps are M14-03). System tiles open
+ * Home launcher (M14-02): native host screen. M14-03 ships Chat/Files/
+ * Settings/Home as image-shipped packages for the agent; this screen still
+ * opens the existing native host routes. System tiles open
  * the existing Chat, Files, and Settings host screens; installed apps stay
  * grouped by space with a switcher, catalog entry, and update badges.
  * Tapping an instance opens the runner (`[instanceId].tsx`).

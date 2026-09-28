@@ -1896,9 +1896,10 @@ returned. Content (imports, types, SQL) is the builder's (M12-04).
 `homeai`; other top-level (Expo) keys are allowed and ignored. `homeai` is
 strict (unknown keys rejected): required `sdk` (one of `"1"`), `icon`
 (vector-icon name, `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 64); optional
-`description` (≤ 500), `permissions` (object; SDK 1 defines no keys, so it
-must be `{}`), `exports` / `reads` (reserved until M14-04: arrays that must
-be empty). Nodes carry an `errorMessage` (the ajv-errors keyword) with the
+`description` (≤ 500), `permissions` (object; SDK 1 user apps define no keys, so it
+must be `{}` or omitted), `exports` / `reads` (reserved until M14-04: arrays that must
+be empty). Image-shipped system apps (M14-03) are validated with a separate schema
+that allows `permissions.privileged` (`["files"]` only). Nodes carry an `errorMessage` (the ajv-errors keyword) with the
 sentence the validator reports.
 
 *Objects*:
@@ -1927,6 +1928,10 @@ sentence the validator reports.
   `working` installs and when already current).
 - `CatalogEntry`: `{"app": Instance.app, "version": AppVersion (latest
   published), "installed": bool, "instance_id": id|null}`.
+- `SystemApp` (M14-03): `{"slug", "name", "version", "icon", "description",
+  "native": true, "read_only_source": true, "privileged": [str],
+  "actions": [{"name", "description", "params"}], "agent_md"}`. Not an
+  `apps` row; listed by `GET /system-apps`.
 
 *Visible apps* (caller): apps whose source space they can read, plus apps
 with a live instance in a space they belong to, plus apps listed in a
@@ -1940,7 +1945,10 @@ All routes: guard *user* — an agent delegation has its user's rights here
 |---|---|---|---|---|
 | `GET /api/platform/apps/schema` | — | — | `200` the `app.json` JSON Schema | — |
 | `GET /api/platform/apps` | — | — | `200 {"apps": [App]}` — visible apps, by name | — |
-| `POST /api/platform/apps` | write on the source space | `{"source_path"}` — exactly `/personal/Apps/<slug>` or `/spaces/<s>/Apps/<slug>` (trailing slash optional) | `201 {"app": App, "valid": true, "diagnostics": []}`; creates the app and its `working` version from `app.json`. The space's `Apps` folder is created first if missing (`<caller uid>:<gid>` `2770`). | `422 invalid_source_path` (any other shape, a slug that isn't a valid slug, or a symlinked `Apps`/app folder), space errors, `409 apps_folder_not_a_directory`, `422 invalid_app` + `diagnostics` (incl. a missing folder), `409 app_exists` (that slug is already registered in that space) |
+| `GET /api/platform/system-apps` | — | — | `200 {"apps": [SystemApp]}` — image-shipped Home, Chat, Files, Settings (`native`, `read_only_source`, `privileged`, `actions`, `agent_md`) | — |
+| `GET /api/platform/system-apps/{slug}` | — | — | `200 SystemApp` | `404 not_found` |
+| `POST /api/platform/system-apps/{slug}/actions/{name}` | write on every space a path names | `{"params"}` (Files: `{src, dst}` virtual paths) | `200 {"ok": true, "result"}` — Files `moveToSpace` / `copyToSpace` reuse `/files/move` and `/files/copy` | `404 not_found` / `unknown_action`, files API errors (`403 insufficient_role`, `409 already_exists`, …) |
+| `POST /api/platform/apps` | write on the source space | `{"source_path"}` — exactly `/personal/Apps/<slug>` or `/spaces/<s>/Apps/<slug>` (trailing slash optional) | `201 {"app": App, "valid": true, "diagnostics": []}`; creates the app and its `working` version from `app.json`. The space's `Apps` folder is created first if missing (`<caller uid>:<gid>` `2770`). | `422 invalid_source_path` (any other shape, a slug that isn't a valid slug, or a symlinked `Apps`/app folder), space errors, `409 apps_folder_not_a_directory`, `422 invalid_app` + `diagnostics` (incl. a missing folder, `permissions.privileged`, or a reserved system-app slug `home`/`chat`/`files`/`settings`), `409 app_exists` (that slug is already registered in that space) |
 | `GET /api/platform/apps/{id}` | visible | — | `200 App` | `404 not_found` |
 | `POST /api/platform/apps/{id}/validate` | write on the source space | — | `200 {"app": App, "valid": bool, "diagnostics": [Diagnostic]}`. When valid, the working version takes the current `app.json` (and the app its `name`); when not, nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors |
 | `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |
@@ -2266,9 +2274,9 @@ credential or an instance id.
 §7 "As built (M12-06)")
 
 - **Home launcher** (`src/app/(tabs)/apps/index.tsx`, M14-02; a Stack like
-  `chat/`, tab title Home, default tab): native host screen (not a
-  sandboxed system-app package — those are M14-03). System tiles open the
-  existing Chat, Files, and Settings host screens. `GET /api/platform/spaces`,
+  `chat/`, tab title Home, default tab): native host screen. M14-03 ships
+  Chat/Files/Settings/Home as image packages for the agent (`system_apps/`);
+  the launcher tiles still open the existing native host screens. `GET /api/platform/spaces`,
   then `GET …/spaces/{id}/instances` for each unarchived space
   (`lib/apps.ts`); sections Personal first, then shared spaces by name,
   empty ones hidden; a space switcher (All + each live space) filters the

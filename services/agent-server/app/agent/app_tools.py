@@ -187,12 +187,17 @@ class _Catalog:
     spaces: list[dict]
     instances: list[dict]  # each with "space" added
     apps: list[dict]
+    system_apps: list[dict]
 
     def app(self, app_id: str) -> dict | None:
         return next((a for a in self.apps if a["id"] == app_id), None)
 
     def space_of(self, space_id: str) -> dict | None:
         return next((s for s in self.spaces if s["id"] == space_id), None)
+
+    def system_app(self, ref: str) -> dict | None:
+        key = ref.strip().strip("/")
+        return next((a for a in self.system_apps if a["slug"] == key), None)
 
 
 async def _catalog(api: _Platform, *, with_apps: bool = True) -> _Catalog | str:
@@ -212,7 +217,11 @@ async def _catalog(api: _Platform, *, with_apps: bool = True) -> _Catalog | str:
         if not reply.ok:
             return f"Error: couldn't list apps: {_why(reply)}"
         apps = reply.body["apps"]
-    return _Catalog(spaces, instances, apps)
+    reply = await api.call("GET", f"{API}/system-apps")
+    if not reply.ok:
+        return f"Error: couldn't list system apps: {_why(reply)}"
+    system_apps = reply.body["apps"] if isinstance(reply.body, dict) else []
+    return _Catalog(spaces, instances, apps, system_apps)
 
 
 def _find_space(cat: _Catalog, ref: str) -> dict | str:
@@ -343,7 +352,43 @@ def _needs_write_approval(inst: dict, config: RunnableConfig) -> bool:
     return inst["space"]["kind"] == "shared" and _hitl_enabled(config)
 
 
-# --- formatting -----------------------------------------------------------------------
+def _vpath_is_shared(path: object) -> bool:
+    return isinstance(path, str) and path.startswith("/spaces/")
+
+
+def _needs_files_approval(params: dict[str, Any], config: RunnableConfig) -> bool:
+    """Files privileged actions: HITL when a shared space is involved, like app_sql writes."""
+    return _hitl_enabled(config) and (
+        _vpath_is_shared(params.get("src")) or _vpath_is_shared(params.get("dst"))
+    )
+
+
+def _system_app_lines(app: dict) -> list[str]:
+    actions = app.get("actions") or []
+    if actions:
+        listed = ", ".join(
+            f"{a['name']}({', '.join(a.get('params') or {})})" if isinstance(a, dict) else str(a)
+            for a in actions
+        )
+    else:
+        listed = "none"
+    lines = [
+        (
+            f"- {app['name']} (slug {app['slug']}, version {app.get('version')}, "
+            "image-shipped system app)"
+        ),
+        "  native host screen; source is read-only (not in the files tree)",
+        f"  instance id: {app['slug']}",
+        f"  actions: {listed}",
+    ]
+    if app.get("privileged"):
+        lines.insert(2, "  privileged: " + ", ".join(app["privileged"]))
+    if app.get("description"):
+        lines.append(f"  {app['description']}")
+    if app.get("agent_md"):
+        lines.append("  AGENT.md:")
+        lines.extend(f"    {line}" if line else "    " for line in app["agent_md"].splitlines())
+    return lines
 
 
 def _json(value: Any) -> str:
@@ -459,8 +504,10 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
 
     @tool
     async def list_apps(config: RunnableConfig) -> str:
-        """List the apps installed in the user's spaces (personal and shared).
+        """List the apps installed in the user's spaces, plus image-shipped system apps.
 
+        System apps (Home, Chat, Files, Settings) ship in the platform image: native host
+        screens, read-only source. Files has privileged actions (moveToSpace, copyToSpace).
         For each installed instance: its id, app name/slug/version, the space it's in and
         the user's role there, the app's source folder (edit it with the file tools) and
         where execute_code can read a read-only copy of its data. Call this before using
@@ -474,6 +521,8 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         if isinstance(cat, str):
             return cat
         lines = []
+        for app in cat.system_apps:
+            lines += _system_app_lines(app)
         for inst in cat.instances:
             app = cat.app(inst["app_id"])
             space = inst["space"]
@@ -500,9 +549,11 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 f"(templates: {template_names})."
             )
         return (
-            "Apps (an instance is an installed copy with its own database):\n"
+            "Apps (system apps are native host screens; an instance is an installed "
+            "copy with its own database):\n"
             + "\n".join(lines)
-            + "\nBefore changing an app, read its app.json, AGENT.md and schema.sql."
+            + "\nBefore changing a user app, read its app.json, AGENT.md and schema.sql. "
+            "System-app source is image-shipped and read-only."
         )
 
     @tool
@@ -696,12 +747,12 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         tool_call_id: Annotated[str, InjectedToolCallId],
         params: dict[str, str | int | float | bool | None] | None = None,
     ) -> str:
-        """Run one of an app's named actions (its actions/<name>.sql) on an installed instance.
+        """Run one of an app's named actions.
 
-        instance: the instance id from list_apps (or "<space>/<app-slug>"). name: the
-        action, e.g. "addItem"; params: its :named parameters as an object. All the
-        action's statements run in one transaction. In a shared space this may need the
-        user's approval.
+        For a user-app instance: its actions/<name>.sql, instance id from list_apps (or
+        "<space>/<app-slug>"). For an image-shipped system app: instance is the slug
+        (e.g. "files") and name is a privileged action such as moveToSpace. Params are
+        an object. In a shared space this may need the user's approval.
         """
         token = _delegation_token(config)
         if token is None:
@@ -710,6 +761,32 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
             cat = await _catalog(api)
             if isinstance(cat, str):
                 return cat
+            sysapp = cat.system_app(instance)
+            if sysapp is not None:
+                action_params = dict(params or {})
+                known = {a["name"] for a in sysapp.get("actions") or [] if isinstance(a, dict)}
+                if name not in known:
+                    return f"Error: {sysapp['name']} has no action '{name}'."
+                if _needs_files_approval(action_params, config):
+                    description = f"Run action {name} of system app {sysapp['name']}" + (
+                        f" with {_json(action_params)}" if action_params else ""
+                    )
+                    args = {"instance": sysapp["slug"], "name": name, "params": action_params}
+                    approved, reason = _ask_user("app_action", args, description, tool_call_id)
+                    if not approved:
+                        return f"The user rejected this action; it was not run. {reason}"
+                reply = await api.call(
+                    "POST",
+                    f"{API}/system-apps/{sysapp['slug']}/actions/{name}",
+                    json={"params": action_params},
+                )
+                if not reply.ok:
+                    return f"Error: {_why(reply)}"
+                result = reply.field("result") if isinstance(reply.body, dict) else None
+                if isinstance(result, dict) and "src" in result and "dst" in result:
+                    verb = "moved" if name == "moveToSpace" else "copied"
+                    return f"OK: {verb} {result['src']} to {result['dst']}."
+                return f"OK: {_json(result if result is not None else reply.body)}"
             inst = _find_instance(cat, instance)
             if isinstance(inst, str):
                 return inst

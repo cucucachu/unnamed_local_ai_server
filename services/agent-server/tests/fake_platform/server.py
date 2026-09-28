@@ -418,4 +418,48 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         fake.hitl_markers[marker] = (who.thread_id, body["instance_id"], body["migration_id"])
         return JSONResponse({"token": marker, "expires_in_s": 60})
 
+    @app.get("/api/platform/system-apps")
+    async def list_system_apps(request: Request) -> JSONResponse:
+        _who(request)
+        return JSONResponse({"apps": fake.system_apps})
+
+    @app.get("/api/platform/system-apps/{slug}")
+    async def get_system_app(request: Request, slug: str) -> JSONResponse:
+        _who(request)
+        app_ = next((a for a in fake.system_apps if a["slug"] == slug), None)
+        if app_ is None:
+            raise _error(404, "not_found")
+        return JSONResponse(app_)
+
+    @app.post("/api/platform/system-apps/{slug}/actions/{name}")
+    async def run_system_action(request: Request, slug: str, name: str) -> JSONResponse:
+        who = _who(request)
+        app_ = next((a for a in fake.system_apps if a["slug"] == slug), None)
+        if app_ is None:
+            raise _error(404, "not_found")
+        known = {a["name"] for a in app_.get("actions") or []}
+        if name not in known:
+            raise _error(404, "unknown_action")
+        body = await request.json()
+        params = body.get("params") if isinstance(body, dict) else {}
+        if not isinstance(params, dict):
+            params = {}
+        fake.system_action_calls.append((slug, name, params))
+        src, dst = params.get("src"), params.get("dst")
+        if not isinstance(src, str) or not isinstance(dst, str):
+            raise _error(422, "invalid_params")
+        src_place = _Place(fake, who, src)
+        dst_place = _Place(fake, who, dst)
+        src_place.require_write()
+        dst_place.require_write()
+        if src_place.rel not in src_place.tree:
+            raise _error(404, "not_found")
+        if dst_place.rel in dst_place.tree:
+            raise _error(409, "already_exists")
+        data = src_place.tree[src_place.rel]
+        if name == "moveToSpace":
+            del src_place.tree[src_place.rel]
+        dst_place.tree[dst_place.rel] = data
+        return JSONResponse({"ok": True, "result": {"src": src, "dst": dst}})
+
     return app

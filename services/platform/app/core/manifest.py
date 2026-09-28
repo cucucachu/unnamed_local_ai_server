@@ -7,6 +7,11 @@
       actions/*.sql   optional; `^[a-z][a-zA-Z0-9_]*\\.sql$`, no subfolders
       app/            `_layout.tsx` + `index.tsx` required; route rules below
 
+Image-shipped system apps (M14-03, `validate_package(..., shipped=True)`):
+same files except `app/` is omitted (they render natively) and `actions/`
+may hold `.json` descriptors for platform-implemented privileged actions.
+`homeai.permissions.privileged` is only valid on a shipped package.
+
 `validate_package(pkg_fd, slug)` returns every problem it finds as a
 model-readable `Diagnostic` - `file` relative to the package, `path` a JSON
 pointer into that file (`""` for non-JSON files or the file as a whole),
@@ -45,6 +50,11 @@ MAX_DIAGNOSTICS = 50
 
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,39}$"
 ACTION_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*\.sql$")
+ACTION_JSON_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*\.json$")
+# Image-shipped system apps (D17). User packages may not use these slugs or
+# declare `homeai.permissions.privileged`.
+SYSTEM_APP_SLUGS = ("home", "chat", "files", "settings")
+PRIVILEGED_CAPABILITIES = ("files",)
 NAME_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 PARAM_SEGMENT_RE = re.compile(r"^\[[A-Za-z_][A-Za-z0-9_]*\]$")
 REST_SEGMENT_RE = re.compile(r"^\[\.\.\.[A-Za-z_][A-Za-z0-9_]*\]$")
@@ -138,6 +148,27 @@ SCHEMA: dict[str, Any] = {
 
 _VALIDATOR = Draft202012Validator(SCHEMA)
 
+# Same schema, plus `permissions.privileged` for image-shipped system apps.
+# `GET /apps/schema` keeps serving SCHEMA so user apps (and the authoring
+# model) never see privileged as something they can declare.
+SHIPPED_SCHEMA = json.loads(json.dumps(SCHEMA))
+SHIPPED_SCHEMA["properties"]["homeai"]["properties"]["permissions"] = {
+    "description": "Privileged capabilities only image-shipped system apps may hold.",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "privileged": {
+            "description": 'Platform-implemented action families. SDK 1: "files".',
+            "type": "array",
+            "items": {"type": "string", "enum": list(PRIVILEGED_CAPABILITIES)},
+            "uniqueItems": True,
+            "errorMessage": 'privileged must be an array of known names (SDK 1: "files")',
+        },
+    },
+    "errorMessage": ('permissions may only include "privileged" on image-shipped system apps'),
+}
+_SHIPPED_VALIDATOR = Draft202012Validator(SHIPPED_SCHEMA)
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -177,11 +208,12 @@ def _schema_diagnostics(error: ValidationError) -> list[Diagnostic]:
     return [Diagnostic(MANIFEST_FILE, _pointer(at), custom or error.message)]
 
 
-def validate_manifest(doc: Any) -> list[Diagnostic]:
+def validate_manifest(doc: Any, *, shipped: bool = False) -> list[Diagnostic]:
     """Schema diagnostics for a parsed `app.json`, in document order."""
+    validator = _SHIPPED_VALIDATOR if shipped else _VALIDATOR
     out: list[Diagnostic] = []
     seen: set[tuple[str, str]] = set()
-    for error in sorted(_VALIDATOR.iter_errors(doc), key=lambda e: list(map(str, e.path))):
+    for error in sorted(validator.iter_errors(doc), key=lambda e: list(map(str, e.path))):
         for d in _schema_diagnostics(error):
             if (d.path, d.message) not in seen:
                 seen.add((d.path, d.message))
@@ -370,25 +402,34 @@ def _route_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
     return out
 
 
-def _action_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
+def _action_diagnostics(pkg: int, walk: _Walk, *, shipped: bool = False) -> list[Diagnostic]:
     out: list[Diagnostic] = []
     fd = _open_dir(pkg, "actions")
     if fd is None:
         return out
+    allowed = " .sql or .json files" if shipped else " .sql files"
+    name_ok = (
+        (lambda n: ACTION_RE.fullmatch(n) or ACTION_JSON_RE.fullmatch(n))
+        if shipped
+        else ACTION_RE.fullmatch
+    )
+    example = "addItem.sql or moveToSpace.json" if shipped else "addItem.sql"
     try:
         for entry, rel in walk.entries(fd, PurePosixPath("actions")):
             if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
                 out.append(
                     Diagnostic(
-                        str(rel), "", f"{rel}: actions/ may only contain .sql files, one per action"
+                        str(rel),
+                        "",
+                        f"{rel}: actions/ may only contain{allowed}, one per action",
                     )
                 )
-            elif not ACTION_RE.fullmatch(entry.name):
+            elif not name_ok(entry.name):
                 out.append(
                     Diagnostic(
                         str(rel),
                         "",
-                        f"{rel}: action file names must look like addItem.sql "
+                        f"{rel}: action file names must look like {example} "
                         "(a letter first, then letters, digits or '_')",
                     )
                 )
@@ -397,10 +438,13 @@ def _action_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
     return out
 
 
-def validate_package(pkg: int | None, slug: str) -> tuple[Any, list[Diagnostic]]:
+def validate_package(
+    pkg: int | None, slug: str, *, shipped: bool = False
+) -> tuple[Any, list[Diagnostic]]:
     """(parsed manifest or None, every diagnostic) for the package folder open as `pkg`.
 
-    `pkg` is None when there is no such folder.
+    `pkg` is None when there is no such folder. `shipped=True` is the
+    image-shipped system-app layout (no `app/` UI; `.json` actions allowed).
     """
     if pkg is None:
         return None, [
@@ -408,11 +452,19 @@ def validate_package(pkg: int | None, slug: str) -> tuple[Any, list[Diagnostic]]
         ]
     manifest, out = read_manifest(pkg)
     if manifest is not None:
-        out += validate_manifest(manifest)
+        out += validate_manifest(manifest, shipped=shipped)
         declared = manifest.get("slug") if isinstance(manifest, dict) else None
         if isinstance(declared, str) and declared != slug:
             message = f'slug "{declared}" must equal the app\'s folder name "{slug}"'
             out.append(Diagnostic(MANIFEST_FILE, "/slug", message))
+        if not shipped and slug in SYSTEM_APP_SLUGS:
+            out.append(
+                Diagnostic(
+                    MANIFEST_FILE,
+                    "/slug",
+                    f'slug "{slug}" is reserved for an image-shipped system app',
+                )
+            )
     out += _required_file(pkg, "AGENT.md", "describe what the app does and its data for the agent")
     out += _required_file(pkg, "schema.sql", "the app's CREATE TABLE statements (may be empty)")
     walk = _Walk()
@@ -422,14 +474,15 @@ def validate_package(pkg: int | None, slug: str) -> tuple[Any, list[Diagnostic]]
         out += _route_diagnostics(pkg, walk)
     elif _is(pkg, "app", stat.S_ISLNK):
         out.append(Diagnostic("app", "", "app/ must be a folder, not a symlink"))
-    else:
+    elif not shipped:
         out.append(
             Diagnostic("app", "", "app/ is missing: the folder of screens (_layout.tsx, index.tsx)")
         )
     if _is(pkg, "actions", stat.S_ISDIR):
-        out += _action_diagnostics(pkg, walk)
+        out += _action_diagnostics(pkg, walk, shipped=shipped)
     elif _lstat(pkg, "actions") is not None:
-        out.append(Diagnostic("actions", "", "actions must be a folder of .sql files"))
+        kind = ".sql or .json files" if shipped else ".sql files"
+        out.append(Diagnostic("actions", "", f"actions must be a folder of {kind}"))
     if walk.truncated:
         out.append(
             Diagnostic(

@@ -1,0 +1,11 @@
+{
+  "name": "Settings",
+  "slug": "settings",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "settings-outline",
+    "description": "The host Settings tab: account, sessions, spaces, and admin.",
+    "permissions": {}
+  }
+}
