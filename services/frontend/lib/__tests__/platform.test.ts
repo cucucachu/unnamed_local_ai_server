@@ -13,6 +13,7 @@ import {
   isReadOnly,
   listSessions,
   listWireGuardDevices,
+  patchPlatformSettings,
   platformErrorMessage,
   removeMember,
   revokeSession,
@@ -72,7 +73,20 @@ describe('platform client requests', () => {
     ['removeMember', () => removeMember('sp', 'u2'), 'DELETE', '/api/platform/spaces/sp/members/u2', undefined],
     ['adminUpdateUser', () => adminUpdateUser('u2', { disabled: true }), 'PATCH', '/api/platform/admin/users/u2', { disabled: true }],
     ['adminCreateInvite', () => adminCreateInvite('Sam'), 'POST', '/api/platform/admin/invites', { label: 'Sam' }],
-    ['adminCreateInvite (no label)', () => adminCreateInvite(), 'POST', '/api/platform/admin/invites', {}],
+    [
+      'adminCreateInvite (no label)',
+      () => adminCreateInvite(),
+      'POST',
+      '/api/platform/admin/invites',
+      {},
+    ],
+    [
+      'patchPlatformSettings',
+      () => patchPlatformSettings(true),
+      'PATCH',
+      '/api/platform/admin/settings',
+      { public_https: true },
+    ],
   ])('%s', async (_name, call, method, path, body) => {
     await call();
     const sent = lastCall();

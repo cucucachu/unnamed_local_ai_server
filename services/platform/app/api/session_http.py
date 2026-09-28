@@ -83,7 +83,13 @@ def credential_attempt(request: Request, *keys: str) -> Iterator[None]:
     Only failed credentials (401/403) keep their slot; success and input
     errors (422/409) give it back.
     """
-    limiter: RateLimiter = request.app.state.limiter
+    from app.core.origin import request_origin
+
+    limiter: RateLimiter = (
+        request.app.state.public_limiter
+        if request_origin(request) == "public"
+        else request.app.state.limiter
+    )
     taken = limiter.acquire(keys)
     try:
         yield

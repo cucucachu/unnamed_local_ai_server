@@ -39,6 +39,7 @@ from app.core.errors import (
 )
 from app.core.events import EventHub
 from app.core.hitl import HitlApprovals
+from app.core.platform_settings import get_public_https
 from app.core.ratelimit import RateLimited, RateLimiter
 from app.core.storage import SpaceStorage, StorageError
 from app.core.tokens import TokenService, load_or_create_signing_key
@@ -200,6 +201,11 @@ def create_app(
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s
             )
+            app.state.public_limiter = RateLimiter(
+                s.platform_auth_public_rate_limit, s.platform_auth_public_rate_window_s
+            )
+            async with pool.connection() as conn:
+                app.state.public_https = await get_public_https(conn)
             await legacy.maybe_migrate(app)
             yield
         finally:

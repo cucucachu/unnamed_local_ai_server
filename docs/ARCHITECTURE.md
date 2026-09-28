@@ -236,7 +236,9 @@ what another doc says it should be.
   public root cert is served at `http://homeai.local/ca.crt` (trusted-LAN
   trade-off — see `docs/NETWORKING.md`). Optional `HOMEAI_DOMAIN` (M15-03)
   adds `https://$HOMEAI_DOMAIN` with ACME DNS-01 (DuckDNS); `homeai.local`
-  stays `tls internal`. HTTP on `:80` is never redirected and has no HSTS.
+  stays `tls internal`. HTTP on `:80` is never redirected and has no HSTS
+  (optional HSTS only on `https://$HOMEAI_DOMAIN` when domain mode is on,
+  M15-05).
 - **Routing (M10-04, `docs/PLATFORM.md` §3)**, identical on `:80`,
   `https://homeai.local`, and the optional domain site:
 
@@ -262,7 +264,9 @@ what another doc says it should be.
   No `trusted_proxies` is configured, so Caddy overwrites any
   client-supplied `X-Forwarded-For`/`-Proto`/`-Host` with what it
   actually saw — the platform's per-IP rate limits and origin policy
-  (last XFF hop) can't be spoofed. Do not add `trusted_proxies`. `/internal/*` is never routed. Range and `HEAD` requests to
+  (last XFF hop) can't be spoofed. The same strip-then-set applies to
+  `X-HomeAI-Via` (Caddy sets `vpn` when the TCP peer is the `wireguard`
+  service). Do not add `trusted_proxies`. `/internal/*` is never routed. Range and `HEAD` requests to
   `/api/platform/files/stream` pass through unchanged (206 + `Content-Range`).
 - **Image/base**: multi-stage — `caddy:2-builder-alpine` runs `xcaddy
   build --with github.com/caddy-dns/duckdns` (M15-03); build stage
@@ -274,9 +278,11 @@ what another doc says it should be.
   second one (M12-05) that builds the app sandbox runtime from
   `packages/homeai-sdk/` into `/srv/app-runtime/1/`, final
   stage `caddy:2-alpine` with the xcaddy binary copied over the stock
-  one. Entrypoint (`infra/caddy/entrypoint.sh`) writes
+  one.   Entrypoint (`infra/caddy/entrypoint.sh`) writes
   `/etc/caddy/domain.caddy` from `HOMEAI_DOMAIN` (hostname validated
-  before interpolation; empty domain → empty file, no extra site block).
+  before interpolation; empty domain → empty file, no extra site block)
+  and `/etc/caddy/via.caddy` from Docker DNS for the `wireguard` service
+  (IPv4 only; sets `X-HomeAI-Via: vpn` after stripping client copies).
   Dockerfile: `infra/caddy/Dockerfile`.
 - **Published ports**: `80` and `443` — confirmed via `docker compose
   config`. 443 is the one intentional amendment to the original v1 "no new
@@ -292,7 +298,9 @@ what another doc says it should be.
   certs when domain mode is on) stay stable across container recreates.
   `infra/caddy/Caddyfile` and the exported static bundle (`/srv/www`) are
   both baked into the image at build time, not bind-mounted. The optional
-  domain snippet is generated at start into `/etc/caddy/domain.caddy`.
+  domain snippet is generated at start into `/etc/caddy/domain.caddy`;
+  `/etc/caddy/via.caddy` is rewritten when Docker DNS for `wireguard` is
+  known.
 - **Env vars consumed**: `HOMEAI_DOMAIN` (optional; empty = `:80` +
   `https://homeai.local` only), `DUCKDNS_TOKEN` (secret — never log it;
   required when `HOMEAI_DOMAIN` is set; empty token is a hard start
@@ -1127,7 +1135,10 @@ what another doc says it should be.
   to `/data/legacy-files`). DB host/port/user/name default to
   `postgres`/`5432`/`platform`/`homeai_platform`; data/spaces dirs to
   `/data/platform`/`/data/spaces`; `PLATFORM_AUTH_RATE_LIMIT` /
-  `PLATFORM_AUTH_RATE_WINDOW_S` default to `5` / `60` (not set in compose).
+  `PLATFORM_AUTH_RATE_WINDOW_S` default to `5` / `60` (not set in compose);
+  `PLATFORM_AUTH_PUBLIC_RATE_LIMIT` / `PLATFORM_AUTH_PUBLIC_RATE_WINDOW_S`
+  default to `3` / `300` (M15-05; public origin only). The `public_https`
+  flag is in Postgres, not env.
   M12-04 (not set in compose): `PLATFORM_BUILDS_DIR` (`/data/builds`),
   `EXEC_MANAGER_URL` (`http://code-exec-manager:8090`),
   `PLATFORM_BUILD_TIMEOUT_S` (`600`, per phase call, queueing included).
@@ -1140,7 +1151,9 @@ what another doc says it should be.
   revoked/expired/disabled, sliding expiry, step-up, rate limits, no
   plaintext tokens),   `test_origin.py` (LAN/VPN/public matrix, last-hop
   XFF, `403 public_origin` on setup/invite-accept/admin/WG create/passkey
-  register), `test_webauthn.py` (M15-04: virtual authenticator register /
+  register), `test_public_https.py` (M15-05: flag, passkey-only when
+  public, docker-bridge SNAT, Via header, rate limits, PATCH guards),
+  `test_webauthn.py` (M15-04: virtual authenticator register /
   login / step-up / sign_count / wrong user / public origin / agent /
   `domain_required` / `passkey_required` vs native / TOTP after passkey),
   `test_platform_api.py` (principal resolution incl.
@@ -1687,12 +1700,14 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
     (`403 admin_required`), session stepped up within 5 min
     (`403 step_up_required`).
 - **Rate limits** (in-memory, per process): at most 5 *failed* attempts per
-  60 s per bucket; success and `409`/`422` outcomes don't count. Buckets:
-  login — per username and per client IP; setup and invite accept — per
-  client IP; step-up and every current-password/TOTP check under
-  `/api/platform/me` — per user and per client IP (shared bucket). Client
-  IP = the last `X-Forwarded-For` hop (Caddy's), else the TCP peer.
-- **Origin** (`app/core/origin.py`, M15-02): last-hop address classified
+  60 s per bucket on LAN/VPN; a **public** origin uses 3 per 300 s
+  (`PLATFORM_AUTH_PUBLIC_RATE_LIMIT` / `_WINDOW_S`). Success and `409`/`422`
+  outcomes don't count. Buckets: login — per username and per client IP;
+  setup and invite accept — per client IP; step-up and every
+  current-password/TOTP check under `/api/platform/me` — per user and per
+  client IP (shared bucket). Client IP = the last `X-Forwarded-For` hop
+  (Caddy's), else the TCP peer.
+- **Origin** (`app/core/origin.py`, M15-02 / M15-05): last-hop address classified
   **vpn** (`ORIGIN_VPN_SUBNETS`, default `10.13.13.0/24`, matched first),
   else **lan** (`ORIGIN_LAN_SUBNETS`, default RFC1918 + loopback + IPv6
   ULA/link-local), else **public**. Privileged = lan or vpn. From public:
@@ -1703,10 +1718,16 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
   wireguard-devices, GET/DELETE passkeys, passkey login/step-up, and
   ordinary space/app routes are not blocked. Unauthenticated setup/accept from public is still 403 (not
   401); unauthenticated admin is still 401. Caddy overwrites XFF (no
-  `trusted_proxies`). Host-published `:80`/`:443` may still look like
-  RFC1918 to Caddy (Docker SNAT); tunnel HTTP often looks like the
-  sidecar's `homeai-internal` address (lan, still privileged). Real WAN
-  distinction is M15-05.
+  `trusted_proxies`) and strips client `X-HomeAI-Via`, then sets
+  `X-HomeAI-Via: vpn` when the TCP peer is the `wireguard` compose
+  service. Host-published `:80`/`:443` may still look like RFC1918 to
+  Caddy (Docker SNAT). When `public_https` is on, `172.16.0.0/12` is
+  **not** LAN; that header (same trust model as last-hop XFF) keeps
+  tunnel HTTP as vpn. Flag off: RFC1918 stays LAN. Do not add
+  `trusted_proxies`, PROXY protocol on `:80`/`:443`, or `network_mode:
+  host`. When the flag is on and origin is public (not native), password
+  login/step-up answer `403 passkey_required` without checking the
+  password.
 
 **Objects**
 
@@ -1748,11 +1769,11 @@ themselves)
 
 | Method + path | Request | Success | Errors |
 |---|---|---|---|
-| `GET /api/auth/status` | session credential optional | `200 {"setup_required": bool, "authenticated": bool, "user"?: User, "webauthn": {"rp_id"?: str, "origin_ok": bool}}` (`user` only when authenticated). `webauthn.rp_id` is omitted when passkeys are off. Re-sends the cookie (fresh `Max-Age`) when the credential was the cookie. | — |
+| `GET /api/auth/status` | session credential optional | `200 {"setup_required": bool, "authenticated": bool, "user"?: User, "webauthn": {"rp_id"?: str, "origin_ok": bool}, "public_https": bool, "origin": "lan"\|"vpn"\|"public"}` (`user` only when authenticated). `webauthn.rp_id` is omitted when passkeys are off. Re-sends the cookie (fresh `Max-Age`) when the credential was the cookie. | — |
 | `POST /api/auth/setup` | `{"setup_code", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates the bootstrap **admin**, closes setup for good | `403 public_origin` (not LAN/VPN), `401 invalid_setup_code`, `409 setup_complete`, `409 username_taken`, `422` input rules, `429 rate_limited` |
-| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Optional `device_id` tags the session to a WireGuard peer the user owns (M15-01). | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `403 passkey_required` (browser, `require_passkeys`, RP ID set — password is not checked), `422 unknown_device`, `429 rate_limited` |
+| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Optional `device_id` tags the session to a WireGuard peer the user owns (M15-01). | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `403 passkey_required` (browser, `require_passkeys` *or* public HTTPS flag + public origin, RP ID set — password is not checked), `422 unknown_device`, `429 rate_limited` |
 | `POST /api/auth/logout` | session credential optional | `204`, revokes the session, clears the cookie; idempotent | — |
-| `POST /api/auth/step-up` | session credential + `{"password"}` | `200 {"stepped_up_until": ts}` (now + 5 min, this session only) | `401 unauthenticated`, `403 invalid_password`, `403 passkey_required` (browser when `require_passkeys` and RP ID set), `429 rate_limited` |
+| `POST /api/auth/step-up` | session credential + `{"password"}` | `200 {"stepped_up_until": ts}` (now + 5 min, this session only) | `401 unauthenticated`, `403 invalid_password`, `403 passkey_required` (browser when `require_passkeys` *or* public HTTPS flag + public origin, RP ID set), `429 rate_limited` |
 | `POST /api/auth/passkey/login/begin` | `{"username"}` | `200` WebAuthn `publicKey` request options (challenge bound to the user) | `409 domain_required`, `422 passkey_rp_mismatch`, `401 invalid_credentials` (unknown user or no passkeys), `429 rate_limited` |
 | `POST /api/auth/passkey/login/finish` | `{"username", "credential", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Password is not used on this path. TOTP still applies after a successful assertion. | `409 domain_required`, `422 passkey_rp_mismatch`, `401 invalid_credentials`, `401 totp_required`, `401 invalid_totp`, `403 account_disabled`, `422 unknown_device`, `429 rate_limited` |
 | `POST /api/auth/passkey/step-up/begin` | session credential | `200` WebAuthn `publicKey` request options | `401 unauthenticated`, `409 domain_required`, `409 no_passkey`, `422 passkey_rp_mismatch`, `429 rate_limited` |
@@ -1788,7 +1809,9 @@ themselves)
 | `POST /api/platform/spaces/{id}/members` | membership `manage` | `{"user_id", "role": "owner"\|"editor"\|"viewer"}` | `201 Member` | space errors, `409 personal_space`, `422 unknown_user`, `409 user_disabled`, `409 already_member` |
 | `PATCH /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | `{"role"}` | `200 Member` | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` (demoting the only owner) |
 | `DELETE /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | — | `204`; the user loses access at once | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` |
+| `GET /api/platform/settings` | user | — | `200 {"public_https": bool, "domain_configured": bool}` | — |
 | `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | `403 public_origin` |
+| `PATCH /api/platform/admin/settings` | admin | `{"public_https": bool}` | `200` same as GET. Enabling needs an RP ID. Does not punch the host firewall. | `403 public_origin`, `422 domain_required` (enabling with no RP ID) |
 | `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool, "require_passkeys"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). `require_passkeys: true` needs an RP ID. | `403 public_origin`, `404 not_found`, `409 last_admin` (would leave no enabled admin), `422 domain_required` (requiring passkeys with no RP ID) |
 | `POST /api/platform/admin/invites` | admin | `{"label"?}` | `201 Invite + {"token": "hi_…", "accept_url": "<scheme>://<host>/invite?token=<token>"}` — the only time the token is returned. Single use, expires in 7 days. `accept_url` uses `X-Forwarded-Host`/`Host` and `X-Forwarded-Proto` as seen by the platform. | `403 public_origin`, `422 invalid_label` |
 | `GET /api/platform/admin/invites` | admin | — | `200 {"invites": [Invite]}` (newest first, no tokens) | `403 public_origin` |
@@ -3479,9 +3502,14 @@ M7-03; the recipe below is what it actually does, not a plan):**
 ### Documented fast-follows (not built for v1)
 
 - Docker-socket-proxy in front of code-exec-manager's docker.sock access.
-- Public HTTPS listener / HSTS / force-HTTPS (M15-05). Real certificates
-  via ACME DNS-01 shipped in M15-03; `https://homeai.local` stays Caddy
-  `tls internal`. HTTP is not redirected and HSTS is off.
+- Public HTTPS **policy + Settings toggle** shipped in M15-05 (passkey-only
+  when origin is public and the flag is on; stricter public rate limits;
+  optional HSTS only on `https://$HOMEAI_DOMAIN`). The **host firewall**
+  (WAN TCP 443 / `DOCKER-USER`) is still a human step
+  (`infra/host/setup-public-https.md`); `:80` and `homeai.local` stay
+  without HSTS and without HTTP→HTTPS redirects. Real certificates via
+  ACME DNS-01 shipped in M15-03; `https://homeai.local` stays Caddy
+  `tls internal`.
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
 - EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).

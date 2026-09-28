@@ -16,6 +16,22 @@ jest.mock('@/lib/clipboard', () => ({
 
 jest.mock('react-native-qrcode-svg', () => () => null, { virtual: true });
 
+let mockRole: 'admin' | 'member' = 'member';
+jest.mock('@/components/AuthProvider', () => ({
+  useAuth: () => ({
+    state: {
+      phase: 'ready',
+      setupRequired: false,
+      user: { id: 'u1', username: 'alice', display_name: 'Alice', role: mockRole },
+    },
+  }),
+}));
+
+const mockWithStepUp = jest.fn((fn: () => Promise<unknown>) => fn());
+jest.mock('@/components/StepUpProvider', () => ({
+  useStepUp: () => ({ withStepUp: mockWithStepUp }),
+}));
+
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import RemoteAccessScreen from '../remote';
 
@@ -52,6 +68,9 @@ const originalConfirm = window.confirm;
 
 beforeEach(() => {
   mockCopy.mockClear();
+  mockRole = 'member';
+  mockWithStepUp.mockReset();
+  mockWithStepUp.mockImplementation((fn) => fn());
   Platform.OS = 'web';
   window.confirm = jest.fn().mockReturnValue(true);
   mockFetchRoutes({
@@ -105,5 +124,51 @@ describe('RemoteAccessScreen', () => {
 
     expect(requestsTo(global.fetch as jest.Mock, 'DELETE', '/me/wireguard-devices/phone')).toHaveLength(0);
     expect(exists(renderer, 'remote-row-phone')).toBe(true);
+  });
+
+  it('members do not see the public HTTPS toggle', async () => {
+    renderer = await render(RemoteAccessScreen);
+    expect(exists(renderer, 'settings-public-https-switch')).toBe(false);
+  });
+
+  it('admins can toggle public HTTPS after step-up when a domain is configured', async () => {
+    mockRole = 'admin';
+    mockFetchRoutes({
+      'GET /api/platform/me/wireguard-devices': { body: { devices: [device({ id: 'phone' })] } },
+      'GET /api/platform/settings': {
+        body: { public_https: false, domain_configured: true },
+      },
+      'PATCH /api/platform/admin/settings': {
+        body: { public_https: true, domain_configured: true },
+      },
+    });
+    renderer = await render(RemoteAccessScreen);
+    expect(exists(renderer, 'settings-public-https-switch')).toBe(true);
+    expect(textOf(renderer)).toContain('does not open the host firewall');
+
+    const sw = renderer.root.findByProps({ testID: 'settings-public-https-switch' });
+    expect(sw.props.disabled).toBe(false);
+    expect(sw.props.value).toBe(false);
+    await act(async () => {
+      await sw.props.onValueChange(true);
+    });
+    expect(mockWithStepUp).toHaveBeenCalled();
+    expect(requestsTo(global.fetch as jest.Mock, 'PATCH', '/admin/settings')).toEqual([
+      { public_https: true },
+    ]);
+  });
+
+  it('disables the switch with help text when no domain is configured', async () => {
+    mockRole = 'admin';
+    mockFetchRoutes({
+      'GET /api/platform/me/wireguard-devices': { body: { devices: [] } },
+      'GET /api/platform/settings': {
+        body: { public_https: false, domain_configured: false },
+      },
+    });
+    renderer = await render(RemoteAccessScreen);
+    const sw = renderer.root.findByProps({ testID: 'settings-public-https-switch' });
+    expect(sw.props.disabled).toBe(true);
+    expect(textOf(renderer)).toContain('Needs a domain');
   });
 });

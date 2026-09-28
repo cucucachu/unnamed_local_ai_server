@@ -16,6 +16,7 @@ SHIPPED = [
     (7, "app_exports"),
     (8, "wireguard"),
     (9, "webauthn"),
+    (10, "public_https"),
 ]
 
 
@@ -62,6 +63,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0007_app_exports.sql",
             "0008_wireguard.sql",
             "0009_webauthn.sql",
+            "0010_public_https.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
@@ -69,6 +71,8 @@ async def test_fresh_database_gets_initial_schema(pg_database):
         tables |= {"wireguard_peers", "webauthn_credentials", "webauthn_challenges"}
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
+        cur = await conn.execute("SELECT value FROM platform_state WHERE key = 'public_https'")
+        assert (await cur.fetchone())["value"] is False
 
 
 async def test_second_run_applies_nothing(pg_database):

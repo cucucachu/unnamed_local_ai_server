@@ -138,9 +138,11 @@ NODIR="${TMPDIR}/caddy-off"
 mkdir -p "$NODIR"
 cp "${REPO_ROOT}/infra/caddy/Caddyfile" "$NODIR/Caddyfile"
 printf '%s\n' '# domain mode off' > "$NODIR/domain.caddy"
+printf '%s\n' '# wireguard via unset' > "$NODIR/via.caddy"
 if docker run --rm \
     -v "${NODIR}/Caddyfile:/etc/caddy/Caddyfile:ro" \
     -v "${NODIR}/domain.caddy:/etc/caddy/domain.caddy:ro" \
+    -v "${NODIR}/via.caddy:/etc/caddy/via.caddy:ro" \
     caddy:2-alpine \
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
   pass "caddy validate (stock caddy:2-alpine) for no-domain Caddyfile"
@@ -163,6 +165,7 @@ ONDIR="${TMPDIR}/caddy-on"
 mkdir -p "$ONDIR"
 cp "${REPO_ROOT}/infra/caddy/Caddyfile" "$ONDIR/Caddyfile"
 : > "$ONDIR/domain.caddy"
+printf '%s\n' '# wireguard via unset' > "$ONDIR/via.caddy"
 
 run_entrypoint() {
   # Args: extra docker run args after image, then command.
@@ -186,6 +189,7 @@ fi
 
 if grep -q "dns duckdns {env.DUCKDNS_TOKEN}" "$ONDIR/domain.caddy" \
     && grep -q "https://${DUMMY_DOMAIN}" "$ONDIR/domain.caddy" \
+    && grep -q "Strict-Transport-Security" "$ONDIR/domain.caddy" \
     && ! grep -Fq "$DUMMY_TOKEN" "$ONDIR/domain.caddy"; then
   pass "generated snippet uses DNS-01 duckdns + env token placeholder (token not written to disk)"
 else

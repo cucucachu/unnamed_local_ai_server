@@ -48,6 +48,11 @@ class StatusResponse(BaseModel):
     authenticated: bool
     user: UserOut | None = None
     webauthn: WebAuthnStatus = WebAuthnStatus()
+    # M15-05: DB flag (not a secret). `origin` is this request's classifier
+    # so the login UI can hide the password when the flag is on *and* the
+    # client is public. Native still uses password until M15-06.
+    public_https: bool = False
+    origin: Literal["lan", "vpn", "public"] = "lan"
 
 
 class SetupRequest(BaseModel):
@@ -146,6 +151,15 @@ class AdminUserPatch(BaseModel):
     role: Literal["admin", "member"] | None = None
     disabled: bool | None = None
     require_passkeys: bool | None = None
+
+
+class PlatformSettingsOut(BaseModel):
+    public_https: bool
+    domain_configured: bool
+
+
+class PlatformSettingsPatch(BaseModel):
+    public_https: bool
 
 
 class PasskeyLoginBeginRequest(BaseModel):

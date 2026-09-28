@@ -66,4 +66,30 @@ describe('LoginScreen passkey button', () => {
     await press(renderer!, 'auth-passkey-submit');
     expect(mockLoginWithPasskey).toHaveBeenCalledWith({ username: 'alice', totpCode: undefined });
   });
+
+  it('hides the password field when public HTTPS is on and this origin is public', async () => {
+    Object.defineProperty(navigator, 'credentials', {
+      configurable: true,
+      value: { create: jest.fn(), get: jest.fn() },
+    });
+    mockFetchRoutes({
+      'GET /api/auth/status': {
+        body: {
+          setup_required: false,
+          authenticated: false,
+          public_https: true,
+          origin: 'public',
+          webauthn: { rp_id: 'example.duckdns.org', origin_ok: true },
+        },
+      },
+    });
+    mockLoginWithPasskey.mockResolvedValue(undefined);
+    await renderLogin();
+    expect(exists(renderer!, 'auth-password')).toBe(false);
+    expect(exists(renderer!, 'auth-passkey-submit')).toBe(false);
+
+    await type(renderer!, 'auth-username', 'alice');
+    await press(renderer!, 'auth-submit');
+    expect(mockLoginWithPasskey).toHaveBeenCalledWith({ username: 'alice', totpCode: undefined });
+  });
 });

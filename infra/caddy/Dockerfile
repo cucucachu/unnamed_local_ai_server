@@ -40,7 +40,9 @@ COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY infra/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY infra/caddy/entrypoint.sh /entrypoint.sh
 COPY infra/lib/valid_hostname.sh /usr/local/lib/homeai-valid-hostname.sh
-RUN chmod 755 /entrypoint.sh && printf '%s\n' '# domain mode off' > /etc/caddy/domain.caddy
+RUN chmod 755 /entrypoint.sh \
+	&& printf '%s\n' '# domain mode off' > /etc/caddy/domain.caddy \
+	&& printf '%s\n' '# wireguard via unset' > /etc/caddy/via.caddy
 COPY --from=frontend-build /out /srv/www
 COPY --from=runtime-build /out/app-runtime /srv/app-runtime
 ENTRYPOINT ["/entrypoint.sh"]
