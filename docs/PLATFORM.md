@@ -324,8 +324,9 @@ boundary; UID/GID permissions are defense in depth.
 
 ### Race-free access
 
-Everything below `<space_id>/` is writable by the space's members (and, from
-M11-03, by their exec containers), while the platform acts on it as root.
+Everything below `<space_id>/` is writable by the space's members (and,
+since M11-03, everything below `files/` by their exec containers, which
+mount only that dir), while the platform acts on it as root.
 So **no platform operation on space content may be redirected by a symlink
 or directory swapped in between a check and a use**: not a read, write,
 mkdir, move/rename (within or across spaces), copy, delete, chown/chmod,
