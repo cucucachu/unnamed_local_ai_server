@@ -871,6 +871,87 @@ describe('ChatScreen ([threadId])', () => {
     });
   });
 
+  describe('app tools (M13-02)', () => {
+    function iconCount(renderer: ReturnType<typeof create>, name: string): number {
+      return renderer.root.findAll((node) => node.props.name === name && typeof node.type !== 'string').length;
+    }
+
+    it('an app tool card uses the app icon', () => {
+      setUseChatResult({
+        items: [
+          {
+            id: 'app-1',
+            kind: 'tool',
+            toolCallId: 'call-app-1',
+            name: 'build_app',
+            category: 'app',
+            status: 'success',
+            args: { app: '/personal/Apps/todo' },
+            resultPreview: 'Build succeeded: To-do 1.0.0',
+          },
+        ],
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+      expandActivityPanel(renderer!);
+
+      expect(iconCount(renderer!, 'apps-outline')).toBeGreaterThan(0);
+      expect(renderedText(renderer!)).toContain('build_app');
+    });
+
+    it('an app approval shows the target space and the SQL', () => {
+      setUseChatResult({
+        pendingApproval: {
+          interruptId: 'int-app',
+          actions: [
+            {
+              toolCallId: 'call-sql',
+              name: 'app_sql',
+              category: 'app',
+              args: {
+                instance: 'i-1',
+                space: '/spaces/family',
+                sql: 'DELETE FROM items WHERE done = 1',
+              },
+              description: 'Change data in Groceries in /spaces/family (shared space "Family"):\nDELETE FROM items WHERE done = 1',
+            },
+            {
+              toolCallId: 'call-mig',
+              name: 'approve_migration',
+              category: 'app',
+              args: {
+                instance: 'i-1',
+                space: '/personal',
+                migration_id: 'm-1',
+                steps: ['ALTER TABLE items DROP COLUMN done'],
+              },
+              description: 'Apply a DESTRUCTIVE database change',
+            },
+          ],
+        },
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const texts = (testID: string) =>
+        renderer!.root
+          .findAll((node) => node.props.testID === testID && String(node.type) === 'Text')
+          .map((node) => node.props.children);
+      expect(texts('approval-app-space')).toEqual(['/spaces/family', '/personal']);
+      expect(texts('approval-app-body')).toEqual([
+        'DELETE FROM items WHERE done = 1',
+        'ALTER TABLE items DROP COLUMN done',
+      ]);
+      expect(iconCount(renderer!, 'apps-outline')).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe('Edit / Resend / Regenerate (M8-04)', () => {
     const userOne: ChatUserItem = { id: 'u-1', kind: 'user', text: 'turn one' };
     const assistantOne = { id: 'a-1', kind: 'assistant' as const, text: 'reply one', streaming: false };

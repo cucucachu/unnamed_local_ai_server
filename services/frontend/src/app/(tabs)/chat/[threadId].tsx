@@ -56,6 +56,7 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
   // specifically for `web_search` (see `toolIconName` below); `web_fetch`
   // keeps this `globe-outline` default.
   web: 'globe-outline',
+  app: 'apps-outline',
   other: 'construct-outline',
 };
 
@@ -977,10 +978,10 @@ function firstNLines(text: string, n: number): string {
 
 /** Renders one pending action's `args` per the spec's per-type rules: exec
  * (`execute_code`) -> the command in monospace; file ops (`write_file`/
- * `edit_file`/`delete`) -> the path + first ~20 lines of content/edit.
- * Falls back to a raw JSON dump for anything else (defensive — the four
- * mutating tools are the only ones `interrupt_on` ever covers today, see
- * `app/agent/build.py`'s `MUTATING_TOOL_NAMES`). */
+ * `edit_file`/`delete`) -> the path + first ~20 lines of content/edit;
+ * app tools (`app_sql`/`app_action`/`approve_migration`, M13-02) -> the
+ * target space, then the SQL, action name or migration steps.
+ * Falls back to a raw JSON dump for anything else (defensive). */
 function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): ReactElement {
   const args = action.args;
   if (action.category === 'exec') {
@@ -1004,6 +1005,32 @@ function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): Reac
         </Text>
         {bodyPreview !== null ? (
           <Text style={[styles.toolDetailText, styles.approvalArgsText]}>{bodyPreview}</Text>
+        ) : null}
+      </View>
+    );
+  }
+
+  if (action.category === 'app') {
+    const space = typeof args.space === 'string' ? args.space : null;
+    let body: string | null = null;
+    if (typeof args.sql === 'string') body = firstNLines(args.sql, 20);
+    else if (typeof args.name === 'string') body = `action ${args.name}`;
+    else if (Array.isArray(args.steps)) body = firstNLines(args.steps.join('\n'), 20);
+    const params = args.params !== undefined ? JSON.stringify(args.params) : null;
+    return (
+      <View style={styles.approvalArgsColumn}>
+        {space !== null ? (
+          <Text style={[styles.toolDetailText, styles.approvalArgsText]} testID="approval-app-space">
+            {space}
+          </Text>
+        ) : null}
+        {body !== null ? (
+          <Text style={[styles.toolDetailText, styles.approvalArgsText]} testID="approval-app-body">
+            {body}
+          </Text>
+        ) : null}
+        {params !== null ? (
+          <Text style={[styles.toolDetailText, styles.approvalArgsText]}>{params}</Text>
         ) : null}
       </View>
     );

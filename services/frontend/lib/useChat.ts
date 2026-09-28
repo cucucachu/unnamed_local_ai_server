@@ -167,6 +167,12 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   task: 'plan',
   web_search: 'web',
   web_fetch: 'web',
+  list_apps: 'app',
+  create_app: 'app',
+  build_app: 'app',
+  app_sql: 'app',
+  app_action: 'app',
+  approve_migration: 'app',
 };
 
 function categoryForToolName(name: string): ToolCategory {
@@ -514,7 +520,13 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           };
 
           setItems((prev) => {
-            if (previousStreamingId === null) return [...prev, toolItem];
+            // A rejected app tool still runs (to tell the model), under the
+            // card `respondToApproval` already made for it.
+            const rejected = prev.some(
+              (item) => item.kind === 'tool' && item.toolCallId === frame.tool_call_id && item.status === 'rejected',
+            );
+            const added = rejected ? [] : [toolItem];
+            if (previousStreamingId === null) return [...prev, ...added];
             // The item `turn_start` (or a prior `tool_start`) opened is
             // being interrupted by this tool call: if it never received any
             // tokens, drop it (an empty bubble would be a UI artifact with
@@ -525,14 +537,18 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
               if (item.text === '') return [];
               return [{ ...item, streaming: false }];
             });
-            return [...withPreviousResolved, toolItem];
+            return [...withPreviousResolved, ...added];
           });
         },
         onToolEnd: (frame: ToolEndFrame) => {
           setItems((prev) =>
             prev.map((item) =>
               item.kind === 'tool' && item.toolCallId === frame.tool_call_id
-                ? { ...item, status: frame.status, resultPreview: frame.result_preview }
+                ? {
+                    ...item,
+                    status: item.status === 'rejected' ? item.status : frame.status,
+                    resultPreview: frame.result_preview,
+                  }
                 : item,
             ),
           );
@@ -544,6 +560,14 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           };
           pendingApprovalRef.current = pending;
           setPendingApproval(pending);
+          // An app tool asks from inside its own run (after its tool_start),
+          // and resuming re-sends tool_start: drop the paused card.
+          const paused = new Set(frame.actions.map((action) => action.tool_call_id));
+          setItems((prev) =>
+            prev.filter(
+              (item) => !(item.kind === 'tool' && item.status === 'running' && paused.has(item.toolCallId)),
+            ),
+          );
         },
         onTurnEnd: (frame: TurnEndFrame) => {
           const id = currentAssistantIdRef.current;
@@ -679,7 +703,8 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     // Synthesize a `ChatToolItem` for every REJECTED action right away —
     // a rejected tool call never actually runs, so no real
     // `tool_start`/`tool_end` frame will ever arrive for it (see this
-    // hook's `PendingApprovalAction.status` doc). Approved actions get no
+    // hook's `PendingApprovalAction.status` doc; app tools are the
+    // exception, handled in `onToolStart`). Approved actions get no
     // synthesized item: the resumed turn's real `tool_start`/`tool_end`
     // frames cover them exactly like any other tool call.
     const decisionByToolCallId = new Map(decisions.map((d) => [d.tool_call_id, d.decision]));
