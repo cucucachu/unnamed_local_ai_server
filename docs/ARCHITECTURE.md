@@ -1151,12 +1151,14 @@ what another doc says it should be.
   revoked/expired/disabled, sliding expiry, step-up, rate limits, no
   plaintext tokens),   `test_origin.py` (LAN/VPN/public matrix, last-hop
   XFF, `403 public_origin` on setup/invite-accept/admin/WG create/passkey
-  register), `test_public_https.py` (M15-05: flag, passkey-only when
+  register / host-app pair begin+enroll), `test_public_https.py` (M15-05: flag, passkey-only when
   public, docker-bridge SNAT, Via header, rate limits, PATCH guards),
   `test_webauthn.py` (M15-04: virtual authenticator register /
   login / step-up / sign_count / wrong user / public origin / agent /
   `domain_required` / `passkey_required` vs native / TOTP after passkey),
-  `test_platform_api.py` (principal resolution incl.
+  `test_device_pairs.py` (M15-06: software P-256 enroll / login / replay /
+  revoke / public origin / agent / TOTP after device login / wrong-user
+  key), `test_platform_api.py` (principal resolution incl.
   delegation `act=agent`, self-service, admin users, last admin,
   invites), `test_spaces.py` (personal-space invariants on every creation
   path, slug collisions, backfill of pre-`0003` users, dir modes +
@@ -1712,10 +1714,13 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
   else **lan** (`ORIGIN_LAN_SUBNETS`, default RFC1918 + loopback + IPv6
   ULA/link-local), else **public**. Privileged = lan or vpn. From public:
   `POST /api/auth/setup`, `POST /api/auth/invite/accept`, all
-  `/api/platform/admin/*`, `POST /api/platform/me/wireguard-devices`, and
-  `POST /api/platform/me/passkeys/register/*` (M15-04 enrollment) answer
+  `/api/platform/admin/*`, `POST /api/platform/me/wireguard-devices`,
+  `POST /api/platform/me/passkeys/register/*` (M15-04 enrollment),
+  `POST /api/platform/me/device-pairs/begin`, and
+  `POST /api/auth/device/enroll` (M15-06) answer
   `403 public_origin`. Login, logout, step-up, status, TOTP, GET/DELETE
-  wireguard-devices, GET/DELETE passkeys, passkey login/step-up, and
+  wireguard-devices, GET/DELETE passkeys, GET/DELETE device-pairs,
+  passkey login/step-up, device login, and
   ordinary space/app routes are not blocked. Unauthenticated setup/accept from public is still 403 (not
   401); unauthenticated admin is still 401. Caddy overwrites XFF (no
   `trusted_proxies`) and strips client `X-HomeAI-Via`, then sets
@@ -1736,6 +1741,10 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
   "created_at": ts}`.
 - `Passkey`: `{"id", "name": str|null, "transports": [str]|null, "created_at",
   "last_used_at": ts|null}`.
+- `DevicePair`: `{"id", "name", "created_at", "last_used_at": ts|null}` (no
+  public key in list/revoke). Pairing QR payload:
+  `{"v": 1, "kind": "homeai-host-pair", "token": "hd_…", "challenge",
+  "user"}` (ECDSA P-256; challenge and signature are unpadded base64url).
 - `Session`: `{"id", "device_label": str|null, "created_at", "last_seen_at",
   "expires_at", "current": bool}` (`current` = the caller's own session).
 - `Invite`: `{"id", "label": str|null, "status":
@@ -1743,7 +1752,7 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
   "created_at", "expires_at", "used_at": ts|null, "used_by": id|null,
   "revoked_at": ts|null}`.
 - `SessionResponse`: `{"user": User}` (web) or `{"user": User,
-  "session_token": "hs_…"}` (native).
+  "session_token": "hs_…"}` (`X-HomeAI-Client: native` or `host`).
 - `Space`: `{"id", "slug", "name", "kind": "personal"|"shared", "gid": int,
   "owner_user_id": id|null (personal only), "role":
   "owner"|"editor"|"viewer"|null (the caller's; null only in the admin
@@ -1771,13 +1780,16 @@ themselves)
 |---|---|---|---|
 | `GET /api/auth/status` | session credential optional | `200 {"setup_required": bool, "authenticated": bool, "user"?: User, "webauthn": {"rp_id"?: str, "origin_ok": bool}, "public_https": bool, "origin": "lan"\|"vpn"\|"public"}` (`user` only when authenticated). `webauthn.rp_id` is omitted when passkeys are off. Re-sends the cookie (fresh `Max-Age`) when the credential was the cookie. | — |
 | `POST /api/auth/setup` | `{"setup_code", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates the bootstrap **admin**, closes setup for good | `403 public_origin` (not LAN/VPN), `401 invalid_setup_code`, `409 setup_complete`, `409 username_taken`, `422` input rules, `429 rate_limited` |
-| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Optional `device_id` tags the session to a WireGuard peer the user owns (M15-01). | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `403 passkey_required` (browser, `require_passkeys` *or* public HTTPS flag + public origin, RP ID set — password is not checked), `422 unknown_device`, `429 rate_limited` |
+| `POST /api/auth/login` | `{"username", "password", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Optional `device_id` tags the session to a WireGuard peer the user owns (M15-01). | `401 invalid_credentials` (unknown user or wrong password), `401 totp_required` (password right, TOTP enabled, no code), `401 invalid_totp` (wrong or replayed code), `403 account_disabled` (only after password + TOTP pass), `403 passkey_required` (browser, `require_passkeys` *or* public HTTPS flag + public origin, RP ID set — password is not checked; Expo Go `native` and host app `host` are exempt), `422 unknown_device`, `429 rate_limited` |
 | `POST /api/auth/logout` | session credential optional | `204`, revokes the session, clears the cookie; idempotent | — |
 | `POST /api/auth/step-up` | session credential + `{"password"}` | `200 {"stepped_up_until": ts}` (now + 5 min, this session only) | `401 unauthenticated`, `403 invalid_password`, `403 passkey_required` (browser when `require_passkeys` *or* public HTTPS flag + public origin, RP ID set), `429 rate_limited` |
 | `POST /api/auth/passkey/login/begin` | `{"username"}` | `200` WebAuthn `publicKey` request options (challenge bound to the user) | `409 domain_required`, `422 passkey_rp_mismatch`, `401 invalid_credentials` (unknown user or no passkeys), `429 rate_limited` |
 | `POST /api/auth/passkey/login/finish` | `{"username", "credential", "totp_code"?, "device_label"?, "device_id"?}` | `200 SessionResponse`. Password is not used on this path. TOTP still applies after a successful assertion. | `409 domain_required`, `422 passkey_rp_mismatch`, `401 invalid_credentials`, `401 totp_required`, `401 invalid_totp`, `403 account_disabled`, `422 unknown_device`, `429 rate_limited` |
 | `POST /api/auth/passkey/step-up/begin` | session credential | `200` WebAuthn `publicKey` request options | `401 unauthenticated`, `409 domain_required`, `409 no_passkey`, `422 passkey_rp_mismatch`, `429 rate_limited` |
 | `POST /api/auth/passkey/step-up/finish` | session credential + `{"credential"}` | `200 {"stepped_up_until": ts}` (same 5-minute window as password step-up) | `401 unauthenticated`, `409 domain_required`, `422 passkey_rp_mismatch`, `403 invalid_passkey`, `429 rate_limited` |
+| `POST /api/auth/device/enroll` | `{"token", "public_key", "name", "signature"}` | `200 DevicePair`. New host app; LAN/VPN only. Signature over the enroll challenge with the submitted P-256 public key. | `403 public_origin`, `409 already_used`, `409 already_enrolled`, `422 invalid_token` / `invalid_signature` / `invalid_public_key` / `invalid_name`, `429 rate_limited` |
+| `POST /api/auth/device/begin` | `{"device_id"}` | `200 {"challenge", "expires_at"}` | `401 invalid_credentials` (unknown device; don't leak), `429 rate_limited` |
+| `POST /api/auth/device/finish` | `{"device_id", "signature", "totp_code"?, "device_label"?}` | `200 SessionResponse`. Tags the session `host_device_id`. TOTP after a valid signature. | `401 invalid_credentials` (unknown, wrong key, replay), `401 totp_required`, `401 invalid_totp`, `403 account_disabled`, `429 rate_limited` |
 | `POST /api/auth/invite/accept` | `{"token", "username", "display_name", "password", "device_label"?}` | `200 SessionResponse`; creates a **member** | `403 public_origin` (not LAN/VPN), `401 invalid_invite` (unknown, used, expired, or revoked — not distinguished), `409 username_taken` (invite stays usable), `422` input rules, `429 rate_limited` |
 
 **`/api/platform/*`** (behind Caddy `forward_auth`; principal as above;
@@ -1792,6 +1804,9 @@ themselves)
 | `GET /api/platform/me/wireguard-devices` | human | — | `200 {"devices": [WireGuardDevice]}` (id, name, address, created_at; no keys) | — |
 | `POST /api/platform/me/wireguard-devices` | human | `{"name"}` | `201 WireGuardDevice + {"config": "<wg-quick text>"}` — the only time the peer private key is returned (also the QR payload). LAN/VPN only (M15-02). | `403 public_origin`, `422 invalid_name`, `409 too_many_devices`, `409 peers_exhausted` |
 | `DELETE /api/platform/me/wireguard-devices/{id}` | human | — | `204` — deletes the peer, rewrites live wg0.conf, revokes sessions tagged with that `device_id` (not untagged LAN sessions) | `404 not_found` (unknown or not yours) |
+| `GET /api/platform/me/device-pairs` | human | — | `200 {"devices": [DevicePair]}` | — |
+| `POST /api/platform/me/device-pairs/begin` | human | — | `200` pairing payload (`v`, `kind`, `token`, `challenge`, `user`, `expires_at`). LAN/VPN only. Settings QR encodes `v/kind/token/challenge/user` (not a WireGuard config). | `403 public_origin`, `429 rate_limited` |
+| `DELETE /api/platform/me/device-pairs/{id}` | human | — | `204` — public origin allowed (stolen-phone); revokes sessions tagged `host_device_id` | `404 not_found` |
 | `POST /api/platform/me/totp/enroll` | human | `{"password"}` | `200 {"secret": base32, "otpauth_uri": "otpauth://totp/HomeAI:<username>?secret=…&issuer=HomeAI&algorithm=SHA1&digits=6&period=30"}`. Pending until confirmed; re-enrolling replaces the pending secret. | `403 invalid_password`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/confirm` | human | `{"code"}` | `200 User` (`totp_enabled: true`) | `403 invalid_totp`, `409 totp_not_pending`, `409 totp_already_enabled`, `429 rate_limited` |
 | `POST /api/platform/me/totp/disable` | human | `{"password"}` | `200 User` (`totp_enabled: false`) | `403 invalid_password`, `409 totp_not_enabled`, `429 rate_limited` |
@@ -1827,8 +1842,9 @@ Admin-guard failures (`403 agent_not_allowed` / `admin_required` /
 Signed-out visits land on `/login`; `/invite?token=…` (native
 `homeai://invite?token=…`) is reachable signed in or out and calls
 `POST /api/auth/invite/accept`. Web relies on the cookie
-(`credentials: "include"`); native sends `X-HomeAI-Client: native` on
-`/api/auth/*`, keeps `session_token` in `expo-secure-store`, and sends
+(`credentials: "include"`); Expo Go sends `X-HomeAI-Client: native` on
+`/api/auth/*`; the host app (dev client) sends `host`. Both native
+clients keep `session_token` in `expo-secure-store` and send
 `Authorization: Bearer` on every request, native upload/download/media
 load, and the chat WebSocket (React Native's `WebSocket(url, protocols,
 {headers})`). Any `401` outside `/api/auth/*` signs the client out. A
@@ -1840,7 +1856,9 @@ shows "Chat not found" instead of reconnecting (M10-07).
 
 Settings (M10-07, `src/app/(tabs)/settings/`) covers `/me` (display name,
 password, TOTP enroll with the `otpauth_uri` as a QR, passkeys in domain
-mode), sessions, **Remote access** (M15-01: WireGuard devices + QR), spaces and
+mode), sessions, **Remote access** (M15-01: WireGuard devices + QR;
+M15-06: **Pair a phone** host-app QR `host-pair-*`, list/revoke; members
+can pair their own device), spaces and
 members (owners manage shared spaces), and, for admins, users and invites.
 Any `403 step_up_required` opens a password prompt (and a passkey button
 when status says passkeys are available), calls `POST
@@ -3511,7 +3529,7 @@ M7-03; the recipe below is what it actually does, not a plan):**
   ACME DNS-01 shipped in M15-03; `https://homeai.local` stays Caddy
   `tls internal`.
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
-- EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution.
+- EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution. M15-06 landed the Android **dev client** (`expo-dev-client`, package `ai.homeai.host`) plus `eas.json` development profile and `scripts/build_host_app_android.sh` (debug APK via throwaway Docker Android image; no `eas login` from an agent). iOS ipa is later.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).
 
 ---

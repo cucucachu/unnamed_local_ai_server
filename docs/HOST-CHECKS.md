@@ -235,6 +235,16 @@ on the LAN":
       enrollment/admin still `public_origin`. Do not require agents to
       punch WAN 443 for Tier A. Human WAN steps:
       `infra/host/setup-public-https.md`.
+- [ ] (M15-06) Install the debug APK from
+      `scripts/build_host_app_android.sh` (or an EAS development client
+      the maintainer built — `eas.json` development profile; this host
+      has no Android SDK). On the LAN: sign in on the web app → Settings
+      → Remote access → **Show pairing QR** → on the phone, Pair this
+      phone (paste the QR JSON if the camera isn't wired). Confirm
+      **Sign in with this device** after a biometric unlock. Revoke the
+      pair; the phone can no longer sign in that way. Expo Go on the
+      same account still uses password (`X-HomeAI-Client: native`). iOS
+      is docs-only; no ipa.
 
 > **PM sign-off: G15 passed ____**
 

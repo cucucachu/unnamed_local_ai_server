@@ -481,7 +481,8 @@ open TCP 443 on the host.** Human WAN steps:
 **Threat notes**
 
 - Passkey-only login is the origin classifier plus the DB flag, not the
-  firewall. Native password still works until M15-06. Enrollment,
+  firewall. Expo Go still uses password; the host app uses device pairing
+  (M15-06). Enrollment,
   invites, and admin stay M15-02 (`403 public_origin`).
 - Docker SNAT: a WAN client on published `:80`/`:443` may appear as
   `172.16.0.0/12`. While the flag is on, that range is not LAN. Caddy

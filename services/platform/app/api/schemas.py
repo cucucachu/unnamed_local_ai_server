@@ -50,7 +50,8 @@ class StatusResponse(BaseModel):
     webauthn: WebAuthnStatus = WebAuthnStatus()
     # M15-05: DB flag (not a secret). `origin` is this request's classifier
     # so the login UI can hide the password when the flag is on *and* the
-    # client is public. Native still uses password until M15-06.
+    # client is public. Expo Go (`native`) still uses password; the host
+    # app (`host`) uses device pairing (M15-06) with password as LAN fallback.
     public_https: bool = False
     origin: Literal["lan", "vpn", "public"] = "lan"
 
@@ -191,6 +192,51 @@ class PasskeyOut(BaseModel):
 
 class PasskeyList(BaseModel):
     passkeys: list[PasskeyOut]
+
+
+class DevicePairOut(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class DevicePairList(BaseModel):
+    devices: list[DevicePairOut]
+
+
+class DevicePairBeginResponse(BaseModel):
+    """LAN QR payload plus `expires_at` (not encoded in the QR)."""
+
+    v: int
+    kind: Literal["homeai-host-pair"]
+    token: str
+    challenge: str
+    user: str
+    expires_at: datetime
+
+
+class DeviceEnrollRequest(BaseModel):
+    token: Short
+    public_key: Secret
+    name: Short
+    signature: Secret
+
+
+class DeviceLoginBeginRequest(BaseModel):
+    device_id: UUID
+
+
+class DeviceLoginBeginResponse(BaseModel):
+    challenge: str
+    expires_at: datetime
+
+
+class DeviceLoginFinishRequest(BaseModel):
+    device_id: UUID
+    signature: Secret
+    totp_code: Short | None = None
+    device_label: Short | None = None
 
 
 class InviteCreateRequest(BaseModel):

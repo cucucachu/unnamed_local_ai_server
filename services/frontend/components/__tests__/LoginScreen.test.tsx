@@ -6,9 +6,29 @@ import { exists, flush, mockFetchRoutes, press, type } from '../../test-utils/sc
 
 const mockLogin = jest.fn();
 const mockLoginWithPasskey = jest.fn();
+const mockLoginWithDevice = jest.fn();
+const mockPairDevice = jest.fn();
+let mockIsHost = false;
+let mockPairedId: string | null = null;
 jest.mock('@/components/AuthProvider', () => ({
-  useAuth: () => ({ login: mockLogin, loginWithPasskey: mockLoginWithPasskey }),
+  useAuth: () => ({
+    login: mockLogin,
+    loginWithPasskey: mockLoginWithPasskey,
+    loginWithDevice: mockLoginWithDevice,
+    pairDevice: mockPairDevice,
+  }),
 }));
+jest.mock('@/lib/client', () => ({
+  isHostApp: () => mockIsHost,
+  homeAiClientHeader: () => (mockIsHost ? 'host' : 'native'),
+}));
+jest.mock('@/lib/auth', () => {
+  const actual = jest.requireActual('@/lib/auth');
+  return {
+    ...actual,
+    loadPairedDeviceId: () => Promise.resolve(mockPairedId),
+  };
+});
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { LoginScreen } from '../LoginScreen';
@@ -20,10 +40,14 @@ afterEach(() => {
   renderer = null;
   mockLogin.mockReset();
   mockLoginWithPasskey.mockReset();
+  mockLoginWithDevice.mockReset();
+  mockPairDevice.mockReset();
 });
 
 beforeEach(() => {
   Platform.OS = 'web';
+  mockIsHost = false;
+  mockPairedId = null;
 });
 
 async function renderLogin() {
@@ -91,5 +115,39 @@ describe('LoginScreen passkey button', () => {
     await type(renderer!, 'auth-username', 'alice');
     await press(renderer!, 'auth-submit');
     expect(mockLoginWithPasskey).toHaveBeenCalledWith({ username: 'alice', totpCode: undefined });
+  });
+});
+
+describe('LoginScreen host-app pairing', () => {
+  beforeEach(() => {
+    Platform.OS = 'android';
+    mockIsHost = true;
+    mockFetchRoutes({
+      'GET /api/auth/status': {
+        body: { setup_required: false, authenticated: false, webauthn: { origin_ok: false } },
+      },
+    });
+  });
+
+  it('offers Sign in with this device when a pair is stored', async () => {
+    mockPairedId = 'device-1';
+    mockLoginWithDevice.mockResolvedValue(undefined);
+    await renderLogin();
+    expect(exists(renderer!, 'host-pair-sign-in')).toBe(true);
+    expect(exists(renderer!, 'host-pair-enroll')).toBe(false);
+    expect(exists(renderer!, 'auth-password')).toBe(true);
+    await press(renderer!, 'host-pair-sign-in');
+    expect(mockLoginWithDevice).toHaveBeenCalledWith(undefined);
+  });
+
+  it('offers Pair this phone when no pair is stored', async () => {
+    mockPairedId = null;
+    mockPairDevice.mockResolvedValue(undefined);
+    await renderLogin();
+    expect(exists(renderer!, 'host-pair-sign-in')).toBe(false);
+    expect(exists(renderer!, 'host-pair-enroll')).toBe(true);
+    await type(renderer!, 'host-pair-payload', '{"kind":"homeai-host-pair","token":"hd_x","challenge":"ab"}');
+    await press(renderer!, 'host-pair-enroll');
+    expect(mockPairDevice).toHaveBeenCalled();
   });
 });

@@ -37,7 +37,8 @@ UDP 51820 (WireGuard) is a separate human step (`setup-wireguard.md`).
 - Last-hop `X-Forwarded-For` only. Do not add `trusted_proxies`. Do not
   enable PROXY protocol on `:80`/`:443`. Do not put Caddy in
   `network_mode: host`.
-- Native apps (`X-HomeAI-Client: native`) still use password until M15-06
-  device pairing. Enrollment, invites, and admin stay M15-02
+- Native apps: Expo Go (`X-HomeAI-Client: native`) still uses password;
+  the host app (`host`) uses device pairing (M15-06). Enrollment, invites,
+  and admin stay M15-02
   (`403 public_origin` on a public origin) — public HTTPS does not invent
   a second policy.

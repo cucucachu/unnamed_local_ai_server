@@ -75,6 +75,7 @@ beforeEach(() => {
   window.confirm = jest.fn().mockReturnValue(true);
   mockFetchRoutes({
     'GET /api/platform/me/wireguard-devices': { body: { devices: [device({ id: 'phone' })] } },
+    'GET /api/platform/me/device-pairs': { body: { devices: [] } },
     'POST /api/platform/me/wireguard-devices': {
       body: created({ id: 'tablet', name: 'Tablet', address: '10.13.13.3' }),
     },
@@ -135,6 +136,7 @@ describe('RemoteAccessScreen', () => {
     mockRole = 'admin';
     mockFetchRoutes({
       'GET /api/platform/me/wireguard-devices': { body: { devices: [device({ id: 'phone' })] } },
+      'GET /api/platform/me/device-pairs': { body: { devices: [] } },
       'GET /api/platform/settings': {
         body: { public_https: false, domain_configured: true },
       },
@@ -162,6 +164,7 @@ describe('RemoteAccessScreen', () => {
     mockRole = 'admin';
     mockFetchRoutes({
       'GET /api/platform/me/wireguard-devices': { body: { devices: [] } },
+      'GET /api/platform/me/device-pairs': { body: { devices: [] } },
       'GET /api/platform/settings': {
         body: { public_https: false, domain_configured: false },
       },
@@ -170,5 +173,45 @@ describe('RemoteAccessScreen', () => {
     const sw = renderer.root.findByProps({ testID: 'settings-public-https-switch' });
     expect(sw.props.disabled).toBe(true);
     expect(textOf(renderer)).toContain('Needs a domain');
+  });
+
+  it('shows a pairing QR distinct from WireGuard and lists host devices', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/me/wireguard-devices': { body: { devices: [] } },
+      'GET /api/platform/me/device-pairs': {
+        body: { devices: [{ id: 'pix', name: 'Pixel', created_at: new Date().toISOString(), last_used_at: null }] },
+      },
+      'POST /api/platform/me/device-pairs/begin': {
+        body: {
+          v: 1,
+          kind: 'homeai-host-pair',
+          token: 'hd_test',
+          challenge: 'abc',
+          user: 'alice',
+          expires_at: new Date().toISOString(),
+        },
+      },
+    });
+    renderer = await render(RemoteAccessScreen);
+    expect(exists(renderer, 'host-pair-row-pix')).toBe(true);
+    expect(exists(renderer, 'remote-created-qr')).toBe(false);
+    await press(renderer, 'host-pair-show');
+    expect(exists(renderer, 'host-pair-qr')).toBe(true);
+    expect(requestsTo(global.fetch as jest.Mock, 'POST', '/me/device-pairs/begin')).toHaveLength(1);
+  });
+
+  it('revokes a host device after confirm', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/me/wireguard-devices': { body: { devices: [] } },
+      'GET /api/platform/me/device-pairs': {
+        body: { devices: [{ id: 'pix', name: 'Pixel', created_at: new Date().toISOString(), last_used_at: null }] },
+      },
+      'DELETE /api/platform/me/device-pairs/pix': { status: 204 },
+    });
+    renderer = await render(RemoteAccessScreen);
+    await press(renderer, 'host-pair-revoke-pix');
+    expect(window.confirm).toHaveBeenCalled();
+    expect(requestsTo(global.fetch as jest.Mock, 'DELETE', '/me/device-pairs/pix')).toHaveLength(1);
+    expect(exists(renderer, 'host-pair-row-pix')).toBe(false);
   });
 });

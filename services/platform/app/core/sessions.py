@@ -49,12 +49,21 @@ async def create_session(
     device_label: str | None = None,
     *,
     device_id: UUID | None = None,
+    host_device_id: UUID | None = None,
 ) -> tuple[str, Row]:
     token = new_token()
     cur = await conn.execute(
-        "INSERT INTO sessions (token_hash, user_id, device_label, device_id, expires_at) "
-        "VALUES (%s, %s, %s, %s, now() + %s) RETURNING id, created_at, expires_at",
-        (hash_token(token), user_id, _device_label(device_label), device_id, SESSION_TTL),
+        "INSERT INTO sessions "
+        "(token_hash, user_id, device_label, device_id, host_device_id, expires_at) "
+        "VALUES (%s, %s, %s, %s, %s, now() + %s) RETURNING id, created_at, expires_at",
+        (
+            hash_token(token),
+            user_id,
+            _device_label(device_label),
+            device_id,
+            host_device_id,
+            SESSION_TTL,
+        ),
     )
     return token, await cur.fetchone()
 

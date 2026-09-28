@@ -9,3 +9,16 @@ jest.mock('react-native-keyboard-controller', () => {
     KeyboardStickyView: View,
   };
 });
+
+jest.mock('expo-local-authentication', () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  authenticateAsync: jest.fn(async () => ({ success: true })),
+}));
+
+jest.mock('homeai-device-key', () => ({
+  generateKey: jest.fn(),
+  sign: jest.fn(),
+  publicKey: jest.fn(),
+  hasKey: jest.fn(),
+  deleteKey: jest.fn(),
+}));

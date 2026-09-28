@@ -17,13 +17,19 @@ import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
 import { copyToClipboard } from '@/lib/clipboard';
 import {
+  beginHostPair,
   createWireGuardDevice,
   getPlatformSettings,
+  listHostDevices,
   listWireGuardDevices,
+  pairingQrValue,
   patchPlatformSettings,
   platformErrorMessage,
+  revokeHostDevice,
   revokeWireGuardDevice,
   type CreatedWireGuardDevice,
+  type HostDevice,
+  type HostPairBegin,
   type WireGuardDevice,
 } from '@/lib/platform';
 import { relativeTime } from '@/lib/relativeTime';
@@ -45,9 +51,22 @@ function confirmRevoke(device: WireGuardDevice): Promise<boolean> {
   });
 }
 
-/** Settings → Remote access: WireGuard device profiles (QR once), revoke.
- * Admins also get the public HTTPS toggle (M15-05) — it does not punch
- * the host firewall. */
+function confirmRevokeHost(device: HostDevice): Promise<boolean> {
+  const message = `Revoke "${device.name}"? That phone can no longer sign in with its pairing key. Sessions from it are signed out.`;
+  if (Platform.OS === 'web') {
+    return Promise.resolve(window.confirm(message));
+  }
+  return new Promise((resolve) => {
+    Alert.alert('Revoke host device', message, [
+      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+      { text: 'Revoke', style: 'destructive', onPress: () => resolve(true) },
+    ]);
+  });
+}
+
+/** Settings → Remote access: WireGuard device profiles (QR once), host-app
+ * pairing QR (LAN), revoke. Admins also get the public HTTPS toggle
+ * (M15-05) — it does not punch the host firewall. */
 export default function RemoteAccessScreen() {
   const { state: authState } = useAuth();
   const user = authState.phase === 'ready' ? authState.user : null;
@@ -56,6 +75,13 @@ export default function RemoteAccessScreen() {
   const { message: toast, showToast } = useToast();
   const load = useCallback(() => listWireGuardDevices(), []);
   const { data: devices, error, reload, setData } = useLoad(load);
+  const loadHost = useCallback(() => listHostDevices(), []);
+  const {
+    data: hostDevices,
+    error: hostError,
+    reload: reloadHost,
+    setData: setHostDevices,
+  } = useLoad(loadHost);
   const loadSettings = useCallback(
     () => (isAdmin ? getPlatformSettings() : Promise.resolve(null)),
     [isAdmin],
@@ -71,6 +97,9 @@ export default function RemoteAccessScreen() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedWireGuardDevice | null>(null);
+  const [pair, setPair] = useState<HostPairBegin | null>(null);
+  const [pairBusy, setPairBusy] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
 
   async function handleCreate() {
     const trimmed = name.trim();
@@ -97,6 +126,25 @@ export default function RemoteAccessScreen() {
     setData((previous) => previous?.filter((d) => d.id !== device.id) ?? null);
   }
 
+  async function handleShowPair() {
+    setPairBusy(true);
+    setPairError(null);
+    try {
+      setPair(await beginHostPair());
+    } catch (caught) {
+      setPairError(platformErrorMessage(caught));
+    } finally {
+      setPairBusy(false);
+    }
+  }
+
+  async function handleRevokeHost(device: HostDevice) {
+    if (!(await confirmRevokeHost(device))) return;
+    const ok = await run(`host-${device.id}`, () => revokeHostDevice(device.id));
+    if (!ok) return;
+    setHostDevices((previous) => previous?.filter((d) => d.id !== device.id) ?? null);
+  }
+
   async function handlePublicHttps(value: boolean) {
     const updated = await run('public-https', () => withStepUp(() => patchPlatformSettings(value)));
     if (!updated) return;
@@ -112,8 +160,9 @@ export default function RemoteAccessScreen() {
       <SettingsFrame title="Remote access" testID="settings-remote-screen">
         <Text style={settingsStyles.muted}>
           Add a phone or laptop while you are on the home Wi-Fi, then scan the QR code in a WireGuard
-          app. Revoking a device removes its VPN access. Host setup (kernel module, router UDP 51820,
-          firewall) is documented in Networking — this screen does not open the internet by itself.
+          app. Pair the Home AI host app with a different QR (not a VPN config). Revoking a device
+          removes its VPN or pairing access. Host setup (kernel module, router UDP 51820, firewall)
+          is documented in Networking — this screen does not open the internet by itself.
         </Text>
 
         {isAdmin ? (
@@ -143,6 +192,70 @@ export default function RemoteAccessScreen() {
             )}
           </>
         ) : null}
+
+        <SectionTitle>Pair a phone</SectionTitle>
+        <Text style={settingsStyles.muted}>
+          Show a pairing QR on the LAN, then open the Home AI host app on the phone (not Expo Go)
+          and paste or scan it. Members can pair their own device. This is not a WireGuard config.
+        </Text>
+        <Card>
+          <View style={settingsStyles.cardBody}>
+            <ErrorText testID="host-pair-error">{pairError}</ErrorText>
+            <ActionButton
+              label="Show pairing QR"
+              variant="primary"
+              onPress={handleShowPair}
+              busy={pairBusy}
+              testID="host-pair-show"
+            />
+          </View>
+        </Card>
+        {pair ? (
+          <Card>
+            <View style={settingsStyles.cardBody}>
+              <Text style={settingsStyles.muted} testID="host-pair-user">
+                Pair {pair.user} · expires in a few minutes · single use
+              </Text>
+              <View style={styles.qr} testID="host-pair-qr">
+                <QRCode value={pairingQrValue(pair)} size={200} quietZone={10} />
+              </View>
+            </View>
+          </Card>
+        ) : null}
+        {hostDevices === null ? (
+          <LoadState error={hostError} onRetry={reloadHost} />
+        ) : hostDevices.length === 0 ? (
+          <Text style={settingsStyles.muted} testID="host-pair-empty">
+            No host apps paired yet.
+          </Text>
+        ) : (
+          <Card>
+            {hostDevices.map((device, index) => (
+              <View
+                key={device.id}
+                style={[settingsStyles.row, index === 0 && settingsStyles.firstRow]}
+                testID={`host-pair-row-${device.id}`}
+              >
+                <View style={settingsStyles.rowMain}>
+                  <Text style={settingsStyles.rowTitle}>{device.name}</Text>
+                  <Text style={settingsStyles.muted}>
+                    added {relativeTime(device.created_at)}
+                    {device.last_used_at ? ` · last used ${relativeTime(device.last_used_at)}` : ''}
+                  </Text>
+                </View>
+                <ActionButton
+                  label="Revoke"
+                  variant="danger"
+                  compact
+                  onPress={() => handleRevokeHost(device)}
+                  busy={busyKey === `host-${device.id}`}
+                  disabled={busyKey !== null && busyKey !== `host-${device.id}`}
+                  testID={`host-pair-revoke-${device.id}`}
+                />
+              </View>
+            ))}
+          </Card>
+        )}
 
         <SectionTitle>New device</SectionTitle>
         <Card>

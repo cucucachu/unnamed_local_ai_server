@@ -4,6 +4,7 @@ from app.api.external import (
     admin,
     appdata,
     apps,
+    device_pairs,
     directory,
     files,
     me,
@@ -17,6 +18,7 @@ from app.api.external import (
 router = APIRouter(prefix="/api/platform")
 router.include_router(me.router)
 router.include_router(wireguard.router)
+router.include_router(device_pairs.router)
 router.include_router(directory.router)
 router.include_router(spaces.router)
 router.include_router(system_apps.router)

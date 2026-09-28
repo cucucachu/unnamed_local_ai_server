@@ -193,15 +193,19 @@ platform's `/internal/*` routes are never routed by Caddy.
   writable root).
 - **Invites**: admins create single-use, 7-day invite tokens
   (`POST /api/platform/admin/invites` → URL/QR). Accepting creates a member
-  and a session. Invite accept, device enrollment (`POST` wireguard-devices),
-  bootstrap setup, and `/api/platform/admin/*` are **LAN/VPN-only**
+  and a session. Invite accept, device enrollment (`POST` wireguard-devices
+  and host-app pair begin/enroll), bootstrap setup, and
+  `/api/platform/admin/*` are **LAN/VPN-only**
   (`403 public_origin`; M15-02). Public HTTPS (M15-05) does not invent a
   second policy.
 - **Step-up**: admin endpoints require `act=user`, `role=admin`, and
   `stepped_up_until > now` (re-enter password, or a passkey in domain mode
-  / when `WEBAUTHN_RP_ID` is set; 5-minute window, this session). Native
-  clients (`X-HomeAI-Client: native`) stay on password (+ optional TOTP)
-  and are exempt from `require_passkeys` until M15-06 device pairing.
+  / when `WEBAUTHN_RP_ID` is set; 5-minute window, this session). Expo Go
+  (`X-HomeAI-Client: native`) stays on password (+ optional TOTP) and is
+  exempt from `require_passkeys` (it cannot do Android Keystore). The host
+  app (`X-HomeAI-Client: host`) signs in with a paired hardware-backed
+  key (M15-06); password remains a LAN fallback. Both native clients get
+  a `session_token` in the body instead of a cookie.
 - Login attempts are rate-limited per username and per client IP (5/60
   on LAN/VPN; 3/300 from a public origin).
 
@@ -1197,6 +1201,46 @@ with that app's context.
 - **Host app**: device pairing via hardware-backed key (Android Keystore /
   Secure Enclave); later, an embedded WireGuard tunnel.
 
+> **As built (M15-06)** — host-app **dev client** (Expo prebuild,
+> `expo-dev-client`, Android first, package `ai.homeai.host`). Expo Go
+> keeps `X-HomeAI-Client: native` and password login (no Keystore). The
+> host app sends `host` and uses pairing login. Algorithm: ECDSA P-256
+> (`secp256r1`), public key = X.509 SPKI DER (unpadded base64url),
+> signature = DER `SHA256withECDSA` over the raw challenge bytes — same
+> encoding in pytest (`cryptography` software keys) and Android Keystore.
+> Challenges live in Postgres (`device_challenges`, migration `0011`,
+> 5-minute TTL, single use), not HITL memory. Enroll tokens are `hd_…`
+> (SHA-256 stored; plaintext in the LAN QR once).
+>
+> Pairing: signed-in human on LAN/VPN `POST /api/platform/me/device-pairs/begin`
+> → Settings shows a **pairing QR** (`host-pair-*`, not a WireGuard
+> config). The new host app generates a Keystore key and
+> `POST /api/auth/device/enroll` `{ token, public_key, name, signature }`.
+> Public origin → `403 public_origin`; agent → `403 agent_not_allowed`.
+> Login: `POST /api/auth/device/begin` `{ device_id }` then
+> `POST /api/auth/device/finish` `{ device_id, signature, totp_code? }`
+> → session (`session_token` like native). Replay, unknown device, or
+> wrong key → `401 invalid_credentials` (don't leak). TOTP still applies
+> after a valid signature; disabled → `403 account_disabled` after
+> success. `GET` list and `DELETE` revoke stay allowed from public
+> (stolen-phone). Revoke drops sessions tagged `sessions.host_device_id`
+> (distinct from WireGuard `sessions.device_id`). Rate-limit via
+> `credential_attempt`. Private keys are never logged.
+>
+> `require_passkeys` / public-HTTPS passkey-only still skip Expo Go and
+> the host app so Expo Go is not locked out. Password remains the LAN
+> fallback. Public HTTPS passkey-only remains **web**. Native-from-public
+> password stays allowed until G15/HOST-CHECKS (no second public-origin
+> policy). iOS is interface + docs only (module stub; no ipa).
+>
+> Build: `scripts/build_host_app_android.sh` runs `expo prebuild` then
+> Gradle in a throwaway Docker Android image (or host `ANDROID_HOME`).
+> Does not `eas login`. EAS `development` profile in
+> `services/frontend/eas.json` is the maintainer path for signed builds.
+> APK is gitignored (`*.apk`). Live check: pytest
+> `test_device_pairs.py`; install the debug APK is Tier B
+> (`docs/HOST-CHECKS.md`).
+
 > **As built (M15-02)** — the origin classifier is in
 > `app/core/origin.py`. Client address is the last `X-Forwarded-For` hop
 > (`client_ip()` in `session_http.py`: Caddy's, else the TCP peer). Earlier
@@ -1212,8 +1256,11 @@ with that app's context.
 > (existing `Forbidden` mapping), checked before other business errors when
 > practical so a public client cannot complete setup or consume an invite:
 > `POST /api/auth/setup`, `POST /api/auth/invite/accept`, all
-> `/api/platform/admin/*`, and `POST /api/platform/me/wireguard-devices`.
-> Login, logout, step-up, status, TOTP, GET/DELETE wireguard-devices, and
+> `/api/platform/admin/*`, `POST /api/platform/me/wireguard-devices`, and
+> host-app pair begin/enroll (`POST /api/platform/me/device-pairs/begin`,
+> `POST /api/auth/device/enroll`).
+> Login, logout, step-up, status, TOTP, GET/DELETE wireguard-devices,
+> GET/DELETE device-pairs, and
 > ordinary space/app routes are not blocked. Unauthenticated setup/accept
 > from public is still `403 public_origin` (not 401). Unauthenticated admin
 > is still `401`; an agent on admin routes is still `403 agent_not_allowed`
@@ -1288,8 +1335,8 @@ with that app's context.
 >
 > `GET /api/auth/status` includes `public_https` and this request's
 > `origin` (no secrets) so the login UI hides the password when the flag
-> is on *and* the origin is public (web only; native stays on password
-> until M15-06).
+> is on *and* the origin is public (web only; Expo Go stays on password;
+> the host app uses device pairing, M15-06).
 >
 > When the flag is on and the request origin is **public** and the client
 > is not native, `POST /api/auth/login` and `POST /api/auth/step-up` with
@@ -1333,24 +1380,31 @@ with that app's context.
 > they are when passkeys are optional. If an admin sets
 > `users.require_passkeys` (needs an RP ID, else `422 domain_required`),
 > browser `POST /api/auth/login` with a password returns `403 passkey_required`
-> without checking the password; native is exempt. TOTP still applies after
+> without checking the password; Expo Go and the host app (`native` /
+> `host`) are exempt. TOTP still applies after
 > a successful passkey assertion. Password step-up remains as a fallback
 > unless passkeys are required. `GET /api/auth/status` includes
 > `webauthn: { rp_id, origin_ok }` (no secrets). Live check:
 > `scripts/e2e/passkey_browser_smoke.sh` (Playwright CDP virtual
 > authenticator through Caddy at `http://localhost`; restores
 > `WEBAUTHN_RP_ID` empty afterwards). Public HTTPS / passkey-only-when-public
-> shipped in M15-05; native device pairing is M15-06.
+> shipped in M15-05; host-app device pairing shipped in M15-06.
 >
-> Settings → Remote access lists devices, creates a named profile (QR +
-> wg-quick text **once**), and revokes with confirm. Routes
-> `GET|POST|DELETE /api/platform/me/wireguard-devices` are *human* only
-> (`403 agent_not_allowed`). Create is LAN/VPN-only (`403 public_origin`,
-> M15-02); GET list and DELETE revoke stay allowed from a public origin
-> so a stolen peer can be revoked off-LAN. Revoke deletes the peer and live config, and revokes sessions
+> Settings → Remote access lists WireGuard devices, creates a named
+> profile (QR + wg-quick text **once**), and revokes with confirm. It also
+> shows **Pair a phone** (M15-06): a LAN pairing QR (`host-pair-*`) plus
+> list/revoke of host-app devices (members pair their own; not
+> admin-only). Routes
+> `GET|POST|DELETE /api/platform/me/wireguard-devices` and
+> `GET|POST begin|DELETE /api/platform/me/device-pairs` are *human* only
+> (`403 agent_not_allowed`). Create / pair-begin is LAN/VPN-only
+> (`403 public_origin`, M15-02); GET list and DELETE revoke stay allowed
+> from a public origin so a stolen peer or phone can be revoked off-LAN.
+> WireGuard revoke deletes the peer and live config, and revokes sessions
 > **tagged** with that `device_id` (`POST /api/auth/login` optional
-> `device_id`). Untagged LAN sessions of the same user stay. Admin does
-> not manage other users' peers in v1.
+> `device_id`). Host-app revoke drops sessions tagged
+> `host_device_id`. Untagged LAN sessions of the same user stay. Admin
+> does not manage other users' peers in v1.
 >
 > This ticket does **not** change the live host firewall or router. Human
 > steps (module, `ufw allow 51820/udp`, router UDP forward, optional
@@ -1459,8 +1513,10 @@ The full dependency graph and ordered backlog are on the
 - **`withTransactionAsync`** is not in SDK v1 (needs a server-side
   transaction lease); revisit if the model reaches for it in the M13
   authoring eval.
-- **Host app builds** (M15): the host has no Android SDK today; building a
-  dev client needs either local Android tooling or EAS Build (maintainer
-  account). Decide at M15.
+- **Host app builds** (M15-06): EAS Build (`eas.json` development
+  profile) is the maintainer path for signed/store builds (needs their
+  Expo account). This host has no Android SDK; `scripts/build_host_app_android.sh`
+  prebuilds then Gradle-builds a debug APK in a throwaway Docker Android
+  image (or a local `ANDROID_HOME`). Do not `eas login` from an agent.
 - **No sudo in agent sessions on the host**: host-level steps (router port
   forward, `ufw` rules for WireGuard) are documented for the human.

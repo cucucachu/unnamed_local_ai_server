@@ -1,4 +1,6 @@
 services/model-runner/models/*.gguf
+*.apk
+*.aab
 .env
 __pycache__/
 .venv/

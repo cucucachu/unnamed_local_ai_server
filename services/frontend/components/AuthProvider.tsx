@@ -6,6 +6,8 @@ import {
   clearSession,
   getAuthStatus,
   login as loginRequest,
+  loginWithPairedDevice,
+  pairThisDevice,
   beginPasskeyLogin,
   finishPasskeyLogin,
   logout as logoutRequest,
@@ -37,6 +39,8 @@ export interface AuthContextValue {
   refresh: () => Promise<void>;
   login: (input: LoginInput) => Promise<void>;
   loginWithPasskey: (input: { username: string; totpCode?: string }) => Promise<void>;
+  loginWithDevice: (totpCode?: string) => Promise<void>;
+  pairDevice: (payloadJson: string) => Promise<void>;
   setup: (input: SetupInput) => Promise<void>;
   acceptInvite: (input: InviteAcceptInput) => Promise<void>;
   logout: () => Promise<void>;
@@ -105,6 +109,18 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
     [signedIn],
   );
 
+  const loginWithDevice = useCallback(
+    async (totpCode?: string) => signedIn(await loginWithPairedDevice(totpCode)),
+    [signedIn],
+  );
+
+  const pairDevice = useCallback(
+    async (payloadJson: string) => {
+      signedIn(await pairThisDevice(payloadJson));
+    },
+    [signedIn],
+  );
+
   const setup = useCallback(
     async (input: SetupInput) => signedIn(await setupRequest(input), true),
     [signedIn],
@@ -127,8 +143,30 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ state, refresh, login, loginWithPasskey, setup, acceptInvite, logout, updateUser }),
-    [state, refresh, login, loginWithPasskey, setup, acceptInvite, logout, updateUser],
+    () => ({
+      state,
+      refresh,
+      login,
+      loginWithPasskey,
+      loginWithDevice,
+      pairDevice,
+      setup,
+      acceptInvite,
+      logout,
+      updateUser,
+    }),
+    [
+      state,
+      refresh,
+      login,
+      loginWithPasskey,
+      loginWithDevice,
+      pairDevice,
+      setup,
+      acceptInvite,
+      logout,
+      updateUser,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
