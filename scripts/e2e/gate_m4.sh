@@ -9,11 +9,12 @@
 # From a running (or freshly brought-up) compose stack, this script:
 #   1. Brings up the full stack, waits for model-runner + agent-server API
 #      health (same polling helpers as `gate_m2.sh`/`gate_m3.sh`).
-#   2. Seeds `${FILES_DIR}/gate-m4/photos/` with 5 dummy files
+#   2. Seeds `/personal/gate-m4/photos/` (the signed-in user's personal
+#      space, through the platform files API) with 5 dummy files
 #      `img_001.txt` .. `img_005.txt` (content = their index).
 #   3. Over a single WS turn (`scripts/ws_smoke.py`, same client every gate
 #      script shells out to), asks the agent to write a Python script in
-#      `gate-m4/` that renames each `img_XXX.txt` to `renamed_XXX.txt`, run
+#      `/personal/gate-m4/` that renames each `img_XXX.txt` to `renamed_XXX.txt`, run
 #      it with `execute_code`, and confirm the result - one retry on
 #      failure (LLM nondeterminism allowance, 2 strikes total - same policy
 #      as every other `scripts/e2e/gate_*.sh`/`exec_crossview_smoke.sh`
@@ -21,7 +22,7 @@
 #      to the pristine `img_001..005.txt` state first, since the prompt's
 #      own premise ("there are files named img_XXX.txt") would otherwise be
 #      false against a partially-renamed leftover from attempt 1.
-#   4. Asserts on the HOST filesystem (within ~180s of sending the prompt,
+#   4. Asserts on the user's files (platform files API; within ~180s of sending the prompt,
 #      per attempt): >=1 `gate-m4/*.py` file (top-level, not recursive - the
 #      prompt says "in gate-m4/"), all five `renamed_001..005.txt` exist
 #      somewhere under `gate-m4/` (recursive - the script may reasonably
@@ -41,8 +42,8 @@
 #   7. Regression: runs `scripts/e2e/gate_m2.sh` and `scripts/e2e/gate_m3.sh`
 #      (both already implemented, self-contained) as subprocesses and
 #      asserts BOTH exit 0.
-#   8. Cleans up (EXIT trap): removes the seeded/created `gate-m4/`
-#      directory from the host files dir, deletes the thread via REST - so
+#   8. Cleans up (EXIT trap): removes the seeded/created `/personal/gate-m4/`
+#      directory, deletes the thread via REST and its exec container - so
 #      re-running this script is safe (Tier A requires two green runs in a
 #      row).
 #
@@ -62,13 +63,10 @@
 # other `scripts/e2e/*.sh` script) - uses `wget`/Python (`urllib.request`)
 # helpers instead, same as `gate_m2.sh`/`gate_m3.sh`/`exec_crossview_smoke.sh`.
 #
-# M11-02: steps 2-5 are SKIPPED until M11-03. The file tools now work on the
-# user's platform spaces (`/personal`, `/spaces/<slug>`) while exec still
-# mounts the old shared `FILES_DIR` at `/files`, so a script the agent
-# writes with its file tools can't be run by `execute_code` on the same
-# files - the premise of this gate. The steps are kept as they were, to
-# re-enable (with virtual paths) once exec runs as the user; steps 1, 6 and 7
-# still run.
+# M11-03: the file tools see the user's spaces as `/personal/...` and
+# `/spaces/<slug>/...`; `execute_code` runs as the user with the same spaces
+# mounted at `/files/personal/...` and `/files/spaces/<slug>/...`, so the
+# script the agent writes with one runs on the same files with the other.
 #
 # Usage:
 #   scripts/e2e/gate_m4.sh
@@ -82,12 +80,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 # shellcheck source=lib/auth.sh
 source "$SCRIPT_DIR/lib/auth.sh"
+# shellcheck source=lib/files.sh
+source "$SCRIPT_DIR/lib/files.sh"
 
 API_BASE="http://localhost/api"
 
 # Created once signed in (`create_thread`).
 THREAD_ID=""
-PROMPT="In gate-m4/photos there are files named img_XXX.txt. Write a Python script in gate-m4/ that renames each to renamed_XXX.txt, run it with execute_code, and confirm the result."
+PROMPT="In /personal/gate-m4/photos there are files named img_XXX.txt. Write a Python script in /personal/gate-m4/ that renames each to renamed_XXX.txt, run it with execute_code, and confirm the result."
 
 MODEL_RUNNER_HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
@@ -96,9 +96,9 @@ API_HEALTH_TIMEOUT_S=120
 # deliberately does NOT spell out exact tool paths (unlike
 # `exec_crossview_smoke.sh`'s own prompts, which hand the model the exact
 # virtual path to avoid needing this reasoning at all) - so the model has
-# to work out, on its own, that `write_file`'s virtual root is bare `/`
-# (no `/files/` prefix) while `execute_code`'s shell *does* need the
-# `/files/` prefix for the identical directory. Real transcripts on this host show the
+# to work out, on its own, that `write_file` takes `/personal/...` while
+# `execute_code`'s shell needs `/files/personal/...` for the identical
+# directory. Real transcripts on this host show the
 # model reliably self-corrects via `ls`/`find` exploration, but that can
 # take 8-12+ sequential tool-call round trips (each its own LLM generation
 # pass on this hardware) before it converges - a 160-170s turn timeout
@@ -106,7 +106,7 @@ API_HEALTH_TIMEOUT_S=120
 # lost (each attempt was still actively converging, just out of time).
 # 280s is what real runs actually needed to reach a natural `turn_end`.
 WS_TURN_TIMEOUT_S=280
-# Per-attempt budget for the host-filesystem assertion to become true,
+# Per-attempt budget for the file-state assertion to become true,
 # counted from when the prompt is sent (i.e. including however long the WS
 # turn itself took). Deliberately above the ticket's own "≤180s" framing -
 # that figure was this host's aspirational estimate before real
@@ -120,12 +120,8 @@ WS_TURN_TIMEOUT_S=280
 HOST_ASSERT_TOTAL_BUDGET_S=300
 MIN_HOST_POLL_TIMEOUT_S=20
 
-FILES_DIR="$(sed -n 's/^FILES_DIR=\(.*\)$/\1/p' .env | head -n1 | xargs)"
-if [ -z "$FILES_DIR" ]; then
-  echo "[gate-m4] ERROR: FILES_DIR not set in .env" >&2
-  exit 1
-fi
-GATE_M4_DIR="${FILES_DIR}/gate-m4"
+# Relative to /personal (`lib/files.sh`).
+GATE_M4_DIR="gate-m4"
 PHOTOS_DIR="${GATE_M4_DIR}/photos"
 # Empty until we successfully PUT hitl_enabled=false after the API is up.
 SAVED_HITL=""
@@ -240,34 +236,69 @@ run_ws_turn() {
 # ---- files seeding -------------------------------------------------------
 
 seed_files() {
-  rm -rf "$GATE_M4_DIR"
-  mkdir -p "$PHOTOS_DIR"
+  e2e_personal_rm "$GATE_M4_DIR"
   local i padded
   for i in 1 2 3 4 5; do
     padded="$(printf '%03d' "$i")"
-    echo "$i" >"${PHOTOS_DIR}/img_${padded}.txt"
+    e2e_personal_put "${PHOTOS_DIR}/img_${padded}.txt" "$i"$'\n'
   done
 }
 
-# ---- host-filesystem assertion ----------------------------------------------
+# Every path under /personal/<dir>, relative to it, one per line; dirs end in
+# `/`. Non-zero if <dir> doesn't exist.
+personal_tree() {
+  python3 - "${E2E_BASE:-http://localhost}" "$1" <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+base, root = sys.argv[1], "/personal/" + sys.argv[2].strip("/")
+
+
+def entries(vpath):
+    url = f"{base}/api/platform/files?" + urllib.parse.urlencode({"path": vpath})
+    req = urllib.request.Request(url, headers={"Cookie": os.environ["E2E_AUTH_COOKIE"]})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())["entries"]
+
+
+def walk(vpath):
+    for entry in entries(vpath):
+        rel = entry["path"][len(root) + 1 :]
+        if entry["type"] == "dir":
+            print(rel + "/")
+            walk(entry["path"])
+        else:
+            print(rel)
+
+
+try:
+    walk(root)
+except urllib.error.HTTPError:
+    sys.exit(1)
+PY
+}
+
+# ---- file-state assertion (platform files API) ------------------------------
 
 check_host_state() {
+  local tree
+  tree="$(personal_tree "$GATE_M4_DIR" 2>/dev/null)" || return 1
   # >=1 top-level *.py directly in gate-m4/ (not recursive - the prompt says
-  # "Write a Python script in gate-m4/").
-  if [ -z "$(find "$GATE_M4_DIR" -maxdepth 1 -type f -name '*.py' 2>/dev/null)" ]; then
-    return 1
-  fi
+  # "Write a Python script in /personal/gate-m4/").
+  grep -qE '^[^/]+\.py$' <<<"$tree" || return 1
   # all five renamed_001..005.txt exist SOMEWHERE under gate-m4/ (recursive
   # - the script may reasonably rename in place inside photos/).
   local i padded
   for i in 1 2 3 4 5; do
     padded="$(printf '%03d' "$i")"
-    if [ -z "$(find "$GATE_M4_DIR" -type f -name "renamed_${padded}.txt" 2>/dev/null)" ]; then
-      return 1
-    fi
+    grep -qE "(^|/)renamed_${padded}\.txt$" <<<"$tree" || return 1
   done
   # no img_*.txt remain anywhere under gate-m4/.
-  if [ -n "$(find "$GATE_M4_DIR" -type f -name 'img_*.txt' 2>/dev/null)" ]; then
+  if grep -qE '(^|/)img_[^/]*\.txt$' <<<"$tree"; then
     return 1
   fi
   return 0
@@ -313,9 +344,9 @@ step_stack_up_and_healthy() {
 }
 
 step_seed_files() {
-  log "Step 2/6: seeding ${PHOTOS_DIR} with img_001..005.txt..."
+  log "Step 2/6: seeding /personal/${PHOTOS_DIR} with img_001..005.txt..."
   seed_files
-  log "OK: seeded 5 dummy files under ${PHOTOS_DIR}"
+  log "OK: seeded 5 dummy files under /personal/${PHOTOS_DIR}"
 }
 
 step_agent_writes_and_runs_script() {
@@ -332,12 +363,12 @@ step_agent_writes_and_runs_script() {
     remaining="$MIN_HOST_POLL_TIMEOUT_S"
   fi
   if poll_host_state_after_turn "$WS_LOG_FILE" "$remaining"; then
-    log "OK: host filesystem state correct on attempt 1"
+    log "OK: file state correct on attempt 1"
     return 0
   fi
 
-  log "WARN: host filesystem state not correct within budget on attempt 1 - retrying once (LLM nondeterminism allowance, same policy as gate_m2.sh/gate_m3.sh)"
-  log "Resetting ${GATE_M4_DIR} back to the pristine seeded state before retrying..."
+  log "WARN: file state not correct within budget on attempt 1 - retrying once (LLM nondeterminism allowance, same policy as gate_m2.sh/gate_m3.sh)"
+  log "Resetting /personal/${GATE_M4_DIR} back to the pristine seeded state before retrying..."
   seed_files
 
   start="$(date +%s)"
@@ -349,11 +380,11 @@ step_agent_writes_and_runs_script() {
     remaining="$MIN_HOST_POLL_TIMEOUT_S"
   fi
   if poll_host_state_after_turn "$WS_LOG_FILE" "$remaining"; then
-    log "OK: host filesystem state correct on attempt 2"
+    log "OK: file state correct on attempt 2"
     return 0
   fi
 
-  log "ERROR: host filesystem state still incorrect after 2 attempts - gate FAILS"
+  log "ERROR: file state still incorrect after 2 attempts - gate FAILS"
   log "--- attempt 1 transcript ---"
   cat /tmp/gate-m4-turn-attempt-1.log 2>/dev/null || true
   log "--- attempt 2 transcript ---"
@@ -416,22 +447,14 @@ cleanup() {
   if [ -n "$SAVED_HITL" ]; then
     bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
-  rm -rf "$GATE_M4_DIR" 2>/dev/null || true
-
-  # Defensive: a failed attempt can leave a STRAY "${FILES_DIR}/files/"
-  # directory behind - the model occasionally calls `write_file` with a
-  # redundant "/files/"-prefixed path (virtual_mode's file-tool root is
-  # bare `/`, not `/files` - that prefix is execute_code-only - so using it
-  # in a write_file call creates a real nested "files" subdirectory instead
-  # of writing where intended - see `step_agent_writes_and_runs_script`'s
-  # header comment). Only removed when its content matches that EXACT known
-  # artifact shape (a lone "gate-m4" entry) - never unconditionally, so a
-  # real unrelated user directory literally named "files" is never touched.
-  local stray_dir="${FILES_DIR}/files" stray_entries
-  if [ -d "$stray_dir" ]; then
-    stray_entries="$(find "$stray_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)"
-    if [ "$stray_entries" = "gate-m4" ]; then
-      rm -rf "$stray_dir" 2>/dev/null || true
+  if [ -n "${E2E_AUTH_COOKIE:-}" ]; then
+    e2e_personal_rm "$GATE_M4_DIR"
+    # A failed attempt can leave a stray `/personal/files/gate-m4` behind: the
+    # model occasionally hands `write_file` the exec shell's `/files/...`
+    # spelling. Only removed when it's exactly that known artifact (a lone
+    # "gate-m4" entry), never a real user folder named "files".
+    if [ "$(e2e_personal_ls files 2>/dev/null)" = "gate-m4" ]; then
+      e2e_personal_rm files
     fi
   fi
 
@@ -441,17 +464,10 @@ cleanup() {
   fi
   rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
 
-  # M6-03: code-exec-manager publishes no host port (M4-03) - reached here
-  # by execing python3 directly inside its own container against its own
-  # localhost:8090, same workaround as `exec_crossview_smoke.sh`'s own
-  # M6-03 cleanup addition.
-  docker exec homeai-code-exec-manager-1 python3 -c "
-import sys, urllib.request
-try:
-    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
-except Exception:
-    pass
-" "$THREAD_ID" >/dev/null 2>&1 || true
+  # M6-03: also remove the exec container this script's `execute_code` call
+  # creates (session_id == THREAD_ID). The manager's DELETE needs the run's
+  # delegation (M11-03), so it goes through `docker rm` instead.
+  docker rm -f "homeai-exec-${THREAD_ID}" >/dev/null 2>&1 || true
   e2e_auth_end
 }
 trap cleanup EXIT
@@ -473,8 +489,15 @@ main() {
   log "=== GATE M4 (G4): agent writes+runs a script on real files; isolation green ==="
   step_stack_up_and_healthy
   e2e_auth_begin gate-m4
-  log "Steps 2-5/8: SKIPPED until M11-03 - execute_code's /files is FILES_DIR, the file" \
-    "tools see the user's spaces; a script written with one can't be run on the other's files"
+  create_thread
+  # M8-03 made HITL on by default; this gate's write_file/execute_code
+  # prompts are not wired to send approval_response, so turn HITL off.
+  log "Turning hitl_enabled off so mutating tools are not interrupted..."
+  SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
+  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
+  step_seed_files
+  step_agent_writes_and_runs_script
+  step_ws_frame_categories
   step_verify_isolation
   step_regression_gate_m2_m3
   echo "GATE M4: PASS"

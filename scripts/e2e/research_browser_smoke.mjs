@@ -11,8 +11,8 @@
 //   node research_browser_smoke.mjs positive   -> the "research a question"
 //     happy path: one prompt, one turn, web_search + web_fetch (both
 //     strictly required) plus a file landing in the user's personal space
-//     (via the file tools — see `attemptPositiveScenario`'s own comment).
-//     One retry allowed (LLM
+//     (via `write_file` normally, but `execute_code` is also accepted —
+//     see `attemptPositiveScenario`'s own comment). One retry allowed (LLM
 //     nondeterminism allowance, same 2-attempts-total policy as
 //     gate_m2.sh/gate_m3.sh/gate_m4.sh/exec_crossview_smoke.sh) — real runs
 //     show attempt 1 can also fail a third way: the model narrates having
@@ -195,14 +195,19 @@ async function classifyNewToolCards(page, priorCount) {
   return { foundWriteFile, foundWebSearch, foundWebFetch, details };
 }
 
-/** Best-effort REST DELETE of a thread (same pattern as
- * `chat_browser_smoke.mjs`'s `cleanupThreadBestEffort`, trimmed to just the
- * thread — neither scenario here ever calls `execute_code`, so there's no
- * code-exec-manager session to also clean up). */
+/** Best-effort REST DELETE of a thread, plus the exec container the
+ * positive scenario leaves behind if the model wrote its file with
+ * `execute_code` (same pattern as `chat_browser_smoke.mjs`'s
+ * `cleanupThreadBestEffort`). */
 function deleteThreadBestEffort(threadId) {
   if (!threadId) return;
   try {
     apiRequest('DELETE', `${API_BASE}/threads/${threadId}`);
+  } catch {
+    // best-effort
+  }
+  try {
+    execFileSync('docker', ['rm', '-f', `homeai-exec-${threadId}`], { stdio: 'ignore' });
   } catch {
     // best-effort
   }
@@ -283,11 +288,13 @@ async function attemptPositiveScenario(browser, attemptNumber) {
     }
     console.log('[positive] OK — web_fetch tool card found');
 
-    // NOT a hard requirement (unlike web_search/web_fetch above): the file
-    // check below is the authoritative proof, whichever file tool wrote it
-    // (`write_file` or `edit_file`). Until M11-03 `execute_code` can't reach
-    // `/personal`, so a shell-redirect write fails the check below.
-    console.log(`[positive] ${foundWriteFile ? 'OK — write_file tool card found' : 'INFO — no write_file tool card found (the file check below is the authoritative assertion)'}`);
+    // NOT a hard requirement (unlike web_search/web_fetch above): real runs
+    // show the model sometimes satisfies "save a summary to ..." via
+    // `execute_code` (a shell `mkdir -p && echo >` one-liner into
+    // `/files/personal/...`) instead of calling `write_file` — same file in
+    // the user's personal space, just a different tool choice. The file
+    // check below is the authoritative, tool-agnostic proof.
+    console.log(`[positive] ${foundWriteFile ? 'OK — write_file tool card found' : 'INFO — no write_file tool card found (model likely used execute_code instead; the file check below is the authoritative assertion)'}`);
 
     // `write_file`'s own tool_end happens before `turn_end`, so the file
     // should already exist — a short poll covers any lag.

@@ -324,6 +324,9 @@ services:
       PLATFORM_MIGRATE_LEGACY_FILES: ${PLATFORM_MIGRATE_LEGACY_FILES:-1}
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
+      # The host-side path of the /data/spaces mount above: exec grants name
+      # bind sources as the Docker daemon sees them.
+      SPACES_HOST_DIR: ${SPACES_DIR}
     healthcheck:
       # python:3.12-slim has no curl.
       test:
@@ -355,9 +358,12 @@ services:
     networks: [homeai-internal]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # No user-data mounts of its own (M11-03, docs/PLATFORM.md §6): every
+    # session call carries the run's delegation, verified against the
+    # platform's JWKS; the platform's /internal/exec-grants (this service
+    # token) answers which uid, space gids and space dirs the exec
+    # container gets.
     environment:
-      FILES_DIR: ${FILES_DIR}
-      HOMEAI_UID: ${HOMEAI_UID}
-      HOMEAI_GID: ${HOMEAI_GID}
+      PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
       EXEC_IDLE_MINUTES: ${EXEC_IDLE_MINUTES}
       EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}

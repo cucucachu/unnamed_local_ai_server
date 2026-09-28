@@ -327,10 +327,9 @@ async function waitForAnyText(container, patterns, timeoutMs) {
  * chat" button created, plus the code-exec-manager session `EXEC_MESSAGE`
  * creates for it (session_id == threadId, already exec-manager-safe since
  * a UUID only ever contains `[a-z0-9-]`). Same "curl not installed;
- * urllib/`docker exec` are the house workarounds" conventions as every
- * other `scripts/e2e/*.sh` script — code-exec-manager publishes no host
- * port (M4-03), so its session is reached by execing python3 directly
- * inside its own container against its own localhost:8090. */
+ * urllib is the house workaround" conventions as every other
+ * `scripts/e2e/*.sh` script. The manager's own DELETE needs the run's
+ * delegation (M11-03), so the exec container is removed with `docker rm`. */
 /** GET/PUT `/api/settings` via python3 urllib (this host has no `curl`). */
 function pythonSslPreamble() {
   // urllib on this host has no curl; when the smoke is pointed at
@@ -447,17 +446,8 @@ except Exception:
     // best-effort
   }
 
-  const deleteSessionScript = `
-import sys
-import urllib.request
-
-try:
-    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
-except Exception:
-    pass
-`;
   try {
-    execFileSync('docker', ['exec', 'homeai-code-exec-manager-1', 'python3', '-c', deleteSessionScript, threadId]);
+    execFileSync('docker', ['rm', '-f', `homeai-exec-${threadId}`], { stdio: 'ignore' });
   } catch {
     // best-effort — e.g. no execute_code call ever happened this run, so no session ever existed
   }

@@ -442,14 +442,10 @@ cleanup() {
     rest_request DELETE "${API_BASE}/threads/${THREAD_ID}" >/dev/null 2>&1 || true
     # Best-effort: the LLM may have used execute_code (not just file tools)
     # to satisfy the write prompt, which would have created a code-exec-manager
-    # session/container keyed by THREAD_ID - see M6-03 note above.
-    docker exec homeai-code-exec-manager-1 python3 -c "
-import sys, urllib.request
-try:
-    urllib.request.urlopen(urllib.request.Request(f'http://localhost:8090/sessions/{sys.argv[1]}', method='DELETE'), timeout=15)
-except Exception:
-    pass
-" "$THREAD_ID" >/dev/null 2>&1 || true
+    # session/container keyed by THREAD_ID - see M6-03 note above. The
+    # manager's DELETE needs the run's delegation (M11-03), so it's removed
+    # with `docker rm` instead.
+    docker rm -f "homeai-exec-${THREAD_ID}" >/dev/null 2>&1 || true
   fi
   e2e_auth_end
 }
