@@ -25,9 +25,10 @@
 #      inert)
 #   -> platform_app_data_smoke.sh (M12-03: per-instance SQLite migrations,
 #      RPC role matrix, db_changed event, read-only copy for exec)
-#   -> app_runner_browser_smoke.sh (M12-06: Apps tab -> sandboxed runner,
-#      a written row survives a reload, rebuild hot-reloads, runtime error
-#      overlay + Reload, a viewer can't write)
+#   -> app_runner_browser_smoke.sh (M12-06 / M13-04: Apps tab -> sandboxed runner,
+#      a written row survives a reload, Ask the agent panel with app context +
+#      live db_changed, rebuild hot-reloads, runtime error overlay + Reload,
+#      a viewer can't write)
 #   -> grocery_app_smoke.sh (M12-07: the reference Grocery list app in a
 #      personal and a shared space: add/check/detail/clear, a second
 #      member sees it live, a viewer can't write)
@@ -242,6 +243,7 @@ main() {
   run_step "app_history_smoke.sh"    bash "${SCRIPT_DIR}/app_history_smoke.sh"
   run_step "platform_app_data_smoke.sh" bash "${SCRIPT_DIR}/platform_app_data_smoke.sh"
   run_step "app_runner_browser_smoke.sh" bash "${SCRIPT_DIR}/app_runner_browser_smoke.sh"
+  # M13-04: the same smoke also opens Ask the agent (context + db_changed).
   run_step "grocery_app_smoke.sh"    bash "${SCRIPT_DIR}/grocery_app_smoke.sh"
   run_step "files_browser_smoke.sh"  bash "${SCRIPT_DIR}/files_browser_smoke.sh"
   run_step "media_browser_smoke.sh"  bash "${SCRIPT_DIR}/media_browser_smoke.sh"
