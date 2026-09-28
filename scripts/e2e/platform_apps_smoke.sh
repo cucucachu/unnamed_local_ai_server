@@ -13,7 +13,7 @@
 #      it is 422 `invalid_app` with an AGENT.md diagnostic. After uploading
 #      AGENT.md it registers (201), and `POST /apps/{id}/validate` is valid.
 #   4. The owner installs it in their personal space: the instance dir
-#      `apps/<instance_id>/` exists on disk as `0:<space gid>` 2770.
+#      `apps/<instance_id>/` exists on disk as `0:<space gid>` 2750.
 #   5. The outsider can't see the app (404), list the owner's instances (404),
 #      or install it into the owner's space (404).
 #   6. The files API refuses to delete or rename `/personal/Apps` (403 reserved).
@@ -177,7 +177,7 @@ r="$(post_json owner "/spaces/$S_ID/instances" "{\"app_id\":\"$APP_ID\",\"tracks
 expect 201 "$r" "install hello"
 IID="$(body_of "$r" | py 'print(d["id"])')"
 read -r owner mode < <(disk stat -c '%u:%g %a' "/data/spaces/$S_ID/apps/$IID")
-[[ "$owner $mode" == "0:$S_GID 2770" ]] || fail "instance dir is $owner $mode, want 0:$S_GID 2770"
+[[ "$owner $mode" == "0:$S_GID 2750" ]] || fail "instance dir is $owner $mode, want 0:$S_GID 2750"
 echo "ok   apps/$IID is $owner $mode"
 r="$(get owner "/spaces/$S_ID/instances")"
 expect 200 "$r" "list instances"
