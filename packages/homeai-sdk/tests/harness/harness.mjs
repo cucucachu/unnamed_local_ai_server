@@ -19,7 +19,7 @@ const HOST_SCRIPT = `
 (async () => {
   const H = window.HomeaiHost;
   const cfg = JSON.parse(document.getElementById('cfg').textContent);
-  const h = (window.harness = { events: [], frames: [], killed: false, error: null, H });
+  const h = (window.harness = { events: [], frames: [], killed: false, error: null, asked: null, H });
   try {
     const bundle = await H.fetchBundle(cfg.instanceId);
     const runtime = await H.fetchRuntime(bundle.sdk);
@@ -30,6 +30,7 @@ const HOST_SCRIPT = `
       forward: H.platformForward(cfg.instanceId),
       readOnly: cfg.readOnly,
       onEvent: (event, data) => h.events.push({ event, data }),
+      onAskAgent: (prompt) => (h.asked = prompt),
       onKilled: () => (h.killed = true),
     });
     h.sandbox = sb;
@@ -234,16 +235,26 @@ export async function runChecks(h, platform, { SANDBOX_CSP, fixtureIndex }) {
   rows = await platform.rows('SELECT count(*) AS n FROM items WHERE done = 1');
   assert(rows[0]?.n === 2, 'runAction ran actions/markAllDone.sql on the instance', rows);
 
+  // askAgent is host-local; a write as if the agent ran app_sql updates the list.
+  await visible('ask-agent').click();
+  await page.waitForFunction(() => window.harness.asked === 'Add Milk via app_sql', null, { timeout: 10000 });
+  assert(true, 'askAgent reached the host (agent.ask) without a platform RPC');
+  await platform.externalWrite('INSERT INTO items (name) VALUES (?)', ['From agent']);
+  await waitText('item-3', 'From agent');
+  assert(true, 'a write after askAgent shows up live (db_changed)');
+
   // The host passes nothing but the allowlist to the fixed instance.
   const answers = await frame.evaluate(rawBridge, [
     { id: 9001, method: 'transaction', params: { statements: [{ sql: 'DELETE FROM items' }] } },
     { id: 9002, method: 'db.exec', params: { sql: 'DROP TABLE items' } },
     { id: 9003, method: 'db.getAll', params: { sql: 'SELECT count(*) AS n FROM items', params: [], instance_id: platform.otherInstanceId, instanceId: platform.otherInstanceId } },
     { id: 9004, method: 'db.run', params: { sql: 'CREATE TABLE x (a)' } },
+    { id: 9005, method: 'agent.ask', params: { prompt: 'from raw', instance_id: platform.otherInstanceId } },
   ]);
   assert(answers[9001]?.error?.code === 'method_not_allowed' && answers[9002]?.error?.code === 'method_not_allowed', 'methods outside the allowlist are refused by the host', answers);
-  assert(answers[9003]?.ok && answers[9003].result[0].n === 2, 'an instance id in params is ignored: the host forwards to its fixed instance', answers[9003]);
+  assert(answers[9003]?.ok && answers[9003].result[0].n === 3, 'an instance id in params is ignored: the host forwards to its fixed instance', answers[9003]);
   assert(answers[9004]?.error?.code === 'sql_not_allowed', 'DDL through db.run is refused by the platform', answers[9004]);
+  assert(answers[9005]?.ok && (await page.evaluate(() => window.harness.asked)) === 'from raw', 'raw agent.ask is host-local', answers[9005]);
 
   // Escapes: nothing but the bridge.
   const target = new URL(PROBE_PATH, page.url()).href;

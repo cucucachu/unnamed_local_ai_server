@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
-import { runAction, useDatabase, useQuery, useSpace, type SDKError } from '@homeai/sdk';
+import { askAgent, runAction, useDatabase, useQuery, useSpace, type SDKError } from '@homeai/sdk';
 
 type Item = { id: number; name: string; done: number };
 
@@ -40,6 +40,9 @@ export default function Index() {
       </Pressable>
       <Pressable testID="mark-all" onPress={markAll}>
         <Text>Mark all done</Text>
+      </Pressable>
+      <Pressable testID="ask-agent" onPress={() => void askAgent('Add Milk via app_sql').catch((e) => setStatus(`refused: ${(e as SDKError).code}`))}>
+        <Text>Ask the agent</Text>
       </Pressable>
       <Text testID="status">{status}</Text>
       {error && <Text testID="error">{error.message}</Text>}

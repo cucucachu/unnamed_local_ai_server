@@ -40,6 +40,7 @@ export const modules: Record<string, unknown> = {
     useSQLiteContext: SDK.useSQLiteContext,
     useQuery: SDK.useQuery,
     runAction: SDK.runAction,
+    askAgent: SDK.askAgent,
     useSpace: SDK.useSpace,
   },
 };

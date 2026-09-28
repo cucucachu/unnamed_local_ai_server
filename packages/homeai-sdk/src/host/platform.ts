@@ -5,7 +5,7 @@
 // cookie, or a bearer on native); the sandbox never sees them.
 import type { Forward } from './bridge-host';
 import type { BridgeHost } from './bridge-host';
-import type { Method, Methods } from '../protocol';
+import type { PlatformMethod, Methods } from '../protocol';
 
 export type FetchLike = (
   url: string,
@@ -22,7 +22,7 @@ export type PlatformOptions = {
 
 export type Bundle = { app_id: string; version: string; sdk: string; bundle_id: string; code: string };
 
-const OPS: Record<Method, string> = { 'db.getAll': 'getAll', 'db.getFirst': 'getFirst', 'db.run': 'run', action: 'action' };
+const OPS: Record<PlatformMethod, string> = { 'db.getAll': 'getAll', 'db.getFirst': 'getFirst', 'db.run': 'run', action: 'action' };
 
 function withError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
@@ -59,7 +59,7 @@ const instancePath = (instanceId: string) => `/api/platform/apps/instances/${enc
 /** A `forward` for createBridgeHost bound to one instance. */
 export function platformForward(instanceId: string, opts: PlatformOptions = {}): Forward {
   const url = `${instancePath(instanceId)}/rpc`;
-  return (async (method: Method, params: Methods[Method]['params']) => {
+  return (async (method: PlatformMethod, params: Methods[PlatformMethod]['params']) => {
     const op = OPS[method];
     const doc = await call(opts, url, { op, ...params });
     if (method === 'db.getAll') return doc.rows;

@@ -9,7 +9,7 @@ const H = await importHost();
 const req = (id, method, params) => JSON.stringify({ homeai: 1, kind: 'req', id, method, params });
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-function harness({ readOnly = false, forward } = {}) {
+function harness({ readOnly = false, forward, onAskAgent } = {}) {
   const sent = [];
   const forwarded = [];
   const events = [];
@@ -23,6 +23,7 @@ function harness({ readOnly = false, forward } = {}) {
       }),
     readOnly,
     onEvent: (event, data) => events.push({ event, data }),
+    onAskAgent,
   });
   return { host, sent, forwarded, events, res: (id) => sent.find((m) => m.kind === 'res' && m.id === id) };
 }
@@ -57,6 +58,25 @@ test('other methods, bad params and viewer writes are refused without forwarding
     [1, 2, 3, 4, 5, 6, 7, 8].map((id) => h.res(id).error.code),
     ['method_not_allowed', 'read_only', 'read_only', 'bad_request', 'bad_request', 'bad_request', 'bad_request', 'method_not_allowed'],
   );
+});
+
+test('agent.ask is handled by the host and never forwarded, including for viewers', async () => {
+  const asked = [];
+  const h = harness({
+    readOnly: true,
+    onAskAgent: (prompt) => asked.push(prompt),
+  });
+  h.host.receive(req(1, 'agent.ask', { prompt: 'Add milk', instance_id: 'other', url: 'http://x' }));
+  h.host.receive(req(2, 'agent.ask', { prompt: 1 }));
+  h.host.receive(req(3, 'agent.ask', null));
+  h.host.receive(req(4, 'agent.ask', { prompt: 'x'.repeat(32 * 1024 + 1) }));
+  await tick();
+  assert.deepEqual(asked, ['Add milk']);
+  assert.deepEqual(h.forwarded, []);
+  assert.deepEqual(h.res(1), { homeai: 1, kind: 'res', id: 1, ok: true, result: {} });
+  assert.equal(h.res(2).error.code, 'bad_request');
+  assert.equal(h.res(3).error.code, 'bad_request');
+  assert.equal(h.res(4).error.code, 'bad_request');
 });
 
 test('forward errors keep their code; the in-flight cap answers busy', async () => {

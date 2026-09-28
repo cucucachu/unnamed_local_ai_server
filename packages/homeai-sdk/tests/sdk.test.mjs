@@ -38,6 +38,7 @@ async function boot({ config = { initialPath: '/', space: SPACE }, readOnly = fa
     unobserve() {}
     disconnect() {}
   };
+  const asked = [];
   const events = [];
   const wire = [];
   const toSandbox = [];
@@ -47,6 +48,7 @@ async function boot({ config = { initialPath: '/', space: SPACE }, readOnly = fa
     forward: host.platformForward(INSTANCE_ID, { fetch: platform.fetch(async () => bundleCode) }),
     readOnly,
     onEvent: (event, data) => events.push({ event, data }),
+    onAskAgent: (prompt) => asked.push(prompt),
   });
   win.ReactNativeWebView = {
     postMessage(s) {
@@ -74,6 +76,7 @@ async function boot({ config = { initialPath: '/', space: SPACE }, readOnly = fa
     bridge,
     platform,
     events,
+    asked,
     wire,
     toSandbox,
     $,
@@ -144,6 +147,18 @@ test('runAction runs the named action and refreshes queries', async () => {
   s.close();
 });
 
+test('askAgent is a host-local RPC; a write elsewhere still updates the UI', async () => {
+  const s = await boot();
+  s.click('ask-agent');
+  await until('askAgent', () => s.asked[0] === 'Add Milk via app_sql');
+  assert.equal(s.requests('agent.ask').length, 1);
+  assert.deepEqual(s.requests('agent.ask')[0].params, { prompt: 'Add Milk via app_sql' });
+  assert.equal(s.platform.calls.length, s.requests('db.getAll').length);
+  s.platform.externalWrite("INSERT INTO items (name) VALUES ('Milk')");
+  await until('agent write shown', () => s.text('item-1') === 'Milk' && s.text('count') === '1 items');
+  s.close();
+});
+
 test('Link, params, getFirstAsync (variadic and named binds), back, nav.changed', async () => {
   const s = await boot();
   s.platform.externalWrite("INSERT INTO items (name) VALUES ('Eggs')");
@@ -209,7 +224,7 @@ test('the runtime provides exactly modules.json, and the typings declare the non
   for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
   for (const m of ['react-dom', 'react-dom/client', 'react-native-web', 'fs']) assert.throws(() => req(m), /not available in the app sandbox/);
   const sdk = req('@homeai/sdk');
-  assert.deepEqual(Object.keys(sdk).sort(), ['runAction', 'useDatabase', 'useQuery', 'useSQLiteContext', 'useSpace']);
+  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'runAction', 'useDatabase', 'useQuery', 'useSQLiteContext', 'useSpace']);
   assert.equal(sdk.useSQLiteContext, sdk.useDatabase);
   await assert.rejects(sdk.useDatabase().withTransactionAsync(async () => {}), /not available in SDK 1: put multi-statement writes in an action/);
   assert.deepEqual(Object.keys(req('expo-sqlite')).sort(), ['SQLiteProvider', 'openDatabaseAsync', 'useSQLiteContext']);
