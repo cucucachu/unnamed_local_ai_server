@@ -967,7 +967,10 @@ what another doc says it should be.
   the guard's check and the operation on every files route, mid-walk, and
   by a thread hammering `renameat2(RENAME_EXCHANGE)` against read, write,
   mkdir, move, copy, delete and chown — the other space's tree is
-  unchanged and nothing in it is chowned), `test_files_api.py`
+  unchanged and nothing in it is chowned; #184: a destination created
+  after a move's check, deterministically on every move/rename route and
+  by a racing creator thread, is kept and the move is `409`, and moves
+  refuse without `renameat2`), `test_files_api.py`
   (every route through the guard cases, the owner/editor/viewer/non-member
   × user/agent matrix, cross-space move/copy, recorded ownership and
   modes), `test_media_api.py` (Range, HEAD, 416, thumbnails),
@@ -975,9 +978,9 @@ what another doc says it should be.
   deepagents 0.7.11's `FilesystemBackend`), `test_fsops.py` (real
   ownership and modes as root in a container, like `test_storage.py`,
   plus a planted cross-space link redirecting neither a root write nor a
-  root chown),
+  root chown, and `renameat2(RENAME_NOREPLACE)` working there),
   `test_legacy.py` (off by default, waits for bootstrap, idempotent,
-  collisions, resume). M12-02: `test_manifest.py` (the schema — good and
+  collisions, a name taken after it was picked, resume). M12-02: `test_manifest.py` (the schema — good and
   bad manifests, reserved `exports`/`reads`, pointers — and the package
   layout: required files, route rules, action names, symlinks),
   `test_apps_api.py` (registration and install owner/editor/viewer/
@@ -1561,7 +1564,10 @@ the check (by an exec container, say) yields `422 invalid_path` (or
 `404`/`409` if it vanished) instead of reaching another space. Downloads
 are served from the opened fd (`/proc/self/fd/<n>`), thumbnails hand ffmpeg
 the inherited fd, grep/glob descend by fd, and a copy never descends into
-the directory it is creating.
+the directory it is creating. A move or rename is
+`renameat2(RENAME_NOREPLACE)` (#184), so something created at `dst` after
+the existence check is kept and the move is `409 already_exists`; with no
+`renameat2` in libc, moves fail (`500`) instead of risking a replace.
 
 *Ownership*: everything created is `<caller uid>:<space gid>` — files
 `0660` (`0770` if copied from an executable), dirs `2770` — through
@@ -1591,7 +1597,7 @@ is a query parameter unless the request column says otherwise.
 | `POST /api/platform/files/upload` | write | multipart: `path` (target dir) + one or more `file` parts | `201 {"uploaded": [vpath]}`. Stored under each part's basename; existing files are overwritten; streamed to disk. | `404 not_found` (dir missing), `422 invalid_filename` (empty, `.`, `..`), `409 is_a_directory` |
 | `GET /api/platform/files/download` | read | `?path=` | `200` bytes, `Content-Disposition: attachment` | `404 not_found` (missing, a dir, or not a regular file) |
 | `POST /api/platform/files/mkdir` | write | `{"path"}` | `201 {"path"}` — `mkdir -p`; an existing dir is fine | `409 not_a_directory`/`already_exists` (a file in the way), `403 read_only` |
-| `POST /api/platform/files/move` | write on both | `{"src", "dst"}` (`dst` is the new full path) | `200 {"src", "dst"}`; within or across spaces | `404 not_found` (src), `409 already_exists` (dst), `404 parent_not_found` (dst's parent), `422 invalid_destination` (into itself), `403 read_only` (a space root either side), `403 reserved` (src is a space's top-level `Apps` folder) |
+| `POST /api/platform/files/move` | write on both | `{"src", "dst"}` (`dst` is the new full path) | `200 {"src", "dst"}`; within or across spaces | `404 not_found` (src), `409 already_exists` (dst, even if it appeared mid-move), `404 parent_not_found` (dst's parent), `422 invalid_destination` (into itself), `403 read_only` (a space root either side), `403 reserved` (src is a space's top-level `Apps` folder) |
 | `POST /api/platform/files/rename` | write | `{"path", "name"}` | `200 {"src", "dst"}` — a move within the same dir | move's errors, `422 invalid_name` (empty, `.`, `..`, `/`, NUL) |
 | `POST /api/platform/files/copy` | write on both | `{"src", "dst"}` | `200 {"src", "dst"}`; dirs recursively, symlinks inside a copied tree are copied as links; a whole space root may be copied | move's errors except `read_only` on `src` |
 | `DELETE /api/platform/files` | write | `?path=` | `204`; dirs recursively; a symlink is removed, never its target | `404 not_found`, `403 read_only` (a space root), `403 reserved` (a space's top-level `Apps` folder) |

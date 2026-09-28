@@ -78,6 +78,20 @@ fsops.adopt_at(A.fd, "e", {SPACE_A}, {ALICE})
 out["adopted"] = {{p: describe(a / p) for p in ("d", "d/n.txt", "e", "e/m.txt")}}
 out["legacy_left"] = sorted(os.listdir(legacy))
 
+# A move never replaces a file or an (empty) directory at the destination.
+(a / "keep.txt").write_text("keep")
+(a / "keepdir").mkdir()
+(a / "new.txt").write_text("new")
+out["noreplace"] = []
+for dst in ("keep.txt", "keepdir"):
+    try:
+        fsops.move(A, ("new.txt",), A, (dst,))
+        out["noreplace"].append("replaced")
+    except OSError as exc:
+        out["noreplace"].append(errno.errorcode[exc.errno])
+out["noreplace_kept"] = [(a / "keep.txt").read_text(), os.listdir(a / "keepdir"),
+                         (a / "new.txt").read_text()]
+
 # A link into space b planted in space a redirects neither a write nor a chown.
 os.symlink(str(b), a / "evil")
 before = describe(b)
@@ -173,6 +187,11 @@ def test_adopted_tree(result):
     assert result["legacy_left"] == []
 
 
+def test_move_never_replaces(result):
+    assert result["noreplace"] == ["EEXIST", "EEXIST"]
+    assert result["noreplace_kept"] == ["keep", [], "new"]
+
+
 def test_planted_link_to_another_space_redirects_nothing(result):
     assert result["planted_write"] == "EXDEV"
     chown = result["planted_chown"]
@@ -194,6 +213,6 @@ def test_module_is_stdlib_only(module):
         for line in source.splitlines()
         if line.startswith(("import ", "from ")) and not line.startswith("from __future__")
     }
-    stdlib = {"errno", "os", "shutil", "stat", "collections.abc", "contextlib", "dataclasses",
-              "typing"}  # fmt: skip
+    stdlib = {"ctypes", "errno", "os", "shutil", "stat", "collections.abc", "contextlib",
+              "dataclasses", "typing"}  # fmt: skip
     assert imports <= stdlib | {"app.core", "app.core.beneath"}, imports

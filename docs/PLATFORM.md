@@ -344,7 +344,7 @@ walk's own fd stack (never past the root), an absolute target only if it
 names that `files/` dir's own path or below it — and anything that leaves
 the root is `EXDEV` (`422 invalid_path`). The operation is then an `*at`
 call on the resulting directory fd with `O_NOFOLLOW` on the final name
-(`openat`, `mkdirat`, `renameat`, `unlinkat`, `fchownat(AT_SYMLINK_NOFOLLOW)`),
+(`openat`, `mkdirat`, `renameat2`, `unlinkat`, `fchownat(AT_SYMLINK_NOFOLLOW)`),
 or `fchown`/`fchmod`/`fstat`/`futimens` on the opened fd; recursive copy,
 delete and regroup descend by opening each child `O_NOFOLLOW` relative to
 its parent's fd, and links inside a tree are recreated or re-owned as links,
@@ -353,6 +353,14 @@ never followed. Downloads and thumbnails are served from the opened fd
 because `RESOLVE_BENEATH` refuses all absolute symlinks, which the files API
 follows while they stay inside the space, and it would need a second code
 path wherever `openat2` is unavailable or filtered by seccomp.
+
+Nor may a move replace what someone creates at its destination after the
+existence check (#184): every move/rename in a space, and each legacy
+migration step, is `renameat2(..., RENAME_NOREPLACE)` (`fsops.rename_noreplace`,
+a `ctypes` call into libc, glibc >= 2.28). A destination that appeared in
+between is `EEXIST`, the same `409 already_exists` the check gives; the legacy
+migration picks the next free name instead. Without `renameat2` a move
+fails (`ENOSYS`, `500`) rather than fall back to a plain `rename`.
 
 ### Legacy migration
 
@@ -656,7 +664,8 @@ Each is enforced below the agent and covered by an automated check
 8. Nothing in `SPACES_DIR` is ever imported or executed by a core service.
 9. No platform operation on space content can be redirected outside that
    space's `files/` (or `apps/`) dir by a symlink or directory swapped in
-   between check and use (§5 "Race-free access";
+   between check and use, and no move or rename replaces an entry created
+   at its destination after the check (§5 "Race-free access";
    `services/platform/tests/test_races.py`).
 
 ## 10. Roadmap

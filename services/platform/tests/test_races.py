@@ -13,6 +13,9 @@ operation, or in the middle of one. Three angles:
 
 The other space is snapshotted before and compared after; no chown may be
 recorded on anything in it.
+
+Last, a destination created between a move's existence check and its
+rename is never replaced (`fsops.rename_noreplace`).
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from app.api.external import files as files_api
 from app.core import agentfs, beneath, fsops, vfs
 from tests.files_world import FILES, World
 
@@ -312,3 +316,127 @@ def test_hammered_swaps_never_escape(two_spaces, chowns):
     assert not hammer_errors, hammer_errors
     assert all(seen["ok"] for seen in outcomes.values()), (flips, outcomes)
     assert sum(seen["refused"] for seen in outcomes.values()) >= 10, (flips, outcomes)
+
+
+# --- something created at the destination after the existence check --------------------
+
+
+def _file(path: Path) -> None:
+    path.write_text("theirs")
+
+
+def _empty_dir(path: Path) -> None:
+    path.mkdir()
+
+
+@pytest.mark.parametrize(
+    ("route", "body", "src", "dst", "create"),
+    [
+        ("/move", {"src": "/personal/mine", "dst": "/personal/taken"}, "home", "home", _file),
+        ("/rename", {"path": "/personal/mine", "name": "taken"}, "home", "home", _file),
+        # A plain rename of a directory silently replaces an empty one.
+        ("/rename", {"path": "/personal/mine", "name": "taken"}, "home", "home", _empty_dir),
+        ("/move", {"src": "/personal/mine", "dst": "/spaces/family/taken"}, "home", "family",
+         _file),
+    ],
+)  # fmt: skip
+@pytest.mark.parametrize("mine", ["file", "dir"])
+async def test_destination_created_after_the_check_is_kept(
+    world: World, monkeypatch, route, body, src, dst, create, mine
+):
+    dirs = {"home": world.home("alice"), "family": world.family_root}
+    src_path, dst_path = dirs[src] / "mine", dirs[dst] / "taken"
+    if mine == "dir":
+        src_path.mkdir()
+        (src_path / "inner.txt").write_text("mine")
+    else:
+        src_path.write_text("mine")
+    real_check = files_api._check_destination
+
+    def check_then_create(*args, **kwargs) -> None:
+        real_check(*args, **kwargs)
+        create(dst_path)
+
+    monkeypatch.setattr(files_api, "_check_destination", check_then_create)
+    response = await world.client.post(f"{FILES}{route}", json=body, headers=world.headers["alice"])
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": "already_exists"}
+    if create is _file:
+        assert dst_path.read_text() == "theirs"
+    else:
+        assert list(dst_path.iterdir()) == []
+    assert (src_path / "inner.txt" if mine == "dir" else src_path).read_text() == "mine"
+
+
+def test_racing_creator_is_never_replaced(tmp_path: Path):
+    """Check, then a creator and the move race for the name: exactly one gets it, nothing is lost."""
+    d = tmp_path.resolve()
+    fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    root = beneath.Root(fd, str(d))
+    go, done = threading.Barrier(2, timeout=5), threading.Barrier(2, timeout=5)
+    creator_won = []
+
+    def creator() -> None:
+        try:
+            while True:
+                go.wait()
+                try:
+                    cfd = os.open(d / "dst", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                except FileExistsError:
+                    creator_won.append(False)
+                else:
+                    os.write(cfd, b"theirs")
+                    os.close(cfd)
+                    creator_won.append(True)
+                done.wait()
+        except threading.BrokenBarrierError:
+            return
+
+    thread = threading.Thread(target=creator, daemon=True)
+    thread.start()
+    wins = {"move": 0, "creator": 0}
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and min(wins.values()) < 5:
+            (d / "src").write_bytes(b"mine")
+            with pytest.raises(FileNotFoundError):
+                beneath.lstat_at(root, ("dst",))
+            go.wait()
+            try:
+                fsops.move(root, ("src",), root, ("dst",))
+                moved = True
+            except FileExistsError:
+                moved = False
+            done.wait()
+            assert moved != creator_won[-1]
+            if moved:
+                assert (d / "dst").read_bytes() == b"mine"
+                assert not (d / "src").exists()
+                wins["move"] += 1
+            else:
+                assert (d / "dst").read_bytes() == b"theirs"
+                assert (d / "src").read_bytes() == b"mine"
+                wins["creator"] += 1
+            (d / "dst").unlink()
+    finally:
+        go.abort()
+        done.abort()
+        thread.join(timeout=5)
+        os.close(fd)
+    assert wins["creator"] > 0, wins
+
+
+def test_without_renameat2_a_move_refuses_rather_than_races(tmp_path: Path, monkeypatch):
+    d = tmp_path.resolve()
+    (d / "src.txt").write_text("mine")
+    fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        monkeypatch.setattr(fsops, "_renameat2", None)
+        with pytest.raises(OSError) as info:
+            fsops.move(beneath.Root(fd, str(d)), ("src.txt",), beneath.Root(fd, str(d)), ("dst",))
+    finally:
+        os.close(fd)
+    assert info.value.errno == errno.ENOSYS
+    assert "renameat2" in str(info.value)
+    assert (d / "src.txt").read_text() == "mine"
+    assert not (d / "dst").exists()
