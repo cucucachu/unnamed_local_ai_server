@@ -131,3 +131,34 @@ async def test_file_tools_fail_closed_without_a_delegation(
     assert fake_platform.personal() == {}
     tool_messages = [m for m in fake_model.requests[1]["messages"] if m.get("role") == "tool"]
     assert "no delegation" in tool_messages[-1]["content"]
+
+
+def _request_text(request: dict) -> str:
+    parts: list[str] = []
+    for message in request.get("messages") or []:
+        content = message.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+    return "\n".join(parts)
+
+
+async def test_app_authoring_guide_is_in_the_system_prompt(
+    fake_model: FakeModel, agent: CompiledStateGraph
+) -> None:
+    fake_model.queue(TextTurn("hi"))
+    await agent.ainvoke(
+        {"messages": [{"role": "user", "content": "hello"}]},
+        config={"configurable": {"thread_id": "guide"}},
+    )
+    text = _request_text(fake_model.requests[0])
+    assert "App authoring" in text
+    assert "app.json" in text and "schema.sql" in text and "AGENT.md" in text
+    assert "useDatabase()" in text and "useSQLiteContext()" in text
+    assert "grocery-list" in text and "tracker" in text
+    assert "@homeai/sdk" in text

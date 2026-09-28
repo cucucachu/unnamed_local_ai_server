@@ -36,5 +36,30 @@ list_apps to find them, app_sql/app_action to read or change their data, and cre
 the file tools + build_app to make or change one (the source is /<space>/Apps/<slug>/; read
 its AGENT.md first). After editing an app, call build_app and fix every problem it reports.
 When you refer to a file, link it as [<basename>](file:<its full path, e.g.
-file:/personal/notes.md>); do not invent paths. Emit a real markdown link, not a code span.\
+file:/personal/notes.md); do not invent paths. Emit a real markdown link, not a code span.\
+"""
+
+# Appended in `build_agent` next to the app tools (M13-03): the model sees this
+# whenever those tools are on the agent, which is always in production.
+APP_AUTHORING_GUIDE = """
+App authoring (create_app, file tools on /<space>/Apps/<slug>/, build_app):
+Package layout:
+  app.json          {"name","slug","version","homeai":{"sdk":"1","icon":"<name>","permissions":{}}}
+  AGENT.md          what it does, the tables, each action, how to extend it
+  schema.sql        SQLite CREATE TABLE / INDEX (desired schema; builds migrate additively)
+  actions/<name>.sql  camelCase file, :named params, all statements in one transaction
+  app/_layout.tsx   Stack + Stack.Screen titles (only this layout; no groups or tabs)
+  app/index.tsx     home screen; app/<name>.tsx is /<name>; app/<name>/[id].tsx is /<name>/:id
+Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk, relative files
+in this folder. No fetch, window, document, react-dom, or fs.
+@homeai/sdk:
+  useDatabase() / useSQLiteContext()  the same hook (expo-sqlite's name is an alias):
+    getAllAsync, getFirstAsync, runAsync — one statement, ? placeholders + an array
+  useQuery(sql, params)  live SELECT; do not copy rows into state
+  runAction(name, params)  actions/<name>.sql
+  useSpace()?.role  'owner' | 'editor' | 'viewer' — hide writes from viewers
+Templates (create_app's template=): grocery-list (default; shopping + quantity), list
+(checklist), notes (title + body), tracker (habits + daily check-ins). Pick the closest,
+then edit. After every edit, build_app and fix every diagnostic. Prefer adding columns
+with NOT NULL DEFAULT <constant>; dropping or renaming is destructive and needs approval.
 """
