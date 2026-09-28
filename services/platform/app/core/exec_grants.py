@@ -84,7 +84,8 @@ async def for_delegation(
     mounts = []
     for space in member_of:
         try:
-            vfs.files_root(storage, space["id"])
+            with vfs.open_files_root(storage, space["id"]):
+                pass
         except NotFound:
             logger.warning(
                 "exec grants: space %s has no plain files/ dir; not mounted", space["id"]
