@@ -12,9 +12,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMAGE="homeai-app-builder:latest"
 
 echo "=== build-builder-image.sh: building ${IMAGE} ==="
-docker build -t "${IMAGE}" "${SCRIPT_DIR}"
+# The repo root, for packages/homeai-sdk; the root .dockerignore keeps
+# node_modules, dist and model weights out of the context.
+docker build -t "${IMAGE}" -f "${SCRIPT_DIR}/Dockerfile" "${REPO_ROOT}"
 echo "=== build-builder-image.sh: done ==="
 docker images "${IMAGE}"

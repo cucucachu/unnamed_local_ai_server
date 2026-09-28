@@ -1,7 +1,7 @@
-// Runtime bundle entry: provides the only modules app code can import, boots
-// the app bundle, and wires the bridge. Built once per SDK version; the
-// builder's smoke render evaluates the dev build (docs/PLATFORM.md §7).
-// Productionized from the M12-01 spike (spikes/app_runtime/runtime/).
+// Runtime bundle entry: provides the only modules app code can import
+// (exactly ../modules.json), boots the app bundle, and wires the bridge. Built
+// once per SDK version (scripts/build-runtime.mjs); the builder's smoke render
+// evaluates the dev build (docs/PLATFORM.md §7).
 import * as React from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import * as RN from 'react-native';
@@ -9,13 +9,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import * as Router from './router';
 import * as SDK from './sdk';
 import { emit, installReceiver, on } from './bridge';
+import type { SandboxConfig } from './protocol';
 
 type AppExports = { routes: Router.RouteTable['routes']; layout?: React.ComponentType };
-type Config = { initialPath?: string };
 
 declare global {
   interface Window {
-    __homeai_config?: Config;
+    __homeai_config?: SandboxConfig;
     __homeai_define?: (factory: (require: (m: string) => unknown, module: { exports: any }, exports: any) => void) => void;
   }
 }
@@ -75,7 +75,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode; version
 
 let root: Root | null = null;
 let version = 0;
-const config: Config = window.__homeai_config ?? {};
+const config: SandboxConfig = window.__homeai_config ?? {};
+if (config.space) SDK.setSpace(config.space);
 
 function mount(app: AppExports) {
   version++;
@@ -113,6 +114,6 @@ function loadBundle(code: string) {
 }
 
 installReceiver();
-on('bundle.load', ({ code }: { code: string }) => loadBundle(code));
+on('bundle.load', (data: { code?: unknown }) => typeof data?.code === 'string' && loadBundle(data.code));
 window.addEventListener('error', (e) => emit('runtime.error', errorInfo(e.error ?? e.message)));
 window.addEventListener('unhandledrejection', (e) => emit('runtime.error', errorInfo(e.reason)));

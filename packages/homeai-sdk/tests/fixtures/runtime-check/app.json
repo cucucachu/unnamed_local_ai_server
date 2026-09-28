@@ -1,0 +1,11 @@
+{
+  "name": "Runtime check",
+  "slug": "runtime-check",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "checkmark-done-outline",
+    "description": "Fixture app for the SDK runtime tests: every SDK and router call once.",
+    "permissions": {}
+  }
+}

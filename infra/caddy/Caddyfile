@@ -51,6 +51,14 @@
 		import authenticated
 		reverse_proxy agent-server:8000
 	}
+	# The app sandbox runtime per SDK version (static; no data in it). Hosts
+	# fetch it and inline it into the sandbox document; no SPA fallback.
+	handle /app-runtime/* {
+		root * /srv
+		header Cache-Control "no-cache"
+		header X-Content-Type-Options nosniff
+		file_server
+	}
 	handle {
 		root * /srv/www
 		try_files {path} /index.html

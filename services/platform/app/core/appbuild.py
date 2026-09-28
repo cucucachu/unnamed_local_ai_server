@@ -492,3 +492,58 @@ async def _record(
             if await cur.fetchone() is None:
                 return previous
     return None
+
+
+# --- serving -------------------------------------------------------------------------
+
+_INSTANCE_BUNDLE = """
+SELECT i.space_id, i.app_id, v.version, v.manifest -> 'homeai' ->> 'sdk' AS sdk, v.bundle_path
+FROM app_instances i
+JOIN app_versions v ON v.id = i.version_id
+    OR (i.version_id IS NULL AND v.app_id = i.app_id AND v.kind = 'working')
+WHERE i.id = %s AND i.uninstalled_at IS NULL
+"""
+
+
+def _read_bundle(data_dir: Path, bundle_path: str) -> bytes | None:
+    if not BUNDLE_PATH_RE.fullmatch(bundle_path):
+        return None
+    try:
+        dir_fd = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            with fsops.open_regular_at(dir_fd, bundle_path) as f:
+                data = f.read(MAX_BUNDLE_BYTES + 1)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        return None
+    if len(data) > MAX_BUNDLE_BYTES or not data.startswith(BUNDLE_PREFIX):
+        return None
+    return data
+
+
+async def instance_bundle(
+    pool: AsyncConnectionPool, principal: Principal, data_dir: Path, instance_id: UUID
+) -> dict:
+    """The bundle of the version `instance_id` tracks, for its space's readers."""
+    # A rebuild removes the old bundle right after pointing the row at the new one.
+    for _ in range(2):
+        async with pool.connection() as conn:
+            cur = await conn.execute(_INSTANCE_BUNDLE, (instance_id,))
+            row = await cur.fetchone()
+            if row is None:
+                raise NotFound("not_found")
+            await spaces.authorize_space(conn, principal, row["space_id"], "read")
+        if row["bundle_path"] is None:
+            raise NotFound("no_bundle")
+        data = await anyio.to_thread.run_sync(_read_bundle, data_dir, row["bundle_path"])
+        if data is not None:
+            return {
+                "app_id": row["app_id"],
+                "version": row["version"],
+                "sdk": row["sdk"],
+                "bundle_id": row["bundle_path"].split("/")[2],
+                "code": data.decode("utf-8", errors="replace"),
+            }
+    logger.error("instance %s: bundle %s is missing or unusable", instance_id, row["bundle_path"])
+    raise NotFound("no_bundle")

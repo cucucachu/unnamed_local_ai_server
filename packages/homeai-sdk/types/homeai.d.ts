@@ -1,19 +1,33 @@
 // Typings app code is checked against for the modules the runtime provides
 // besides react / react-native (docs/PLATFORM.md §7 "Allowed imports").
-// They describe exactly what runtime/index.tsx registers: anything missing
+// They describe exactly what src/runtime.tsx registers: anything missing
 // here is a type error in the app, which is how unsupported expo-router or
 // SDK features are reported.
 
 declare module '@homeai/sdk' {
-  export type SQLParams = unknown[];
+  export type SQLValue = string | number | boolean | null;
+  /** `?` placeholders take a list; `:name` / `$name` / `@name` take an object (the prefix is optional in its keys). */
+  export type SQLParams = SQLValue[] | Record<string, SQLValue>;
   export type RunResult = { changes: number; lastInsertRowId: number };
+  export type ActionResult = RunResult & { rows: Record<string, unknown>[] };
 
-  /** expo-sqlite-shaped access to this app instance's database. */
+  /**
+   * expo-sqlite-shaped access to this app instance's database. Params go as
+   * a list, an object, or one by one: `runAsync(sql, [a, b])`,
+   * `runAsync(sql, { $a: a })`, `runAsync(sql, a, b)`. One statement per call;
+   * multi-statement writes are actions (`runAction`).
+   */
   export interface Database {
     getAllAsync<T = any>(sql: string, params?: SQLParams): Promise<T[]>;
+    getAllAsync<T = any>(sql: string, ...params: SQLValue[]): Promise<T[]>;
     getFirstAsync<T = any>(sql: string, params?: SQLParams): Promise<T | null>;
+    getFirstAsync<T = any>(sql: string, ...params: SQLValue[]): Promise<T | null>;
     runAsync(sql: string, params?: SQLParams): Promise<RunResult>;
+    runAsync(sql: string, ...params: SQLValue[]): Promise<RunResult>;
   }
+
+  /** What SDK calls reject with: `code` is the platform's (`sql_error`, `sql_not_allowed`, …) or the host's (`read_only`, `timeout`, …). */
+  export type SDKError = Error & { code: string };
 
   export type QueryResult<T> = {
     data: T[] | undefined;
@@ -27,8 +41,9 @@ declare module '@homeai/sdk' {
   export function useDatabase(): Database;
   /** Runs `sql` and re-runs it whenever the instance's database changes. */
   export function useQuery<T = any>(sql: string, params?: SQLParams): QueryResult<T>;
-  /** Runs the named action from actions/<name>.sql in one transaction. */
-  export function runAction(name: string, params?: Record<string, unknown>): Promise<unknown>;
+  export function useQuery<T = any>(sql: string, ...params: SQLValue[]): QueryResult<T>;
+  /** Runs the named action from actions/<name>.sql in one transaction; `rows` are the last result set's. */
+  export function runAction(name: string, params?: Record<string, SQLValue>): Promise<ActionResult>;
   /** The space this instance is installed in; null until the host has said. */
   export function useSpace(): Space | null;
 }

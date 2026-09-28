@@ -1,6 +1,7 @@
-"""`/api/platform/apps/instances/{id}/...`: an app instance's data (RPC) and migrations.
+"""`/api/platform/apps/instances/{id}/...`: an app instance's bundle, data (RPC) and migrations.
 
-Contract: docs/ARCHITECTURE.md §3 "App data"; rules: `app.core.appdata`.
+Contract: docs/ARCHITECTURE.md §3 "App data" and "App runtime"; rules:
+`app.core.appdata`, `app.core.appbuild.instance_bundle`.
 Every route takes an agent delegation too (D6).
 """
 
@@ -9,10 +10,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Request
 
-from app.api.schemas import MigrationList, MigrationOut, RpcRequest
+from app.api.schemas import InstanceBundleOut, MigrationList, MigrationOut, RpcRequest
+from app.core import appbuild
 from app.core.principal import CurrentUser
 
 router = APIRouter(prefix="/apps/instances/{instance_id}")
+
+
+@router.get("/bundle", response_model=InstanceBundleOut)
+async def bundle(instance_id: UUID, request: Request, principal: CurrentUser):
+    state = request.app.state
+    return await appbuild.instance_bundle(
+        state.db_pool, principal, state.settings.platform_data_dir, instance_id
+    )
 
 
 @router.post("/rpc")

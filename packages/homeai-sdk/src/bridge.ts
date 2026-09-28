@@ -1,21 +1,9 @@
-// Sandbox side of the host <-> sandbox bridge.
-//
-// Envelope (JSON string on the wire, identical for iframe and WebView):
-//   { homeai: 1, kind: 'req', id, method, params }
-//   { homeai: 1, kind: 'res', id, ok: true, result } | { ..., ok: false, error: { code, message } }
-//   { homeai: 1, kind: 'evt', event, data }
+// Sandbox side of the bridge (protocol: ./protocol.ts).
 // Sandbox -> host: window.ReactNativeWebView.postMessage(str) in a WebView,
 // otherwise parent.postMessage(str, '*') (the host checks event.source).
 // Host -> sandbox: iframe.contentWindow.postMessage(str, '*') on web,
 // webview.injectJavaScript(`__homeaiReceive(${str})`) on native.
-
-export const PROTOCOL = 1;
-
-export type Envelope =
-  | { homeai: 1; kind: 'req'; id: number; method: string; params?: unknown }
-  | { homeai: 1; kind: 'res'; id: number; ok: true; result: unknown }
-  | { homeai: 1; kind: 'res'; id: number; ok: false; error: { code: string; message: string } }
-  | { homeai: 1; kind: 'evt'; event: string; data?: unknown };
+import { PROTOCOL, parseEnvelope, type Envelope, type Method, type Methods } from './protocol';
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
 
@@ -36,12 +24,22 @@ function send(env: Envelope) {
   else window.parent.postMessage(wire, '*');
 }
 
-export function rpc<T = unknown>(method: string, params?: unknown, timeoutMs = 15000): Promise<T> {
+export class BridgeError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BridgeError';
+  }
+}
+
+export function rpc<M extends Method>(method: M, params: Methods[M]['params'], timeoutMs = 15000): Promise<Methods[M]['result']> {
   const id = nextId++;
-  return new Promise<T>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(Object.assign(new Error(`RPC ${method} timed out`), { code: 'timeout' }));
+      reject(new BridgeError('timeout', `${method} got no answer from the host within ${timeoutMs / 1000} s`));
     }, timeoutMs);
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
     send({ homeai: PROTOCOL, kind: 'req', id, method, params });
@@ -56,24 +54,19 @@ export function on(event: string, fn: (data: any) => void): () => void {
   let set = listeners.get(event);
   if (!set) listeners.set(event, (set = new Set()));
   set.add(fn);
-  return () => set!.delete(fn);
+  return () => void set!.delete(fn);
 }
 
 function receive(raw: unknown) {
-  let env: Envelope;
-  try {
-    env = typeof raw === 'string' ? JSON.parse(raw) : (raw as Envelope);
-  } catch {
-    return;
-  }
-  if (!env || env.homeai !== PROTOCOL) return;
+  const env = parseEnvelope(raw);
+  if (!env) return;
   if (env.kind === 'res') {
     const p = pending.get(env.id);
     if (!p) return;
     pending.delete(env.id);
     clearTimeout(p.timer);
     if (env.ok) p.resolve(env.result);
-    else p.reject(Object.assign(new Error(env.error.message), { code: env.error.code }));
+    else p.reject(new BridgeError(String(env.error?.code ?? 'error'), String(env.error?.message ?? 'request failed')));
   } else if (env.kind === 'evt') {
     listeners.get(env.event)?.forEach((fn) => fn(env.data));
   }
@@ -82,8 +75,9 @@ function receive(raw: unknown) {
 export function installReceiver() {
   window.__homeaiReceive = receive;
   window.addEventListener('message', (e) => {
-    // On web only the embedding host may talk to us; in a WebView the host
-    // uses injectJavaScript -> __homeaiReceive instead.
+    // On web only the embedding host may talk to us. A WebView is top-level
+    // (parent === window) and its host uses __homeaiReceive instead, so its
+    // own MessageEvents (document on Android, window on iOS) are ignored.
     if (window.parent !== window && e.source === window.parent) receive(e.data);
   });
 }

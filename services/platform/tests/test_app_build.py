@@ -660,3 +660,89 @@ async def test_uninstalled_and_other_apps_instances_are_left_alone(world, builde
 
     assert (await _build(world, app["id"])).json()["migrations"] == []
     assert await _columns(world, kept) == []
+
+
+# --- serving the bundle (GET /apps/instances/{id}/bundle) ------------------------------
+
+
+async def _instance(world: World, app_id: str) -> dict:
+    response = await world.client.post(
+        f"{API}/spaces/{world.family['id']}/instances",
+        json={"app_id": app_id}, headers=world.headers["alice"],
+    )  # fmt: skip
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _bundle(world: World, instance_id: str, user: str = "alice"):
+    return world.client.get(
+        f"{API}/apps/instances/{instance_id}/bundle", headers=world.headers[user]
+    )
+
+
+async def test_the_space_s_readers_get_the_instance_bundle(world, builder) -> None:
+    app = await _registered(world)
+    instance = await _instance(world, app["id"])
+    build = (await _build(world, app["id"])).json()["build"]
+
+    for user in ("alice", "bob", "carol"):
+        response = await _bundle(world, instance["id"], user)
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "app_id": app["id"], "version": "1.0.0", "sdk": "1", "bundle_id": build["id"],
+            "code": BUNDLE.decode(),
+        }  # fmt: skip
+    response = await world.client.get(
+        f"{API}/apps/instances/{instance['id']}/bundle", headers=await world.agent("alice")
+    )
+    assert response.status_code == 200
+    response = await _bundle(world, instance["id"], "dave")
+    assert (response.status_code, response.json()["detail"]) == (404, "not_found")
+
+
+async def test_a_rebuild_is_served_at_once(world, builder) -> None:
+    app = await _registered(world)
+    instance = await _instance(world, app["id"])
+    await _build(world, app["id"])
+    second = (await _build(world, app["id"])).json()["build"]
+
+    body = (await _bundle(world, instance["id"])).json()
+
+    assert body["bundle_id"] == second["id"]
+
+
+async def test_no_bundle_before_a_build_and_unknown_or_uninstalled_instances(
+    world, builder
+) -> None:
+    app = await _registered(world)
+    instance = await _instance(world, app["id"])
+
+    response = await _bundle(world, instance["id"])
+    assert (response.status_code, response.json()["detail"]) == (404, "no_bundle")
+    response = await _bundle(world, "00000000-0000-4000-8000-000000000000")
+    assert (response.status_code, response.json()["detail"]) == (404, "not_found")
+    await _build(world, app["id"])
+    response = await world.client.delete(
+        f"{API}/spaces/{world.family['id']}/instances/{instance['id']}",
+        headers=world.headers["alice"],
+    )
+    assert response.status_code == 204
+    response = await _bundle(world, instance["id"])
+    assert (response.status_code, response.json()["detail"]) == (404, "not_found")
+
+
+@pytest.mark.parametrize("tamper", ["symlink", "not_a_bundle", "missing"])
+async def test_an_unusable_bundle_file_is_not_served(world, builder, tmp_path, tamper) -> None:
+    app = await _registered(world)
+    instance = await _instance(world, app["id"])
+    path = _data(world) / (await _build(world, app["id"])).json()["build"]["bundle_path"]
+    path.unlink()
+    if tamper == "symlink":
+        (tmp_path / "elsewhere.js").write_bytes(BUNDLE)
+        path.symlink_to(tmp_path / "elsewhere.js")
+    elif tamper == "not_a_bundle":
+        path.write_bytes(b"alert(1)")
+
+    response = await _bundle(world, instance["id"])
+
+    assert (response.status_code, response.json()["detail"]) == (404, "no_bundle")

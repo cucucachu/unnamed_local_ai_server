@@ -8,8 +8,9 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { diagnostic, relative } from './diagnostics.mjs';
 import { routeTable } from './routes.mjs';
+import { ALLOWED_MODULES } from './sdk.mjs';
 
-export const ALLOWED_MODULES = ['react', 'react/jsx-runtime', 'react-native', 'expo-router', 'expo-sqlite', '@homeai/sdk'];
+export { ALLOWED_MODULES };
 const LISTED = ALLOWED_MODULES.filter((m) => m !== 'react/jsx-runtime').join(', ');
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.json']);
 

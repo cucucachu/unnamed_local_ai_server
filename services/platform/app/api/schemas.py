@@ -484,6 +484,14 @@ SqlParams = (
 )
 
 
+class InstanceBundleOut(BaseModel):
+    app_id: UUID
+    version: str
+    sdk: str
+    bundle_id: str
+    code: str
+
+
 class RpcGetAll(BaseModel):
     op: Literal["getAll"]
     sql: SqlText
