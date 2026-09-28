@@ -8,3 +8,6 @@ dist/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+scripts/eval/app_authoring/last-report.json
+scripts/eval/app_authoring/app-ids.txt
+scripts/eval/app_authoring/logs/
