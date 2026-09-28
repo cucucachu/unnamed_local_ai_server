@@ -152,6 +152,62 @@ test('a local named like a forbidden global is fine', async () => {
   assert.deepEqual(r.diagnostics, []);
 });
 
+const inAdd = (...lines) => ({
+  'app/index.tsx': (old) => old.replace('async function add() {', ['async function add() {', ...lines.map((l) => `    ${l}`)].join('\n')),
+});
+const found = (r) => r.diagnostics.map((d) => [d.line, d.column, d.message.split(':')[0]]);
+
+test('forbidden globals reached through globalThis are refused', async () => {
+  const r = await compileOnly(
+    inAdd(
+      "await globalThis.fetch('https://example.com');",
+      "new globalThis['XMLHttpRequest']();",
+      'globalThis.globalThis.require;',
+      '(globalThis as any).WebSocket;',
+      'const key = String(name);',
+      'console.log(globalThis[key]);',
+    ),
+  );
+  assert.deepEqual(found(r), [
+    [14, 22, '"fetch" is not available in apps'],
+    [15, 20, '"XMLHttpRequest" is not available in apps'],
+    [16, 27, '"require" is not available in apps'],
+    [17, 25, '"WebSocket" is not available in apps'],
+    [19, 28, 'computed access on globalThis is not allowed in apps; use the global directly'],
+  ]);
+});
+
+test('globalThis cannot be aliased or destructured to get around the check', async () => {
+  const r = await compileOnly(
+    inAdd('const g = globalThis;', "await g.fetch('https://example.com');", 'const { WebSocket: W } = globalThis;', 'console.log(W);', "Reflect.get(globalThis.globalThis, 'fetch');"),
+  );
+  const asValue = 'globalThis can only be used as globalThis.<name> in apps, not as a value; use the global directly';
+  assert.deepEqual(found(r), [
+    [14, 15, asValue],
+    [15, 13, '"fetch" is not available in apps'],
+    [16, 13, '"WebSocket" is not available in apps'],
+    [16, 30, asValue],
+    [18, 17, asValue],
+  ]);
+});
+
+test('self and global are refused like window', async () => {
+  const r = await compileOnly(inAdd('console.log(self, global);'));
+  assert.deepEqual(found(r), [
+    [14, 17, '"self" is not available in apps'],
+    [14, 23, '"global" is not available in apps'],
+  ]);
+});
+
+test('allowed globals through globalThis, and a local named globalThis, are fine', async () => {
+  const r = await compileOnly(
+    inAdd("globalThis.setTimeout(() => {}, 0);", "console.log(globalThis['Math'].max(1, 2), globalThis.Math.PI);", 'const t: typeof globalThis.setTimeout = setTimeout;', 'console.log(t);'),
+  );
+  assert.deepEqual(r.diagnostics, []);
+  const local = await compileOnly(inAdd('const globalThis = { fetch: (n: string) => n };', 'globalThis.fetch(name);', "console.log(globalThis['fetch']);"));
+  assert.deepEqual(local.diagnostics, []);
+});
+
 test('triple-slash directives are refused (they could bring the DOM lib back)', async () => {
   const r = await compileOnly({ 'app/index.tsx': prepend('/// <reference lib="dom" />') });
   assert.deepEqual(r.diagnostics.map(pick), [{ step: 'type', file: 'app/index.tsx', line: 1, column: 21 }]);

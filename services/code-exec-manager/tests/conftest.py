@@ -20,6 +20,7 @@ USER_A = "11111111-1111-4111-8111-111111111111"
 USER_B = "22222222-2222-4222-8222-222222222222"
 KID = "test-key"
 SERVICE_TOKEN = "test-service-token"
+BUILD_TOKEN = "test-build-token"
 
 
 def grants_for(user_id: str, uid: int = 20001, gid: int = 30001, shared: bool = True) -> Grants:
@@ -92,6 +93,7 @@ def test_settings() -> Settings:
         exec_default_timeout_s=5,
         toolbox_image="homeai-exec-toolbox:latest",
         platform_exec_token=SERVICE_TOKEN,
+        platform_build_token=BUILD_TOKEN,
         app_builds_host_dir="/srv/homeai/builds",
         _env_file=None,
     )

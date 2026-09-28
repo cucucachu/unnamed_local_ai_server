@@ -5,8 +5,10 @@
 // and `require` as globals (they exist in a real RN app), so leaving out the
 // DOM lib alone doesn't keep them out of app code (D9). Every reference to
 // one of FORBIDDEN_GLOBALS that resolves to a global declaration is reported
-// too, and so are triple-slash directives, which could pull the DOM lib back
-// in. This is a check for the model's benefit, not the boundary: the
+// too, as is reaching one through globalThis (by name, computed, or with
+// globalThis used as a value), and so are triple-slash directives, which
+// could pull the DOM lib back in. This is a check for the model's benefit,
+// not the boundary: the
 // sandbox's CSP is (docs/PLATFORM.md §7).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,6 +35,8 @@ export const FORBIDDEN_GLOBALS = new Map([
   ['EventSource', NO_NETWORK],
   ['require', 'use import statements, from the allowed modules or the app\'s own files'],
   ['window', NO_DOM],
+  ['self', NO_DOM],
+  ['global', 'apps are React Native code, not Node: use the globals directly'],
   ['document', NO_DOM],
   ['navigator', NO_DOM],
   ['location', NO_DOM],
@@ -90,18 +94,72 @@ function isGlobalDeclaration(decl) {
   return false;
 }
 
+const GLOBAL_THIS_VALUE = 'globalThis can only be used as globalThis.<name> in apps, not as a value; use the global directly';
+const GLOBAL_THIS_COMPUTED = 'computed access on globalThis is not allowed in apps; use the global directly';
+
+/** `expr` with the parentheses, `!` and type assertions around it removed. */
+function unwrap(expr) {
+  while (ts.isParenthesizedExpression(expr) || ts.isNonNullExpression(expr) || ts.isAsExpression(expr) || ts.isTypeAssertionExpression(expr) || ts.isSatisfiesExpression(expr)) expr = expr.expression;
+  return expr;
+}
+
+/** The expression `node` sits in once the wrappers `unwrap` removes are included. */
+function wrapped(node) {
+  while (ts.isParenthesizedExpression(node.parent) || ts.isNonNullExpression(node.parent) || ts.isAsExpression(node.parent) || ts.isTypeAssertionExpression(node.parent) || ts.isSatisfiesExpression(node.parent)) node = node.parent;
+  return node;
+}
+
+// `globalThis.fetch`, `globalThis['fetch']` and `const { fetch } = globalThis`
+// reach a forbidden global without naming it as one. Anything typed as the
+// global object (`globalThis.globalThis`, an alias) is followed by type.
+function globalThisAccess(checker, sf) {
+  const globalThisSymbol = checker.resolveName('globalThis', sf, ts.SymbolFlags.Value, false);
+  const globalType = globalThisSymbol && checker.getTypeOfSymbol(globalThisSymbol);
+  if (!globalType) return () => null;
+  const isAccess = (node) => ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node);
+  const isGlobalObject = (expr) => checker.getTypeAtLocation(unwrap(expr)) === globalType;
+  const member = (node) => {
+    if (ts.isPropertyAccessExpression(node)) {
+      return FORBIDDEN_GLOBALS.has(node.name.text) ? [node.name, `"${node.name.text}" is not available in apps: ${FORBIDDEN_GLOBALS.get(node.name.text)}`] : null;
+    }
+    const arg = node.argumentExpression;
+    if (ts.isStringLiteralLike(arg)) {
+      return FORBIDDEN_GLOBALS.has(arg.text) ? [arg, `"${arg.text}" is not available in apps: ${FORBIDDEN_GLOBALS.get(arg.text)}`] : null;
+    }
+    return ts.isNumericLiteral(arg) ? null : [arg, GLOBAL_THIS_COMPUTED];
+  };
+  const isGlobalValue = (node) =>
+    ts.isIdentifier(node)
+      ? node.text === 'globalThis' && !ts.isTypeQueryNode(node.parent) && !ts.isQualifiedName(node.parent) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) && checker.getSymbolAtLocation(node) === globalThisSymbol
+      : isAccess(node) && checker.getTypeAtLocation(node) === globalType;
+  return (node) => {
+    if (isAccess(node) && isGlobalObject(node.expression)) {
+      const found = member(node);
+      if (found) return found;
+    }
+    if (isGlobalValue(node)) {
+      const outer = wrapped(node);
+      return isAccess(outer.parent) && outer.parent.expression === outer ? null : [node, GLOBAL_THIS_VALUE];
+    }
+    return null;
+  };
+}
+
 function forbiddenGlobals(checker, sf, appRoot) {
   const out = [];
+  const report = (node, message) => out.push(diagnostic({ step: 'type', file: relative(appRoot, sf.fileName), ...position(sf, node.getStart(sf)), message }));
+  const viaGlobalThis = globalThisAccess(checker, sf);
   const visit = (node) => {
     if (ts.isIdentifier(node) && FORBIDDEN_GLOBALS.has(node.text)) {
       const parent = node.parent;
       const isName = (ts.isPropertyAccessExpression(parent) && parent.name === node) || (ts.isPropertyAssignment(parent) && parent.name === node);
       const symbol = isName ? undefined : checker.getSymbolAtLocation(node);
       if (symbol?.declarations?.length && symbol.declarations.every(isGlobalDeclaration)) {
-        const at = position(sf, node.getStart(sf));
-        out.push(diagnostic({ step: 'type', file: relative(appRoot, sf.fileName), ...at, message: `"${node.text}" is not available in apps: ${FORBIDDEN_GLOBALS.get(node.text)}` }));
+        report(node, `"${node.text}" is not available in apps: ${FORBIDDEN_GLOBALS.get(node.text)}`);
       }
     }
+    const found = viaGlobalThis(node);
+    if (found) report(...found);
     ts.forEachChild(node, visit);
   };
   visit(sf);

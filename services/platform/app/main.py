@@ -171,7 +171,7 @@ def create_app(
             app.state.bootstrap = bootstrap
             app.state.builds = await _prepare_builds(s)
             app.state.builder = appbuild.ExecManagerBuilder(
-                s.exec_manager_url, s.platform_exec_token, s.platform_build_timeout_s
+                s.exec_manager_url, s.platform_build_token, s.platform_build_timeout_s
             )
             app.state.events = EventHub()
             app.state.appdata = AppData(pool, storage, app.state.events)

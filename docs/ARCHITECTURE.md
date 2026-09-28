@@ -708,7 +708,9 @@ what another doc says it should be.
   `scripts/check_socket_exclusivity.sh`.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings`): `PLATFORM_EXEC_TOKEN` (its
-  service token for `POST /internal/exec-grants`), `EXEC_IDLE_MINUTES`,
+  service token for `POST /internal/exec-grants`), `PLATFORM_BUILD_TOKEN`
+  (#192: the token the platform presents on `POST /builds/...`; empty
+  refuses every build), `EXEC_IDLE_MINUTES`,
   `EXEC_DEFAULT_TIMEOUT_S`, `APP_BUILDS_HOST_DIR` (M12-04: the host path
   of the platform's `/data/builds`, `${APP_BUILDS_DIR:-/srv/homeai/builds}`;
   empty refuses every build). `PLATFORM_URL` defaults to
@@ -720,12 +722,12 @@ what another doc says it should be.
 - **Auth (M11-03)**: ensure, execute and delete need `Authorization:
   Bearer <delegation>`, verified against the platform JWKS
   (`app/delegation.py`); grants are fetched per call (`app/grants.py`).
-  `POST /builds/...` (M12-04) takes the platform's service token
-  (`PLATFORM_EXEC_TOKEN`) instead, compared in constant time. See
+  `POST /builds/...` (M12-04) takes the platform's build token
+  (`PLATFORM_BUILD_TOKEN`, #192) instead, compared in constant time. See
   "`code-exec-manager` API" below.
 - **Tests**: `services/code-exec-manager/tests/` — `test_api_unit.py`,
   `test_sessions_unit.py`, `test_hardening_spec.py`, `test_reaper_unit.py`,
-  `test_builds.py` (the builder container spec field by field, the service
+  `test_builds.py` (the builder container spec field by field, the build
   token, timeouts, cleanup; all use the `fake_docker.py` test double, no
   real Docker needed), plus `test_sessions_integration.py` and
   `test_builds_integration.py` (marked `integration` — need a real
@@ -953,7 +955,9 @@ what another doc says it should be.
   legacy migration; nothing else reads it. M12-04 adds
   `${APP_BUILDS_DIR:-/srv/homeai/builds}:/data/builds` (rw bind), the app
   build staging root, made `0700` at startup; stored bundles live in
-  `platform-data` under `app-bundles/`.
+  `platform-data` under `app-bundles/`. Archiving a space (#192) unsets
+  and deletes the working bundles of the apps sourced in it, in the same
+  transaction as the archive (files removed after commit).
 - **Runs as**: root, with `cap_drop: [ALL]` + `cap_add: [CHOWN,
   DAC_OVERRIDE, FOWNER, FSETID]` (it assigns per-user/per-space ownership;
   `FSETID` because the kernel clears the setgid bit on a `chmod` by a
@@ -1060,9 +1064,10 @@ what another doc says it should be.
   compared in constant time — `app/api/internal/service_auth.py`; an
   empty token matches nothing. `PLATFORM_AGENT_TOKEN` guards
   `GET /internal/bootstrap-admin` and `/internal/delegations*`,
-  `PLATFORM_EXEC_TOKEN` guards `POST /internal/exec-grants`, and since
-  M12-04 is also what the platform presents on code-exec-manager's
-  `POST /builds/...`).
+  `PLATFORM_EXEC_TOKEN` guards `POST /internal/exec-grants`).
+  `PLATFORM_BUILD_TOKEN` (#192) is what the platform presents on
+  code-exec-manager's `POST /builds/...` (empty: builds are `503
+  builder_unavailable`).
   `SPACES_HOST_DIR` (M11-03; compose sets it to `SPACES_DIR`, the host
   path behind `/data/spaces`, so exec-grants can name bind sources the
   Docker daemon resolves; empty refuses every grant).
@@ -1636,7 +1641,7 @@ themselves)
 | `POST /api/platform/spaces` | human | `{"slug", "name"}` | `201 Space` — a shared space; the caller is its only `owner`; its directory tree exists on return | `422 invalid_slug`, `422 reserved_slug`, `422 invalid_name`, `409 slug_taken` (incl. personal and archived spaces' slugs) |
 | `GET /api/platform/spaces/{id}` | space `read` | — | `200 Space` | space errors |
 | `PATCH /api/platform/spaces/{id}` | space `manage` | `{"name"}` (the slug is immutable; other fields are ignored) | `200 Space`. Personal spaces can be renamed. | space errors, `422 invalid_name` |
-| `DELETE /api/platform/spaces/{id}` | space `manage` | — | `204` — archives: hidden from every route (`404`), rows and files kept, slug stays taken | space errors, `409 personal_space` |
+| `DELETE /api/platform/spaces/{id}` | space `manage` | — | `204` — archives: hidden from every route (`404`), rows and files kept, slug stays taken; the working bundles of apps sourced here are deleted (#192) | space errors, `409 personal_space` |
 | `GET /api/platform/spaces/{id}/members` | membership `read` | — | `200 {"members": [Member]}` (owners, editors, viewers; then by username) | space errors |
 | `POST /api/platform/spaces/{id}/members` | membership `manage` | `{"user_id", "role": "owner"\|"editor"\|"viewer"}` | `201 Member` | space errors, `409 personal_space`, `422 unknown_user`, `409 user_disabled`, `409 already_member` |
 | `PATCH /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | `{"role"}` | `200 Member` | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` (demoting the only owner) |
@@ -1945,6 +1950,8 @@ in `docs/PLATFORM.md` §7 "Build and verify").
    `app-bundles/<app_id>/<build_id>/app.js` (relative to the platform data
    dir), `version` and `manifest`, and the app's `name`. The previous
    working bundle's dir is removed unless another version row uses it.
+   The source space is re-checked after that row lock, so a build can't
+   land a bundle in a space archived meanwhile.
 7. The build dir is always removed. No database connection is held while
    the builder runs.
 
@@ -1986,9 +1993,15 @@ what the runtime provides). React Native's typings declare `fetch`,
 `XMLHttpRequest`, `WebSocket`, `require` and friends as globals, so a
 checker pass refuses any reference that resolves to a global declaration
 of those names or of `window`, `document`, `navigator`, `location`,
-`localStorage`, `sessionStorage` (with an "is not available in apps"
-message in place of tsc's "add the dom lib"); triple-slash directives are
-refused. `globalThis.x` is not caught; the sandbox CSP is the boundary.
+`localStorage`, `sessionStorage`, `self`, `global` (with an "is not
+available in apps" message in place of tsc's "add the dom lib");
+triple-slash directives are refused. #192: so is reaching those names
+through anything typed `typeof globalThis` (`globalThis.fetch`,
+`globalThis['fetch']`, `globalThis.globalThis.fetch`, an alias's
+`.fetch`), computed access on it with a non-literal key, and using
+`globalThis` as a value at all (aliasing, destructuring, passing it to
+`Reflect.get`); `globalThis.<allowed name>` stays fine. It's a check for
+the model, not a boundary: the sandbox CSP is the boundary.
 
 *Import allowlist* (esbuild plugin, `verbatimModuleSyntax` so unused
 imports are still checked): `react`, `react/jsx-runtime`, `react-native`,
@@ -2305,12 +2318,12 @@ no duplicates.
 **Builds** (M12-04, platform only; `app/builds.py`):
 
 - `POST /builds/{build_id}/{phase}` with `Authorization: Bearer
-  <PLATFORM_EXEC_TOKEN>` (constant-time compare; a delegation is not
-  accepted) → `200 {"exit_code": int, "timed_out": bool, "duration_ms":
+  <PLATFORM_BUILD_TOKEN>` (constant-time compare; neither a delegation
+  nor `PLATFORM_EXEC_TOKEN` is accepted) → `200 {"exit_code": int, "timed_out": bool, "duration_ms":
   int, "stdout": str, "stderr": str, "truncated": bool}` (each stream's
   last 64,000 bytes). `build_id` must match `^[a-f0-9]{32}$` and `phase`
   `^(compile|smoke)$` (`422` otherwise); wrong or missing token `401`;
-  `PLATFORM_EXEC_TOKEN` or `APP_BUILDS_HOST_DIR` unset `503`; build dirs
+  `PLATFORM_BUILD_TOKEN` or `APP_BUILDS_HOST_DIR` unset `503`; build dirs
   not staged `404`; the builder image missing `503`; that phase of that
   build already running `409`. Runs the phase's container to completion
   (at most `BUILD_CONCURRENCY` at once, the rest wait), kills it after

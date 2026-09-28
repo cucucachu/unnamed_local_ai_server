@@ -22,10 +22,11 @@ class Settings(BaseSettings):
 
     toolbox_image: str = "homeai-exec-toolbox:latest"
 
-    # App builds (`app/builds.py`). `platform_exec_token` also authenticates
-    # the platform to `/builds`. `app_builds_host_dir` is the HOST path of
-    # the platform's `/data/builds` (Docker resolves bind sources on the
-    # host); empty: every build call fails closed.
+    # App builds (`app/builds.py`). `platform_build_token` authenticates the
+    # platform to `/builds`. `app_builds_host_dir` is the HOST path of the
+    # platform's `/data/builds` (Docker resolves bind sources on the host);
+    # either empty: every build call fails closed.
+    platform_build_token: str = ""
     app_builds_host_dir: str = ""
     builder_image: str = "homeai-app-builder:latest"
     build_timeout_s: int = 120

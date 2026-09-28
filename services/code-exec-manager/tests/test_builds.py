@@ -1,5 +1,5 @@
 """`POST /builds/{build_id}/{phase}` (`app/builds.py`): the builder
-container spec field by field, the service-token check, and the run /
+container spec field by field, the build-token check, and the run /
 wait / timeout / cleanup lifecycle against the fake Docker client."""
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from httpx import AsyncClient
 
 from app.builds import BuildRunner, build_run_kwargs
 from app.core.config import Settings
-from tests.conftest import SERVICE_TOKEN, Issuer
+from tests.conftest import BUILD_TOKEN, SERVICE_TOKEN, Issuer
 from tests.fake_docker import FakeContainer, FakeDockerClient
 
 BUILD_ID = "0123456789abcdef0123456789abcdef"
-AUTH = {"Authorization": f"Bearer {SERVICE_TOKEN}"}
+AUTH = {"Authorization": f"Bearer {BUILD_TOKEN}"}
 
 
 def _bind(source: str, target: str, read_only: bool) -> dict[str, Any]:
@@ -122,11 +122,12 @@ async def test_a_phase_that_overruns_is_killed_and_reported(
     [
         {},
         {"Authorization": "Bearer wrong"},
-        {"Authorization": SERVICE_TOKEN},
-        {"Authorization": f"Basic {SERVICE_TOKEN}"},
+        {"Authorization": BUILD_TOKEN},
+        {"Authorization": f"Basic {BUILD_TOKEN}"},
+        {"Authorization": f"Bearer {SERVICE_TOKEN}"},
     ],
 )
-async def test_the_service_token_is_required(
+async def test_the_build_token_is_required(
     client: AsyncClient, fake_docker: FakeDockerClient, headers: dict[str, str]
 ) -> None:
     response = await client.post(f"/builds/{BUILD_ID}/compile", headers=headers)
@@ -135,7 +136,7 @@ async def test_the_service_token_is_required(
     assert fake_docker.containers.run_calls == []
 
 
-async def test_a_user_delegation_is_not_a_service_token(
+async def test_a_user_delegation_is_not_the_build_token(
     client: AsyncClient, fake_docker: FakeDockerClient, issuer: Issuer
 ) -> None:
     response = await client.post(f"/builds/{BUILD_ID}/compile", headers=issuer.headers(BUILD_ID))
@@ -163,7 +164,7 @@ async def test_only_a_build_id_and_a_known_phase_are_accepted(
     assert fake_docker.containers.run_calls == []
 
 
-@pytest.mark.parametrize("overrides", [{"platform_exec_token": ""}, {"app_builds_host_dir": ""}])
+@pytest.mark.parametrize("overrides", [{"platform_build_token": ""}, {"app_builds_host_dir": ""}])
 async def test_builds_fail_closed_until_configured(
     fake_docker: FakeDockerClient, overrides: dict[str, str]
 ) -> None:
@@ -173,6 +174,7 @@ async def test_builds_fail_closed_until_configured(
 
     settings = Settings(
         platform_exec_token=SERVICE_TOKEN,
+        platform_build_token=BUILD_TOKEN,
         app_builds_host_dir="/srv/homeai/builds",
         _env_file=None,
     ).model_copy(update=overrides)

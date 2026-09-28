@@ -22,7 +22,8 @@ is read the same way, with size caps, as untrusted input.
 
 is where a successful build's bundle goes; `bundle_path` is that path
 relative to the platform data dir. A failed build leaves the previous one
-in place.
+in place; archiving the app's source space removes it
+(`release_space_bundles`).
 """
 
 from __future__ import annotations
@@ -273,7 +274,7 @@ class Builder(Protocol):
 
 
 class ExecManagerBuilder:
-    """`POST {exec_manager_url}/builds/{build_id}/{phase}` with the exec service token."""
+    """`POST {exec_manager_url}/builds/{build_id}/{phase}` with the build token."""
 
     def __init__(
         self,
@@ -412,6 +413,37 @@ def _drop_bundle(data_dir: Path, bundle_path: str | None) -> None:
         shutil.rmtree(data_dir / bundle_path.rsplit("/", 1)[0], ignore_errors=True)
 
 
+async def release_space_bundles(conn, space_id: UUID) -> list[str]:
+    """Unset the working bundles of the apps sourced in `space_id`; returns their paths.
+
+    For `drop_bundles` once the caller's transaction commits. Published
+    versions keep theirs: they can be installed in other spaces.
+    """
+    cur = await conn.execute(
+        "SELECT v.id, v.bundle_path FROM app_versions v JOIN apps a ON a.id = v.app_id "
+        "WHERE a.source_space_id = %s AND v.kind = 'working' AND v.bundle_path IS NOT NULL "
+        "FOR UPDATE OF v",
+        (space_id,),
+    )
+    rows = await cur.fetchall()
+    if rows:
+        await conn.execute(
+            "UPDATE app_versions SET bundle_path = NULL WHERE id = ANY(%s)",
+            ([row["id"] for row in rows],),
+        )
+    return [row["bundle_path"] for row in rows]
+
+
+def drop_bundles(data_dir: Path, bundle_paths: list[str]) -> None:
+    for bundle_path in bundle_paths:
+        _drop_bundle(data_dir, bundle_path)
+        if BUNDLE_PATH_RE.fullmatch(bundle_path):
+            try:
+                (data_dir / bundle_path).parent.parent.rmdir()
+            except OSError:
+                pass
+
+
 async def build_app(
     pool: AsyncConnectionPool,
     principal: Principal,
@@ -469,7 +501,6 @@ async def _record(
 ) -> str | None:
     """Make `bundle_path` the working version's; returns the one it replaced if nothing else uses it."""
     app = await apps.get_visible_app(conn, principal, app_id)
-    await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
     async with conn.transaction():
         cur = await conn.execute(
             "SELECT id, bundle_path FROM app_versions "
@@ -479,6 +510,8 @@ async def _record(
         row = await cur.fetchone()
         if row is None:
             raise NotFound("not_found")
+        # After the row lock: a space archived meanwhile has released its bundles.
+        await spaces.authorize_space(conn, principal, app["source_space_id"], "write")
         await conn.execute("UPDATE apps SET name = %s WHERE id = %s", (doc["name"], app_id))
         await conn.execute(
             "UPDATE app_versions SET version = %s, manifest = %s, bundle_path = %s WHERE id = %s",

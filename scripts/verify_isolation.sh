@@ -197,7 +197,7 @@ platform_call() {
   ISO_COOKIE="$COOKIE_A" docker exec -e ISO_COOKIE "$RUNNER_NAME" python3 -c "$PY_PLATFORM" "$@" 2>/dev/null || true
 }
 
-# argv: build_id phase auth(none|wrong|delegation). Prints the HTTP status of
+# argv: build_id phase auth(none|wrong|exec|delegation). Prints the HTTP status of
 # code-exec-manager's POST /builds/{build_id}/{phase}.
 PY_BUILDS="$(cat <<'EOF'
 import json, os, sys, urllib.error, urllib.request
@@ -206,7 +206,9 @@ PLATFORM = "http://platform:8100"
 build_id, phase, auth = sys.argv[1:4]
 headers = {}
 if auth == "wrong":
-    headers["Authorization"] = "Bearer not-the-service-token"
+    headers["Authorization"] = "Bearer not-the-build-token"
+elif auth == "exec":
+    headers["Authorization"] = f"Bearer {os.environ['PLATFORM_EXEC_TOKEN']}"
 elif auth == "delegation":
     req = urllib.request.Request(f"{PLATFORM}/internal/auth/verify", headers={"Cookie": os.environ["ISO_COOKIE"]})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -231,8 +233,8 @@ EOF
 )"
 
 builds_status() {
-  ISO_COOKIE="$COOKIE_A" docker exec -e ISO_COOKIE -e PLATFORM_AGENT_TOKEN "$RUNNER_NAME" \
-    python3 -c "$PY_BUILDS" "$@" 2>/dev/null || echo "runner-error"
+  ISO_COOKIE="$COOKIE_A" docker exec -e ISO_COOKIE -e PLATFORM_AGENT_TOKEN -e PLATFORM_EXEC_TOKEN \
+    "$RUNNER_NAME" python3 -c "$PY_BUILDS" "$@" 2>/dev/null || echo "runner-error"
 }
 
 session_of() {
@@ -493,12 +495,13 @@ preflight() {
 
   SPACES_DIR="$(_e2e_env_value SPACES_DIR "")"
   PLATFORM_AGENT_TOKEN="$(_e2e_env_value PLATFORM_AGENT_TOKEN "")"
-  export PLATFORM_AGENT_TOKEN
-  if [ -z "$SPACES_DIR" ] || [ -z "$PLATFORM_AGENT_TOKEN" ]; then
-    log "ERROR: SPACES_DIR/PLATFORM_AGENT_TOKEN not set in .env"
+  PLATFORM_EXEC_TOKEN="$(_e2e_env_value PLATFORM_EXEC_TOKEN "")"
+  export PLATFORM_AGENT_TOKEN PLATFORM_EXEC_TOKEN
+  if [ -z "$SPACES_DIR" ] || [ -z "$PLATFORM_AGENT_TOKEN" ] || [ -z "$PLATFORM_EXEC_TOKEN" ]; then
+    log "ERROR: SPACES_DIR/PLATFORM_AGENT_TOKEN/PLATFORM_EXEC_TOKEN not set in .env"
     exit 1
   fi
-  log "OK: SPACES_DIR=${SPACES_DIR}; PLATFORM_AGENT_TOKEN is set"
+  log "OK: SPACES_DIR=${SPACES_DIR}; PLATFORM_AGENT_TOKEN and PLATFORM_EXEC_TOKEN are set"
   APP_BUILDS_DIR="$(_e2e_env_value APP_BUILDS_DIR /srv/homeai/builds)"
 
   log "Building homeai-app-builder:latest (cached) for checks 23-27 ..."
@@ -1118,15 +1121,16 @@ EOF
 }
 
 check_26() {
-  local desc="POST /builds is service-token only: none/wrong token/a user's delegation are 401; bad ids and phases are refused"
+  local desc="POST /builds is build-token only: none/wrong token/the exec token/a user's delegation are 401; bad ids and phases are refused"
   local id got
   id="$(openssl rand -hex 16)"
   got="$(printf '%s ' \
     "$(builds_status "$id" compile none)" \
     "$(builds_status "$id" compile wrong)" \
+    "$(builds_status "$id" compile exec)" \
     "$(builds_status "$id" smoke delegation)")"
-  if [ "${got% }" != "401 401 401" ]; then
-    fail 26 "$desc" "got '${got% }', expected '401 401 401'"
+  if [ "${got% }" != "401 401 401 401" ]; then
+    fail 26 "$desc" "got '${got% }', expected '401 401 401 401'"
     return
   fi
   for bad in "..%2F..%2Fetc compile" "${id} shell" "${id}/x compile" "${id^^} compile"; do
