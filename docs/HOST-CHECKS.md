@@ -215,8 +215,14 @@ phones.
 
 ## M15
 
-Phone-off-LAN (G15) waits for later M15 tickets. M15-01 is "create the QR
-on the LAN":
+Web G15 is `scripts/e2e/gate_m15.sh` (stack health, WireGuard throwaway-client
+smoke, origin-policy through Caddy, Caddy domain/Caddyfile validate, platform
+origin / public-HTTPS / WebAuthn / device-pairs pytest, passkey browser smoke
+with RP ID restore, then `g15_enrollment_smoke.sh`: public origin refuses
+enrollment; temporary `public_https` is always restored). Phone-off-LAN, APK
+install, and WAN public HTTPS remain the existing unchecked boxes below.
+Setup: stack up with Caddy from `main`, WireGuard kernel module loaded,
+signed in as yourself (G10).
 
 - [ ] (M15-01) On home Wi-Fi: Settings → Remote access → create a device
       named for this phone → scan the QR in a WireGuard app → the tunnel
