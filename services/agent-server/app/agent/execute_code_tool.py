@@ -91,7 +91,9 @@ def make_execute_code_tool(settings: Settings):
         For running programs, not for creating, reading, editing or listing files (use the
         file tools for those). The user's files are mounted at /files/personal (= /personal in your file tools) and
         /files/spaces/<slug> (= /spaces/<slug>); a space the user only views is read-only.
-        Nothing else under /files is writable. The container has NO network access.
+        Nothing else under /files is writable. Symlinks you create here need relative targets
+        (or none): the file tools don't follow absolute /files/... targets. The container has
+        NO network access.
         Installed: Python 3 with pandas/numpy/pillow/matplotlib/openpyxl/pypdf, Node.js, git,
         ffmpeg, imagemagick, pandoc, ripgrep, jq. You cannot install packages. State in /tmp
         and $HOME is ephemeral; only the user's files persist. Long jobs: raise

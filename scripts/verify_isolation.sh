@@ -543,7 +543,7 @@ cleanup() {
     [ -n "${COOKIE_B:-}" ] && manager_call b DELETE "$SESSION_B" delete delegation 10 >/dev/null
     docker rm -f "$RUNNER_NAME" >/dev/null 2>&1 || true
   fi
-  # Defensive: in case a DELETE never landed (or check 22 left B in A's session).
+  # Defensive: in case a DELETE never landed.
   docker rm -f "$CONTAINER_A" "$CONTAINER_B" >/dev/null 2>&1 || true
   if [ -n "${SPACE_ID:-}" ] && [[ "$SPACE_ID" =~ ^[0-9a-f-]{36}$ ]]; then
     _e2e_psql homeai_platform "DELETE FROM spaces WHERE id = '${SPACE_ID}'" >/dev/null 2>&1 || true
@@ -877,33 +877,25 @@ if codes != want:
 }
 
 check_22() {
-  local desc="B can't take over A's session: DELETE is 403; ensure replaces it with B's own grants"
-  local delete ensure out rc
-  delete="$(manager_call b DELETE "$SESSION_A" delete "delegation-for:${SESSION_A}" 10)"
-  if ! docker inspect "$CONTAINER_A" >/dev/null 2>&1; then
-    fail 22 "$desc" "A's container was removed by B's DELETE (${delete})"
-    return
-  fi
+  local desc="B can't take over A's session: ensure, execute and DELETE are 403; A's container untouched"
+  local before after ensure execute delete out
+  before="$(docker inspect -f '{{.Id}} {{.State.Running}}' "$CONTAINER_A" 2>&1)"
   ensure="$(manager_call b POST "$SESSION_A" ensure "delegation-for:${SESSION_A}" 30)"
-  local want
-  want="$(printf '{"user": "%s:%s", "group_add": ["%s"], "binds": {"%s": ["/files/personal", true], "%s": ["%s", false]}}' \
-    "$UID_B" "$GID_B" "$GID_S" "${SPACES_DIR}/${HOME_B}/files" "${SPACES_DIR}/${SPACE_ID}/files" "$SHARED")"
+  execute="$(manager_call b POST "$SESSION_A" execute "delegation-for:${SESSION_A}" 15 '{"command": "cat /files/personal/*"}')"
+  delete="$(manager_call b DELETE "$SESSION_A" delete "delegation-for:${SESSION_A}" 10)"
+  after="$(docker inspect -f '{{.Id}} {{.State.Running}}' "$CONTAINER_A" 2>&1)"
   if out="$(python3 -c '
 import json, sys
-delete, ensure = json.loads(sys.argv[1]), json.loads(sys.argv[2])
-if delete.get("http_error") != 403:
-    print(f"B DELETE of A session: {delete}")
+before, after = sys.argv[4], sys.argv[5]
+codes = [json.loads(r).get("http_error") for r in sys.argv[1:4]]
+if codes != [403, 403, 403]:
+    print(f"B ensure/execute/DELETE of A session gave {codes}, expected [403, 403, 403]: {sys.argv[1:4]}")
     sys.exit(1)
-if ensure.get("created") is not True:
-    print(f"B ensure of A session did not recreate: {ensure}")
+if not before.endswith(" true") or after != before:
+    print(f"A container changed: before {before!r}, after {after!r}")
     sys.exit(1)
-' "$delete" "$ensure" 2>&1)" \
-    && out="$(python3 -c "$VALIDATOR_INSPECT" "$(docker inspect "$CONTAINER_A")" "$want" 2>&1)"; then
-    rc=0
-  else
-    rc=1
-  fi
-  if [ "$rc" -eq 0 ]; then
+' "$ensure" "$execute" "$delete" "$before" "$after" 2>&1)" \
+    && out="$(python3 -c "$VALIDATOR_UID" "$(manager_execute 'id -u' 10)" "$UID_A" 2>&1)"; then
     pass 22 "$desc"
   else
     fail 22 "$desc" "$out"

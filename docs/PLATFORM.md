@@ -406,9 +406,9 @@ Until then they're visible to nobody.
 >   `group_add=<the other gids>`. Binds are `--mount type=bind`, so a
 >   missing source fails instead of being created. Nothing else is mounted
 >   and every other hardening flag is unchanged. Labels `homeai.user` and
->   `homeai.grants` (a digest) are compared on every ensure *and* execute;
->   on a mismatch the container is recreated. Delete refuses (403) a
->   container labelled for another user. Commands run under `umask 002`, so
+>   `homeai.grants` (a digest) are compared on every ensure *and* execute:
+>   a container labelled for another user is refused (403) by ensure,
+>   execute and delete and left alone; otherwise a mismatch recreates it. Commands run under `umask 002`, so
 >   exec-created files are `uid:space_gid` 0664 and dirs 2775.
 > - The manager no longer mounts `FILES_DIR` or reads
 >   `HOMEAI_UID`/`HOMEAI_GID`.

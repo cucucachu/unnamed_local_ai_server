@@ -1803,13 +1803,15 @@ Since M11-03, ensure, execute and delete require `Authorization: Bearer
 `thr` = `session_id`): missing or invalid → `401 unauthenticated`,
 another thread's → `403`, JWKS unreachable → `503`. Ensure and execute then
 fetch the user's grants (`POST /internal/exec-grants`); the platform
-refusing the delegation → `401`, the platform unreachable → `503`.
+refusing the delegation → `401`, the platform unreachable → `503`. All
+three refuse (`403`) a container labelled `homeai.user` for another user
+and leave it untouched.
 
 - `POST /sessions/{session_id}/ensure` → `200 {"container_id": str,
   "created": bool}`. `session_id` must match `^[a-zA-Z0-9_-]{1,64}$`
-  (thread UUIDs qualify) — otherwise `422`. A container whose
-  `homeai.user`/`homeai.grants` labels don't match the current grants is
-  replaced (`created: true`).
+  (thread UUIDs qualify) — otherwise `422`. This user's container
+  whose `homeai.grants` label doesn't match the current grants, or an
+  unlabelled one from before M11-03, is replaced (`created: true`).
 - `POST /sessions/{session_id}/execute` body `{"command": str,
   "timeout_seconds": int = EXEC_DEFAULT_TIMEOUT_S}` → `200 {"stdout": str,
   "stderr": str, "exit_code": int, "timed_out": bool, "duration_ms": int,
@@ -2335,8 +2337,8 @@ exact §7 hardening spec):
   read-only (though B is in the space's group); files A creates are
   `uid:space_gid` 0664 (dirs 2775), inside the container and on the host;
   missing/tampered delegations are refused (401), another thread's
-  (403); B can't delete A's session, and ensuring it replaces A's
-  container with one carrying B's grants.
+  (403); B's ensure, execute and delete of A's session are all refused
+  (403) and A's container is left running, unchanged.
 - **Resource limits** — the cgroup CPU quota and `memory.max` match
   `nano_cpus`/`mem_limit` exactly.
 - **Secret non-leakage** — no environment variables reach the exec

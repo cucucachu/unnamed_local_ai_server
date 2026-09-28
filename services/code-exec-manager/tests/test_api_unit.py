@@ -163,6 +163,24 @@ async def test_delete_of_another_users_session_is_refused(
     assert fake_docker.containers.get(container_name(T1)).removed is False
 
 
+@pytest.mark.parametrize("action", ["ensure", "execute"])
+async def test_another_users_delegation_cannot_take_over_a_session(
+    client: AsyncClient, fake_docker: FakeDockerClient, issuer: Issuer, action: str
+) -> None:
+    await client.post(f"/sessions/{T1}/ensure", headers=issuer.headers(T1, USER_A))
+    owned = fake_docker.containers.get(container_name(T1))
+    body = {"command": "id"} if action == "execute" else None
+
+    response = await client.post(
+        f"/sessions/{T1}/{action}", json=body, headers=issuer.headers(T1, USER_B)
+    )
+
+    assert response.status_code == 403
+    assert fake_docker.containers.get(container_name(T1)) is owned
+    assert owned.removed is False
+    assert owned.last_exec_cmd is None
+
+
 async def test_list_sessions_returns_active_sessions(client: AsyncClient, issuer: Issuer) -> None:
     await client.post("/sessions/thread-1/ensure", headers=issuer.headers("thread-1"))
     await client.post("/sessions/thread-2/ensure", headers=issuer.headers("thread-2"))

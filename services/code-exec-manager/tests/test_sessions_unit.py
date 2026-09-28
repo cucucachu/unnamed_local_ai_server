@@ -125,9 +125,8 @@ async def test_ensure_labels_the_container_with_user_and_grants(
             GRANTS.gids,
             (GRANTS.mounts[0], Mount(GRANTS.mounts[1].host_path, "/files/spaces/family", False)),
         ),
-        grants_for(USER_B, uid=20002, gid=30002),
     ],
-    ids=["membership-removed", "personal-gid", "viewer-promoted", "other-user"],
+    ids=["membership-removed", "personal-gid", "viewer-promoted"],
 )
 async def test_ensure_recreates_when_grants_change(
     manager: SessionManager, fake_docker: FakeDockerClient, changed: Grants
@@ -177,6 +176,42 @@ async def test_execute_recreates_instead_of_running_under_stale_grants(
     fresh = fake_docker.containers.get(container_name("sess-1"))
     assert fresh.labels["homeai.grants"] == changed.digest
     assert fresh.last_exec_cmd is not None
+
+
+@pytest.mark.parametrize("running", [True, False], ids=["running", "stopped"])
+async def test_ensure_refuses_another_users_container(
+    manager: SessionManager, fake_docker: FakeDockerClient, running: bool
+) -> None:
+    await manager.ensure("sess-1", GRANTS)
+    owned = fake_docker.containers.get(container_name("sess-1"))
+    if not running:
+        owned.status = "exited"
+    runs = len(fake_docker.containers.run_calls)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await manager.ensure("sess-1", grants_for(USER_B, uid=20002, gid=30002))
+
+    assert exc_info.value.status_code == 403
+    assert fake_docker.containers.get(container_name("sess-1")) is owned
+    assert owned.removed is False
+    assert len(fake_docker.containers.run_calls) == runs
+
+
+async def test_execute_refuses_another_users_container(
+    manager: SessionManager, fake_docker: FakeDockerClient
+) -> None:
+    await manager.ensure("sess-1", GRANTS)
+    owned = fake_docker.containers.get(container_name("sess-1"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await manager.execute(
+            "sess-1", grants_for(USER_B, uid=20002, gid=30002), "id", timeout_seconds=5
+        )
+
+    assert exc_info.value.status_code == 403
+    assert owned.removed is False
+    assert owned.last_exec_cmd is None
+    assert fake_docker.containers.get(container_name("sess-1")) is owned
 
 
 async def test_remove_refuses_another_users_container(

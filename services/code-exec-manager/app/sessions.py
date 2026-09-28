@@ -8,8 +8,9 @@ hardcoded constant, derived from `Settings`, or taken from the session's
 user), never from a caller-supplied value (README.md "Isolation boundary":
 callers send a command string, never a container spec).
 
-A container is labelled with its user and its grants' digest; one whose
-labels no longer match the current grants (another user, a membership or
+A container is labelled with its user and its grants' digest. One labelled
+for another user is refused (`403`) by ensure, execute and remove, and left
+alone; one whose labels no longer match the current grants (a membership or
 role change, a container from before per-user exec) is replaced, never
 reused.
 
@@ -171,12 +172,14 @@ class SessionManager:
     def _ensure_sync(self, session_id: str, grants: Grants) -> dict[str, Any]:
         container = self._get(session_id)
         if container is not None:
+            _refuse_other_user(container, grants.user_id)
             container.reload()
             if container.status == "running" and _matches(container, session_id, grants):
                 self._touch(session_id)
                 return {"container_id": container.id, "created": False}
-            # Stopped, or created under other grants: remove and recreate
-            # fresh rather than `container.start()`-ing the old one. A bare
+            # Stopped, unlabelled, or created under this user's old grants:
+            # remove and recreate fresh rather than `container.start()`-ing
+            # the old one. A bare
             # restart wouldn't re-apply the §7 spec if it's ever changed
             # (e.g. a code-exec-manager upgrade landing new hardening
             # flags), and couldn't change its user or mounts at all.
@@ -192,6 +195,7 @@ class SessionManager:
         container = self._get(session_id)
         if container is None:
             raise HTTPException(404, f"session not found: {session_id!r} (call ensure first)")
+        _refuse_other_user(container, grants.user_id)
         if not _matches(container, session_id, grants):
             self._ensure_sync(session_id, grants)
             container = self._get(session_id)
@@ -280,9 +284,7 @@ class SessionManager:
         container = self._get(session_id)
         if container is None:
             return  # idempotent - already gone
-        owner = container.labels.get("homeai.user")
-        if owner is not None and owner != user_id:
-            raise HTTPException(403, "session belongs to another user")
+        _refuse_other_user(container, user_id)
         try:
             container.stop(timeout=5)
         except docker.errors.APIError:
@@ -391,6 +393,12 @@ class SessionManager:
             started_at = datetime.now(UTC)
         self._last_used[session_id] = started_at
         return started_at
+
+
+def _refuse_other_user(container: Any, user_id: str) -> None:
+    owner = (container.labels or {}).get("homeai.user")
+    if owner is not None and owner != user_id:
+        raise HTTPException(403, "session belongs to another user")
 
 
 def _matches(container: Any, session_id: str, grants: Grants) -> bool:

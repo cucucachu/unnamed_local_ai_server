@@ -10,7 +10,8 @@ and the `command` string passed to `exec_run`.
 
 `ensure`, `execute` and `delete` need `Authorization: Bearer <delegation>`
 (`app/delegation.py`) whose `thr` is the session id: `401` without a valid
-one, `403` for another thread's, `503` if the platform can't be asked.
+one, `403` for another thread's or for a session held by another user,
+`503` if the platform can't be asked.
 `ensure` and `execute` then fetch the grants, so a delegation whose session
 has ended is refused there (`401`).
 """
