@@ -17,6 +17,7 @@ export default function SettingsLayout() {
         <Stack.Screen name="index" />
         <Stack.Screen name="account" />
         <Stack.Screen name="sessions" />
+        <Stack.Screen name="remote" />
         <Stack.Screen name="spaces/index" />
         <Stack.Screen name="spaces/[spaceId]" />
         <Stack.Protected guard={isAdmin}>

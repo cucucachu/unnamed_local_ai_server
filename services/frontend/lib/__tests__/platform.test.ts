@@ -7,13 +7,16 @@ import {
   adminUpdateUser,
   confirmTotp,
   createSpace,
+  createWireGuardDevice,
   enrollTotp,
   inviteLink,
   isReadOnly,
   listSessions,
+  listWireGuardDevices,
   platformErrorMessage,
   removeMember,
   revokeSession,
+  revokeWireGuardDevice,
   slugify,
   updateMe,
   updateMemberRole,
@@ -47,6 +50,20 @@ describe('platform client requests', () => {
   it.each([
     ['updateMe', () => updateMe({ display_name: 'Al' }), 'PATCH', '/api/platform/me', { display_name: 'Al' }],
     ['revokeSession', () => revokeSession('s1'), 'DELETE', '/api/platform/me/sessions/s1', undefined],
+    [
+      'createWireGuardDevice',
+      () => createWireGuardDevice('Phone'),
+      'POST',
+      '/api/platform/me/wireguard-devices',
+      { name: 'Phone' },
+    ],
+    [
+      'revokeWireGuardDevice',
+      () => revokeWireGuardDevice('d1'),
+      'DELETE',
+      '/api/platform/me/wireguard-devices/d1',
+      undefined,
+    ],
     ['enrollTotp', () => enrollTotp('pw'), 'POST', '/api/platform/me/totp/enroll', { password: 'pw' }],
     ['confirmTotp', () => confirmTotp('123456'), 'POST', '/api/platform/me/totp/confirm', { code: '123456' }],
     ['createSpace', () => createSpace({ slug: 'fam', name: 'Fam' }), 'POST', '/api/platform/spaces', { slug: 'fam', name: 'Fam' }],
@@ -66,6 +83,14 @@ describe('platform client requests', () => {
 
   it('unwraps list envelopes', async () => {
     await expect(listSessions()).resolves.toEqual([{ id: 's1' }]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: { get: () => null },
+      json: async () => ({ devices: [{ id: 'd1' }] }),
+    });
+    await expect(listWireGuardDevices()).resolves.toEqual([{ id: 'd1' }]);
   });
 });
 

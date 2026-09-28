@@ -1,9 +1,21 @@
 from fastapi import APIRouter
 
-from app.api.external import admin, appdata, apps, directory, files, me, media, spaces, system_apps
+from app.api.external import (
+    admin,
+    appdata,
+    apps,
+    directory,
+    files,
+    me,
+    media,
+    spaces,
+    system_apps,
+    wireguard,
+)
 
 router = APIRouter(prefix="/api/platform")
 router.include_router(me.router)
+router.include_router(wireguard.router)
 router.include_router(directory.router)
 router.include_router(spaces.router)
 router.include_router(system_apps.router)

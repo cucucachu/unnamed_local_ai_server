@@ -11,9 +11,11 @@
 #   searxng            -> M7-04 (self-hosted metasearch engine, GET-only engines) [added]
 #   db-init            -> M10-02 (one-shot: platform role + homeai_platform DB; M11-04: agent role) [added]
 #   platform           -> M10-02 (auth, spaces, app registry, user storage) [added]
+#   wireguard          -> M15-01 (WireGuard sidecar: one UDP port, NET_ADMIN) [added]
 #
-# Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): only
-# `caddy` publishes host ports (80 and, as of M9-05, 443). M7-01 splits the single bridge that
+# Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): `caddy`
+# publishes host ports 80 and 443; `wireguard` publishes UDP 51820 (M15-01).
+# M7-01 splits the single bridge that
 # used to hold everything into two networks, so "no internet" is the
 # default rather than something merely unused:
 #   homeai-net      -> the egress-capable network (default Docker NAT, a
@@ -27,10 +29,15 @@
 #                      on it can reach the public internet at the network
 #                      layer, not merely by omission. Every other service
 #                      (agent-server, model-runner, code-exec-manager,
-#                      postgres, egress-proxy, web-fetch, searxng) lives
-#                      here too, since it's how `web-fetch` (M7-03) and
-#                      `searxng` (M7-04) both reach `egress-proxy` in the
-#                      first place.
+#                      postgres, egress-proxy, web-fetch, searxng,
+#                      platform, wireguard) lives here too. `wireguard`
+#                      stays off `homeai-net` on purpose: it must not gain
+#                      a default route out.
+#   homeai-wg       -> M15-01. Ordinary bridge so Docker can publish UDP
+#                      51820 with a return path (`internal: true` drops
+#                      forwarded replies). Masquerade is off, so this is
+#                      not a second internet network. Only `wireguard`
+#                      joins it.
 # `caddy` and `egress-proxy` are the only services on `homeai-net`; `caddy`
 # additionally needs `homeai-internal` to reach `agent-server`, and
 # `egress-proxy` additionally needs `homeai-internal` to be reachable BY
@@ -46,6 +53,13 @@ networks:
   homeai-internal:
     driver: bridge
     internal: true
+  # UDP 51820 return path for LAN/WAN clients. Not homeai-net (no NAT to
+  # the internet). Not internal (Docker would drop forwarded WG replies).
+  homeai-wg:
+    name: homeai-wg
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
 
 volumes:
   pgdata:
@@ -61,8 +75,12 @@ volumes:
   egress-proxy-ca:
   # M10-02: the platform service's own state - Ed25519 signing keys
   # (`keys/`, 0600) today, the bootstrap setup code later. Losing it rotates
-  # the signing key, invalidating every outstanding token.
+  # the signing key, invalidating every outstanding token. M15-01 also keeps
+  # the WireGuard server private key here (`wireguard/server.key`, 0600).
   platform-data:
+  # Derived wg0.conf the platform writes and the wireguard sidecar applies.
+  # Server private key is in this file (0600); not in git, not in compose env.
+  wireguard-config:
 
 services:
   caddy:
@@ -325,6 +343,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     volumes:
       - platform-data:/data/platform
+      - wireguard-config:/data/wireguard
       - ${SPACES_DIR}:/data/spaces
       # Pre-spaces files root, moved into the bootstrap admin's personal space
       # once bootstrap completes (PLATFORM_MIGRATE_LEGACY_FILES), then left empty.
@@ -341,6 +360,10 @@ services:
       # The host-side path of the /data/spaces mount above: exec grants name
       # bind sources as the Docker daemon sees them.
       SPACES_HOST_DIR: ${SPACES_DIR}
+      # M15-01: `Endpoint =` in client configs / QR codes. LAN hostname by
+      # default; after the human forwards UDP 51820, set this to the public
+      # host:port (docs/NETWORKING.md). Never a private key.
+      WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-homeai.local:51820}
     healthcheck:
       # python:3.12-slim has no curl.
       test:
@@ -352,6 +375,34 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # M15-01: WireGuard sidecar. Kernel module stays on the host (`modprobe
+  # wireguard`); this container only gets NET_ADMIN (not SYS_MODULE, not
+  # privileged) to create wg0 and apply the platform-written config.
+  # Peers live in Postgres; this service never talks to the platform DB.
+  # UDP 51820 is the one new published port (not on homeai-net — no
+  # default route out). HTTP/HTTPS for tunnel clients is proxied to
+  # `caddy` on 10.13.13.1; DNS for `homeai.local` is the same address.
+  # homeai-wg is the published-port netns (return path); homeai-internal
+  # is how this sidecar reaches `caddy` by name.
+  wireguard:
+    build: ./services/wireguard
+    restart: unless-stopped
+    networks: [homeai-internal, homeai-wg]
+    depends_on:
+      platform:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - wireguard-config:/data/wireguard:ro
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
 
   # The *only* service with docker.sock mounted (README.md "Isolation
   # boundary" / "Documented future hardening (not v1)": a docker-socket-proxy

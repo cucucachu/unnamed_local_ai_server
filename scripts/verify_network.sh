@@ -4,7 +4,8 @@
 # wrote and ran infra/host/setup-avahi.sh/setup-ufw.sh; this is the
 # after-the-fact check that their combined effect, plus the actual compose
 # stack, together deliver on the isolation claim in docs/NETWORKING.md:
-# reachable by name from the LAN, ports 80 and 443 only, nothing else exposed).
+# reachable by name from the LAN, ports 80/443 (caddy) and UDP 51820
+# (wireguard, M15-01) only, nothing else exposed).
 #
 # Must be run with sudo — checks 4/5 read ufw/iptables state, both of which
 # refuse to run (or lie) as a non-root user (`ufw status` exits with "You
@@ -27,10 +28,11 @@
 #      repo; see e.g. verify_isolation.sh's header).
 #   3. Port audit, DOCKER STACK SCOPE (not "every process on this dev
 #      machine" — see the check's own comment below for why that scoping
-#      choice is deliberate): `docker compose config` shows only caddy with
-#      a ports: mapping, and live `docker ps` output confirms no running
-#      container other than caddy has a host-published port, and that
-#      caddy's own published ports are exactly 80 and 443.
+#      choice is deliberate): `docker compose config` shows only caddy and
+#      wireguard with a ports: mapping, and live `docker ps` output confirms
+#      no running container other than those has a host-published port, that
+#      caddy's own published ports are exactly 80 and 443, and that
+#      wireguard's is exactly 51820/udp (M15-01).
 #   4. `ufw status verbose` shows the firewall active, default-deny
 #      incoming, and the LAN-subnet allow rule for tcp/80 that setup-ufw.sh
 #      installs for tcp/80 and tcp/443.
@@ -195,20 +197,44 @@ except Exception as e:
 # socket on this dev machine" — a developer's own host can legitimately run
 # unrelated tooling on other ports (IDE helpers, other projects, etc.) that
 # have nothing to do with this ticket's actual security question ("does the
-# homeai stack expose anything besides caddy:80/443"). The ticket's own
+# homeai stack expose anything besides caddy:80/443 and wireguard:51820/udp").
+# The ticket's own
 # acceptance wording confirms this scope: "fail if any other HOMEAI
 # CONTAINER publishes a port" — not any other process. sshd on 22 is
 # explicitly named as an allowed EXCEPTION precisely because it's the one
 # non-Docker, host-level service this setup expects to be listening
 # LAN-wide; it is logged for visibility but never gates this check either
 # way (its own exposure is ufw's job — check 4 — not this one's).
+# M15-01 adds WireGuard UDP 51820 as the one other published stack port;
+# random extra ports still fail.
 check_3() {
   local compose_offenders live_offenders sshd_state
 
   compose_offenders="$(docker compose config --format json 2>/dev/null | python3 -c "
 import json, sys
+
+def published(p):
+    if isinstance(p, dict):
+        return str(p.get('published') or ''), (p.get('protocol') or 'tcp').lower()
+    s = str(p)
+    proto = 'udp' if s.endswith('/udp') else 'tcp'
+    host = s.split(':')[0]
+    return host, proto
+
 cfg = json.load(sys.stdin)
-bad = [name for name, svc in cfg.get('services', {}).items() if name != 'caddy' and svc.get('ports')]
+bad = []
+for name, svc in cfg.get('services', {}).items():
+    ports = svc.get('ports') or []
+    if not ports:
+        continue
+    items = [published(p) for p in ports]
+    if name == 'caddy':
+        continue
+    if name == 'wireguard':
+        if items != [('51820', 'udp')]:
+            bad.append(name + ':' + ','.join(f'{h}/{pr}' for h, pr in items))
+        continue
+    bad.append(name)
 print('\n'.join(bad))
 ")"
 
@@ -226,12 +252,21 @@ print(' '.join(published))
 ")"
 
   live_offenders="$(docker ps --format '{{.Names}}\t{{.Ports}}' | awk -F'\t' '
-    $2 ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && $1 !~ /caddy/ { print }
+    $2 ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && $1 !~ /caddy/ && $1 !~ /wireguard/ { print }
     $2 ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && $1 ~ /caddy/ {
       line = $2
       n = split(line, parts, ", ")
       for (i = 1; i <= n; i++) {
         if (parts[i] ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && parts[i] !~ /(0\.0\.0\.0|\[::\]):(80|443)->/) {
+          print $1 " publishes unexpected port: " parts[i]
+        }
+      }
+    }
+    $2 ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && $1 ~ /wireguard/ {
+      line = $2
+      n = split(line, parts, ", ")
+      for (i = 1; i <= n; i++) {
+        if (parts[i] ~ /(0\.0\.0\.0|\[::\]):[0-9]+->/ && parts[i] !~ /(0\.0\.0\.0|\[::\]):51820->51820\/udp/) {
           print $1 " publishes unexpected port: " parts[i]
         }
       }
@@ -259,10 +294,10 @@ print(' '.join(published))
   fi
 
   if [[ -z "${compose_offenders}" ]] && [[ -z "${live_offenders}" ]] && [[ "${#missing[@]}" -eq 0 ]]; then
-    pass 3 "only caddy publishes host ports, and only 80 and 443 (docker compose config + docker ps)"
+    pass 3 "only caddy (80/443) and wireguard (51820/udp) publish host ports (docker compose config + docker ps)"
   else
     local detail="${compose_offenders}${compose_offenders:+; }${live_offenders}${live_offenders:+; }$(IFS='; '; echo "${missing[*]}")"
-    fail 3 "only caddy publishes host ports, and only 80 and 443 (docker compose config + docker ps)" "${detail}"
+    fail 3 "only caddy (80/443) and wireguard (51820/udp) publish host ports (docker compose config + docker ps)" "${detail}"
   fi
 }
 

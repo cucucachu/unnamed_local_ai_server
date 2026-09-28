@@ -54,6 +54,9 @@ class LoginRequest(BaseModel):
     password: Secret
     totp_code: Short | None = None
     device_label: Short | None = None
+    # Optional WireGuard peer this login came from (M15-01). Revoking that
+    # device then drops this session without signing out other devices.
+    device_id: UUID | None = None
 
 
 class StepUpRequest(BaseModel):
@@ -89,6 +92,28 @@ class SessionOut(BaseModel):
 
 class SessionList(BaseModel):
     sessions: list[SessionOut]
+
+
+class WireGuardDeviceCreateRequest(BaseModel):
+    name: Short
+
+
+class WireGuardDeviceOut(BaseModel):
+    id: UUID
+    name: str
+    address: str
+    created_at: datetime
+
+
+class WireGuardDeviceCreated(WireGuardDeviceOut):
+    """Returned only from create: `config` is the wg-quick text (and QR payload).
+    The peer private key is in that text and is never stored."""
+
+    config: str
+
+
+class WireGuardDeviceList(BaseModel):
+    devices: list[WireGuardDeviceOut]
 
 
 class PasswordRequest(BaseModel):

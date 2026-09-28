@@ -185,12 +185,13 @@ describe('SettingsScreen', () => {
     expect(mockLogout).toHaveBeenCalledTimes(1);
   });
 
-  it('links to Account, Sessions, and Spaces; members see no Admin section', async () => {
+  it('links to Account, Sessions, Remote access, and Spaces; members see no Admin section', async () => {
     const renderer = await renderScreen();
 
     for (const [testID, path] of [
       ['settings-nav-account', '/settings/account'],
       ['settings-nav-sessions', '/settings/sessions'],
+      ['settings-nav-remote', '/settings/remote'],
       ['settings-nav-spaces', '/settings/spaces'],
     ]) {
       await act(async () => {

@@ -148,6 +148,7 @@ def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
         platform_data_dir=data_dir,
         platform_spaces_dir=spaces_dir,
         platform_builds_dir=data_dir / "builds",
+        wireguard_config_dir=data_dir / "wireguard-config",
         _env_file=None,
         **overrides,
     )

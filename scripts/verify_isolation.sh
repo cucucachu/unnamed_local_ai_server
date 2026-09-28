@@ -789,14 +789,32 @@ check_17() {
   local offenders
   offenders="$(docker compose config --format json | python3 -c "
 import json, sys
+
+def published(p):
+    if isinstance(p, dict):
+        return str(p.get('published') or ''), (p.get('protocol') or 'tcp').lower()
+    s = str(p)
+    proto = 'udp' if s.endswith('/udp') else 'tcp'
+    return s.split(':')[0], proto
+
 cfg = json.load(sys.stdin)
-bad = [name for name, svc in cfg.get('services', {}).items() if name != 'caddy' and svc.get('ports')]
+bad = []
+for name, svc in cfg.get('services', {}).items():
+    ports = svc.get('ports') or []
+    if not ports:
+        continue
+    items = [published(p) for p in ports]
+    if name == 'caddy':
+        continue
+    if name == 'wireguard' and items == [('51820', 'udp')]:
+        continue
+    bad.append(name)
 print('\n'.join(bad))
 ")"
   if [ -z "$offenders" ]; then
-    pass 17 "only 'caddy' publishes host ports (docker compose config)"
+    pass 17 "only caddy (80/443) and wireguard (51820/udp) publish host ports (docker compose config)"
   else
-    fail 17 "only 'caddy' publishes host ports (docker compose config)" "service(s) with published ports: ${offenders}"
+    fail 17 "only caddy (80/443) and wireguard (51820/udp) publish host ports (docker compose config)" "service(s) with unexpected published ports: ${offenders}"
   fi
 }
 

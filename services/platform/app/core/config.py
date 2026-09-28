@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # Default is `system_apps/` next to this package (`/app/system_apps` in the image).
     system_apps_dir: Path = Path(__file__).resolve().parents[2] / "system_apps"
 
+    # WireGuard (M15-01): the sidecar's wg0.conf lives on a shared volume
+    # (`wireguard-config` → `/data/wireguard`). Server keys stay under
+    # `platform_data_dir/wireguard/` (0600). Endpoint is what client configs
+    # put in `Endpoint =` — LAN hostname by default; set to the public
+    # host:port after the human forwards UDP 51820 (docs/NETWORKING.md).
+    wireguard_config_dir: Path = Path("/data/wireguard")
+    wireguard_endpoint: str = "homeai.local:51820"
+
     @property
     def keys_dir(self) -> Path:
         return self.platform_data_dir / "keys"

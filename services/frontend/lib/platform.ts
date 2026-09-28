@@ -102,6 +102,29 @@ export function revokeSession(id: string): Promise<void> {
   return send<void>('DELETE', `/api/platform/me/sessions/${encodeURIComponent(id)}`);
 }
 
+export interface WireGuardDevice {
+  id: string;
+  name: string;
+  address: string;
+  created_at: string;
+}
+
+export interface CreatedWireGuardDevice extends WireGuardDevice {
+  config: string;
+}
+
+export async function listWireGuardDevices(): Promise<WireGuardDevice[]> {
+  return (await apiFetch<{ devices: WireGuardDevice[] }>('/api/platform/me/wireguard-devices')).devices;
+}
+
+export function createWireGuardDevice(name: string): Promise<CreatedWireGuardDevice> {
+  return send<CreatedWireGuardDevice>('POST', '/api/platform/me/wireguard-devices', { name });
+}
+
+export function revokeWireGuardDevice(id: string): Promise<void> {
+  return send<void>('DELETE', `/api/platform/me/wireguard-devices/${encodeURIComponent(id)}`);
+}
+
 export function enrollTotp(password: string): Promise<TotpEnrollment> {
   return send<TotpEnrollment>('POST', '/api/platform/me/totp/enroll', { password });
 }
@@ -237,6 +260,9 @@ const MESSAGES: Record<string, string> = {
   working_not_updatable: 'The working copy updates when you build. Publish a version to update other installs.',
   already_on_version: 'This install is already on that version.',
   not_published: "This app hasn't been published, so it can't be copied without its source.",
+  too_many_devices: 'This account already has the maximum number of WireGuard devices.',
+  peers_exhausted: 'The VPN has no free addresses left. Revoke an unused device and try again.',
+  unknown_device: "That VPN device isn't on this account.",
 };
 
 /** Human-readable text for a failed platform call. */
