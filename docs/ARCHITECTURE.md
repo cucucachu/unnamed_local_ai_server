@@ -34,7 +34,7 @@ flowchart TB
     nativeapp -->|"ws/http(s) to homeai.local"| proxy
 
     subgraph host [Linux Host]
-        proxy["Caddy Reverse Proxy\n(serves the Expo web build directly\nfrom /srv/www, baked in at build time)\n:80 + :443 tls internal, homeai-net + homeai-internal — the only service on both"]
+        proxy["Caddy Reverse Proxy\n(serves the Expo web build directly\nfrom /srv/www, baked in at build time)\n:80 + :443 tls internal, optional ACME DNS-01\nhomeai-net + homeai-internal — the only service on both"]
         avahi[avahi-daemon\nmDNS: homeai.local]
 
         subgraph internalnet [Docker network: homeai-internal, internal: true — no route to the internet]
@@ -79,11 +79,12 @@ flowchart TB
 
 Caddy serves the Expo web export itself, straight off local disk
 (`infra/caddy/Caddyfile`'s `handle { root * /srv/www; file_server }`).
-`infra/caddy/Dockerfile` is a multi-stage build that produces this: stage 1
-(`node:22-alpine`) runs `npx expo export --platform web` against
-`services/frontend/`, then stage 2 (`caddy:2-alpine`) `COPY
---from=frontend-build /out /srv/www` bakes the resulting static bundle
-directly into the final Caddy image.
+`infra/caddy/Dockerfile` is a multi-stage build that produces this:
+an `xcaddy` builder (`github.com/caddy-dns/duckdns`, M15-03), stage
+`frontend-build` (`node:22-alpine`, `npx expo export --platform web`
+against `services/frontend/`), stage `runtime-build` (app sandbox
+runtime), then the alpine final stage copies the plugin-enabled
+`caddy` binary and bakes `/srv/www` and `/srv/app-runtime`.
 
 `model-runner` passes through `/dev/dri:/dev/dri` (plus `group_add:
 [RENDER_GID, VIDEO_GID]` and `ipc: host`) — the Vulkan/RADV render node
@@ -101,8 +102,9 @@ egress). `agent-server`, `model-runner`, `code-exec-manager`,
 non-internal bridge with masquerade off) so published UDP 51820 has a
 return path; it must not join `homeai-net`. `caddy` is the sole service
 on both: it needs `homeai-internal` to reach `agent-server`, and
-`homeai-net` to keep its published port (and thus a route out, for
-whatever it itself needs). `homeai-net` is reserved exclusively for
+`homeai-net` to keep its published port (and thus a route out: ACME
+DNS-01 to the CA and the DuckDNS API when `HOMEAI_DOMAIN` is set,
+M15-03 — do not put Caddy on a third internet network). `homeai-net` is reserved exclusively for
 `caddy` and the M7-02 `egress-proxy` — no other service may ever join it.
 This makes "no internet" the default for every container instead of
 something merely unused.
@@ -232,9 +234,11 @@ what another doc says it should be.
   `https://homeai.local` uses Caddy's `tls internal` CA (M9-05) so
   browsers get a secure context (needed for microphone access). The same
   public root cert is served at `http://homeai.local/ca.crt` (trusted-LAN
-  trade-off — see `docs/NETWORKING.md`).
-- **Routing (M10-04, `docs/PLATFORM.md` §3)**, identical on `:80` and
-  `https://homeai.local`:
+  trade-off — see `docs/NETWORKING.md`). Optional `HOMEAI_DOMAIN` (M15-03)
+  adds `https://$HOMEAI_DOMAIN` with ACME DNS-01 (DuckDNS); `homeai.local`
+  stays `tls internal`. HTTP on `:80` is never redirected and has no HSTS.
+- **Routing (M10-04, `docs/PLATFORM.md` §3)**, identical on `:80`,
+  `https://homeai.local`, and the optional domain site:
 
   | Path | Auth | Upstream |
   |---|---|---|
@@ -260,14 +264,20 @@ what another doc says it should be.
   actually saw — the platform's per-IP rate limits and origin policy
   (last XFF hop) can't be spoofed. Do not add `trusted_proxies`. `/internal/*` is never routed. Range and `HEAD` requests to
   `/api/platform/files/stream` pass through unchanged (206 + `Content-Range`).
-- **Image/base**: multi-stage — build stage `node:22-alpine` (`npm ci` +
+- **Image/base**: multi-stage — `caddy:2-builder-alpine` runs `xcaddy
+  build --with github.com/caddy-dns/duckdns` (M15-03); build stage
+  `node:22-alpine` (`npm ci` +
   `npx expo export --platform web` against `services/frontend/`, in
   `/repo/services/frontend` with `packages/homeai-sdk/` beside it at
   `/repo/packages/` since M12-06, so the lockfile's `@homeai/sdk` link
   resolves), a
   second one (M12-05) that builds the app sandbox runtime from
   `packages/homeai-sdk/` into `/srv/app-runtime/1/`, final
-  stage `caddy:2-alpine`. Dockerfile: `infra/caddy/Dockerfile`.
+  stage `caddy:2-alpine` with the xcaddy binary copied over the stock
+  one. Entrypoint (`infra/caddy/entrypoint.sh`) writes
+  `/etc/caddy/domain.caddy` from `HOMEAI_DOMAIN` (hostname validated
+  before interpolation; empty domain → empty file, no extra site block).
+  Dockerfile: `infra/caddy/Dockerfile`.
 - **Published ports**: `80` and `443` — confirmed via `docker compose
   config`. 443 is the one intentional amendment to the original v1 "no new
   published ports" rule (M9-05). M15-01 adds UDP 51820 on `wireguard`, not
@@ -275,16 +285,24 @@ what another doc says it should be.
 - **Internal ports**: `80` and `443` (same — it's the entry point, not
   proxied to from anything else).
 - **Network (M7-01)**: `homeai-net` **and** `homeai-internal` — the only
-  service on both. `homeai-net` keeps the published ports (and any egress
-  this service itself needs); `homeai-internal` is how it reaches
-  `agent-server`.
-- **Mounts**: named volume `caddy-data:/data` so the local CA stays
-  stable across container recreates. `infra/caddy/Caddyfile` and the
-  exported static bundle (`/srv/www`) are both baked into the image at
-  build time, not bind-mounted.
-- **Env vars consumed**: none.
-- **Tests**: no dedicated unit tests for Caddy itself (it's a stock image +
-  a static Caddyfile). Verified indirectly by every browser e2e smoke
+  service on both. `homeai-net` keeps the published ports and ACME DNS-01
+  egress (Let's Encrypt + DuckDNS API; no third internet network);
+  `homeai-internal` is how it reaches `agent-server`.
+- **Mounts**: named volume `caddy-data:/data` so the local CA (and ACME
+  certs when domain mode is on) stay stable across container recreates.
+  `infra/caddy/Caddyfile` and the exported static bundle (`/srv/www`) are
+  both baked into the image at build time, not bind-mounted. The optional
+  domain snippet is generated at start into `/etc/caddy/domain.caddy`.
+- **Env vars consumed**: `HOMEAI_DOMAIN` (optional; empty = `:80` +
+  `https://homeai.local` only), `DUCKDNS_TOKEN` (secret — never log it;
+  required when `HOMEAI_DOMAIN` is set; empty token is a hard start
+  failure). Not required in `.env` for the default stack.
+- **Tests**: `scripts/verify_caddy_domain.sh` (compose `config -q` with
+  and without a dummy domain+token; `caddy validate` of the no-domain
+  file on stock `caddy:2-alpine` and of the domain-on snippet on the
+  plugin-enabled binary; empty-token and invalid-hostname failures).
+  Does not contact Let's Encrypt / DuckDNS and does not recreate live
+  caddy. Also verified indirectly by every browser e2e smoke
   script that goes through it (`scripts/e2e/chat_browser_smoke.sh`,
   `files_browser_smoke.sh`, `media_browser_smoke.sh`,
   `image_browser_smoke.sh`, `video_thumbnail_browser_smoke.sh`,
@@ -1221,8 +1239,9 @@ what another doc says it should be.
 - **Purpose** (M15-01, `docs/PLATFORM.md` §8): the WireGuard data plane.
   Creates `wg0` on **10.13.13.0/24** (server **10.13.13.1**), listens UDP
   **51820**, applies the platform-written `wg0.conf`, answers DNS for
-  `homeai.local` → `10.13.13.1`, and TCP-proxies `:80`/`:443` on that
-  address to `caddy`. Peers and server keys live in the platform (Postgres
+  `homeai.local` → `10.13.13.1` (and `HOMEAI_DOMAIN` → `10.13.13.1` when
+  that env is set, M15-03; still `--no-resolv`, not a recursive resolver),
+  and TCP-proxies `:80`/`:443` on that address to `caddy`. Peers and server keys live in the platform (Postgres
   + `/data/platform/wireguard/`); this container never sees the platform
   database and never logs private keys.
 - **Image/base**: `alpine:3.21` + `wireguard-tools`, `dnsmasq`, `socat`.
@@ -1240,7 +1259,8 @@ what another doc says it should be.
   `cap_add: NET_ADMIN`; no `SYS_MODULE`.
 - **Mounts**: `wireguard-config:/data/wireguard:ro` (platform writes
   `wg0.conf` mode 0600).
-- **Env**: none required (`WG_GATEWAY` / `WG_CADDY_HOST` have defaults).
+- **Env**: `HOMEAI_DOMAIN` optional (empty = `homeai.local` only).
+  `WG_GATEWAY` / `WG_CADDY_HOST` have defaults.
 - **Tests**: `services/platform/tests/test_wireguard.py` (keys, config
   text, API, revoke vs sessions, `act=agent` 403). Live:
   `scripts/e2e/wireguard_smoke.sh`. Host steps:
@@ -3074,7 +3094,9 @@ What the design defends against, and how:
    `scripts/verify_network.sh`). Remote access is WireGuard (M15-01): the
    `wireguard` sidecar publishes UDP 51820; the human forwards that port
    if they want off-LAN access. Do not expose `:80`/`:443` to the internet.
-   Local HTTPS (`https://homeai.local`, Caddy `tls internal`) is confidentiality on the LAN and a browser
+   Optional `HOMEAI_DOMAIN` (M15-03) gets a real cert via ACME DNS-01
+   (no inbound 80/443); split-DNS that name to this host on the LAN
+   (`docs/NETWORKING.md`). Local HTTPS (`https://homeai.local`, Caddy `tls internal`) is confidentiality on the LAN and a browser
    secure context; HTTP on `:80` stays available on purpose, so a session
    cookie used on `:80` crosses the LAN in the clear — prefer HTTPS.
 5. **No outbound internet by default — and where Stage 2 grants it,
@@ -3438,8 +3460,9 @@ M7-03; the recipe below is what it actually does, not a plan):**
 ### Documented fast-follows (not built for v1)
 
 - Docker-socket-proxy in front of code-exec-manager's docker.sock access.
-- Public ACME certificates / a real domain (local HTTPS via Caddy's
-  internal CA shipped in M9-05; HTTP is not redirected and HSTS is off).
+- Public HTTPS listener / HSTS / force-HTTPS (M15-05). Real certificates
+  via ACME DNS-01 shipped in M15-03; `https://homeai.local` stays Caddy
+  `tls internal`. HTTP is not redirected and HSTS is off.
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
 - EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).
@@ -3496,6 +3519,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/verify_isolation.sh` | 22-check code-exec hardening and per-user exec suite (see "Security model" above) | After any change to `code-exec-manager` or the toolbox image |
 | `scripts/verify_tenancy.sh` | M11-04: 29-check cross-user tenancy suite for `docs/PLATFORM.md` §9 invariants 1-7 — sessions and identity headers at Caddy, B vs A's personal space and viewer writes through the files API / a delegation / exec, `act=agent` refused by admin and auth endpoints, agent-server's mounts and Postgres role, `docker.sock`, read-only roots, exec binds vs grants, and (M12-08) the app sandbox holding no credentials plus app RPC/bundle scoping, (#194) row-level security on agent-server's tables: enabled and forced, the roles' attributes, raw SQL as `agent` without `app.user_id` seeing nothing, and no user's setting surviving a pooled connection's return, and (M14-05) exec `/app-data` readable / not writable / no other user's data (see "Security model" above). Also in `gate_full.sh` and `gate_m12.sh` | After touching auth routing, the platform's auth/spaces/files/apps code, delegations, exec grants, the app host or runtime, or the agent-server/platform/db-init compose blocks |
 | `scripts/verify_network.sh` (needs `sudo`) | LAN-only network posture (mDNS, port audit for 80+443, `ufw`, `DOCKER-USER`) + M7-01 network segmentation (no-egress from internal services, internal reachability, UI still on `:80`) | After touching `docker-compose.yml` port/network config, firewall scripts, or the network hardware |
+| `scripts/verify_caddy_domain.sh` | M15-03: `docker compose config -q` with and without a dummy `HOMEAI_DOMAIN`+token (not from live `.env`); `caddy validate` of the no-domain Caddyfile on stock `caddy:2-alpine` and of the domain-on snippet on the plugin-enabled binary; empty-token and invalid-hostname failures. Does not contact Let's Encrypt / DuckDNS, does not `compose up`, does not set `HOMEAI_DOMAIN` on the live stack | After touching Caddy domain/ACME DNS-01, the caddy/wireguard compose env, or `infra/caddy/` |
 | `scripts/export-ca.sh` | Copy Caddy's local-CA root cert to `${BACKUP_DIR}/homeai-root-ca.crt` (same file as `http://homeai.local/ca.crt`) | After first HTTPS boot, or after rotating the CA |
 | `scripts/verify_egress.sh` (needs real internet, no `sudo`) | M7-02 egress-proxy policy against the live stack: HTTPS MITM actually works, method + destination guard both enforce `403`, `agent-server` itself still has no route out | After touching `services/egress-proxy/` or its compose service block |
 | `scripts/e2e/web_research_smoke.sh` (needs real internet, no `sudo`) | M7-04: `web-fetch`'s `GET /search` against the live stack — a real query round-trips through `searxng`'s enabled GET-only engines and `egress-proxy` and returns >=1 `https://` result, AND `egress-proxy`'s own log shows zero `POST` lines for the run (the GET-only engine audit holds at runtime, not just on paper) | After touching `services/searxng/`, `web-fetch`'s `/search` route, or either's compose service block |

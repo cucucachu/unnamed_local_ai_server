@@ -128,4 +128,5 @@ runtime the moment Expo Go's JS engine hits that line.
 
 `infra/caddy/Dockerfile`'s `frontend-build` stage runs `npm ci` + `npx expo
 export --platform web` against this directory and copies the resulting
-`dist/` output into the final `caddy:2-alpine` image at `/srv/www`.
+`dist/` output into the final Caddy image at `/srv/www` (`caddy:2-alpine`
+plus an xcaddy-built binary with the DuckDNS plugin).

@@ -199,7 +199,7 @@ The binding technical contracts every ticket built against — environment varia
 - **Definition of done**: each ticket issue lists
   - **Tier A** — automated checks (lint, tests, `docker compose config -q`, any named e2e script) — required to close the issue.
   - **Tier B** (gate issues only) — a human/host checklist (needs the real machine, a phone, or a LAN device). Appended to `docs/HOST-CHECKS.md`.
-  - **Out of scope for v1** (don't build these, even if tempting): public ACME certificates, forcing HTTPS / HSTS, auth, docker-socket-proxy, transcoding, EAS builds, multi-user, GPU queueing, runtime `pip`/`npm` in exec containers, exposing HTTP/HTTPS to the internet. Local HTTPS for `homeai.local` (Caddy internal CA) is in. Stage 3's sanctioned remote path is WireGuard (M15-01), not a public website.
+  - **Out of scope for v1** (don't build these, even if tempting): forcing HTTPS / HSTS, public WAN HTTP/HTTPS (M15-05), auth, docker-socket-proxy, transcoding, EAS builds, multi-user, GPU queueing, runtime `pip`/`npm` in exec containers, exposing HTTP/HTTPS to the internet. Optional real certificates via ACME DNS-01 (DuckDNS, no inbound 80/443) shipped in M15-03; `https://homeai.local` (Caddy internal CA) remains. Stage 3's sanctioned remote path is WireGuard (M15-01), not a public website.
 
 ## Getting started
 

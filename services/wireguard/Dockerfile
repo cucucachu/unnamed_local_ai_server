@@ -6,6 +6,7 @@ FROM alpine:3.21
 RUN apk add --no-cache wireguard-tools iptables dnsmasq socat iproute2 bash wget
 
 COPY entrypoint.sh /entrypoint.sh
+COPY --from=hostlib valid_hostname.sh /usr/local/lib/homeai-valid-hostname.sh
 RUN chmod 755 /entrypoint.sh
 
 # UDP 51820 is published by compose on the host; 80/443/53 are tunnel-only.

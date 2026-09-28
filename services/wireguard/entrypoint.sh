@@ -1,6 +1,7 @@
 #!/bin/sh
 # Apply the platform-written wg0.conf, proxy HTTP/HTTPS from the tunnel to
-# Caddy, and answer DNS for homeai.local on the tunnel gateway.
+# Caddy, and answer DNS for homeai.local (and HOMEAI_DOMAIN when set) on
+# the tunnel gateway. Still --no-resolv: not a recursive resolver.
 #
 # Requires the host kernel's wireguard module (this container is NET_ADMIN
 # only — it does not load SYS_MODULE). Missing module is a hard failure.
@@ -14,6 +15,9 @@ CADDY_HOST="${WG_CADDY_HOST:-caddy}"
 DNSMASQ_PID=""
 SOCAT80_PID=""
 SOCAT443_PID=""
+
+# shellcheck disable=SC1091
+. /usr/local/lib/homeai-valid-hostname.sh
 
 log() { echo "wireguard: $*"; }
 
@@ -65,11 +69,23 @@ apply_conf() {
 ensure_helpers() {
   if ! alive "$DNSMASQ_PID"; then
     # -d/--no-daemon: alpine's --keep-in-foreground still exits 5 without it.
-    dnsmasq --conf-file=/dev/null --pid-file=/run/dnsmasq.pid \
-      --user=root --no-daemon \
-      --listen-address="$GATEWAY" --bind-interfaces \
-      --address=/homeai.local/"$GATEWAY" \
-      --no-resolv --no-hosts --port=53 &
+    # --no-resolv: answer only the names we list; never recurse to the
+    # public internet (M15-03 split DNS is extra --address= records).
+    # HOMEAI_DOMAIN was validated at startup when set.
+    if [ -n "${HOMEAI_DOMAIN:-}" ]; then
+      dnsmasq --conf-file=/dev/null --pid-file=/run/dnsmasq.pid \
+        --user=root --no-daemon \
+        --listen-address="$GATEWAY" --bind-interfaces \
+        --address=/homeai.local/"$GATEWAY" \
+        --address=/"${HOMEAI_DOMAIN}"/"$GATEWAY" \
+        --no-resolv --no-hosts --port=53 &
+    else
+      dnsmasq --conf-file=/dev/null --pid-file=/run/dnsmasq.pid \
+        --user=root --no-daemon \
+        --listen-address="$GATEWAY" --bind-interfaces \
+        --address=/homeai.local/"$GATEWAY" \
+        --no-resolv --no-hosts --port=53 &
+    fi
     DNSMASQ_PID=$!
     log "started dnsmasq pid=${DNSMASQ_PID} on ${GATEWAY}:53"
   fi
@@ -88,10 +104,17 @@ checksum() {
 }
 
 require_module
+if [ -n "${HOMEAI_DOMAIN:-}" ] && ! valid_hostname "$HOMEAI_DOMAIN"; then
+  fail "HOMEAI_DOMAIN is not a valid hostname; not passing it to dnsmasq"
+fi
 wait_for_conf
 apply_conf
 ensure_helpers
-log "dns+proxy on ${GATEWAY} (homeai.local -> ${GATEWAY}, :80/:443 -> ${CADDY_HOST})"
+if [ -n "${HOMEAI_DOMAIN:-}" ]; then
+  log "dns+proxy on ${GATEWAY} (homeai.local + ${HOMEAI_DOMAIN} -> ${GATEWAY}, :80/:443 -> ${CADDY_HOST})"
+else
+  log "dns+proxy on ${GATEWAY} (homeai.local -> ${GATEWAY}, :80/:443 -> ${CADDY_HOST})"
+fi
 
 last="$(checksum)"
 while true; do

@@ -84,3 +84,9 @@ https://homeai.local {
 	tls internal
 	import app
 }
+
+# Optional ACME DNS-01 site, written at container start when HOMEAI_DOMAIN
+# is a valid hostname (infra/caddy/entrypoint.sh). Empty when unset — do
+# not put `https://{$HOMEAI_DOMAIN}` here; an empty site address is invalid.
+# homeai.local above always stays; :80 is never redirected and has no HSTS.
+import /etc/caddy/domain.caddy

@@ -78,6 +78,14 @@ Do **not** forward TCP 80 or 443. Public HTTPS is M15-05 and is opt-in.
 ## 5. DNS
 
 Client configs set `DNS = 10.13.13.1`. The sidecar answers `homeai.local`
-with `10.13.13.1` and proxies `:80`/`:443` to Caddy. Other names are not
-resolved in v1 (split / recursive DNS is M15-03). With split-tunnel
-`AllowedIPs = 10.13.13.0/24`, only traffic to the box uses the VPN.
+with `10.13.13.1` and, when `HOMEAI_DOMAIN` is set, that name too (same
+address). It proxies `:80`/`:443` to Caddy. Other names are not resolved
+(`--no-resolv`: not a recursive resolver for the public internet). With
+split-tunnel `AllowedIPs = 10.13.13.0/24`, only traffic to the box uses
+the VPN.
+
+On the LAN, map `HOMEAI_DOMAIN` to this host's LAN IPv4 on the resolver
+your clients use (dnsmasq / Pi-hole / AdGuard, pfSense/OPNsense host
+override, UniFi local DNS, or the ISP router's LAN DNS if it has one).
+See `docs/NETWORKING.md` "Split DNS (optional real domain)". DNS-01 does
+**not** need inbound TCP 80/443; do not forward those (M15-05).
