@@ -21,6 +21,13 @@
 #     ones agent-server's own startup DDL and LangGraph's migrations created
 #     as the superuser before this role existed are handed over here, rows
 #     untouched. Each run hands over whatever isn't `agent`'s yet.
+#   - role `agent_rls_bypass` (#194; NOLOGIN, BYPASSRLS) is the one way past
+#     the row-level security agent-server puts on its tables: `agent` may
+#     only `SET ROLE` to it (no inherited privileges), and agent-server does
+#     so inside a transaction just for handing pre-Stage-3 data to the
+#     bootstrap admin. It owns nothing; agent-server's startup DDL grants it
+#     the few table privileges that needs. Only a superuser can create a
+#     BYPASSRLS role, hence here.
 #   - PUBLIC loses CONNECT on both application databases and on `postgres`
 #     and `template1`, so each role reaches only its own database.
 #
@@ -67,6 +74,12 @@ SELECT 'CREATE ROLE agent'
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'agent')\gexec
 ALTER ROLE agent WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
   PASSWORD :'agent_password';
+
+SELECT 'CREATE ROLE agent_rls_bypass'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'agent_rls_bypass')\gexec
+ALTER ROLE agent_rls_bypass WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  BYPASSRLS;
+GRANT agent_rls_bypass TO agent WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;
 
 SELECT format('CREATE DATABASE %I', :'agent_db')
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'agent_db')\gexec
@@ -124,4 +137,4 @@ END
 $$;
 SQL
 
-echo "db-init: roles 'platform' and 'agent', databases 'homeai_platform' and '${AGENT_DB}' are in place"
+echo "db-init: roles 'platform', 'agent' and 'agent_rls_bypass', databases 'homeai_platform' and '${AGENT_DB}' are in place"
