@@ -24,7 +24,9 @@
 // --space defaults to your Personal space; a shared space's slug installs
 // it there (you must be an owner or editor). --base defaults to
 // $HOMEAI_BASE_URL or http://homeai.local. The password comes from
-// $HOMEAI_PASSWORD or is prompted for (not echoed).
+// $HOMEAI_PASSWORD or is prompted for (not echoed). With TOTP on, the code
+// comes from $HOMEAI_TOTP_CODE or is prompted for; a code is single-use, so
+// wait for the next one between runs.
 //
 // app_runner_browser_smoke.mjs imports `fixtureV2` from here.
 import fs from 'node:fs';
@@ -105,6 +107,18 @@ async function readPassword() {
   });
 }
 
+async function readTotpCode() {
+  if (process.env.HOMEAI_TOTP_CODE) return process.env.HOMEAI_TOTP_CODE.trim();
+  if (!process.stdin.isTTY) throw new Error('TOTP is on for this account: set HOMEAI_TOTP_CODE');
+  const readline = await import('node:readline/promises');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return (await rl.question('TOTP code: ')).trim();
+  } finally {
+    rl.close();
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const password = await readPassword();
@@ -126,7 +140,12 @@ async function main() {
     return r.ok ? doc : { error: doc?.detail };
   };
 
-  bearer = (await call('POST', '/api/auth/login', { json: { username: opts.user, password, device_label: 'app_fixture.mjs' } })).session_token;
+  const credentials = { username: opts.user, password, device_label: 'app_fixture.mjs' };
+  let login = await call('POST', '/api/auth/login', { json: credentials, allow: ['totp_required'] });
+  if (login.error) {
+    login = await call('POST', '/api/auth/login', { json: { ...credentials, totp_code: await readTotpCode() } });
+  }
+  bearer = login.session_token;
   try {
     const spaces = (await call('GET', '/api/platform/spaces')).spaces;
     const space = opts.space ? spaces.find((s) => s.slug === opts.space) : spaces.find((s) => s.kind === 'personal');
