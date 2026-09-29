@@ -646,7 +646,9 @@ what another doc says it should be.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `app/core/config.py`'s `Settings` class): `MODEL_BASE_URL`,
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
-  `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05), `POSTGRES_USER`
+  `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05),
+  `AGENT_RECURSION_LIMIT` (optional, default 200: LangGraph steps per chat
+  turn; LangGraph's own 25 cut off app builds), `POSTGRES_USER`
   (`agent`), `POSTGRES_PASSWORD` (from `AGENT_DB_PASSWORD`),
   `POSTGRES_DB`, `PLATFORM_AGENT_TOKEN` (M10-04;
   service bearer for `GET /internal/bootstrap-admin` and, since M11-02,

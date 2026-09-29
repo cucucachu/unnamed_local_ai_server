@@ -272,6 +272,7 @@ services:
       EXEC_DEFAULT_TIMEOUT_S: ${EXEC_DEFAULT_TIMEOUT_S}
       WEB_FETCH_URL: ${WEB_FETCH_URL}
       WEB_FETCH_TOOL_MAX_CHARS: ${WEB_FETCH_TOOL_MAX_CHARS}
+      AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT:-200}
       # The non-superuser `agent` role (M11-04, created by db-init): it can
       # reach only this database, never `homeai_platform`.
       POSTGRES_USER: agent
