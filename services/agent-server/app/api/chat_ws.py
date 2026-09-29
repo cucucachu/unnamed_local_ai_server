@@ -829,6 +829,7 @@ async def _run_turn(
         thinking_enabled=thinking_enabled,
         delegation=delegation,
     )
+    config["recursion_limit"] = websocket.app.state.settings.agent_recursion_limit
 
     await websocket.send_json({"type": "turn_start"})
     async for event in agent.astream_events(run_input, config=config, version="v2"):

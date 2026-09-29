@@ -223,6 +223,33 @@ async def test_tool_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> 
     assert fake_platform.personal() == {"x.txt": b"y"}
 
 
+async def test_long_tool_turn_is_not_cut_at_langgraph_default(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    """15 tool rounds is 30+ graph steps: over LangGraph's default recursion
+    limit of 25 (the G13 health-tracker build hit it), under ours."""
+    rounds = 15
+    fake_model.queue(
+        *(
+            ToolCallTurn(
+                name="write_file",
+                args={"file_path": f"/personal/f{i}.txt", "content": "y"},
+            )
+            for i in range(rounds)
+        ),
+        TextTurn("done"),
+    )
+
+    with _make_client(
+        fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
+    ) as client, client.websocket_connect("/ws/chat/long-thread") as ws:
+        ws.send_json({"type": "user_message", "content": "write many files"})
+        frames = _drain_turn(ws)
+
+    _assert_turn_end(frames[-1], "completed")
+    assert len(fake_platform.personal()) == rounds
+
+
 async def test_execute_code_tool_turn(
     fake_model: FakeModel, fake_exec_manager: FakeExecManager, fake_platform: FakePlatform
 ) -> None:

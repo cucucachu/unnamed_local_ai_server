@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # single tool result shoves into the model's own context window).
     web_fetch_tool_max_chars: int = 30000
 
+    # LangGraph super-steps per turn (a model call and a tool round are one
+    # each). LangGraph's default of 25 stops an app build (create, several
+    # edits, build, fix, rebuild) partway. It can't be unlimited; it's the
+    # only stop for a model that loops on tool calls with nobody watching.
+    agent_recursion_limit: int = 200
+
     # Identity JWKS, the files API the agent's file tools use, and the
     # service-auth `/internal/*` routes (bootstrap admin, delegations).
     # Without a token no delegation can be minted, so chat sockets close
