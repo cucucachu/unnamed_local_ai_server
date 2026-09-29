@@ -186,6 +186,7 @@ describe('openChatSocket — send/close', () => {
     const handlers = makeHandlers();
     const chat = openChatSocket('thread-1', handlers, Ctor);
 
+    latestSocket().open();
     chat.send('hi there');
 
     expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'user_message', content: 'hi there' })]);
@@ -195,6 +196,7 @@ describe('openChatSocket — send/close', () => {
     const handlers = makeHandlers();
     const chat = openChatSocket('thread-1', handlers, Ctor);
 
+    latestSocket().open();
     chat.send('edited', { replaceFromMessageId: 'user-2', mode: 'truncate', id: 'new-id' });
 
     expect(latestSocket().sent).toEqual([
@@ -206,6 +208,31 @@ describe('openChatSocket — send/close', () => {
         id: 'new-id',
       }),
     ]);
+  });
+
+  it('queues frames sent before the handshake and flushes them on open', () => {
+    const handlers = makeHandlers();
+    const chat = openChatSocket('thread-1', handlers, Ctor);
+
+    chat.send('early');
+    expect(latestSocket().sent).toEqual([]);
+
+    latestSocket().open();
+    expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'user_message', content: 'early' })]);
+
+    chat.send('later');
+    expect(latestSocket().sent).toHaveLength(2);
+  });
+
+  it('close() drops frames that never got a handshake', () => {
+    const handlers = makeHandlers();
+    const chat = openChatSocket('thread-1', handlers, Ctor);
+
+    chat.send('never');
+    chat.close();
+    latestSocket().open();
+
+    expect(latestSocket().sent).toEqual([]);
   });
 
   it('close() closes the underlying socket', () => {
@@ -221,6 +248,7 @@ describe('openChatSocket — send/close', () => {
     const handlers = makeHandlers();
     const chat = openChatSocket('thread-1', handlers, Ctor);
 
+    latestSocket().open();
     chat.cancel();
 
     expect(latestSocket().sent).toEqual([JSON.stringify({ type: 'cancel' })]);
@@ -261,6 +289,7 @@ describe('openChatSocket — send/close', () => {
     const handlers = makeHandlers();
     const chat = openChatSocket('thread-1', handlers, Ctor);
 
+    latestSocket().open();
     chat.approvalResponse('int-1', [{ tool_call_id: 'call-1', decision: 'approve' }]);
 
     expect(latestSocket().sent).toEqual([

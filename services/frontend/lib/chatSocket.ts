@@ -236,6 +236,16 @@ export function openChatSocket(
   let closedByClient = false;
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // `WebSocket.send` throws while CONNECTING, so frames sent before `onopen`
+  // (e.g. the app agent panel's auto-sent `askAgent` prompt) wait here.
+  let isOpen = false;
+  let outbox: string[] = [];
+
+  function sendFrame(frame: object): void {
+    const data = JSON.stringify(frame);
+    if (socket && isOpen) socket.send(data);
+    else outbox.push(data);
+  }
 
   function clearReconnectTimer(): void {
     if (reconnectTimer !== null) {
@@ -360,17 +370,25 @@ export function openChatSocket(
         ? new WebSocketImpl(url, undefined, { headers })
         : new WebSocketImpl(url);
     let opened = false;
+    const current = socket;
     socket.onopen = () => {
       opened = true;
+      isOpen = true;
       reconnectAttempts = 0;
       handlers.onConnectionStateChange?.('open');
+      const pending = outbox;
+      outbox = [];
+      for (const data of pending) current.send(data);
     };
     socket.onmessage = handleMessage;
     // Browsers/RN always follow a WebSocket error with a close event, so
     // `onclose` alone owns the reconnect/surface-error decision — handling
     // it in both places would double-fire.
     socket.onerror = () => {};
-    socket.onclose = (event) => handleClose(event, opened);
+    socket.onclose = (event) => {
+      isOpen = false;
+      handleClose(event, opened);
+    };
   }
 
   connect();
@@ -387,11 +405,11 @@ export function openChatSocket(
       if (options?.id) {
         frame.id = options.id;
       }
-      socket?.send(JSON.stringify(frame));
+      sendFrame(frame);
     },
     cancel(): void {
       const frame: CancelFrame = { type: 'cancel' };
-      socket?.send(JSON.stringify(frame));
+      sendFrame(frame);
     },
     approvalResponse(interruptId: string, decisions: ApprovalDecision[]): void {
       const frame: ApprovalResponseFrame = {
@@ -399,10 +417,12 @@ export function openChatSocket(
         interrupt_id: interruptId,
         decisions,
       };
-      socket?.send(JSON.stringify(frame));
+      sendFrame(frame);
     },
     close(): void {
       closedByClient = true;
+      isOpen = false;
+      outbox = [];
       clearReconnectTimer();
       socket?.close();
       handlers.onConnectionStateChange?.('closed');

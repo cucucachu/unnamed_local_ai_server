@@ -385,6 +385,7 @@ describe('useChat — tool-only turn with no trailing text (substituted edge cas
 describe('useChat — stopTurn / cancelled turn_end (M8-01)', () => {
   it('marks the currently-streaming assistant item stopped:true on turn_end status "cancelled", and clears busy', async () => {
     const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
 
     act(() => {
       hook.current().sendMessage('count slowly');
@@ -430,6 +431,7 @@ describe('useChat — stopTurn / cancelled turn_end (M8-01)', () => {
 
   it('a cancel with no streaming item in flight is a harmless no-op', async () => {
     const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
 
     act(() => {
       hook.current().stopTurn();
@@ -444,6 +446,7 @@ describe('useChat — stopTurn / cancelled turn_end (M8-01)', () => {
 describe('useChat — sendMessage', () => {
   it('appends a user item immediately, sets busy, and sends a user_message frame', async () => {
     const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
 
     act(() => {
       hook.current().sendMessage('hi there');
@@ -461,6 +464,7 @@ describe('useChat — sendMessage', () => {
 
   it('replaceFromMessageId drops items from that user item onward and sends truncate fields (M8-04)', async () => {
     const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
 
     act(() => {
       hook.current().sendMessage('one');
@@ -701,6 +705,7 @@ describe('useChat — HITL approvals (M8-03)', () => {
 
   it('respondToApproval sends approval_response, clears pendingApproval, and sets busy', async () => {
     const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
 
     act(() => {
       latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
@@ -747,6 +752,7 @@ describe('useChat — HITL approvals (M8-03)', () => {
 
   it('respondToApproval is a no-op if called again after the first response (avoids double-submit)', async () => {
     const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
 
     act(() => {
       latestSocket().emit({ type: 'approval_request', interrupt_id: 'int-1', actions: [action] });
