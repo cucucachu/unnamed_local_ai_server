@@ -145,8 +145,9 @@ async def list_instances(space_id: UUID, request: Request, principal: CurrentUse
 async def install_app(
     space_id: UUID, body: InstallRequest, request: Request, principal: CurrentUser
 ):
+    """Pinned installs migrate here; nothing builds them. Working copies migrate on build."""
     async with request.app.state.db_pool.connection() as conn:
-        return await apps.install_app(
+        instance = await apps.install_app(
             conn,
             principal,
             request.app.state.storage,
@@ -156,6 +157,9 @@ async def install_app(
             body.granted_permissions,
             body.granted_reads,
         )
+    if instance["tracks"] != apps.WORKING:
+        await request.app.state.appdata.migrate(principal, instance["id"])
+    return instance
 
 
 @router.delete("/spaces/{space_id}/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
