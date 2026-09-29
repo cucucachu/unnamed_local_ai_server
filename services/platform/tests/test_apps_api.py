@@ -12,6 +12,7 @@ import json
 import shutil
 import stat
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -384,14 +385,17 @@ async def test_install_rejects_unknown_tracks_and_apps(world) -> None:
 
 
 async def test_install_pinned_published_version(world) -> None:
-    _family_pkg(world)
+    pkg = _family_pkg(world)
     app = await _registered(world)
+    snapshot = f"app-releases/{app['id']}/{uuid4()}"
+    shutil.copytree(pkg, world.platform.app.state.settings.platform_data_dir / snapshot)
     (version,) = sql(
         world.platform,
-        "INSERT INTO app_versions (app_id, version, kind, manifest, published_at) "
-        "SELECT app_id, version, 'published', manifest, now() FROM app_versions "
+        "INSERT INTO app_versions (app_id, version, kind, manifest, published_at, "
+        "source_snapshot) "
+        "SELECT app_id, version, 'published', manifest, now(), %s FROM app_versions "
         "WHERE app_id = %s RETURNING id",
-        (app["id"],),
+        (snapshot, app["id"]),
     )
     response = await _install(
         world, world.headers["alice"], world.family["id"], app["id"], str(version["id"])

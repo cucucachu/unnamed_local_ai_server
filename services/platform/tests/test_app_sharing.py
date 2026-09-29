@@ -149,6 +149,12 @@ async def test_family_member_installs_a_published_version(world: World) -> None:
     assert inst["tracks"] == version_id
     assert inst["granted_permissions"] == {}
     assert inst["update"] is None
+    rows = await world.client.post(
+        f"{API}/apps/instances/{inst['id']}/rpc",
+        json={"op": "getAll", "sql": "SELECT name FROM items"},
+        headers=world.headers["bob"],
+    )
+    assert (rows.status_code, rows.json()["rows"]) == (200, [])
     listing = await world.client.get(
         f"{API}/spaces/{world.family['id']}/catalog", headers=world.headers["carol"]
     )
@@ -376,7 +382,7 @@ async def test_pinned_instance_reads_schema_and_actions_from_the_snapshot(world:
         f"{API}/apps/instances/{inst['id']}/migrate", headers=world.headers["bob"]
     )
     assert migrated.status_code == 200, migrated.text
-    assert migrated.json()["status"] == "applied"
+    assert migrated.json()["status"] == "up_to_date"
     rpc = await world.client.post(
         f"{API}/apps/instances/{inst['id']}/rpc",
         json={"op": "action", "name": "addItem", "params": {"name": "milk"}},
