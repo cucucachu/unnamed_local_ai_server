@@ -138,13 +138,13 @@ built from `main`, the builder image built):
    `EXPO_PUBLIC_API_HOST` pointing at the host as for the other Expo Go
    checks; open it in Expo Go (SDK 57) and sign in.
 
-- [ ] (M12-06) Expo Go (Android and iOS): the **Apps** tab lists "Runtime check" under Personal; tapping it opens the app (build label `v1`, your space and `(owner)`) with no blank screen or red box.
-- [ ] (M12-06) Expo Go: type an item, tap **Add** — the status reads `added N` and the list shows it; leave the runner, reopen it (and fully restart Expo Go once) — the item is still there.
-- [ ] (M12-06) Expo Go: with the runner open, run `node scripts/e2e/app_fixture.mjs v2 --user <you>` on the host — within a few seconds the label changes to `v2` and a **Crash** button appears without leaving the screen (hot reload).
-- [ ] (M12-06) Expo Go: tap **Crash** — the host's "This app hit an error" overlay shows `e2e runner crash`; **Reload** brings the app back (`v2`, items intact). Then `node scripts/e2e/app_fixture.mjs v1 --user <you>` to restore.
-- [ ] (M12-06) Expo Go: tap an item, then **Back** — in-app navigation works and no external browser or other app opens at any point.
-- [ ] (M12-06) Expo Go, as a **viewer** of a shared space where the app is installed (`install --space <slug>` as its owner): the row says "View only", the runner shows the read-only note, and **Add** reads `refused: read_only`.
-- [ ] (M12-06) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (and `--space <slug>`); the Apps tab no longer lists it.
+- [x] (M12-06) Expo Go (Android and iOS): the **Apps** tab lists "Runtime check" under Personal; tapping it opens the app (build label `v1`, your space and `(owner)`) with no blank screen or red box.
+- [x] (M12-06) Expo Go: type an item, tap **Add** — the status reads `added N` and the list shows it; leave the runner, reopen it (and fully restart Expo Go once) — the item is still there.
+- [x] (M12-06) Expo Go: with the runner open, run `node scripts/e2e/app_fixture.mjs v2 --user <you>` on the host — within a few seconds the label changes to `v2` and a **Crash** button appears without leaving the screen (hot reload).
+- [x] (M12-06) Expo Go: tap **Crash** — the host's "This app hit an error" overlay shows `e2e runner crash`; **Reload** brings the app back (`v2`, items intact). Then `node scripts/e2e/app_fixture.mjs v1 --user <you>` to restore.
+- [x] (M12-06) Expo Go: tap an item, then **Back** — in-app navigation works and no external browser or other app opens at any point.
+- [x] (M12-06) Expo Go, as a **viewer** of a shared space where the app is installed (`install --space <slug>` as its owner): the row says "View only", the runner shows the read-only note, and **Add** reads `refused: read_only`.
+- [x] (M12-06) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (and `--space <slug>`); the Apps tab no longer lists it.
 
 
 **GATE G12 (M12-08)**: the reference Grocery list app in a shared space on
@@ -169,17 +169,17 @@ probe script as below in Chromium). Setup:
    open `http://homeai.local` in a browser and sign in (as yourself, or as
    the second person in a private window).
 
-- [ ] (M12-08) Expo Go: **Apps** lists "Grocery list" under the shared space and under Personal; opening the shared one renders the list (no blank screen or red box). **(GATE G12)**
-- [ ] (M12-08) Browser: open the shared space's Grocery list and add `Milk` — within a couple of seconds it appears on the phone without touching it. Tick it on the phone — the browser shows it ticked. **Clear checked** in the browser — it disappears on the phone. **(GATE G12)**
-- [ ] (M12-08) Phone: add `Eggs`, tap it, set a quantity on the detail screen, **Save** — back on the list it reads `× <quantity>`, and the browser shows the same. **(GATE G12)**
-- [ ] (M12-08) Phone: open Grocery list under **Personal** — it's a separate, empty list; nothing from the shared one is in it. **(GATE G12)**
-- [ ] (M12-08) If the second person is a **viewer** of the space: on their phone the app is "View only", with no add box or **Clear checked**, and their taps change nothing.
-- [ ] (M12-08, spike 1-2: render + navigate) Expo Go: open "Runtime check" (Personal): it renders `v1`; tap an item — its screen opens; **Back** returns to the list.
-- [ ] (M12-08, spike 4: hot reload keeps the route) Open an item in "Runtime check", then on the host run `node scripts/e2e/app_fixture.mjs v2 --user <you>` — you stay on the item's screen; tap **Back** — the label reads `v2` and a **Crash** button is there, with no reload. Restore with `... v1 --user <you>`.
+- [x] (M12-08) Expo Go: **Apps** lists "Grocery list" under the shared space and under Personal; opening the shared one renders the list (no blank screen or red box). **(GATE G12)**
+- [x] (M12-08) Browser: open the shared space's Grocery list and add `Milk` — within a couple of seconds it appears on the phone without touching it. Tick it on the phone — the browser shows it ticked. **Clear checked** in the browser — it disappears on the phone. **(GATE G12)**
+- [x] (M12-08) Phone: add `Eggs`, tap it, set a quantity on the detail screen, **Save** — back on the list it reads `× <quantity>`, and the browser shows the same. **(GATE G12)**
+- [x] (M12-08) Phone: open Grocery list under **Personal** — it's a separate, empty list; nothing from the shared one is in it. **(GATE G12)**
+- [x] (M12-08) If the second person is a **viewer** of the space: on their phone the app is "View only", with no add box or **Clear checked**, and their taps change nothing.
+- [x] (M12-08, spike 1-2: render + navigate) Expo Go: open "Runtime check" (Personal): it renders `v1`; tap an item — its screen opens; **Back** returns to the list.
+- [x] (M12-08, spike 4: hot reload keeps the route) Open an item in "Runtime check", then on the host run `node scripts/e2e/app_fixture.mjs v2 --user <you>` — you stay on the item's screen; tap **Back** — the label reads `v2` and a **Crash** button is there, with no reload. Restore with `... v1 --user <you>`.
 - [ ] (M12-08, spike 3 + 5: bench and probes) With "Runtime check" open, attach the WebView devtools (`webviewDebuggingEnabled` is on in dev; Android: USB debugging + `chrome://inspect` on the laptop; iOS: Safari → Develop → the phone), pick the sandbox page (`about:blank`), paste the whole of `scripts/e2e/sandbox_probe.js` into its console, then run `await homeaiSandboxProbe('http://<host>')`. **Pass:** `bench.failures` is 0 and `bench.p95` < 25 ms (the spike's bar; it now includes the Wi-Fi round trip to the platform, so record the numbers even if it misses); `escaped` is `[]`; every `fetch …`, `XMLHttpRequest`, `WebSocket …` and `image beacon` entry has `"ok": false`; `document.cookie` / storage are refused or empty. No external browser or other app opens (the `window.open` probe), and the app keeps running.
 - [ ] (M12-08, spike 5: navigation) In the same console: `await homeaiSandboxProbe('http://<host>', { bench: 0, navigate: true })` — no browser opens, the app stays on screen and still works (tap **Add**).
 - [ ] (M12-08) Paste both JSON reports into issue #149 with the device model, OS version and Expo Go version; Android, and iOS too if you can.
-- [ ] (M12-08) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (the fixture), and for Grocery list `--app examples/apps/grocery-list` with and without `--space <slug>` (or keep it; it's yours).
+- [x] (M12-08) Clean up: `node scripts/e2e/app_fixture.mjs uninstall --user <you>` (the fixture), and for Grocery list `--app examples/apps/grocery-list` with and without `--space <slug>` (or keep it; it's yours).
 
 > **PM sign-off: G12 passed ____**
 
