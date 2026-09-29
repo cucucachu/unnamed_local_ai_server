@@ -103,24 +103,24 @@ agent run.
 
 ## M10
 
-- [ ] (M10-08) Get the setup code (`docker compose exec platform cat /data/platform/setup-code`, or `docker compose logs platform | grep -i setup`), open `http://homeai.local`, complete Setup as yourself — you become the bootstrap admin; your pre-Stage-3 chat threads (and settings) appear under your account.
-- [ ] (M10-08) Settings → Account: enable TOTP with an authenticator app; sign out and back in with the code.
-- [ ] (M10-08) Settings → Admin → Invites: invite a second person; they accept on their phone in the browser **and** in Expo Go (sign in with the same account); each sees only their own threads.
-- [ ] (M10-08) Settings → Spaces: create a shared space and add them; they see it in their Spaces list.
-- [ ] (M10-08) Settings → Sessions: revoke one of your other devices; it is signed out on its next request.
+- [x] (M10-08) Get the setup code (`docker compose exec platform cat /data/platform/setup-code`, or `docker compose logs platform | grep -i setup`), open `http://homeai.local`, complete Setup as yourself — you become the bootstrap admin; your pre-Stage-3 chat threads (and settings) appear under your account.
+- [x] (M10-08) Settings → Account: enable TOTP with an authenticator app; sign out and back in with the code.
+- [x] (M10-08) Settings → Admin → Invites: invite a second person; they accept on their phone in the browser **and** in Expo Go (sign in with the same account); each sees only their own threads.
+- [x] (M10-08) Settings → Spaces: create a shared space and add them; they see it in their Spaces list.
+- [x] (M10-08) Settings → Sessions: revoke one of your other devices; it is signed out on its next request.
 
-> **PM sign-off: G10 passed ____**
+> **PM sign-off: G10 passed 2026-09-28**
 
 ## M11
 
-- [ ] (M11-05) `sudo scripts/verify_network.sh` on the host: all checks green (`gate_m11.sh` skips it when not run as root).
-- [ ] (M11-05) From two phones signed in as two different people (you and an invited member): each uploads a file to Personal; neither sees the other's file in Files, and asking your own agent to read the other's file finds nothing. **(GATE G11)**
-- [ ] (M11-05) Settings → Spaces: add the second person to a shared space as a **viewer**. From your phone, upload a file there (or ask your agent to write one); it shows up on both phones. **(GATE G11)**
-- [ ] (M11-05) On the viewer's phone: the space is marked read-only, with no Upload/New folder and only Download on a file; asking their agent to write or edit a file in the space is refused and nothing appears on your phone. **(GATE G11)**
+- [x] (M11-05) `sudo scripts/verify_network.sh` on the host: all checks green (`gate_m11.sh` skips it when not run as root).
+- [x] (M11-05) From two phones signed in as two different people (you and an invited member): each uploads a file to Personal; neither sees the other's file in Files, and asking your own agent to read the other's file finds nothing. **(GATE G11)**
+- [x] (M11-05) Settings → Spaces: add the second person to a shared space as a **viewer**. From your phone, upload a file there (or ask your agent to write one); it shows up on both phones. **(GATE G11)**
+- [x] (M11-05) On the viewer's phone: the space is marked read-only, with no Upload/New folder and only Download on a file; asking their agent to write or edit a file in the space is refused and nothing appears on your phone. **(GATE G11)**
 
-- [ ] (#194) When you complete Setup (M10-08): the three pre-Stage-3 threads appear under your account, each opens with its full history, and one of them takes a new turn. The hand-over now runs through the `agent_rls_bypass` role, which the automated checks can't reach without completing bootstrap.
+- [x] (#194) When you complete Setup (M10-08): the three pre-Stage-3 threads appear under your account, each opens with its full history, and one of them takes a new turn. The hand-over now runs through the `agent_rls_bypass` role, which the automated checks can't reach without completing bootstrap.
 
-> **PM sign-off: G11 passed ____**
+> **PM sign-off: G11 passed 2026-09-28**
 
 ## M12
 
