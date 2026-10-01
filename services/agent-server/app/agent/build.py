@@ -72,6 +72,7 @@ from __future__ import annotations
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.utils import validate_path
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import ToolCallRequest
@@ -83,6 +84,7 @@ from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
 from app.agent.prompts import APP_AUTHORING_GUIDE, SYSTEM_PROMPT
+from app.agent.tool_errors import CompactToolErrorsMiddleware
 from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
 from app.core.config import Settings
 
@@ -145,10 +147,26 @@ def _interrupt_on_config() -> InterruptOnConfig:
     )
 
 
+def build_backend(settings: Settings) -> CompositeBackend:
+    """The user's files, plus per-thread state for what middleware sets aside.
+
+    Summarization offloads evicted history to `/conversation_history/` and
+    big tool results to `/large_tool_results/`. The platform only has
+    `/personal` and `/spaces`, so those live in the thread's checkpoint,
+    where the agent can still `read_file` them.
+    """
+    scratch = StateBackend()
+    return CompositeBackend(
+        default=PlatformFilesBackend(settings.platform_url),
+        routes={"/conversation_history/": scratch, "/large_tool_results/": scratch},
+    )
+
+
 def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
     return create_deep_agent(
         model=build_model(settings),
-        backend=PlatformFilesBackend(settings.platform_url),
+        backend=build_backend(settings),
+        middleware=[CompactToolErrorsMiddleware()],
         system_prompt=SYSTEM_PROMPT + APP_AUTHORING_GUIDE,
         tools=[
             make_execute_code_tool(settings),

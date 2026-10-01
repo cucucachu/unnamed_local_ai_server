@@ -9,6 +9,9 @@ injects `extra_body={"chat_template_kwargs": {"enable_thinking": ...}}`.
 That is the "configurable -> model kwargs" path (not `model.bind(...)`):
 the compiled deep agent already owns the model instance, so a per-turn
 `.bind()` would be discarded.
+
+`profile.max_input_tokens` is what deepagents' summarization middleware
+reads to trigger at 85% of the window (`compute_summarization_defaults`).
 """
 
 from app.agent.reasoning_model import ReasoningChatOpenAI
@@ -24,4 +27,5 @@ def build_model(settings: Settings) -> ReasoningChatOpenAI:
         streaming=True,
         max_retries=1,
         timeout=600,
+        profile={"max_input_tokens": settings.agent_context_tokens},
     )

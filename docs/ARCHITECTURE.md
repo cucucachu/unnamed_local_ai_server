@@ -648,7 +648,10 @@ what another doc says it should be.
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
   `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05),
   `AGENT_RECURSION_LIMIT` (optional, default 200: LangGraph steps per chat
-  turn; LangGraph's own 25 cut off app builds), `POSTGRES_USER`
+  turn; LangGraph's own 25 cut off app builds), `AGENT_CONTEXT_TOKENS`
+  (optional, defaults to `MODEL_CTX_SIZE`: the model's window; deepagents
+  summarizes history and clips old tool arguments at 85% of it, and a
+  llama-server overflow summarizes and retries), `POSTGRES_USER`
   (`agent`), `POSTGRES_PASSWORD` (from `AGENT_DB_PASSWORD`),
   `POSTGRES_DB`, `PLATFORM_AGENT_TOKEN` (M10-04;
   service bearer for `GET /internal/bootstrap-admin` and, since M11-02,
@@ -2835,15 +2838,23 @@ docker compose run --rm --entrypoint /app/llama model-runner \
 
 ### Context-size tradeoffs
 
-`MODEL_CTX_SIZE=32768` (32K tokens) in `.env`/`.env.example`, passed
-straight through to `llama-server`'s `--ctx-size`. The model itself
-supports up to 256K context per its model card — 32K was picked as a
-generous-but-bounded middle ground for interactive chat + tool-calling
-history, not from a dedicated benchmark. Unlike the quant choice below,
-**context size has not been benchmarked directly in this repo** — no
-ticket has measured the actual KV-cache memory cost or throughput impact
-of raising `MODEL_CTX_SIZE`. The real tradeoff, documented here rather than
-measured, is: KV-cache memory scales with context size and shares the same
+`MODEL_CTX_SIZE=65536` (64K tokens) in `.env`/`.env.example`, passed
+straight through to `llama-server`'s `--ctx-size` and, as
+`AGENT_CONTEXT_TOKENS`, to the agent's summarization budget. The model
+supports 256K. 32K overflowed during a G14 app edit (several whole-file
+rewrites of one screen).
+
+Measured on this host (Q8_0, `n_parallel` auto = 4 slots sharing one
+unified KV cache): only 5 of the 30 layers use global attention; the
+other 25 are sliding-window (1024) with a fixed-size cache. At 32K the KV
+cache was 640 MiB global + 900 MiB SWA, so each extra 32K costs about
+640 MiB; weights are ~26 GB of the 64 GB the iGPU can map. Memory is not
+the limit. Prompt processing is: ~180 tokens/s (generation ~13 tokens/s),
+so a prompt the server can't serve from its cache (e.g. right after
+summarization rewrites history) costs ~3 min at 32K and ~6 min at 64K.
+Ordinary turns only process the new tokens.
+
+The general tradeoff: KV-cache memory scales with context size and shares the same
 GPU-mappable memory pool (VRAM+GTT) as the model weights themselves — the
 same pool that made `BF16` fail to load in the benchmark below at the
 *default* GTT cap — so a much larger context size on a large-quant model
