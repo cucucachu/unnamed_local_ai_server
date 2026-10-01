@@ -91,7 +91,15 @@ def test_edit_semantics() -> None:
     ("content", "old", "code", "message"),
     [
         ("alpha beta\nbeta gamma\n", "nope", "string_not_found",
-         "Error: String not found in file: 'nope'"),
+         ("Error: String not found in file: 'nope'. Its first line is not in the file; read "
+          "the file and copy the text exactly.")),
+        ("a\nb\nc\nd\n", "b\nc\nX", "string_not_found",
+         ("Error: String not found in file: 'b\nc\nX'. Its first 2 line(s) match file lines 2-3, "
+          "then old_string line 3 differs from file line 4:\n  file:       d\n  old_string: X")),
+        ("if x:\n    y = 1\n", "if x:\n  y = 1", "string_not_found",
+         ("Error: String not found in file: 'if x:\n  y = 1'. Its first 1 line(s) match file "
+          "lines 1-1, then old_string line 2 differs from file line 2:\n  file:           y = 1\n"
+          "  old_string:   y = 1\n(The difference is only whitespace or indentation.)")),
         ("alpha beta\nbeta gamma\n", "beta", "string_not_unique",
          ("Error: String 'beta' appears 2 times in file. Use replace_all=True to replace all "
           "instances, or provide a more specific string with surrounding context.")),
@@ -110,6 +118,19 @@ def test_edit_errors_match_deepagents(content, old, code, message) -> None:
     with pytest.raises(AgentFsError) as exc:
         agentfs.edit_text(content, old, "x", False)
     assert (exc.value.code, exc.value.message) == (code, message)
+
+
+def test_a_long_old_string_is_not_echoed_back() -> None:
+    content = "".join(f"line {i}\n" for i in range(400))
+    old = content[: content.index("line 300")] + "line 300 typo\n"
+    with pytest.raises(AgentFsError) as exc:
+        agentfs.edit_text(content, old, "x", False)
+    assert len(exc.value.message) < 400
+    assert exc.value.message == (
+        f"Error: String not found in file: starting 'line 0' ({len(old)} characters). Its first "
+        "300 line(s) match file lines 1-300, then old_string line 301 differs from file line 301:\n"
+        "  file:       line 300\n  old_string: line 300 typo"
+    )
 
 
 # --- glob patterns ------------------------------------------------------------------

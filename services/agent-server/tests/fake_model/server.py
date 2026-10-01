@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .scripting import (
+    ErrorTurn,
     FakeModel,
     TextTurn,
     ToolCallsTurn,
@@ -46,6 +47,9 @@ def create_fake_model_app(fake: FakeModel) -> FastAPI:
                 status_code=500,
                 detail="FakeModel turn queue is empty — no scripted response left to serve.",
             ) from exc
+
+        if isinstance(turn, ErrorTurn):
+            return JSONResponse(turn.body, status_code=turn.status)
 
         completion_id = new_completion_id()
         created = int(time.time())

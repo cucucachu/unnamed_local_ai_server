@@ -135,6 +135,66 @@ def slice_text(content: str, offset: int, limit: int) -> dict:
 # --- edit ------------------------------------------------------------------------
 
 
+# Edit errors stay in the agent's history for the rest of the thread, so a long
+# old_string isn't repeated back; the model has it in its own tool call.
+_ECHO_MAX = 200
+_LINE_MAX = 160
+
+
+def _shown(old: str) -> str:
+    if len(old) <= _ECHO_MAX:
+        return f"'{old}'"
+    first = old.split("\n", 1)[0][:_LINE_MAX]
+    return f"starting '{first}' ({len(old)} characters)"
+
+
+def _clip(line: str) -> str:
+    return line if len(line) <= _LINE_MAX else line[:_LINE_MAX] + "…"
+
+
+def _line_matches(file_line: str, old_line: str, i: int, last: int) -> bool:
+    if i == 0 and i == last:
+        return old_line in file_line
+    if i == 0:
+        return file_line.endswith(old_line)
+    if i == last:
+        return file_line.startswith(old_line)
+    return file_line == old_line
+
+
+def _not_found_message(content: str, old: str) -> str:
+    """Where the longest run of `old`'s leading lines matches, and the first line that differs."""
+    message = f"Error: String not found in file: {_shown(old)}"
+    old_lines = old.split("\n")
+    file_lines = content.split("\n")
+    last = len(old_lines) - 1
+    best_start, best_len = 0, 0
+    for start in range(len(file_lines)):
+        n = 0
+        while (
+            n <= last
+            and start + n < len(file_lines)
+            and _line_matches(file_lines[start + n], old_lines[n], n, last)
+        ):
+            n += 1
+        if n > best_len:
+            best_start, best_len = start, n
+    if best_len == 0:
+        return f"{message}. Its first line is not in the file; read the file and copy the text exactly."
+    at = best_start + best_len
+    differs = old_lines[best_len]
+    found = file_lines[at] if at < len(file_lines) else "<end of file>"
+    hint = (
+        f"{message}. Its first {best_len} line(s) match file lines {best_start + 1}-{at}, "
+        f"then old_string line {best_len + 1} differs from file line {at + 1}:\n"
+        f"  file:       {_clip(found)}\n"
+        f"  old_string: {_clip(differs)}"
+    )
+    if found.strip() == differs.strip():
+        hint += "\n(The difference is only whitespace or indentation.)"
+    return hint
+
+
 def replace_string(content: str, old: str, new: str, replace_all: bool) -> tuple[str, int]:
     occurrences = content.count(old)
     if occurrences == 0:
@@ -154,11 +214,11 @@ def replace_string(content: str, old: str, new: str, replace_all: bool) -> tuple
                 f"{stripped_count} times in the file. Retry with the trailing newline removed "
                 "and add surrounding context so the match is unique.",
             )
-        raise AgentFsError("string_not_found", f"Error: String not found in file: '{old}'")
+        raise AgentFsError("string_not_found", _not_found_message(content, old))
     if occurrences > 1 and not replace_all:
         raise AgentFsError(
             "string_not_unique",
-            f"Error: String '{old}' appears {occurrences} times in file. Use replace_all=True "
+            f"Error: String {_shown(old)} appears {occurrences} times in file. Use replace_all=True "
             "to replace all instances, or provide a more specific string with surrounding "
             "context.",
             occurrences=occurrences,

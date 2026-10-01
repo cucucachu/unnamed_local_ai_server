@@ -11,6 +11,10 @@ class Settings(BaseSettings):
 
     model_base_url: str = "http://model-runner:8080/v1"
     model_name: str = "gemma-4-26b-a4b-it"
+    # model-runner's --ctx-size (compose passes MODEL_CTX_SIZE). deepagents
+    # sizes its history summarization and old-tool-arg truncation from it;
+    # without it they wait for 170k tokens and never fire on a local model.
+    agent_context_tokens: int = 32768
 
     exec_manager_url: str = "http://code-exec-manager:8090"
     exec_default_timeout_s: int = 120

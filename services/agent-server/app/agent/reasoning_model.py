@@ -40,12 +40,26 @@ M8-07 wires this class into `build_model` (`model_client.py`). Per-turn
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import openai
-from langchain_core.outputs import ChatResult
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables.config import var_child_runnable_config
 from langchain_openai import ChatOpenAI
+from langchain_openai.chat_models.base import OpenAIContextOverflowError
+
+# llama-server's 400 when the prompt is over --ctx-size; langchain-openai
+# only recognizes OpenAI's own wording, so it would surface as a plain error.
+_LLAMA_OVERFLOW = "exceed_context_size_error"
+
+
+def _raise_if_overflow(exc: openai.BadRequestError) -> None:
+    if isinstance(exc, OpenAIContextOverflowError) or _LLAMA_OVERFLOW not in str(exc):
+        return
+    raise OpenAIContextOverflowError(
+        message=exc.message, response=exc.response, body=exc.body
+    ) from exc
 
 
 class ReasoningChatOpenAI(ChatOpenAI):
@@ -80,6 +94,35 @@ class ReasoningChatOpenAI(ChatOpenAI):
     the OpenAI request. Default is `False` when the key is absent, matching
     `SettingsDocument.thinking_enabled`.
     """
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        try:
+            return super()._generate(*args, **kwargs)
+        except openai.BadRequestError as exc:
+            _raise_if_overflow(exc)
+            raise
+
+    async def _agenerate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        try:
+            return await super()._agenerate(*args, **kwargs)
+        except openai.BadRequestError as exc:
+            _raise_if_overflow(exc)
+            raise
+
+    def _stream(self, *args: Any, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        try:
+            yield from super()._stream(*args, **kwargs)
+        except openai.BadRequestError as exc:
+            _raise_if_overflow(exc)
+            raise
+
+    async def _astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        try:
+            async for chunk in super()._astream(*args, **kwargs):
+                yield chunk
+        except openai.BadRequestError as exc:
+            _raise_if_overflow(exc)
+            raise
 
     @property
     def _default_params(self) -> dict[str, Any]:

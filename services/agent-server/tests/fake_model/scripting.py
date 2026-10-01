@@ -63,7 +63,15 @@ class ToolCallsTurn:
     calls: list[tuple[str, dict]]
 
 
-Turn = TextTurn | ToolCallTurn | ToolCallsTurn
+@dataclass
+class ErrorTurn:
+    """Model server answers with an HTTP error (e.g. llama-server's context overflow)."""
+
+    status: int
+    body: dict
+
+
+Turn = TextTurn | ToolCallTurn | ToolCallsTurn | ErrorTurn
 
 
 class FakeModel:
