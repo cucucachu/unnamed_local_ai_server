@@ -60,6 +60,11 @@ exporter lists exports [{name, version, tables, actions?}]; a reader lists
 reads [{app: <slug>, export, version}] and is granted that list at install.
 The reader queries the merged view <app>_<export> (rows include _space).
 Bump export version when tables or columns change.
+app.json version is semver. Leave it at 1.0.0 while first creating an app. Once it is
+published, build_app moves it to the next patch on its own. When you change an existing
+app, set the next minor yourself (1.2.3 -> 1.3.0) for a new feature, or the next major
+(2.0.0) for a breaking change (removed screens, actions, tables or columns), before
+build_app. Never lower it.
 Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk, relative files
 in this folder. No fetch, window, document, react-dom, or fs.
 @homeai/sdk:
