@@ -251,6 +251,16 @@ class AppHistory:
         repo = self._ensure(app_id)
         return self.commit(app_id, self._tree_of(repo, target), text)
 
+    def tree_of(self, app_id: UUID, commit: str) -> str | None:
+        """The tree id of `commit`, or None if the app has no history or no such commit."""
+        repo = self.repo(app_id)
+        if not COMMIT_RE.fullmatch(commit) or not (repo / "HEAD").is_file():
+            return None
+        try:
+            return self._tree_of(repo, commit)
+        except HistoryError:
+            return None
+
     # --- reading -------------------------------------------------------------------
 
     def resolve(self, app_id: UUID, rev: str) -> str | None:

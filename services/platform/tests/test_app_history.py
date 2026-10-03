@@ -199,6 +199,70 @@ async def test_history_is_paginated_newest_first(world, builder) -> None:
     assert (await _history(world, app["id"], limit=101)).status_code == 422
 
 
+# --- the patch bump after a publish ----------------------------------------------------------
+
+
+async def _publish(world: World, app_id: str) -> httpx.Response:
+    return await world.client.post(
+        f"{APPS}/{app_id}/publish",
+        json={"space_ids": [world.family["id"]]},
+        headers=world.headers["alice"],
+    )
+
+
+def _src_version(world: World) -> str:
+    return json.loads((_src(world) / "app.json").read_text())["version"]
+
+
+async def test_the_first_build_after_a_publish_bumps_the_patch_once(world, builder) -> None:
+    app = await _registered(world)
+    await _build(world, app["id"])
+    assert (await _publish(world, app["id"])).status_code == 200
+
+    unchanged = await _build(world, app["id"])
+    assert unchanged["app"]["working_version"]["version"] == "1.0.0"
+    assert _src_version(world) == "1.0.0"
+
+    (_src(world) / "app" / "index.tsx").write_text(INDEX_V2)
+    body = await _build(world, app["id"])
+    assert body["app"]["working_version"]["version"] == "1.0.1"
+    assert _src_version(world) == "1.0.1"
+    head = body["build"]["commit"]
+    assert json.loads(_tree(world, app["id"], head)["app.json"])["version"] == "1.0.1"
+    assert (await _commits(world, app["id"]))[0]["subject"] == "Build 1.0.1"
+
+    (_src(world) / "app" / "index.tsx").write_text(INDEX_V1)
+    again = await _build(world, app["id"])
+    assert again["app"]["working_version"]["version"] == "1.0.1"
+    published = await _publish(world, app["id"])
+    assert (published.status_code, published.json()["version"]["version"]) == (200, "1.0.1")
+
+
+async def test_an_authors_bump_above_the_published_versions_is_kept(world, builder) -> None:
+    app = await _registered(world)
+    await _build(world, app["id"])
+    await _publish(world, app["id"])
+
+    (_src(world) / "app" / "index.tsx").write_text(INDEX_V2)
+    (_src(world) / "app.json").write_text(json.dumps(manifest("hello", version="1.1.0")))
+    body = await _build(world, app["id"])
+
+    assert body["app"]["working_version"]["version"] == "1.1.0"
+    assert _src_version(world) == "1.1.0"
+
+
+async def test_a_revert_past_a_publish_builds_as_a_new_patch(world, builder) -> None:
+    app, first, _second = await _two_builds(world)
+    await _publish(world, app["id"])
+
+    response = await _revert(world, app["id"], first)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["app"]["working_version"]["version"] == "1.0.1"
+    assert (_src(world) / "app" / "index.tsx").read_text() == INDEX_V1
+    assert _src_version(world) == "1.0.1"
+
+
 async def test_an_app_never_built_has_no_history(world, builder) -> None:
     app = await _registered(world)
     assert (await _history(world, app["id"])).json() == {"commits": [], "next_offset": None}

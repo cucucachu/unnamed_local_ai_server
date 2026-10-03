@@ -29,6 +29,13 @@ A successful build also commits the staged `src/` to the app's history
 (`app.core.apphistory`) and records the commit as the working version's
 `commit`; a failed one commits nothing. `revert_app` commits an earlier
 tree again, writes it back into the source folder by fd, and rebuilds.
+
+A successful build whose `app.json` version isn't above every published
+version, and whose source differs from the latest published one, builds as
+the next patch after the highest published version: the staged `app.json`
+is rewritten before the commit and then written back into the source folder
+(skipped if that file changed meanwhile). Major and minor bumps are the
+author's.
 """
 
 from __future__ import annotations
@@ -462,6 +469,68 @@ def _staged_tree(history: AppHistory | None, app_id: UUID, builds: Builds, build
         return None
 
 
+_CORE_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+
+
+def _core(version: Any) -> tuple[int, int, int] | None:
+    m = _CORE_RE.match(version) if isinstance(version, str) else None
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def _bumped_version(
+    history: AppHistory | None, app_id: UUID, version: str, published: list, tree: str | None
+) -> str | None:
+    """The patch after the highest published version, if `version` isn't above it and the
+    source differs from the latest published one (`published` is newest first); else None.
+
+    So a publish never collides, and the builds between two publishes share one bump.
+    """
+    cores = [c for c in (_core(p["version"]) for p in published) if c]
+    mine = _core(version)
+    if not cores or mine is None or mine > max(cores):
+        return None
+    latest = published[0]["commit"]
+    if (
+        history is not None
+        and tree is not None
+        and latest
+        and history.tree_of(app_id, latest) == tree
+    ):
+        return None
+    major, minor, patch = max(cores)
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def _set_staged_version(builds: Builds, build_id: str, version: str) -> tuple[bytes, bytes]:
+    """Rewrite the staged `app.json` with `version`: (its bytes before, after)."""
+    path = builds.root / build_id / "src" / manifest.MANIFEST_FILE
+    before = path.read_bytes()
+    doc = json.loads(before)
+    doc["version"] = version
+    after = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode()
+    path.write_bytes(after)
+    return before, after
+
+
+def _write_back_version(r: vfs.Resolved, before: bytes, after: bytes, owner: fsops.Owner) -> bool:
+    """Put the bumped `app.json` in the source folder, unless it changed since staging."""
+    fd = apps.open_source(r)
+    if fd is None:
+        return False
+    try:
+        try:
+            with fsops.open_regular_at(fd, manifest.MANIFEST_FILE) as f:
+                current = f.read(len(before) + 1)
+        except OSError:
+            return False
+        if current != before:
+            return False
+        fsops.replace_file_at(fd, manifest.MANIFEST_FILE, after, owner)
+        return True
+    finally:
+        os.close(fd)
+
+
 def _thread_id(principal: Principal) -> str | None:
     return principal.thread_id if principal.is_agent else None
 
@@ -502,11 +571,17 @@ async def build_app(
             old_schema = await anyio.to_thread.run_sync(
                 apps.read_snapshot_schema, data_dir, snap["source_snapshot"]
             )
+        cur = await conn.execute(
+            "SELECT version, commit FROM app_versions WHERE app_id = %s AND kind = 'published' "
+            "ORDER BY published_at DESC, id DESC",
+            (app_id,),
+        )
+        published = await cur.fetchall()
     build_id, doc, found = await anyio.to_thread.run_sync(_stage, r, slug, builds)
     if build_id is None:
         return app, None, found, []
     start = time.monotonic()
-    schema_sql = tree = None
+    schema_sql = tree = bump = None
     try:
         if not found and doc is not None and app.get("working_version"):
             new_schema = await anyio.to_thread.run_sync(_staged_schema, builds, build_id)
@@ -522,6 +597,17 @@ async def build_app(
         if output is not None:
             schema_sql = await anyio.to_thread.run_sync(_staged_schema, builds, build_id)
             tree = await anyio.to_thread.run_sync(_staged_tree, history, app_id, builds, build_id)
+            version = await anyio.to_thread.run_sync(
+                _bumped_version, history, app_id, doc["version"], published, tree
+            )
+            if version is not None:
+                bump = await anyio.to_thread.run_sync(
+                    _set_staged_version, builds, build_id, version
+                )
+                doc["version"] = version
+                tree = await anyio.to_thread.run_sync(
+                    _staged_tree, history, app_id, builds, build_id
+                )
     finally:
         await anyio.to_thread.run_sync(builds.discard, build_id)
     duration_ms = int((time.monotonic() - start) * 1000)
@@ -542,6 +628,12 @@ async def build_app(
         await anyio.to_thread.run_sync(_drop_bundle, data_dir, bundle_path)
         raise
     await anyio.to_thread.run_sync(_drop_bundle, data_dir, previous)
+    if bump is not None:
+        written = principal.uid is not None and await anyio.to_thread.run_sync(
+            _write_back_version, r, *bump, fsops.Owner(principal.uid, r.space["gid"])
+        )
+        if not written:
+            logger.warning("builds: app %s: built %s; app.json not updated", app_id, doc["version"])
     async with pool.connection() as conn:
         app = await apps.get_visible_app(conn, principal, app_id)
     migrations = await appdata.built(principal, app, doc["version"], schema_sql)

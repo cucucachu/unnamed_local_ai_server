@@ -331,7 +331,7 @@ const MESSAGES: Record<string, string> = {
   history_failed: "Couldn't read this app's history.",
   builder_unavailable: "The app builder isn't available right now. Try again later.",
   not_built: 'Build the app before publishing it.',
-  version_exists: 'That version is already published. Bump the version in app.json and build again.',
+  version_exists: 'This version is already published, with no changes since. Edit the app and build it to publish a new version.',
   not_in_catalog: "This app isn't listed in that space's catalog.",
   permissions_required: 'Confirm the permissions this app is asking for.',
   permissions_changed: 'This update asks for different permissions. Review them and confirm.',
