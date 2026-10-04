@@ -106,6 +106,16 @@ def test_unknown_homeai_key_lists_the_allowed_ones() -> None:
     assert "sdk, icon, description, permissions, exports, reads" in diag.message
 
 
+def test_homeai_keys_at_the_top_level_say_where_they_belong() -> None:
+    doc = good_manifest()
+    doc["exports"] = [{"name": "events", "version": "1", "tables": ["events"]}]
+    doc["reads"] = []
+    doc["icon"] = "./assets/icon.png"
+    diags = validate_manifest(doc)
+    assert [d.path for d in diags] == ["/exports", "/reads"]
+    assert 'belongs inside "homeai" (homeai.exports)' in diags[0].message
+
+
 def test_pointers_escape_special_characters() -> None:
     (diag,) = validate_manifest(_homeai(**{"a/b~c": 1}))
     assert diag.path == "/homeai/a~1b~0c"

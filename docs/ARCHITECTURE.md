@@ -2052,7 +2052,8 @@ must be `{}` or omitted), `exports` (array of `{name, version, tables, actions?}
 omit or `[]` if unused; `name`/`actions` match `^[a-z][a-zA-Z0-9_]*$`; `tables`
 must exist in `schema.sql`; unique `name`s), `reads` (array of `{app` (exporting
 slug), `export`, `version`}; unique `(app, export)`; granted at install as
-`granted_reads`). Changing an export's tables or columns without bumping
+`granted_reads`, and on every build for `working` installs). `sdk`, `permissions`,
+`exports` or `reads` at the top level instead of in `homeai` is a diagnostic. Changing an export's tables or columns without bumping
 `version` is a diagnostic. Image-shipped system apps (M14-03) are validated with a separate schema
 that allows `permissions.privileged` (`["files"]` only). Nodes carry an `errorMessage` (the ajv-errors keyword) with the
 sentence the validator reports.
@@ -2080,7 +2081,8 @@ sentence the validator reports.
   "update": {"id", "version", "permissions"}|null}` (`app` from the
   tracked version). `granted_permissions` is the manifest's `permissions`
   as confirmed at install or the last update; `granted_reads` is the
-  manifest's `reads` (empty `[]` needs no prompt). `update` is the newest
+  manifest's `reads` (empty `[]` needs no prompt), refreshed by each build for
+  `working` installs. `update` is the newest
   published version of that app newer than the pinned one (`null` for
   `working` installs and when already current).
 - `CatalogEntry`: `{"app": Instance.app, "version": AppVersion (latest

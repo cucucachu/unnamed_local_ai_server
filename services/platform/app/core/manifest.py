@@ -262,6 +262,10 @@ SHIPPED_SCHEMA["properties"]["homeai"]["properties"]["permissions"] = {
 }
 _SHIPPED_VALIDATOR = Draft202012Validator(SHIPPED_SCHEMA)
 
+# homeai keys that Expo doesn't use at the top level (its icon and description
+# are), so finding one there is a misplaced homeai key, not an Expo one.
+_HOMEAI_ONLY = ("sdk", "permissions", "exports", "reads")
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -311,6 +315,16 @@ def validate_manifest(doc: Any, *, shipped: bool = False) -> list[Diagnostic]:
             if (d.path, d.message) not in seen:
                 seen.add((d.path, d.message))
                 out.append(d)
+    if isinstance(doc, dict):
+        out.extend(
+            Diagnostic(
+                MANIFEST_FILE,
+                _pointer([key]),
+                f'"{key}" belongs inside "homeai" (homeai.{key}); at the top level it is ignored',
+            )
+            for key in _HOMEAI_ONLY
+            if key in doc
+        )
     return out
 
 
