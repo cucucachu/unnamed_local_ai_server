@@ -70,12 +70,13 @@ function findSql(appRoot, sql) {
   return null;
 }
 
-async function renderRoute({ runtime, app, appRoot, schema, route, settleMs, timeoutMs }) {
+async function renderRoute({ runtime, app, appRoot, schema, readsSql, route, settleMs, timeoutMs }) {
   const routePath = samplePath(route);
   const diagnostics = [];
   const mapStack = mapper(app.map, appRoot);
   const db = new DatabaseSync(':memory:');
   db.exec(schema);
+  if (readsSql) db.exec(readsSql);
   const vc = new VirtualConsole();
   const dom = new JSDOM('<!doctype html><html><head></head><body><div id="root"></div></body></html>', {
     runScripts: 'outside-only',
@@ -184,8 +185,9 @@ async function renderRoute({ runtime, app, appRoot, schema, route, settleMs, tim
   return { path: routePath, ms: Date.now() - start, timed_out: timedOut, diagnostics };
 }
 
-/** { ok, diagnostics, routes: [{path, ms, timed_out}] } for a compiled app (`app` = the dev bundle + map). */
-export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeoutMs = 3000 } = {}) {
+/** { ok, diagnostics, routes: [{path, ms, timed_out}] } for a compiled app (`app` = the dev bundle + map).
+ * `readsSql` creates empty stand-ins for the merged views the app reads (`<app>_<export>`). */
+export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeoutMs = 3000, readsSql = '' } = {}) {
   appRoot = path.resolve(appRoot);
   const runtime = fs.readFileSync(RUNTIME_DEV, 'utf8');
   let schema = '';
@@ -197,8 +199,18 @@ export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeout
       return { ok: false, diagnostics: [diagnostic({ step: 'sql', file: 'schema.sql', message: `schema.sql doesn't run: ${err.message}` })], routes: [] };
     }
   }
+  if (readsSql) {
+    try {
+      const probe = new DatabaseSync(':memory:');
+      probe.exec(schema);
+      probe.exec(readsSql);
+      probe.close();
+    } catch (err) {
+      return { ok: false, diagnostics: [diagnostic({ step: 'sql', file: 'app.json', message: `the stand-ins for homeai.reads don't fit schema.sql: ${err.message}` })], routes: [] };
+    }
+  }
   const results = [];
-  for (const route of routes) results.push(await renderRoute({ runtime, app, appRoot, schema, route, settleMs, timeoutMs }));
+  for (const route of routes) results.push(await renderRoute({ runtime, app, appRoot, schema, readsSql, route, settleMs, timeoutMs }));
   const diagnostics = results.flatMap((r) => r.diagnostics);
   return { ok: diagnostics.length === 0, diagnostics, routes: results.map(({ diagnostics: _d, ...r }) => r) };
 }

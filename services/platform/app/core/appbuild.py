@@ -59,7 +59,7 @@ import httpx
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import apphistory, apps, appschema, fsops, manifest, spaces, vfs
+from app.core import appdb, apphistory, apps, appschema, fsops, manifest, spaces, vfs
 from app.core.appdata import AppData
 from app.core.apphistory import AppHistory, HistoryError
 from app.core.errors import InvalidInput, NotFound, ServerError, Unavailable
@@ -531,6 +531,85 @@ def _write_back_version(r: vfs.Resolved, before: bytes, after: bytes, owner: fso
         os.close(fd)
 
 
+READS_FILE = "reads.sql"
+
+# Instances of `slug` in the user's spaces, other than the app being built,
+# with the commit of the version each one runs.
+_EXPORTERS = """
+SELECT DISTINCT a.id AS app_id, v.manifest, v.commit
+FROM app_instances i
+JOIN apps a ON a.id = i.app_id AND a.archived_at IS NULL
+JOIN spaces s ON s.id = i.space_id AND s.archived_at IS NULL
+JOIN space_members m ON m.space_id = s.id AND m.user_id = %(user)s
+JOIN app_versions v ON v.id = i.version_id
+    OR (i.version_id IS NULL AND v.app_id = i.app_id AND v.kind = 'working')
+WHERE i.uninstalled_at IS NULL AND a.slug = %(slug)s AND a.id <> %(app)s
+  AND v.commit IS NOT NULL
+"""
+
+
+def _export_columns(
+    history: AppHistory, app_id: UUID, commit: str, tables: list[str]
+) -> dict[str, tuple[str, ...]] | None:
+    try:
+        files = history.read_tree(app_id, commit, manifest.MAX_PACKAGE_ENTRIES, MAX_SOURCE_BYTES)
+    except HistoryError:
+        return None
+    try:
+        cols = manifest.schema_table_columns(files.get("schema.sql", b"").decode("utf-8"))
+    except UnicodeDecodeError:
+        return None
+    if cols is None or any(t not in cols for t in tables):
+        return None
+    return {t: cols[t] for t in tables}
+
+
+async def _reads_stand_ins(
+    pool: AsyncConnectionPool, principal: Principal, history: AppHistory | None, app_id: UUID,
+    doc: Any,
+) -> str:  # fmt: skip
+    """`CREATE TABLE`s standing in for the merged views of `doc`'s `homeai.reads`, for the
+    smoke render: each export's columns plus `_space`, taken from the schema an instance of
+    the exporter visible to `principal` was built with. Reads with none are left out."""
+    if history is None:
+        return ""
+    statements: list[str] = []
+    for read in manifest.homeai_reads(doc):
+        if not isinstance(read, dict):
+            continue
+        slug, name, version = read.get("app"), read.get("export"), read.get("version")
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                _EXPORTERS, {"user": principal.user_id, "slug": slug, "app": app_id}
+            )
+            rows = await cur.fetchall()
+        for row in rows:
+            exp = manifest.find_export(row["manifest"], name)
+            if exp is None or str(exp.get("version")) != str(version):
+                continue
+            tables = [t for t in exp.get("tables") or [] if isinstance(t, str)]
+            cols = await anyio.to_thread.run_sync(
+                _export_columns, history, row["app_id"], row["commit"], tables
+            )
+            if not cols:
+                continue
+            for table in tables:
+                view = appdb.merged_view_name(slug, name, table, tables)
+                names = ", ".join(appschema.quote(c) for c in (*cols[table], "_space"))
+                statements.append(f"CREATE TABLE {appschema.quote(view)} ({names});")
+            break
+    return "".join(f"{s}\n" for s in statements)
+
+
+def _write_reads(builds: Builds, build_id: str, sql: str) -> None:
+    fd = builds._open(build_id, "smoke")
+    try:
+        with os.fdopen(os.open(READS_FILE, _OPEN_NEW, 0o644, dir_fd=fd), "w") as f:
+            f.write(sql)
+    finally:
+        os.close(fd)
+
+
 def _thread_id(principal: Principal) -> str | None:
     return principal.thread_id if principal.is_agent else None
 
@@ -593,6 +672,9 @@ async def build_app(
             ]
         if found:
             return app, None, found, []
+        reads_sql = await _reads_stand_ins(pool, principal, history, app_id, doc)
+        if reads_sql:
+            await anyio.to_thread.run_sync(_write_reads, builds, build_id, reads_sql)
         found, output = await _run(builds, builder, build_id)
         if output is not None:
             schema_sql = await anyio.to_thread.run_sync(_staged_schema, builds, build_id)

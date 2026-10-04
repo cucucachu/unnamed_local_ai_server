@@ -861,7 +861,8 @@ allowlist, type-check against the SDK/shim typings, bundle (esbuild), and
 smoke-render. The smoke render loads every route (dynamic params filled in)
 in jsdom with `react-dom/client` — not `react-dom/server`, so effects and
 `useQuery` really run — evaluating the dev builds of the runtime and the app
-against an in-memory SQLite created from `schema.sql`, over the same bridge
+against an in-memory SQLite created from `schema.sql` (plus empty stand-ins
+for the merged views of `homeai.reads`), over the same bridge
 transport the WebView uses; render errors are source-mapped and SQL errors
 reported. Errors come back as structured, model-readable diagnostics
 (`kind` = import/route/type/render/sql, file, line, column, message,
