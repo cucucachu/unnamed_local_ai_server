@@ -693,6 +693,11 @@ async def _record(
             "WHERE id = %s",
             (doc["version"], Jsonb(doc), bundle_path, commit_id, row["id"]),
         )
+        await conn.execute(
+            "UPDATE app_instances SET granted_reads = %s "
+            "WHERE app_id = %s AND tracks = 'working' AND uninstalled_at IS NULL",
+            (Jsonb(manifest.homeai_reads(doc)), app_id),
+        )
         previous = row["bundle_path"]
         if previous and previous != bundle_path:
             cur = await conn.execute(

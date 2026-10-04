@@ -12,6 +12,7 @@ from uuid import UUID
 
 from tests.app_packages import manifest, write_package
 from tests.files_world import API, World
+from tests.test_app_build import FakeBuilder
 from tests.test_apps_api import APPS, _install, _register
 
 CAL_SCHEMA = """CREATE TABLE events (
@@ -209,6 +210,35 @@ async def test_ungranted_planner_cannot_see_calendar(world: World) -> None:
     )
     assert missing.status_code == 422, missing.text
     assert missing.json()["detail"] == "sql_error"
+
+
+async def test_reads_added_after_install_are_granted_by_the_build(world: World) -> None:
+    await _setup(world)
+    world.platform.app.state.builder = FakeBuilder(world.platform.app.state.builds.root)
+    folder = world.family_root / "Apps" / "later"
+    write_package(
+        folder, doc=manifest("later", name="Later"), files={**UI, "schema.sql": PLAN_SCHEMA}
+    )
+    app = (await _register(world, world.headers["alice"], "/spaces/family/Apps/later")).json()[
+        "app"
+    ]
+    inst = (await _install(world, world.headers["alice"], world.family["id"], app["id"])).json()
+    assert inst["granted_reads"] == []
+
+    doc = manifest("later", name="Later")
+    doc["homeai"]["reads"] = [{"app": "calendar", "export": "events", "version": "1"}]
+    write_package(folder, doc=doc, files={**UI, "schema.sql": PLAN_SCHEMA})
+    built = await world.client.post(f"{APPS}/{app['id']}/build", headers=world.headers["alice"])
+    assert built.status_code == 200 and built.json()["ok"], built.text
+
+    r = await _rpc(
+        world,
+        inst["id"],
+        "alice",
+        {"op": "getAll", "sql": "SELECT title FROM calendar_events ORDER BY title"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["rows"] == [{"title": "Family"}, {"title": "Personal"}]
 
 
 async def test_viewer_reads_merged_view_but_cannot_export_action(world: World) -> None:

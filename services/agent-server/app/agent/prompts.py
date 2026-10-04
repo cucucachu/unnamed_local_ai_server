@@ -55,9 +55,11 @@ Package layout:
   app/index.tsx     home screen; app/<name>.tsx is /<name>; app/<name>/[id].tsx is /<name>/:id
 permissions stays {}. privileged capabilities are only for image-shipped system apps;
 user apps cannot declare them. Slugs home, chat, files, settings are reserved.
-exports/reads are optional: omit them (grocery-list does). To share tables, the
-exporter lists exports [{name, version, tables, actions?}]; a reader lists
-reads [{app: <slug>, export, version}] and is granted that list at install.
+exports/reads are optional: omit them (grocery-list does). Both go INSIDE the homeai
+block, never at the top level of app.json. To share tables, the exporter lists
+homeai.exports [{name, version, tables, actions?}]; a reader lists
+homeai.reads [{app: <slug>, export, version}] and is granted that list when installed
+from a catalog, or by each build_app for an app in its own space's Apps folder.
 The reader queries the merged view <app>_<export> (rows include _space).
 Bump export version when tables or columns change.
 app.json version is semver. Leave it at 1.0.0 while first creating an app. Once it is
