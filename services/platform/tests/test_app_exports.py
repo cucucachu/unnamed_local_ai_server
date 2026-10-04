@@ -12,7 +12,7 @@ from uuid import UUID
 
 from tests.app_packages import manifest, write_package
 from tests.files_world import API, World
-from tests.test_app_build import FakeBuilder
+from tests.test_app_build import FakeBuilder, succeed
 from tests.test_apps_api import APPS, _install, _register
 
 CAL_SCHEMA = """CREATE TABLE events (
@@ -239,6 +239,29 @@ async def test_reads_added_after_install_are_granted_by_the_build(world: World) 
     )
     assert r.status_code == 200, r.text
     assert r.json()["rows"] == [{"title": "Family"}, {"title": "Personal"}]
+
+
+async def test_a_readers_smoke_render_gets_stand_ins_for_the_views_it_reads(world: World) -> None:
+    ids = await _setup(world)
+    seen: list[str | None] = []
+
+    def script(phase: str, build) -> None:
+        if phase == "smoke":
+            reads = build / "smoke" / "reads.sql"
+            seen.append(reads.read_text() if reads.exists() else None)
+        return succeed(phase, build)
+
+    world.platform.app.state.builder = FakeBuilder(world.platform.app.state.builds.root, script)
+
+    async def build(app_id: str) -> None:
+        r = await world.client.post(f"{APPS}/{app_id}/build", headers=world.headers["alice"])
+        assert r.status_code == 200 and r.json()["ok"], r.text
+
+    await build(ids["planner_app"]["id"])
+    await build(ids["personal_cal"]["app_id"])
+    await build(ids["planner_app"]["id"])
+
+    assert seen == [None, None, 'CREATE TABLE "calendar_events" ("id", "title", "_space");\n']
 
 
 async def test_viewer_reads_merged_view_but_cannot_export_action(world: World) -> None:

@@ -60,7 +60,9 @@ block, never at the top level of app.json. To share tables, the exporter lists
 homeai.exports [{name, version, tables, actions?}]; a reader lists
 homeai.reads [{app: <slug>, export, version}] and is granted that list when installed
 from a catalog, or by each build_app for an app in its own space's Apps folder.
-The reader queries the merged view <app>_<export> (rows include _space).
+The reader queries the merged view <app>_<export>, named after the EXPORTING app (a
+read of calendar's events export is SELECT ... FROM calendar_events; rows include
+_space). build_app's render test gives the view the exporter's columns and no rows.
 Bump export version when tables or columns change.
 app.json version is semver. Leave it at 1.0.0 while first creating an app. Once it is
 published, build_app moves it to the next patch on its own. When you change an existing

@@ -6,6 +6,8 @@
 //       and app.dev.js(.map) (for the smoke render).
 //   node src/cli.mjs smoke [--src /src] [--bundle /bundle] [--out /out]
 //       renders every route of the compile phase's dev bundle; writes result.json.
+//       The platform may leave `reads.sql` in --out first: empty stand-ins for
+//       the merged views of the app's homeai.reads, run after schema.sql.
 //
 // Exits 0 whenever it wrote result.json, whatever the app's diagnostics.
 import fs from 'node:fs';
@@ -14,6 +16,8 @@ import { compileApp } from './compile.mjs';
 import { diagnostic, writeResult } from './diagnostics.mjs';
 import { smokeRender } from './smoke.mjs';
 import { typecheckApp } from './typecheck.mjs';
+
+export const READS_FILE = 'reads.sql';
 
 function option(args, name, fallback) {
   const i = args.indexOf(`--${name}`);
@@ -34,11 +38,17 @@ export async function compilePhase(src, out) {
   return result;
 }
 
-export async function smokePhase(src, bundle) {
+export async function smokePhase(src, bundle, out) {
   const compiled = JSON.parse(fs.readFileSync(path.join(bundle, 'result.json'), 'utf8'));
   if (!compiled.ok) throw new Error('the compile phase did not succeed');
   const app = { code: fs.readFileSync(path.join(bundle, 'app.dev.js'), 'utf8'), map: fs.readFileSync(path.join(bundle, 'app.dev.js.map'), 'utf8') };
-  return smokeRender(src, app, compiled.routes);
+  let readsSql = '';
+  try {
+    if (out) readsSql = fs.readFileSync(path.join(out, READS_FILE), 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return smokeRender(src, app, compiled.routes, { readsSql });
 }
 
 async function main(args) {
@@ -50,7 +60,7 @@ async function main(args) {
     return 2;
   }
   try {
-    const result = phase === 'compile' ? await compilePhase(src, out) : await smokePhase(src, option(args, 'bundle', '/bundle'));
+    const result = phase === 'compile' ? await compilePhase(src, out) : await smokePhase(src, option(args, 'bundle', '/bundle'), out);
     writeResult(out, result);
   } catch (err) {
     console.error(err?.stack ?? err);

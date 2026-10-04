@@ -77,6 +77,33 @@ test('a valid app compiles, type-checks and renders every route', async () => {
   );
 });
 
+test('a screen querying a merged view renders against the reads.sql stand-in', async () => {
+  const screen = [
+    "import { Text } from 'react-native';",
+    "import { useQuery } from '@homeai/sdk';",
+    'export default function Events() {',
+    "  const { data } = useQuery<{ title: string; _space: string }>('SELECT title, _space FROM calendar_events', []);",
+    '  return <Text>{(data ?? []).length}</Text>;',
+    '}',
+    '',
+  ].join('\n');
+  const compiled = await compileOnly({ 'app/events.tsx': screen });
+  assert.equal(compiled.ok, true, JSON.stringify(compiled.diagnostics));
+  writeResult(compiled.out, compiled);
+
+  const missing = await smokePhase(compiled.dir, compiled.out, compiled.out);
+  assert.equal(missing.ok, false);
+  assert.match(missing.diagnostics[0].message, /no such table: calendar_events/);
+
+  fs.writeFileSync(path.join(compiled.out, 'reads.sql'), 'CREATE TABLE "calendar_events" ("id", "title", "_space");\n');
+  const smoke = await smokePhase(compiled.dir, compiled.out, compiled.out);
+  assert.deepEqual(smoke.diagnostics, []);
+
+  fs.writeFileSync(path.join(compiled.out, 'reads.sql'), 'CREATE TABLE "items" ("x");\n');
+  const clash = await smokePhase(compiled.dir, compiled.out, compiled.out);
+  assert.match(clash.diagnostics[0].message, /stand-ins for homeai\.reads/);
+});
+
 // The reference app (M12-07) and the M13-03 templates. Not in the image,
 // which copies only tests/.
 const TEMPLATES = path.resolve(here, '../../../examples/apps');

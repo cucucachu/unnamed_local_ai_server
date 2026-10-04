@@ -2171,7 +2171,12 @@ in `docs/PLATFORM.md` §7 "Build and verify").
 4. **`smoke`** (`/src` ro, `/bundle` = `bundle/` ro, `/out` = `smoke/`):
    `schema.sql` into node:sqlite (`sql`), then every route in a fresh jsdom
    window with the dev runtime and bundle (`render`, `sql`). Writes
-   `result.json`.
+   `result.json`. Before this phase the platform writes `smoke/reads.sql`
+   when the app has `homeai.reads`: an empty `CREATE TABLE <app>_<export>`
+   (per table if the export has several) with the columns of the export's
+   tables plus `_space`, taken from the committed `schema.sql` of an
+   instance of the exporter in one of the builder's spaces. The builder runs
+   it after `schema.sql`, so screens that query the merged views render.
 5. **Read the outputs as untrusted**: each file opened `O_NOFOLLOW |
    O_NONBLOCK` below fds on the build dir, regular files only, capped
    (`result.json` 1 MB, `app.js` 16 MB, map 32 MB); `app.js` must start
