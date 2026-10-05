@@ -59,6 +59,31 @@ describe('SessionsScreen', () => {
     expect(mockLogout).not.toHaveBeenCalled();
   });
 
+  it('marks routine grants and revokes them like any session', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/me/sessions': {
+        body: {
+          sessions: [
+            session({ id: 'here', current: true }),
+            session({ id: 'brief', device_label: 'Routine: Morning brief', routine_id: 'r-1' }),
+          ],
+        },
+      },
+      'DELETE /api/platform/me/sessions/brief': { status: 204 },
+    });
+    renderer = await render(SessionsScreen);
+
+    expect(exists(renderer, 'session-routine-brief')).toBe(true);
+    expect(exists(renderer, 'session-routine-here')).toBe(false);
+    expect(textOf(renderer)).toContain('Routine: Morning brief');
+    expect(textOf(renderer)).toContain('Runs on its own');
+    await press(renderer, 'session-revoke-brief');
+
+    expect(requestsTo(global.fetch as jest.Mock, 'DELETE', '/me/sessions/brief')).toHaveLength(1);
+    expect(exists(renderer, 'session-row-brief')).toBe(false);
+    expect(mockLogout).not.toHaveBeenCalled();
+  });
+
   it('revoking this session signs out', async () => {
     renderer = await render(SessionsScreen);
     await press(renderer, 'session-revoke-here');

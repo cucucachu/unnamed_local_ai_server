@@ -33,6 +33,15 @@ async def _issue(
         user_id, session_id = UUID(str(claims["sub"])), UUID(str(claims.get("sid")))
     except ValueError as exc:
         raise Unauthorized("unauthenticated") from exc
+    return await issue(conn, tokens, user_id, session_id, thread_id)
+
+
+async def issue(
+    conn: AsyncConnection, tokens: TokenService, user_id: UUID, session_id: UUID, thread_id: str
+) -> tuple[str, datetime]:
+    """A delegation for `thread_id` on an active session (a chat's, or a routine grant)."""
+    if not _THREAD_ID.fullmatch(thread_id):
+        raise InvalidInput("invalid_thread_id")
     row = await sessions.load_active(conn, session_id, user_id)
     if row is None:
         raise Unauthorized("unauthenticated")
@@ -86,7 +95,18 @@ async def space_role(
         raise Unauthorized("unauthenticated") from exc
     if await sessions.load_active(conn, session_id, user_id) is None:
         raise Unauthorized("unauthenticated")
+    space, role = await member_space(conn, user_id, space_path)
+    return canonical_space(space), role
 
+
+def canonical_space(space: spaces.Row) -> str:
+    return f"/{vfs.PERSONAL}" if space["kind"] == "personal" else f"/{vfs.SPACES}/{space['slug']}"
+
+
+async def member_space(
+    conn: AsyncConnection, user_id: UUID, space_path: str
+) -> tuple[spaces.Row, str]:
+    """`(space, role)` for a space root path the user belongs to; NotFound otherwise."""
     parts = vfs.parse(space_path)
     if parts == (vfs.PERSONAL,):
         space = await spaces.get_personal_space(conn, user_id)
@@ -103,5 +123,4 @@ async def space_role(
     row = await cur.fetchone()
     if row is None:
         raise NotFound("not_found")
-    canonical = f"/{vfs.PERSONAL}" if space["kind"] == "personal" else f"/{vfs.SPACES}/{space['slug']}"
-    return canonical, row["role"]
+    return space, row["role"]

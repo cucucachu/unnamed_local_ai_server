@@ -26,6 +26,14 @@ MAX_DEVICE_LABEL_LENGTH = 64
 Row = dict[str, Any]
 
 _ACTIVE = "s.revoked_at IS NULL AND s.expires_at > now() AND u.disabled_at IS NULL"
+# A routine grant (`app.core.routine_grants`) also needs edit rights on its
+# active space, re-checked on every delegated request like everything else.
+_GRANT_IN_FORCE = (
+    "(s.routine_space_id IS NULL OR EXISTS ("
+    " SELECT 1 FROM space_members m JOIN spaces sp ON sp.id = m.space_id"
+    " WHERE m.space_id = s.routine_space_id AND m.user_id = u.id"
+    " AND m.role IN ('owner', 'editor') AND sp.archived_at IS NULL))"
+)
 
 
 def new_token(prefix: str = TOKEN_PREFIX) -> str:
@@ -36,7 +44,7 @@ def hash_token(token: str) -> bytes:
     return hashlib.sha256(token.encode()).digest()
 
 
-def _device_label(label: str | None) -> str | None:
+def clean_device_label(label: str | None) -> str | None:
     if label is None:
         return None
     label = "".join(ch for ch in label.strip() if ch.isprintable())[:MAX_DEVICE_LABEL_LENGTH]
@@ -59,7 +67,7 @@ async def create_session(
         (
             hash_token(token),
             user_id,
-            _device_label(device_label),
+            clean_device_label(device_label),
             device_id,
             host_device_id,
             SESSION_TTL,
@@ -81,7 +89,7 @@ async def resolve_token(conn: AsyncConnection, token: str) -> Row | None:
         "         (u.totp_secret IS NOT NULL) AS totp_enabled, u.require_passkeys,"
         "         u.disabled_at, u.created_at"
         "  FROM sessions s JOIN users u ON u.id = s.user_id"
-        f" WHERE s.token_hash = %(hash)s AND {_ACTIVE}"
+        f" WHERE s.token_hash = %(hash)s AND s.routine_id IS NULL AND {_ACTIVE}"
         "), bump AS ("
         "  UPDATE sessions SET last_seen_at = now(), expires_at = now() + %(ttl)s"
         "  WHERE id = (SELECT session_id FROM hit) AND last_seen_at < now() - %(granularity)s"
@@ -92,13 +100,17 @@ async def resolve_token(conn: AsyncConnection, token: str) -> Row | None:
 
 
 async def load_active(conn: AsyncConnection, session_id: UUID, user_id: UUID) -> Row | None:
-    """Re-check a session named by a verified JWT: still active, user still enabled."""
+    """Re-check a session named by a verified JWT: still active, user still enabled.
+
+    `routine_space_id` is set for a routine grant: the one space it may touch.
+    """
     cur = await conn.execute(
         "SELECT s.id AS session_id, (s.stepped_up_until IS NOT NULL"
         "       AND s.stepped_up_until > now()) AS stepped_up,"
+        "       s.routine_id, s.routine_space_id,"
         "       u.id, u.username, u.display_name, u.role, u.uid"
         " FROM sessions s JOIN users u ON u.id = s.user_id"
-        f" WHERE s.id = %s AND s.user_id = %s AND {_ACTIVE}",
+        f" WHERE s.id = %s AND s.user_id = %s AND {_ACTIVE} AND {_GRANT_IN_FORCE}",
         (session_id, user_id),
     )
     return await cur.fetchone()
@@ -134,7 +146,7 @@ async def revoke_user_sessions(
 
 async def list_user_sessions(conn: AsyncConnection, user_id: UUID) -> list[Row]:
     cur = await conn.execute(
-        "SELECT id, device_label, created_at, last_seen_at, expires_at FROM sessions "
+        "SELECT id, device_label, routine_id, created_at, last_seen_at, expires_at FROM sessions "
         "WHERE user_id = %s AND revoked_at IS NULL AND expires_at > now() "
         "ORDER BY last_seen_at DESC",
         (user_id,),

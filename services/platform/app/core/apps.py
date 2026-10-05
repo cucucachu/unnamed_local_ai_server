@@ -62,7 +62,7 @@ _VERSION_JSON = (
     "'created_at', {v}.created_at, 'published_at', {v}.published_at)"
 )
 
-# %(user)s: the viewer. Rows carry `source_readable`; `_present` hides the
+# %(user)s: the viewer; %(scope)s: their `Principal.space_scope`. Rows carry `source_readable`; `_present` hides the
 # source when it's false.
 _VISIBLE_APPS = f"""
 SELECT a.id, a.slug, a.name, a.source_space_id, a.source_path, a.created_by,
@@ -71,6 +71,7 @@ SELECT a.id, a.slug, a.name, a.source_space_id, a.source_path, a.created_by,
 FROM apps a
 LEFT JOIN spaces ss ON ss.id = a.source_space_id AND ss.archived_at IS NULL
 LEFT JOIN space_members sm ON sm.space_id = ss.id AND sm.user_id = %(user)s
+    AND (%(scope)s::uuid IS NULL OR ss.id = %(scope)s)
 LEFT JOIN app_versions v ON v.app_id = a.id AND v.kind = 'working'
 WHERE a.archived_at IS NULL
   AND (sm.user_id IS NOT NULL
@@ -78,11 +79,13 @@ WHERE a.archived_at IS NULL
       SELECT 1 FROM app_instances i
       JOIN spaces isp ON isp.id = i.space_id AND isp.archived_at IS NULL
       JOIN space_members im ON im.space_id = i.space_id AND im.user_id = %(user)s
+          AND (%(scope)s::uuid IS NULL OR i.space_id = %(scope)s)
       WHERE i.app_id = a.id AND i.uninstalled_at IS NULL)
        OR EXISTS (
       SELECT 1 FROM app_catalog c
       JOIN spaces cs ON cs.id = c.space_id AND cs.archived_at IS NULL
       JOIN space_members cm ON cm.space_id = c.space_id AND cm.user_id = %(user)s
+          AND (%(scope)s::uuid IS NULL OR c.space_id = %(scope)s)
       WHERE c.app_id = a.id))
 """
 
@@ -435,7 +438,8 @@ def _rewrite_slug(r: vfs.Resolved, slug: str, owner: fsops.Owner) -> None:
 
 async def get_visible_app(conn: AsyncConnection, principal: Principal, app_id: UUID) -> Row:
     cur = await conn.execute(
-        _VISIBLE_APPS + " AND a.id = %(id)s", {"user": principal.user_id, "id": app_id}
+        _VISIBLE_APPS + " AND a.id = %(id)s",
+        {"user": principal.user_id, "scope": principal.space_scope, "id": app_id},
     )
     row = await cur.fetchone()
     if row is None:
@@ -445,7 +449,8 @@ async def get_visible_app(conn: AsyncConnection, principal: Principal, app_id: U
 
 async def list_visible_apps(conn: AsyncConnection, principal: Principal) -> list[Row]:
     cur = await conn.execute(
-        _VISIBLE_APPS + " ORDER BY lower(a.name), a.slug, a.id", {"user": principal.user_id}
+        _VISIBLE_APPS + " ORDER BY lower(a.name), a.slug, a.id",
+        {"user": principal.user_id, "scope": principal.space_scope},
     )
     return [_present(row) for row in await cur.fetchall()]
 

@@ -4,7 +4,9 @@ A routine belongs to one user (`owner_user_id`) and runs as them in one of
 their spaces (`space`: `/personal` or `/spaces/<slug>`). `schedule` is the
 JSON shape from `app.routines.schedule`; `next_run_at` (UTC) is derived from
 it and `timezone`, and is null for a disabled routine or a one-shot that has
-run. Each run is a `threads` row with `routine_id` set; deleting the routine
+run. `grant_token` is the platform routine grant a scheduled run acts with
+(M17-03): set while the routine is enabled, never returned by the API. Each
+run is a `threads` row with `routine_id` set; deleting the routine
 keeps its runs as ordinary chats (`ON DELETE SET NULL`).
 
 Same split as `ThreadStore`: `PgRoutineStore` (row-level security keyed on
@@ -41,6 +43,7 @@ ROUTINES_DDL = (
     """,
     "CREATE INDEX IF NOT EXISTS routines_owner_idx ON routines (owner_user_id)",
     "CREATE INDEX IF NOT EXISTS routines_due_idx ON routines (next_run_at) WHERE enabled",
+    "ALTER TABLE routines ADD COLUMN IF NOT EXISTS grant_token TEXT",
     (
         "ALTER TABLE threads ADD COLUMN IF NOT EXISTS routine_id UUID "
         "REFERENCES routines (id) ON DELETE SET NULL"
@@ -53,7 +56,17 @@ ROUTINES_DDL = (
 
 # What `update` may change.
 EDITABLE = frozenset(
-    {"space", "name", "prompt", "schedule", "timezone", "enabled", "next_run_at", "last_run_at"}
+    {
+        "space",
+        "name",
+        "prompt",
+        "schedule",
+        "timezone",
+        "enabled",
+        "next_run_at",
+        "last_run_at",
+        "grant_token",
+    }
 )
 
 
@@ -71,6 +84,7 @@ class RoutineRecord:
     last_run_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    grant_token: str | None = None
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,8 @@ import { StepUpCancelledError } from './stepUp';
 export interface Session {
   id: string;
   device_label: string | null;
+  /** Set for a routine's grant: what its scheduled runs act with, not a device. */
+  routine_id?: string | null;
   created_at: string;
   last_seen_at: string;
   expires_at: string;

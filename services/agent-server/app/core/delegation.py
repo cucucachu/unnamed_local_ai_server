@@ -8,6 +8,11 @@ whenever less than `REFRESH_MARGIN` is left, for as long as the socket is
 open. The platform only mints either while the user's session is active, so
 a revoked session stops the next turn and every file call in flight.
 
+A scheduled routine run has no socket: it exchanges the routine's grant
+(`/internal/routine-grants/exchange`, M17-03) instead of an identity token,
+then refreshes the same way. That delegation reaches only the routine's
+space.
+
 `Delegation` is what a run's `config["configurable"]["delegation"]` holds.
 It's an object, not the token string, on purpose: LangGraph copies every
 `str`/`int`/`float`/`bool` in `configurable` into the checkpoint metadata it
@@ -57,6 +62,18 @@ class DelegationClient(Protocol):
         `space` isn't one of theirs (M17-02)."""
         ...
 
+    async def issue_routine_grant(
+        self, identity_token: str, routine_id: str, space: str, label: str
+    ) -> str | None:
+        """A routine grant (M17-03) for a space the identity's user may edit, else None."""
+        ...
+
+    async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        """A delegation for one run; `DelegationDenied` once the grant is dead."""
+        ...
+
+    async def revoke_routine_grant(self, grant: str) -> None: ...
+
 
 class HttpDelegationClient:
     def __init__(self, platform_url: str, agent_token: str, timeout_s: float = 5.0) -> None:
@@ -104,6 +121,35 @@ class HttpDelegationClient:
             raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
         payload = response.json()
         return payload["space"], payload["role"]
+
+    async def issue_routine_grant(
+        self, identity_token: str, routine_id: str, space: str, label: str
+    ) -> str | None:
+        path = "/internal/routine-grants"
+        body = {
+            "identity_token": identity_token,
+            "routine_id": routine_id,
+            "space": space,
+            "label": label,
+        }
+        response = await self._call(path, body)
+        if response.status_code in (403, 404, 422):
+            return None
+        if response.status_code != 200:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
+        return response.json()["grant"]
+
+    async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        return await self._post(
+            "/internal/routine-grants/exchange",
+            {"grant": grant, "routine_id": routine_id, "thread_id": thread_id},
+        )
+
+    async def revoke_routine_grant(self, grant: str) -> None:
+        path = "/internal/routine-grants/revoke"
+        response = await self._call(path, {"grant": grant})
+        if response.status_code != 204:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
 
 
 class Delegation:

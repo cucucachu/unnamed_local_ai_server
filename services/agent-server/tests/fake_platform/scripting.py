@@ -105,6 +105,15 @@ class Minted:
 
 
 @dataclass
+class RoutineGrant:
+    user_id: str
+    routine_id: str
+    space: str
+    label: str
+    session_id: str
+
+
+@dataclass
 class FakePlatform:
     base_url: str = ""
     ttl: timedelta = timedelta(minutes=15)
@@ -119,6 +128,9 @@ class FakePlatform:
     members: dict[str, dict[str, str]] = field(default_factory=dict)
     grants: dict[str, Minted] = field(default_factory=dict)
     exchanges: list[tuple[str, str]] = field(default_factory=list)
+    # Live routine grants (M17-03); revoking one revokes its session.
+    routine_grants: dict[str, RoutineGrant] = field(default_factory=dict)
+    grant_exchanges: list[tuple[str, str]] = field(default_factory=list)
     refreshes: list[str] = field(default_factory=list)
     # (method, path, bearer) for every files API request
     file_requests: list[tuple[str, str, str | None]] = field(default_factory=list)
@@ -183,6 +195,39 @@ class FakePlatform:
             role = self.members.get(slug, {}).get(user_id)
             return (f"/spaces/{slug}", role) if role else None
         return None
+
+    def issue_routine_grant(
+        self, identity_token: str, routine_id: str, space: str, label: str
+    ) -> str | None:
+        access = self.space_role(identity_token, space)
+        if access is None or access[1] not in ("owner", "editor"):
+            return None
+        user_id, _ = self.identities.get(identity_token, (TEST_USER_ID, TEST_SESSION_ID))
+        for grant, held in list(self.routine_grants.items()):
+            if (held.user_id, held.routine_id) == (user_id, routine_id):
+                self.revoke_routine_grant(grant)
+        n = next(self._counter)
+        grant = f"hr_{n}"
+        self.routine_grants[grant] = RoutineGrant(
+            user_id, routine_id, access[0], label, f"routine-session-{n}"
+        )
+        return grant
+
+    def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        held = self.routine_grants.get(grant)
+        if held is None or held.routine_id != routine_id:
+            raise DelegationDenied("unauthenticated")
+        self.grant_exchanges.append((grant, thread_id))
+        return self._mint(held.user_id, held.session_id, thread_id)
+
+    def revoke_routine_grant(self, grant: str) -> None:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        held = self.routine_grants.pop(grant, None)
+        if held is not None:
+            self.revoked_sessions.add(held.session_id)
 
     def principal(self, bearer: str | None) -> Minted | None:
         minted = self.grants.get(bearer or "")
@@ -299,3 +344,14 @@ class FakeDelegationClient:
 
     async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
         return self.platform.space_role(identity_token, space)
+
+    async def issue_routine_grant(
+        self, identity_token: str, routine_id: str, space: str, label: str
+    ) -> str | None:
+        return self.platform.issue_routine_grant(identity_token, routine_id, space, label)
+
+    async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        return self.platform.exchange_routine_grant(grant, routine_id, thread_id)
+
+    async def revoke_routine_grant(self, grant: str) -> None:
+        self.platform.revoke_routine_grant(grant)

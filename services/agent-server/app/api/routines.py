@@ -6,6 +6,10 @@ token). `schedule`/`timezone` drive `next_run_at` (see
 `app.routines.schedule`); the scheduler (M17-04) fires due routines, and
 `POST /routines/{id}/run` starts a run now. Runs are threads with
 `routine_id` set, listed by `GET /routines/{id}/runs`.
+
+An enabled routine holds a platform routine grant (M17-03) for its
+scheduled runs: issued from the caller's identity when the routine is
+created or enabled or moves space, revoked when it's disabled or deleted.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
 SpacePath = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
 EDIT_ROLES = frozenset({"editor", "owner"})
+MAX_GRANT_LABEL = 64
 
 
 def _check_timezone(value: str | None) -> str | None:
@@ -117,6 +122,36 @@ async def _editable_space(request: Request, space: str) -> str:
     return canonical
 
 
+def _platform_error(exc: DelegationDenied | DelegationUnavailable) -> HTTPException:
+    if isinstance(exc, DelegationDenied):
+        return HTTPException(status_code=401, detail="unauthenticated")
+    return HTTPException(status_code=503, detail="platform unavailable")
+
+
+async def _issue_grant(request: Request, routine_id: str, space: str, name: str) -> str:
+    """A fresh grant for the routine's unattended runs; the platform drops any older one."""
+    client = request.app.state.delegation_client
+    try:
+        grant = await client.issue_routine_grant(
+            request.headers.get(IDENTITY_HEADER) or "",
+            routine_id,
+            space,
+            f"Routine: {name}"[:MAX_GRANT_LABEL],
+        )
+    except (DelegationDenied, DelegationUnavailable) as exc:
+        raise _platform_error(exc) from exc
+    if grant is None:
+        raise HTTPException(status_code=403, detail="routines need edit rights on the space")
+    return grant
+
+
+async def _revoke_grant(request: Request, grant: str) -> None:
+    try:
+        await request.app.state.delegation_client.revoke_routine_grant(grant)
+    except (DelegationDenied, DelegationUnavailable) as exc:
+        raise HTTPException(status_code=503, detail="platform unavailable") from exc
+
+
 def _next_run_at(schedule: dict, timezone: str, enabled: bool) -> datetime | None:
     if not enabled:
         return None
@@ -147,6 +182,13 @@ async def create_routine(body: RoutineIn, request: Request, user: CurrentUser) -
             next_run_at=_next_run_at(schedule, body.timezone, body.enabled),
         ),
     )
+    if record.enabled:
+        try:
+            grant = await _issue_grant(request, record.id, space, record.name)
+        except HTTPException:
+            await _store(request).delete(record.id, user.user_id)
+            raise
+        record = await _store(request).update(record.id, user.user_id, {"grant_token": grant})
     return _out(record)
 
 
@@ -172,6 +214,14 @@ async def update_routine(
             changes.get("timezone", current.timezone),
             changes.get("enabled", current.enabled),
         )
+    enabled = changes.get("enabled", current.enabled)
+    space = changes.get("space", current.space)
+    if enabled and (not current.enabled or space != current.space or not current.grant_token):
+        name = changes.get("name", current.name)
+        changes["grant_token"] = await _issue_grant(request, routine_id, space, name)
+    elif not enabled and current.grant_token:
+        await _revoke_grant(request, current.grant_token)
+        changes["grant_token"] = None
     record = await _store(request).update(routine_id, user.user_id, changes)
     if record is None:
         raise HTTPException(status_code=404, detail=f"routine '{routine_id}' not found")
@@ -180,6 +230,9 @@ async def update_routine(
 
 @router.delete("/routines/{routine_id}", status_code=204)
 async def delete_routine(routine_id: str, request: Request, user: CurrentUser) -> None:
+    current = await _owned(request, routine_id, user.user_id)
+    if current.grant_token:
+        await _revoke_grant(request, current.grant_token)
     if not await _store(request).delete(routine_id, user.user_id):
         raise HTTPException(status_code=404, detail=f"routine '{routine_id}' not found")
 

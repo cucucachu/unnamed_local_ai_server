@@ -14,6 +14,7 @@ from app.core.identity import IDENTITY_HEADER, Identity, IdentityError
 from app.db.settings import InMemorySettingsStore
 from app.db.threads import InMemoryThreadStore
 from app.main import create_app
+from app.routines import runs
 from tests.fake_model.scripting import FakeModel, TextTurn
 from tests.fake_platform.scripting import FakePlatform
 
@@ -216,4 +217,87 @@ def test_run_now_rechecks_the_space(client, fake_platform) -> None:
     fake_platform.members["family"][ALICE] = "viewer"
     response = client.post(f"/api/routines/{routine['id']}/run", headers=ALICE_H)
     assert response.status_code == 403
+    assert client.get("/api/threads", headers=ALICE_H).json() == []
+
+
+def _grants(fake_platform: FakePlatform) -> list[tuple[str, str, str]]:
+    return [(g.user_id, g.routine_id, g.space) for g in fake_platform.routine_grants.values()]
+
+
+def test_an_enabled_routine_holds_one_grant(client, fake_platform) -> None:
+    routine = _create(client)
+    path = f"/api/routines/{routine['id']}"
+    assert "grant_token" not in routine
+    assert _grants(fake_platform) == [(ALICE, routine["id"], "/personal")]
+    (held,) = fake_platform.routine_grants.values()
+    assert held.label == "Routine: Morning brief"
+
+    client.patch(path, json={"enabled": False}, headers=ALICE_H)
+    assert _grants(fake_platform) == []
+    client.patch(path, json={"enabled": True}, headers=ALICE_H)
+    assert _grants(fake_platform) == [(ALICE, routine["id"], "/personal")]
+    client.patch(path, json={"space": "/spaces/family"}, headers=ALICE_H)
+    assert _grants(fake_platform) == [(ALICE, routine["id"], "/spaces/family")]
+    client.patch(path, json={"name": "Renamed"}, headers=ALICE_H)
+    assert len(fake_platform.routine_grants) == 1
+
+    assert client.delete(path, headers=ALICE_H).status_code == 204
+    assert _grants(fake_platform) == []
+
+
+def test_a_disabled_routine_has_no_grant(client, fake_platform) -> None:
+    routine = _create(client, enabled=False)
+    assert fake_platform.routine_grants == {}
+    assert client.delete(f"/api/routines/{routine['id']}", headers=ALICE_H).status_code == 204
+
+
+def test_create_fails_cleanly_without_the_platform(client, fake_platform) -> None:
+    fake_platform.unavailable = True
+    response = client.post("/api/routines", json=_routine(), headers=ALICE_H)
+    assert response.status_code == 503
+    fake_platform.unavailable = False
+    assert client.get("/api/routines", headers=ALICE_H).json() == []
+
+
+def _record(client: TestClient, routine_id: str):
+    return client.portal.call(client.app.state.routine_store.get, routine_id, ALICE)
+
+
+def _scheduled_run(client: TestClient, routine_id: str):
+    """What the scheduler (M17-04) does for a due routine."""
+    state = client.app.state
+
+    async def run():
+        routine = await state.routine_store.get(routine_id, ALICE)
+        thread = await runs.create_run_thread(state, routine)
+        delegation = await runs.grant_delegation(state, routine, thread.id)
+        if delegation is None:
+            await state.thread_store.delete(thread.id, ALICE)
+            return None
+        await runs.launch_run(state, routine, thread, delegation)
+        return thread.id
+
+    return client.portal.call(run)
+
+
+def test_a_scheduled_run_acts_through_the_grant(client, fake_model, fake_platform) -> None:
+    routine = _create(client, space="/spaces/family")
+    (grant,) = fake_platform.routine_grants
+    fake_model.queue(TextTurn("unattended brief"))
+
+    thread_id = _scheduled_run(client, routine["id"])
+    assert thread_id is not None
+    assert _wait_for_reply(client, thread_id)[-1]["content"] == "unattended brief"
+    assert fake_platform.grant_exchanges == [(grant, thread_id)]
+    assert fake_platform.exchanges == []
+
+
+def test_a_dead_grant_disables_the_routine(client, fake_platform) -> None:
+    routine = _create(client)
+    (held,) = fake_platform.routine_grants.values()
+    fake_platform.revoked_sessions.add(held.session_id)  # e.g. revoked in Settings
+
+    assert _scheduled_run(client, routine["id"]) is None
+    record = _record(client, routine["id"])
+    assert (record.enabled, record.next_run_at, record.grant_token) == (False, None, None)
     assert client.get("/api/threads", headers=ALICE_H).json() == []
