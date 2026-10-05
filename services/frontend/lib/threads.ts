@@ -53,6 +53,8 @@ export interface PendingApproval {
 
 export interface ThreadState {
   pending_approval: PendingApproval | null;
+  /** M17-01: a turn is running; its socket replay brings any approval. */
+  running?: boolean;
 }
 
 /** One sibling continuation at a fork (M8-05). `checkpoint_id` is that
@@ -90,7 +92,7 @@ export async function getThreadMessages(threadId: string): Promise<ThreadMessage
   return apiFetch<ThreadMessage[]>(`/api/threads/${encodeURIComponent(threadId)}/messages`);
 }
 
-/** `GET /api/threads/{id}/state` (M8-03) — `{"pending_approval": {...} | null}`.
+/** `GET /api/threads/{id}/state` (M8-03) — `{"pending_approval": {...} | null, "running": bool}`.
  * `useChat` calls this once after history hydration on (re)connect so a
  * pending approval (from before a page reload / reconnect) is restored. */
 export async function getThreadState(threadId: string): Promise<ThreadState> {

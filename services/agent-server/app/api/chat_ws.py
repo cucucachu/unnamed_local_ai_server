@@ -16,6 +16,9 @@ Client -> server (four valid incoming frames):
 
 Server -> client (in order within a turn):
     {"type": "turn_start"}
+     # M17-01: a socket that connects while a turn runs instead gets
+     # {"type": "turn_start", "replay": true, "user_message"?: {"id", "content"}}
+     # then every frame that turn has sent so far, then the live frames.
     {"type": "reasoning", "content": "str"}  # M8-07: thought deltas; not persisted
     {"type": "token", "content": "str"}
     {"type": "tool_start", "tool_call_id": "str", "name": "str",
@@ -124,6 +127,17 @@ invalid frame while idle.
   works) and client-side (`GET /api/threads/{id}/state`, see
   `app/api/chat.py`).
 
+## M17-01 detached turns
+
+Turns run in `app.agent.turn_runner.TurnRunner`, not in this socket's
+task. A disconnect mid-turn only detaches the socket: the turn finishes,
+checkpoints, bumps `updated_at` and persists its tip as usual, and is
+cancelled only after `AGENT_DETACHED_TURN_TIMEOUT_S` with no socket
+attached. A socket connecting to a thread with a running turn follows it
+(replay, see above) before reading its own frames; `cancel` from any
+attached socket cancels it. The runner holds the per-thread lock for the
+whole turn. The notes below that say "the turn task" mean the runner's.
+
 ## M8-01 `cancel` frame notes
 
 - `_watch_inbound` (replacing `_watch_for_disconnect`) races the turn task
@@ -220,8 +234,8 @@ turn lifecycle (the wire format above is untouched — no new/changed frames):
   the default `"New chat"` (a no-op otherwise) — see `_derive_title`.
   M8-04: skipped when `replace_from_message_id` is set (title is not
   re-derived on edit/resend/regenerate).
-- After a turn completes normally (i.e. `_run_turn_or_disconnect` returns
-  `False` — NOT on disconnect-mid-turn or an unhandled-error abort): bump
+- After a turn ends (completed, cancelled or awaiting approval — NOT on an
+  unhandled-error abort), whether or not its socket is still there: bump
   `updated_at = now()`.
 
 ## M8-04 edit / resend / regenerate (`replace_from_message_id`)
@@ -299,8 +313,9 @@ import contextlib
 import json
 import logging
 import time
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from collections.abc import Awaitable
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -312,6 +327,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.app_tools import APP_TOOL_NAMES
 from app.agent.build import MUTATING_TOOL_NAMES
+from app.agent.turn_runner import END, ActiveTurn, TurnOutcome, TurnRequest, TurnRunner
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, IdentityError, KeysUnavailable
 from app.db.rls import bind_user
@@ -320,13 +336,6 @@ from app.db.turn_stats import TurnStat
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Per-thread_id lock, created on demand. Holding it for the full duration of
-# a turn serializes concurrent connections on the same thread_id so their
-# agent calls (and the shared MemorySaver checkpoint they read/write) can't
-# interleave. Module-level and never evicted: thread_id cardinality is small
-# and bounded by the number of chat threads a single-user server accumulates.
-_thread_locks: dict[str, asyncio.Lock] = {}
 
 # Exact category mapping from Conventions & Contracts §6.
 _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
@@ -712,15 +721,8 @@ def _last_assistant_id(state: StateSnapshot) -> str | None:
     return last_ai.id if last_ai.id is not None else None
 
 
-async def _snapshot_last_assistant_id(
-    agent: Any, thread_id: str, checkpoint_id: str | None = None
-) -> str | None:
-    state = await agent.aget_state(graph_config(thread_id, checkpoint_id))
-    return _last_assistant_id(state)
-
-
 async def _persist_turn_stat(
-    websocket: WebSocket,
+    app_state: Any,
     thread_id: str,
     status: str,
     duration_ms: int,
@@ -735,12 +737,12 @@ async def _persist_turn_stat(
     docstring). A completed / awaiting_approval turn always has a new
     last assistant id to attach to.
     """
-    store = getattr(websocket.app.state, "turn_stats_store", None)
+    store = getattr(app_state, "turn_stats_store", None)
     if store is None:
         return
     # After the turn we just wrote, chronological latest is this run's tip
     # (per-thread lock). Do not re-read with the *starting* checkpoint_id.
-    state = await websocket.app.state.agent.aget_state(graph_config(thread_id))
+    state = await app_state.agent.aget_state(graph_config(thread_id))
     final_id = _last_assistant_id(state)
     if final_id is None or final_id == prior_assistant_id:
         return
@@ -755,99 +757,30 @@ async def _persist_turn_stat(
     )
 
 
-async def _send_turn_end(
-    websocket: WebSocket,
-    thread_id: str,
-    status: str,
-    started_mono: float,
-    started_at: datetime,
-    prior_assistant_id: str | None,
-) -> int:
-    duration_ms = _elapsed_ms(started_mono)
+async def turn_end_frame(app_state: Any, turn: ActiveTurn, status: str) -> dict:
+    """Record the turn's stats and build its `turn_end` frame."""
+    duration_ms = _elapsed_ms(turn.started_mono)
     await _persist_turn_stat(
-        websocket, thread_id, status, duration_ms, started_at, prior_assistant_id
+        app_state, turn.thread_id, status, duration_ms, turn.started_at, turn.prior_assistant_id
     )
-    await websocket.send_json({"type": "turn_end", "status": status, "duration_ms": duration_ms})
-    return duration_ms
+    return {"type": "turn_end", "status": status, "duration_ms": duration_ms}
+
+
+def approval_request_frame(pending_approval: dict) -> dict:
+    return {
+        "type": "approval_request",
+        "interrupt_id": pending_approval["interrupt_id"],
+        "actions": pending_approval["actions"],
+    }
 
 
 async def _announce_pending_approval(
-    websocket: WebSocket,
-    thread_id: str,
-    pending_approval: dict,
-    started_mono: float,
-    started_at: datetime,
-    prior_assistant_id: str | None,
+    websocket: WebSocket, turn: ActiveTurn, pending_approval: dict
 ) -> None:
+    await websocket.send_json(approval_request_frame(pending_approval))
     await websocket.send_json(
-        {
-            "type": "approval_request",
-            "interrupt_id": pending_approval["interrupt_id"],
-            "actions": pending_approval["actions"],
-        }
+        await turn_end_frame(websocket.app.state, turn, "awaiting_approval")
     )
-    await _send_turn_end(
-        websocket, thread_id, "awaiting_approval", started_mono, started_at, prior_assistant_id
-    )
-
-
-async def _run_turn(
-    websocket: WebSocket,
-    thread_id: str,
-    run_input: Any,
-    hitl_enabled: bool,
-    thinking_enabled: bool,
-    started_mono: float,
-    started_at: datetime,
-    prior_assistant_id: str | None,
-    checkpoint_id: str | None = None,
-    delegation: Delegation | None = None,
-) -> tuple[str, dict | None]:
-    """Run one turn (fresh `user_message` OR a resumed `Command(resume=...)`).
-
-    `run_input` is either `{"messages": [HumanMessage(...)]}` (a fresh turn)
-    or a `langgraph.types.Command(resume={"decisions": [...]})` (M8-03:
-    resuming a paused approval, from either `approval_response` or a
-    reject-all `cancel`-while-awaiting-approval).
-
-    Returns `(status, pending_approval)`: `status` is `"completed"` or
-    `"awaiting_approval"` (see module docstring's M8-03 section for when
-    each fires); `pending_approval` is the dict `_pending_approval_from_state`
-    returned (only non-`None` when `status == "awaiting_approval"`).
-    """
-    agent = websocket.app.state.agent
-    # `thinking_enabled` is read by `ReasoningChatOpenAI._default_params`
-    # (configurable -> model kwargs) and turned into
-    # extra_body.chat_template_kwargs.enable_thinking. Not `model.bind(...)`.
-    # `checkpoint_id` (M8-05): start from the active tip or a fork parent.
-    # After the stream, we re-read WITHOUT that id so we get the new tip
-    # (passing the start id would return the pre-turn snapshot).
-    config = graph_config(
-        thread_id,
-        checkpoint_id,
-        hitl_enabled=hitl_enabled,
-        thinking_enabled=thinking_enabled,
-        delegation=delegation,
-    )
-    config["recursion_limit"] = websocket.app.state.settings.agent_recursion_limit
-
-    await websocket.send_json({"type": "turn_start"})
-    async for event in agent.astream_events(run_input, config=config, version="v2"):
-        for frame in _frames_for_event(event):
-            await websocket.send_json(frame)
-
-    state = await agent.aget_state(graph_config(thread_id))
-    pending_approval = _pending_approval_from_state(state)
-    if pending_approval is not None:
-        await _announce_pending_approval(
-            websocket, thread_id, pending_approval, started_mono, started_at, prior_assistant_id
-        )
-        return "awaiting_approval", pending_approval
-
-    await _send_turn_end(
-        websocket, thread_id, "completed", started_mono, started_at, prior_assistant_id
-    )
-    return "completed", None
 
 
 def _is_cancel_frame(raw: object) -> bool:
@@ -901,108 +834,80 @@ async def _watch_inbound(websocket: WebSocket, deferred: list[dict]) -> str:
             deferred.append(raw)
 
 
-async def _run_turn_or_interrupt(
-    websocket: WebSocket,
-    thread_id: str,
-    run_input: Any,
-    hitl_enabled: bool,
-    thinking_enabled: bool,
-    checkpoint_id: str | None = None,
-    delegation: Delegation | None = None,
-    deferred_approvals: list[dict] | None = None,
-) -> tuple[str, dict | None]:
-    """Run one turn (see `_run_turn`), racing it against `_watch_inbound`.
+async def _forward_frames(websocket: WebSocket, queue: asyncio.Queue) -> None:
+    """Send frames up to and including the turn's last (`turn_end` or `error`)."""
+    while (frame := await queue.get()) is not END:
+        await websocket.send_json(frame)
+        if frame["type"] in ("turn_end", "error"):
+            return
 
-    Returns `(status, pending_approval)`. `status` is `"completed"` or
-    `"awaiting_approval"` if the turn ran to completion (see `_run_turn`),
-    `"cancelled"` if a `cancel` frame arrived while the turn was in flight
-    (a `turn_end {"status": "cancelled"}` frame has already been sent and
-    the connection is still open). #189: the cancel can land after the turn
-    already paused on an interrupt (between `approval_request` and its
-    `turn_end`), so the checkpointer is re-read: if an approval is still
-    pending it's returned as `pending_approval` and re-announced
-    (`approval_request` + `turn_end {"status": "awaiting_approval"}`)
-    unless the client already answered it mid-turn, in which case the
-    caller applies that held answer instead. Or `"disconnected"` if the client's
-    socket closed mid-turn (the caller should stop processing this
-    connection; no frame is sent — the socket is already gone). Propagates
-    any exception the turn itself raised (unhandled model/agent error).
-    `approval_response` frames received mid-turn are appended to
-    `deferred_approvals` for the caller (see `_take_deferred_approval`).
 
-    M11-02: the connection's delegation is re-minted first, so every turn
-    and resume starts with a fresh one and a revoked session stops here
-    (`DelegationDenied`, before `turn_start`). If the platform can't be
-    asked, the turn still runs on the current delegation while it lasts.
-    """
-    if delegation is not None:
-        try:
-            await delegation.refresh()
-        except DelegationUnavailable as exc:
-            if delegation.token is None:
-                raise
-            logger.warning("delegation: refresh at turn start failed: %s", exc)
-    started_mono = time.monotonic()
-    started_at = datetime.now(UTC)
-    prior_assistant_id = await _snapshot_last_assistant_id(
-        websocket.app.state.agent, thread_id, checkpoint_id
-    )
-
-    if deferred_approvals is None:
-        deferred_approvals = []
-    turn_task = asyncio.create_task(
-        _run_turn(
-            websocket,
-            thread_id,
-            run_input,
-            hitl_enabled,
-            thinking_enabled,
-            started_mono,
-            started_at,
-            prior_assistant_id,
-            checkpoint_id,
-            delegation,
-        )
-    )
-    watch_task = asyncio.create_task(_watch_inbound(websocket, deferred_approvals))
+async def _refresh_for_turn(delegation: Delegation) -> None:
+    """M11-02: every turn and resume starts on a freshly minted delegation, so
+    a revoked session stops here (`DelegationDenied`, before `turn_start`).
+    If the platform can't be asked, the turn runs on the current one while
+    it lasts."""
     try:
-        done, _pending = await asyncio.wait(
-            {turn_task, watch_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        if turn_task in done:
-            return turn_task.result()  # re-raises if the turn itself raised
+        await delegation.refresh()
+    except DelegationUnavailable as exc:
+        if delegation.token is None:
+            raise
+        logger.warning("delegation: refresh at turn start failed: %s", exc)
 
-        outcome = watch_task.result()  # "disconnect" or "cancel"
 
-        # Either way, cancel the in-flight turn; the per-thread lock (held
-        # by the caller's `async with`) releases cleanly once we return.
-        turn_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await turn_task
+async def _follow_turn(
+    websocket: WebSocket, turn: ActiveTurn, queue: asyncio.Queue, deferred: list[dict]
+) -> TurnOutcome | None:
+    """Send `turn`'s frames from `queue` until it ends, racing `_watch_inbound`.
 
-        if outcome == "cancel":
-            await _send_turn_end(
-                websocket,
-                thread_id,
-                "cancelled",
-                started_mono,
-                started_at,
-                prior_assistant_id,
-            )
-            pending_approval = await get_pending_approval(websocket.app.state.agent, thread_id)
-            if pending_approval is not None and not any(
-                f.get("interrupt_id") == pending_approval["interrupt_id"] for f in deferred_approvals
+    Returns the turn's outcome, or None if the client disconnected — the
+    turn itself carries on detached (M17-01). A `cancel` frame cancels the
+    turn; its `turn_end {"status": "cancelled"}` still arrives through
+    `queue`. #189: the cancel can land after the turn already paused on an
+    interrupt (between `approval_request` and its `turn_end`), so a still
+    pending approval is re-announced (`approval_request` + `turn_end
+    {"status": "awaiting_approval"}`) unless the client already answered it
+    mid-turn, in which case the caller applies that held answer instead.
+    `approval_response` frames received mid-turn are appended to `deferred`
+    (see `_take_deferred_approval`).
+    """
+    forward = asyncio.create_task(_forward_frames(websocket, queue))
+    watch = asyncio.create_task(_watch_inbound(websocket, deferred))
+    try:
+        done, _pending = await asyncio.wait({forward, watch}, return_when=asyncio.FIRST_COMPLETED)
+        if watch in done:
+            if watch.result() == "disconnect":
+                return None
+            turn.cancel()
+            await forward
+            outcome = await turn.wait()
+            pending = outcome.pending_approval
+            if (
+                outcome.status == "cancelled"
+                and pending is not None
+                and not any(f.get("interrupt_id") == pending["interrupt_id"] for f in deferred)
             ):
-                await _announce_pending_approval(
-                    websocket, thread_id, pending_approval, started_mono, started_at, prior_assistant_id
-                )
-            return "cancelled", pending_approval
-        return "disconnected", None
+                await _announce_pending_approval(websocket, turn, pending)
+            return outcome
+        # Stop reading before the client's next frame can arrive: it must
+        # reach `_serve`, not this turn's watcher.
+        watch.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watch
+        try:
+            forward.result()
+        except (WebSocketDisconnect, RuntimeError):
+            return None
+        return await turn.wait()
+    except (WebSocketDisconnect, RuntimeError):
+        return None
     finally:
-        if not watch_task.done():
-            watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await watch_task
+        turn.detach(queue)
+        for task in (forward, watch):
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
 
 
 async def _send_error_and_close(websocket: WebSocket, message: str, code: int) -> None:
@@ -1169,12 +1074,74 @@ async def chat_ws(websocket: WebSocket, thread_id: str) -> None:
             await keep_alive
 
 
+async def _start_turn(
+    websocket: WebSocket,
+    runner: TurnRunner,
+    request: TurnRequest,
+    start_from: Awaitable[tuple[str | None, str | None]],
+) -> tuple[ActiveTurn, asyncio.Queue] | None:
+    """Under the thread's lock, resolve where the turn starts (`start_from`:
+    `(error, checkpoint_id)`, an error closing 1008), then hand the lock to
+    the runner. None: the socket was closed."""
+    lock = runner.lock_for(request.thread_id)
+    await lock.acquire()
+    started = False
+    try:
+        error, checkpoint_id = await start_from
+        if error is not None:
+            await _send_error_and_close(websocket, error, code=1008)
+            return None
+        if request.delegation is not None:
+            await _refresh_for_turn(request.delegation)
+        result = await runner.start(replace(request, checkpoint_id=checkpoint_id), lock_held=True)
+        started = True
+        return result
+    except DelegationDenied:
+        await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
+        return None
+    except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
+        await _send_error_and_close(websocket, str(exc), code=1011)
+        return None
+    finally:
+        if not started:
+            lock.release()
+
+
+async def _active_tip(
+    thread_store: Any, thread_id: str, user_id: str
+) -> tuple[str | None, str | None]:
+    return None, await active_checkpoint_id_for(thread_store, thread_id, user_id)
+
+
+async def _edit_start(
+    agent: Any,
+    thread_store: Any,
+    thread_id: str,
+    user_id: str,
+    replace_from_message_id: str | None,
+    mode: Literal["truncate", "fork"] | None,
+) -> tuple[str | None, str | None]:
+    """Where a `user_message` turn starts: the active tip, or for an edit the
+    fork parent / truncated tip (M8-04/M8-05)."""
+    start_checkpoint = await active_checkpoint_id_for(thread_store, thread_id, user_id)
+    if replace_from_message_id is None:
+        return None, start_checkpoint
+    if mode == "fork":
+        fork_id, error = await _find_fork_checkpoint_id(
+            agent, thread_id, replace_from_message_id, start_checkpoint
+        )
+        return error, fork_id
+    return await _truncate_from_message(agent, thread_id, replace_from_message_id, start_checkpoint)
+
+
 async def _serve(
     websocket: WebSocket, thread_id: str, user_id: str, record: Any, delegation: Delegation
 ) -> None:
     thread_store = websocket.app.state.thread_store
+    runner: TurnRunner = websocket.app.state.turn_runner
+    detached_timeout_s = websocket.app.state.settings.agent_detached_turn_timeout_s
     # M8-03: local routing state for this connection only — `None` while
-    # idle/mid-turn, set to the dict `_run_turn` returned right after a
+    # idle/mid-turn, set to the pending approval right after a
     # `turn_end {"status": "awaiting_approval"}`. See module docstring's
     # M8-03 section: this is NOT the source of truth (a reconnect re-derives
     # it from the checkpointer via `GET /api/threads/{id}/state`). A fresh
@@ -1186,6 +1153,29 @@ async def _serve(
         websocket.app.state.agent, thread_id, record.active_checkpoint_id
     )
     deferred_approvals: list[dict] = []
+
+    async def follow(turn: ActiveTurn, queue: asyncio.Queue) -> bool:
+        """Follow a turn to its end; False once this connection is done."""
+        nonlocal pending_approval
+        outcome = await _follow_turn(websocket, turn, queue, deferred_approvals)
+        if outcome is None:
+            return False
+        if outcome.status == "error":
+            # Any other error already reached the client as an `error` frame.
+            if isinstance(outcome.error, DelegationDenied):
+                await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
+            else:
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=1011)
+            return False
+        pending_approval = outcome.pending_approval
+        return True
+
+    # M17-01: a turn that outlived its socket (or runs for another one) is
+    # replayed from its `turn_start`, then followed live.
+    running = runner.active(thread_id)
+    if running is not None and not await follow(running, running.attach()):
+        return
 
     while True:
         raw = _take_deferred_approval(deferred_approvals, pending_approval)
@@ -1199,8 +1189,6 @@ async def _serve(
                     websocket, "invalid frame: expected JSON text", code=1008
                 )
                 return
-
-        lock = _thread_locks.setdefault(thread_id, asyncio.Lock())
 
         if pending_approval is not None:
             # M8-03: while awaiting approval, only `approval_response`
@@ -1220,40 +1208,20 @@ async def _serve(
                     )
                     return
 
-            hitl_enabled = await _current_hitl_enabled(websocket, user_id)
-            thinking_enabled = await _current_thinking_enabled(websocket, user_id)
-            run_input = _resume_command(pending_approval, decisions)
-            async with lock:
-                try:
-                    resume_from = await active_checkpoint_id_for(
-                        thread_store, thread_id, user_id
-                    )
-                    outcome, new_pending = await _run_turn_or_interrupt(
-                        websocket,
-                        thread_id,
-                        run_input,
-                        hitl_enabled,
-                        thinking_enabled,
-                        resume_from,
-                        delegation,
-                        deferred_approvals,
-                    )
-                    if outcome != "disconnected":
-                        await persist_active_tip(
-                            thread_store, websocket.app.state.agent, thread_id
-                        )
-                except WebSocketDisconnect:
-                    return
-                except DelegationDenied:
-                    await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
-                    return
-                except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
-                    await _send_error_and_close(websocket, str(exc), code=1011)
-                    return
-            if outcome == "disconnected":
+            resume = TurnRequest(
+                thread_id=thread_id,
+                user_id=user_id,
+                run_input=_resume_command(pending_approval, decisions),
+                hitl_enabled=await _current_hitl_enabled(websocket, user_id),
+                thinking_enabled=await _current_thinking_enabled(websocket, user_id),
+                delegation=delegation,
+                detached_timeout_s=detached_timeout_s,
+            )
+            started = await _start_turn(
+                websocket, runner, resume, _active_tip(thread_store, thread_id, user_id)
+            )
+            if started is None or not await follow(*started):
                 return
-            pending_approval = new_pending
-            await thread_store.touch(thread_id)
             continue
 
         # M8-01: `cancel` received while idle (no turn in flight, no pending
@@ -1274,8 +1242,6 @@ async def _serve(
 
         settings_store = websocket.app.state.settings_store
         document = await settings_store.get_document(user_id)
-        hitl_enabled = document.hitl_enabled
-        thinking_enabled = document.thinking_enabled
 
         # M8-04/M8-05: `mode` is only meaningful with `replace_from_message_id`.
         # Omitted mode falls back to `edit_mode_default`.
@@ -1289,57 +1255,24 @@ async def _serve(
 
         human = HumanMessage(id=parsed.message_id or str(uuid4()), content=parsed.content)
 
-        async with lock:
-            try:
-                start_checkpoint = await active_checkpoint_id_for(
-                    thread_store, thread_id, user_id
-                )
-                if parsed.replace_from_message_id is not None:
-                    assert mode in ("truncate", "fork")
-                    if mode == "fork":
-                        fork_id, fork_error = await _find_fork_checkpoint_id(
-                            websocket.app.state.agent,
-                            thread_id,
-                            parsed.replace_from_message_id,
-                            start_checkpoint,
-                        )
-                        if fork_error is not None:
-                            await _send_error_and_close(websocket, fork_error, code=1008)
-                            return
-                        start_checkpoint = fork_id
-                    else:
-                        truncate_error, start_checkpoint = await _truncate_from_message(
-                            websocket.app.state.agent,
-                            thread_id,
-                            parsed.replace_from_message_id,
-                            start_checkpoint,
-                        )
-                        if truncate_error is not None:
-                            await _send_error_and_close(websocket, truncate_error, code=1008)
-                            return
-                outcome, new_pending = await _run_turn_or_interrupt(
-                    websocket,
-                    thread_id,
-                    {"messages": [human]},
-                    hitl_enabled,
-                    thinking_enabled,
-                    start_checkpoint,
-                    delegation,
-                    deferred_approvals,
-                )
-                if outcome != "disconnected":
-                    await persist_active_tip(
-                        thread_store, websocket.app.state.agent, thread_id
-                    )
-            except WebSocketDisconnect:
-                return
-            except DelegationDenied:
-                await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthenticated")
-                return
-            except Exception as exc:  # noqa: BLE001 - spec: any unhandled turn error -> `error` frame + close 1011
-                await _send_error_and_close(websocket, str(exc), code=1011)
-                return
-        if outcome == "disconnected":
+        turn_request = TurnRequest(
+            thread_id=thread_id,
+            user_id=user_id,
+            run_input={"messages": [human]},
+            hitl_enabled=document.hitl_enabled,
+            thinking_enabled=document.thinking_enabled,
+            delegation=delegation,
+            user_message={"id": human.id, "content": parsed.content},
+            detached_timeout_s=detached_timeout_s,
+        )
+        start_from = _edit_start(
+            websocket.app.state.agent,
+            thread_store,
+            thread_id,
+            user_id,
+            parsed.replace_from_message_id,
+            mode,
+        )
+        started = await _start_turn(websocket, runner, turn_request, start_from)
+        if started is None or not await follow(*started):
             return
-        pending_approval = new_pending
-        await thread_store.touch(thread_id)

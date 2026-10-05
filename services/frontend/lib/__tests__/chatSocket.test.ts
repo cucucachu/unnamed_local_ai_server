@@ -340,19 +340,80 @@ describe('openChatSocket — reconnect behavior', () => {
     expect(handlers.onError).toHaveBeenCalled();
   });
 
-  it('does NOT reconnect if the socket drops mid-turn, and surfaces onError instead', () => {
+  it('reconnects after a drop mid-turn without failing the turn (M17-01)', () => {
     const handlers = makeHandlers();
     openChatSocket('thread-1', handlers, Ctor);
 
+    latestSocket().open();
     latestSocket().emit({ type: 'turn_start' });
     latestSocket().drop();
+    jest.advanceTimersByTime(1000);
 
-    jest.advanceTimersByTime(10000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(handlers.onError).not.toHaveBeenCalled();
 
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(handlers.onError).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'error', message: expect.stringContaining('turn') }),
+    latestSocket().open();
+    latestSocket().emit({ type: 'turn_start', replay: true, user_message: { id: 'u-1', content: 'hi' } });
+    expect(handlers.onTurnStart).toHaveBeenLastCalledWith({
+      type: 'turn_start',
+      replay: true,
+      user_message: { id: 'u-1', content: 'hi' },
+    });
+  });
+
+  it('awaits beforeReconnect before opening the next socket', async () => {
+    let release: () => void = () => {};
+    const beforeReconnect = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
     );
+    openChatSocket('thread-1', { ...makeHandlers(), beforeReconnect }, Ctor);
+
+    latestSocket().drop();
+    jest.advanceTimersByTime(1000);
+    expect(beforeReconnect).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('reconnectNow skips the backoff, and revives a socket that gave up', () => {
+    const handlers = makeHandlers();
+    const chat = openChatSocket('thread-1', handlers, Ctor);
+
+    latestSocket().open();
+    chat.reconnectNow();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    latestSocket().drop();
+    chat.reconnectNow();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    // Still connecting: a second call doesn't open another socket.
+    chat.reconnectNow();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    for (const delay of [1000, 2000, 4000]) {
+      latestSocket().drop();
+      jest.advanceTimersByTime(delay);
+    }
+    latestSocket().drop();
+    jest.advanceTimersByTime(10000);
+    expect(FakeWebSocket.instances).toHaveLength(5);
+
+    chat.reconnectNow();
+    expect(FakeWebSocket.instances).toHaveLength(6);
+  });
+
+  it('reconnectNow does nothing after close()', () => {
+    const chat = openChatSocket('thread-1', makeHandlers(), Ctor);
+    chat.close();
+    chat.reconnectNow();
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it(`close code ${WS_CLOSE_NOT_FOUND} reports not-found and never reconnects`, () => {

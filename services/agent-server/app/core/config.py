@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # only stop for a model that loops on tool calls with nobody watching.
     agent_recursion_limit: int = 200
 
+    # A chat turn keeps running when its client disconnects (M17-01); one
+    # no client has watched for this long is cancelled. Unset: never.
+    agent_detached_turn_timeout_s: float | None = 3600
+
     # Identity JWKS, the files API the agent's file tools use, and the
     # service-auth `/internal/*` routes (bootstrap admin, delegations).
     # Without a token no delegation can be minted, so chat sockets close
