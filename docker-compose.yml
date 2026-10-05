@@ -338,6 +338,8 @@ services:
       MODEL_NAME: ${CANDIDATE_MODEL_NAME:-qwen3.8-27b}
       AGENT_CONTEXT_TOKENS: ${CANDIDATE_CTX_SIZE:-65536}
       MODEL_TIMEOUT_S: ${CANDIDATE_TIMEOUT_S:-1800}
+      # One scheduler per database: routines run on agent-server only.
+      ROUTINES_SCHEDULER_ENABLED: "false"
 
   postgres:
     image: postgres:17
