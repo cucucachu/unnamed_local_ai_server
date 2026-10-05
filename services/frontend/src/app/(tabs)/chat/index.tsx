@@ -48,7 +48,11 @@ export default function ThreadListScreen() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
+  // M17-06: routine runs can be hidden from the list.
+  const [showRoutineRuns, setShowRoutineRuns] = useState(true);
   const { message: toast, showToast } = useToast();
+  const hasRoutineRuns = threads.some((t) => t.routine_id);
+  const shown = showRoutineRuns ? threads : threads.filter((t) => !t.routine_id);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -180,7 +184,24 @@ export default function ThreadListScreen() {
         </View>
       ) : (
         <FlatList
-          data={threads}
+          data={shown}
+          ListHeaderComponent={
+            hasRoutineRuns ? (
+              <View style={styles.filters}>
+                <Pressable
+                  onPress={() => setShowRoutineRuns((prev) => !prev)}
+                  style={[styles.filterChip, showRoutineRuns && styles.filterChipOn]}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: showRoutineRuns }}
+                  accessibilityLabel="Show routine runs"
+                  testID="thread-filter-routine-runs"
+                >
+                  <Ionicons name="alarm-outline" size={14} color={theme.text} />
+                  <Text style={styles.filterChipText}>Routine runs</Text>
+                </Pressable>
+              </View>
+            ) : null
+          }
           keyExtractor={(thread) => thread.id}
           renderItem={({ item }) => <ThreadRow thread={item} onDelete={handleDelete} />}
           contentContainerStyle={styles.listContent}
@@ -226,6 +247,7 @@ function ThreadRow({ thread, onDelete }: { thread: Thread; onDelete: (thread: Th
         </Text>
         <View style={styles.rowMeta}>
           <Text style={styles.rowTime}>{relativeTime(thread.updated_at)}</Text>
+          {thread.routine_id ? <Badge label="Routine" testID={`thread-routine-${thread.id}`} /> : null}
           {/* M17-05: a routine run paused on an approval; its chat shows the card. */}
           {thread.needs_approval ? (
             <Badge label="Needs approval" tone="accent" testID={`thread-needs-approval-${thread.id}`} />
@@ -326,6 +348,29 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingVertical: 4,
+  },
+  filters: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  filterChipOn: {
+    borderColor: theme.accent,
+    backgroundColor: theme.accent,
+  },
+  filterChipText: {
+    color: theme.text,
+    fontSize: 13,
   },
   row: {
     paddingHorizontal: 16,

@@ -233,6 +233,10 @@ class RoutineStore(Protocol):
         """Newest first."""
         ...
 
+    async def latest_runs(self, owner_user_id: str) -> dict[str, RunRecord]:
+        """Each of the owner's routines' newest run, by routine id (M17-06)."""
+        ...
+
     async def claim_due(
         self, now: datetime, limit: int, advance: Advance, grace: timedelta
     ) -> list[tuple[RoutineRecord, RunRecord]]:
@@ -489,6 +493,16 @@ class PgRoutineStore:
             routines = {r.id: r for r in map(_record_from_row, await cur.fetchall())}
         return [(routines[run.routine_id], run) for run in runs]
 
+    async def latest_runs(self, owner_user_id: str) -> dict[str, RunRecord]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"SELECT DISTINCT ON (routine_id) {_RUN_COLUMNS} FROM routine_runs "
+                "WHERE owner_user_id = %s ORDER BY routine_id, created_at DESC",
+                (owner_user_id,),
+            )
+            runs = [_run_from_row(row) for row in await cur.fetchall()]
+        return {run.routine_id: run for run in runs}
+
     async def run_for_thread(self, thread_id: str, owner_user_id: str) -> RunRecord | None:
         if not _is_valid_uuid(thread_id):
             return None
@@ -718,6 +732,12 @@ class InMemoryRoutineStore:
 
     def _owned_runs(self, owner_user_id: str) -> list[RunRecord]:
         return [r for r in self._runs.values() if r.owner_user_id == owner_user_id]
+
+    async def latest_runs(self, owner_user_id: str) -> dict[str, RunRecord]:
+        latest: dict[str, RunRecord] = {}
+        for run in sorted(self._owned_runs(owner_user_id), key=lambda r: r.created_at):
+            latest[run.routine_id] = run
+        return latest
 
     async def run_for_thread(self, thread_id: str, owner_user_id: str) -> RunRecord | None:
         runs = [r for r in self._owned_runs(owner_user_id) if r.thread_id == thread_id]
