@@ -248,7 +248,9 @@ signed in as yourself (G10).
 - [ ] (M15-06) Install the release APK from
       `HOMEAI_APK_VARIANT=release EXPO_PUBLIC_API_HOST=http://10.13.13.1
       scripts/build_host_app_android.sh` (Docker; no host SDK. JS is embedded,
-      so it works off the LAN over WireGuard; a debug APK needs Metro), or an EAS development client
+      so it works off the LAN over WireGuard; a debug APK needs Metro; the
+      release build is also copied to every user's Files → Personal as
+      `HomeAI.apk`, via `scripts/publish_host_apk.sh`), or an EAS development client
       the maintainer built — `eas.json` development profile; this host
       has no Android SDK). On the LAN: sign in on the web app → Settings
       → Remote access → **Show pairing QR** → on the phone, Pair this
