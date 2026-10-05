@@ -226,8 +226,8 @@ signed in as yourself (G10).
 
 - [x] (M15-01) On home Wi-Fi: Settings → Remote access → create a device
       named for this phone → scan the QR in a WireGuard app → the tunnel
-      comes up and `http://homeai.local` (or `http://10.13.13.1`) loads
-      the UI. Revoke the device; the tunnel no longer reaches the box.
+      comes up and `http://10.13.13.1` loads the UI, and other apps
+      still reach the internet (the profile sets no `DNS =`). Revoke the device; the tunnel no longer reaches the box.
 - [x] (M15-01) Off the LAN: router forwards UDP 51820 to the host,
       `WIREGUARD_ENDPOINT` is a dynamic DNS name; phone on cellular with
       the tunnel on loads `http://10.13.13.1`, signs in, and chats.
@@ -246,8 +246,11 @@ signed in as yourself (G10).
       punch WAN 443 for Tier A. Human WAN steps:
       `infra/host/setup-public-https.md`.
 - [ ] (M15-06) Install the release APK from
-      `HOMEAI_APK_VARIANT=release EXPO_PUBLIC_API_HOST=http://10.13.13.1
-      scripts/build_host_app_android.sh` (Docker; no host SDK. JS is embedded,
+      `HOMEAI_APK_VARIANT=release
+      EXPO_PUBLIC_API_HOST=http://<host LAN IP>,http://10.13.13.1
+      scripts/build_host_app_android.sh` (Docker; no host SDK. The app uses
+      the first address that answers: home Wi-Fi without the VPN, else the
+      tunnel. JS is embedded,
       so it works off the LAN over WireGuard; a debug APK needs Metro; the
       release build is also copied to every user's Files → Personal as
       `HomeAI.apk`, via `scripts/publish_host_apk.sh`), or an EAS development client

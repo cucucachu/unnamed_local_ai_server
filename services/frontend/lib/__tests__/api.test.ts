@@ -212,3 +212,79 @@ describe('wsUrl', () => {
     expect(wsUrl('/ws/chat/abc')).toBe('wss://homeai.local/ws/chat/abc');
   });
 });
+
+describe('resolveApiHost', () => {
+  const originalOS = Platform.OS;
+  const originalEnv = process.env.EXPO_PUBLIC_API_HOST;
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    Platform.OS = originalOS;
+    global.fetch = originalFetch;
+    if (originalEnv === undefined) {
+      delete process.env.EXPO_PUBLIC_API_HOST;
+    } else {
+      process.env.EXPO_PUBLIC_API_HOST = originalEnv;
+    }
+  });
+
+  function freshApi(): typeof import('../api') {
+    let mod: typeof import('../api') | undefined;
+    jest.isolateModules(() => {
+      mod = jest.requireActual('../api');
+    });
+    return mod!;
+  }
+
+  function reachable(...up: string[]) {
+    global.fetch = jest.fn(async (url: string) => {
+      if (up.some((host) => url.startsWith(host))) return { ok: true } as Response;
+      throw new TypeError('Network request failed');
+    }) as unknown as typeof fetch;
+  }
+
+  beforeEach(() => {
+    Platform.OS = 'android';
+    process.env.EXPO_PUBLIC_API_HOST = 'http://192.168.0.108, http://10.13.13.1';
+  });
+
+  it('uses the first listed host before anything is probed', () => {
+    expect(freshApi().apiBase()).toBe('http://192.168.0.108');
+  });
+
+  it('prefers the LAN host when both answer', async () => {
+    reachable('http://192.168.0.108', 'http://10.13.13.1');
+    const api = freshApi();
+    await api.resolveApiHost();
+    expect(api.apiBase()).toBe('http://192.168.0.108');
+    expect(api.wsUrl('/ws/x')).toBe('ws://192.168.0.108/ws/x');
+  });
+
+  it('falls back to the VPN host away from home, and back again', async () => {
+    const api = freshApi();
+    reachable('http://10.13.13.1');
+    await api.resolveApiHost();
+    expect(api.apiBase()).toBe('http://10.13.13.1');
+    reachable('http://192.168.0.108');
+    await api.resolveApiHost();
+    expect(api.apiBase()).toBe('http://192.168.0.108');
+  });
+
+  it('keeps the current pick when nothing answers', async () => {
+    const api = freshApi();
+    reachable('http://10.13.13.1');
+    await api.resolveApiHost();
+    reachable();
+    await api.resolveApiHost();
+    expect(api.apiBase()).toBe('http://10.13.13.1');
+  });
+
+  it('does not probe with a single host', async () => {
+    process.env.EXPO_PUBLIC_API_HOST = 'http://10.13.13.1';
+    reachable();
+    const api = freshApi();
+    await api.resolveApiHost();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(api.apiBase()).toBe('http://10.13.13.1');
+  });
+});

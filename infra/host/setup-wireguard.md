@@ -77,12 +77,16 @@ Do **not** forward TCP 80 or 443. Public HTTPS is M15-05 and is opt-in.
 
 ## 5. DNS
 
-Client configs set `DNS = 10.13.13.1`. The sidecar answers `homeai.local`
-with `10.13.13.1` and, when `HOMEAI_DOMAIN` is set, that name too (same
-address). It proxies `:80`/`:443` to Caddy. Other names are not resolved
-(`--no-resolv`: not a recursive resolver for the public internet). With
-split-tunnel `AllowedIPs = 10.13.13.0/24`, only traffic to the box uses
-the VPN.
+Client configs set **no** `DNS =` line, so the device keeps its own
+resolver: a tunnel DNS server receives *every* lookup, and the sidecar
+only answers `homeai.local` (and `HOMEAI_DOMAIN`) with `10.13.13.1`
+(`--no-resolv`, no internet egress), so all other apps lost DNS. Over the
+tunnel, open `http://10.13.13.1`. The sidecar proxies `:80`/`:443` to
+Caddy. With split-tunnel `AllowedIPs = 10.13.13.0/24`, only traffic to
+the box uses the VPN.
+
+Profiles made before this change carry `DNS = 10.13.13.1`: edit the
+tunnel in the WireGuard app and clear "DNS servers", or make a new one.
 
 On the LAN, map `HOMEAI_DOMAIN` to this host's LAN IPv4 on the resolver
 your clients use (dnsmasq / Pi-hole / AdGuard, pfSense/OPNsense host

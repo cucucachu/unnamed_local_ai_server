@@ -49,7 +49,6 @@ const CONFIG = [
   '[Interface]',
   'PrivateKey = CLIENTPRIV',
   'Address = 10.13.13.2/32',
-  'DNS = 10.13.13.1',
   '',
   '[Peer]',
   'PublicKey = SERVERPUB',

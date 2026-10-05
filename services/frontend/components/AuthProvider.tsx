@@ -18,6 +18,9 @@ import {
   type SetupInput,
   type User,
 } from '@/lib/auth';
+import { AppState } from 'react-native';
+
+import { resolveApiHost } from '@/lib/api';
 import { getCredential } from '@/lib/webauthn';
 import { onUnauthorized, sessionToken } from '@/lib/session';
 
@@ -56,6 +59,7 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
+      await resolveApiHost();
       const status = await getAuthStatus();
       if (!status.authenticated && sessionToken() !== null) await clearSession();
       setState({
@@ -73,6 +77,15 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
   useEffect(() => {
     restoreSession().then(refresh);
   }, [refresh]);
+
+  // Back in the foreground the phone may have moved between home Wi-Fi
+  // and the VPN.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void resolveApiHost();
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(
     () =>

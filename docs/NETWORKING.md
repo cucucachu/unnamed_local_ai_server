@@ -373,8 +373,7 @@ always the device, not this setup:
 
 HTTP and HTTPS stay LAN-scoped. The sanctioned remote path is WireGuard
 (M15-01, `docs/PLATFORM.md` §8): a phone or laptop joins **10.13.13.0/24**
-and reaches Caddy at `http://homeai.local` or `http://10.13.13.1` through
-the tunnel. Do **not** forward TCP 80 or 443 on the router.
+and reaches Caddy at `http://10.13.13.1` through the tunnel. Do **not** forward TCP 80 or 443 on the router.
 
 **Origin policy (M15-02):** the platform classifies the last X-Forwarded-For
 hop as lan / vpn / public and refuses setup, invite accept, admin routes,
@@ -392,9 +391,11 @@ TCP 80; agents must not change live ufw/`DOCKER-USER`.
 **As built:** compose service `wireguard` publishes UDP 51820 (`NET_ADMIN`
 only) on `homeai-wg` (not `homeai-net`; masquerade off so it is not a
 second internet path). Platform stores peers and the server key; Settings → Remote access
-issues a QR while you are on the LAN. Client DNS is `10.13.13.1`
-(`homeai.local`, and `HOMEAI_DOMAIN` when set — M15-03; still not a
-recursive resolver).
+issues a QR while you are on the LAN. Client configs set **no** `DNS =`:
+the sidecar's resolver answers only `homeai.local` (and `HOMEAI_DOMAIN`)
+and has no internet egress, and a tunnel DNS server receives every lookup
+on the phone, so setting it broke all other apps. The phone keeps its own
+DNS; use the address `10.13.13.1` over the tunnel.
 
 **Human host steps** (agents must not run these against the live firewall
 or router): `infra/host/setup-wireguard.md` — `modprobe wireguard`,
@@ -454,10 +455,12 @@ case use Pi-hole/AdGuard on the LAN, or keep using `homeai.local`
 (mDNS) and only use the real name from clients that can point at a
 resolver you control.
 
-**WireGuard** — client configs already set `DNS = 10.13.13.1`. The
-sidecar answers `homeai.local` and, when `HOMEAI_DOMAIN` is set, that
-name too, both to `10.13.13.1`. It is not a recursive resolver for the
-public internet (`--no-resolv`).
+**WireGuard** — client configs do not set `DNS =` (it would capture every
+lookup on the device, and the sidecar is not a recursive resolver:
+`--no-resolv`, no egress). The sidecar still answers `homeai.local` and
+`HOMEAI_DOMAIN` at `10.13.13.1` for a client pointed at it by hand.
+Resolving the domain to the tunnel address for VPN clients needs a
+forwarding resolver; that is not built.
 
 After split DNS is in place, open `https://$HOMEAI_DOMAIN` on the LAN
 (public CA, no local-CA install). `https://homeai.local` keeps working

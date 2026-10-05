@@ -2,12 +2,65 @@ import { Platform } from 'react-native';
 
 import { authHeaders, notifyUnauthorized } from './session';
 
+/** Native server candidates: `EXPO_PUBLIC_API_HOST` may list several,
+ * comma-separated, most preferred first (e.g. the LAN address, then the
+ * WireGuard one). */
+function apiHosts(): string[] {
+  const hosts = (process.env.EXPO_PUBLIC_API_HOST ?? 'http://homeai.local')
+    .split(',')
+    .map((host) => host.trim())
+    .filter(Boolean);
+  return hosts.length ? hosts : ['http://homeai.local'];
+}
+
+let activeHost: string | null = null;
+let resolving: Promise<void> | null = null;
+
 /** Base URL to prefix onto API paths. Web build is same-origin (Caddy serves
  * both the SPA and proxies `/api/*` + `/ws/*`); native builds need a real
- * host since there's no "origin" to be relative to. */
+ * host since there's no "origin" to be relative to: the candidate
+ * `resolveApiHost` last picked, else the first. */
 export function apiBase(): string {
   if (Platform.OS === 'web') return '';
-  return process.env.EXPO_PUBLIC_API_HOST ?? 'http://homeai.local';
+  const hosts = apiHosts();
+  return activeHost && hosts.includes(activeHost) ? activeHost : hosts[0];
+}
+
+async function answers(host: string, timeoutMs: number): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${host}/api/auth/status`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** With several candidates, probe them all at once and use the most
+ * preferred one that answers (so home Wi-Fi goes direct and only away from
+ * home needs the VPN). Keeps the current pick when none answer. Called at
+ * startup, when the app returns to the foreground, and after a network
+ * failure. */
+export function resolveApiHost(timeoutMs = 2000): Promise<void> {
+  const hosts = apiHosts();
+  if (Platform.OS === 'web' || hosts.length < 2) return Promise.resolve();
+  resolving ??= (async () => {
+    try {
+      const probes = hosts.map((host) => answers(host, timeoutMs));
+      for (let i = 0; i < hosts.length; i++) {
+        if (await probes[i]) {
+          activeHost = hosts[i];
+          return;
+        }
+      }
+    } finally {
+      resolving = null;
+    }
+  })();
+  return resolving;
 }
 
 /** Build a `ws://`/`wss://` URL for `path` (e.g. `/ws/chat/{id}`). */
@@ -69,11 +122,17 @@ export async function apiFetch<T>(
   init?: RequestInit,
   { signOutOnUnauthorized = true }: ApiFetchOptions = {},
 ): Promise<T> {
-  const response = await fetch(apiBase() + path, {
-    ...init,
-    credentials: 'include',
-    headers: { ...authHeaders(), ...(init?.headers as Record<string, string> | undefined) },
-  });
+  let response: Response;
+  try {
+    response = await fetch(apiBase() + path, {
+      ...init,
+      credentials: 'include',
+      headers: { ...authHeaders(), ...(init?.headers as Record<string, string> | undefined) },
+    });
+  } catch (caught) {
+    void resolveApiHost();
+    throw caught;
+  }
 
   let body: unknown;
   try {

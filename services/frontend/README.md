@@ -89,7 +89,10 @@ Debug APK without a host SDK: repo-root `./scripts/build_host_app_android.sh`
 (throwaway Docker Android image). Maintainer signed builds: `eas.json`
 development profile (do not `eas login` from an agent).
 
-Native builds read the API/WS host from `EXPO_PUBLIC_API_HOST` (defaults to
+Native builds read the API/WS host from `EXPO_PUBLIC_API_HOST` (a
+comma-separated list is probed at startup, on foreground and after a network
+failure, and the first that answers wins — e.g.
+`http://192.168.0.108,http://10.13.13.1` for LAN then WireGuard; defaults to
 `http://homeai.local`, see `.env.example` in this directory — `cp` it to
 `.env` and adjust if needed; also documented at the repo root's
 `.env.example` as part of the whole project's env contract, but Expo itself
