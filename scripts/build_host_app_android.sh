@@ -33,6 +33,8 @@ case "$VARIANT" in
   release) TASK=assembleRelease ;;
   *) printf 'error: HOMEAI_APK_VARIANT must be debug or release\n' >&2; exit 1 ;;
 esac
+# The prebuild's default 2 GB heap runs out merging the release dex.
+GRADLE_JVMARGS="${HOMEAI_GRADLE_JVMARGS:--Xmx4g -XX:MaxMetaspaceSize=1g}"
 # Expo 57's config step needs Node >= 22 (util.parseEnv); v15.0 ships Node 18.
 IMAGE="${HOMEAI_ANDROID_IMAGE:-reactnativecommunity/react-native-android:v21.1}"
 # Fallback images if the primary cannot be pulled.
@@ -68,7 +70,7 @@ fi
 
 assemble() {
   log "gradlew $TASK"
-  ./gradlew "$TASK" --no-daemon
+  ./gradlew "$TASK" --no-daemon "-Dorg.gradle.jvmargs=$GRADLE_JVMARGS"
 }
 
 copy_apk() {
@@ -143,6 +145,6 @@ docker run --rm \
   -v "$ROOT:/repo" \
   -w "$APP_ANDROID" \
   "$CHOSEN" \
-  ./gradlew "$TASK" --no-daemon
+  ./gradlew "$TASK" --no-daemon "-Dorg.gradle.jvmargs=$GRADLE_JVMARGS"
 
 copy_apk

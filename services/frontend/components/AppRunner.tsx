@@ -1,9 +1,18 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { platformEventRelay, type BridgeHost, type SandboxEvents } from '@homeai/sdk/host';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
-import { AppAgentPanel } from '@/components/AppAgentPanel';
+import { AppAgentPanel, type AgentActivity } from '@/components/AppAgentPanel';
+import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { AppSandbox } from '@/components/AppSandbox';
 import { ActionButton, ErrorText } from '@/components/SettingsUI';
 import {
@@ -30,6 +39,40 @@ function loadErrorMessage(error: unknown): string {
 
 type Load = { doc: InstanceDocument | null; error: string | null };
 type Crash = { title: string; message: string };
+/** Narrow screens show the agent as a sheet over the app at these sizes. */
+type SheetSize = 'half' | 'full' | 'min';
+type Agent = { open: boolean; prompt: string | null; seq: number; size: SheetSize };
+
+/** Below this width the side panel would squeeze both the app and the chat. */
+export const SHEET_BREAKPOINT = 768;
+const DRAG_THRESHOLD = 40;
+
+function SheetHandle({ size, onSize }: { size: SheetSize; onSize: (size: SheetSize) => void }) {
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onPanResponderRelease: (_event, { dy }) => {
+          if (dy < -DRAG_THRESHOLD) onSize('full');
+          else if (dy > DRAG_THRESHOLD) onSize(size === 'full' ? 'half' : 'min');
+          else onSize(size === 'full' ? 'half' : 'full');
+        },
+      }),
+    [size, onSize],
+  );
+  return (
+    <View
+      {...responder.panHandlers}
+      style={styles.handleArea}
+      accessibilityRole="adjustable"
+      accessibilityLabel={size === 'full' ? 'Shrink the agent' : 'Expand the agent'}
+      onAccessibilityAction={() => onSize(size === 'full' ? 'half' : 'full')}
+      testID="app-agent-handle"
+    >
+      <View style={styles.handle} />
+    </View>
+  );
+}
 
 /**
  * Runs one installed instance (`docs/PLATFORM.md` §7 "Runtime and bridge"):
@@ -58,11 +101,10 @@ export function AppRunner({
   const [load, setLoad] = useState<Load>({ doc: null, error: null });
   const [host, setHost] = useState<BridgeHost | null>(null);
   const [crash, setCrash] = useState<Crash | null>(null);
-  const [agent, setAgent] = useState<{ open: boolean; prompt: string | null; seq: number }>({
-    open: false,
-    prompt: null,
-    seq: 0,
-  });
+  const [agent, setAgent] = useState<Agent>({ open: false, prompt: null, seq: 0, size: 'half' });
+  const [activity, setActivity] = useState<AgentActivity>({ busy: false, needsApproval: false });
+  const { width } = useWindowDimensions();
+  const sheet = width < SHEET_BREAKPOINT;
 
   useEffect(() => {
     let cancelled = false;
@@ -103,14 +145,32 @@ export function AppRunner({
   }, []);
 
   const onAskAgent = useCallback((prompt: string) => {
-    setAgent((current) => ({ open: true, prompt, seq: current.seq + 1 }));
+    setAgent((current) => ({
+      open: true,
+      prompt,
+      seq: current.seq + 1,
+      size: current.size === 'min' ? 'half' : current.size,
+    }));
   }, []);
 
-  const openAgent = useCallback(() => {
-    setAgent((current) =>
-      current.open ? { open: false, prompt: null, seq: current.seq } : { open: true, prompt: null, seq: current.seq },
-    );
+  const toggleAgent = useCallback(() => {
+    setAgent((current) => {
+      if (!current.open) return { ...current, open: true, prompt: null, size: 'half' };
+      if (current.size === 'min') return { ...current, size: 'half' };
+      return { ...current, open: false, prompt: null };
+    });
   }, []);
+
+  const setSheetSize = useCallback((size: SheetSize) => setAgent((current) => ({ ...current, size })), []);
+  const closeAgent = useCallback(
+    () => setAgent((current) => ({ ...current, open: false, prompt: null })),
+    [],
+  );
+  const expandOnFocus = useCallback(() => {
+    if (sheet) setSheetSize('full');
+  }, [sheet, setSheetSize]);
+
+  const agentVisible = agent.open && (!sheet || agent.size !== 'min');
 
   const restart = useCallback(() => {
     setCrash(null);
@@ -119,7 +179,26 @@ export function AppRunner({
     setGeneration((n) => n + 1);
   }, []);
 
+  const agentAppId = appId ?? doc?.appId;
+  const panel =
+    agent.open && agentAppId ? (
+      <AppAgentPanel
+        instanceId={instanceId}
+        space={space}
+        appId={agentAppId}
+        appName={appName}
+        initialPrompt={agent.prompt}
+        promptSeq={agent.seq}
+        onClose={closeAgent}
+        variant={sheet ? 'sheet' : 'side'}
+        onMinimize={sheet ? () => setSheetSize('min') : undefined}
+        onActivity={setActivity}
+        onComposerFocus={expandOnFocus}
+      />
+    ) : null;
+
   return (
+    <AppKeyboardAvoidingView style={styles.container}>
     <View style={styles.container} testID="app-runner">
       {readOnly ? (
         <Text style={styles.readOnly} testID="app-runner-read-only">
@@ -128,14 +207,14 @@ export function AppRunner({
       ) : null}
       <View style={styles.bar}>
         <Pressable
-          onPress={openAgent}
+          onPress={toggleAgent}
           accessibilityRole="button"
           accessibilityLabel="Ask the agent"
           testID="app-ask-agent"
           style={styles.askButton}
         >
           <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.text} />
-          <Text style={styles.askLabel}>{agent.open ? 'Hide agent' : 'Ask the agent'}</Text>
+          <Text style={styles.askLabel}>{agentVisible ? 'Hide agent' : 'Ask the agent'}</Text>
         </Pressable>
       </View>
       <View style={styles.body}>
@@ -178,19 +257,34 @@ export function AppRunner({
           </View>
         ) : null}
       </View>
-      {agent.open && (appId ?? doc?.appId) ? (
-        <AppAgentPanel
-          instanceId={instanceId}
-          space={space}
-          appId={(appId ?? doc?.appId)!}
-          appName={appName}
-          initialPrompt={agent.prompt}
-          promptSeq={agent.seq}
-          onClose={() => setAgent((current) => ({ open: false, prompt: null, seq: current.seq }))}
-        />
+      {sheet ? null : panel}
+      {sheet && panel ? (
+        <View
+          style={[styles.sheet, agent.size === 'full' ? styles.sheetFull : styles.sheetHalf, agent.size === 'min' && styles.hidden]}
+          testID="app-agent-sheet"
+        >
+          <SheetHandle size={agent.size} onSize={setSheetSize} />
+          {panel}
+        </View>
+      ) : null}
+      {sheet && panel && agent.size === 'min' ? (
+        <Pressable
+          onPress={() => setSheetSize('half')}
+          accessibilityRole="button"
+          accessibilityLabel="Show the agent"
+          testID="app-agent-pill"
+          style={styles.pill}
+        >
+          {activity.busy ? <ActivityIndicator size="small" color={theme.accent} /> : null}
+          <Text style={styles.pillText}>
+            {activity.needsApproval ? 'Agent needs approval' : activity.busy ? 'Agent working…' : 'Agent'}
+          </Text>
+          <Ionicons name="chevron-up" size={16} color={theme.text} />
+        </Pressable>
       ) : null}
       </View>
     </View>
+    </AppKeyboardAvoidingView>
   );
 }
 
@@ -227,6 +321,38 @@ const styles = StyleSheet.create({
   },
   askLabel: { color: theme.text, fontSize: 14 },
   body: { flex: 1, flexDirection: 'row' },
+  sheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: theme.surface,
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+    borderTopWidth: 1,
+    borderColor: theme.border,
+    overflow: 'hidden',
+  },
+  sheetHalf: { height: '55%' },
+  sheetFull: { top: 0 },
+  hidden: { display: 'none' },
+  handleArea: { alignItems: 'center', paddingVertical: 8 },
+  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: theme.border },
+  pill: {
+    position: 'absolute',
+    bottom: 16,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+  },
+  pillText: { color: theme.text, fontSize: 14 },
   centered: {
     flex: 1,
     alignItems: 'center',

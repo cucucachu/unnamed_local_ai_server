@@ -24,6 +24,11 @@ import {
 
 const threadsByInstance = new Map<string, string>();
 
+export interface AgentActivity {
+  busy: boolean;
+  needsApproval: boolean;
+}
+
 /**
  * Side panel on the app runner (M13-04): a regular chat thread pre-seeded
  * with this instance's app.json, AGENT.md, schema.sql, id and space.
@@ -37,6 +42,10 @@ export function AppAgentPanel({
   initialPrompt,
   promptSeq = 0,
   onClose,
+  variant = 'side',
+  onMinimize,
+  onActivity,
+  onComposerFocus,
 }: {
   instanceId: string;
   space: Space;
@@ -46,6 +55,12 @@ export function AppAgentPanel({
   /** Bumps on every `askAgent` so a repeated prompt is still a new turn. */
   promptSeq?: number;
   onClose: () => void;
+  /** `sheet`: full width over the app (phones), context collapsed. */
+  variant?: 'side' | 'sheet';
+  /** Shows a minimize button (the sheet keeps the panel mounted). */
+  onMinimize?: () => void;
+  onActivity?: (activity: AgentActivity) => void;
+  onComposerFocus?: () => void;
 }) {
   const [ctx, setCtx] = useState<AppContext | null>(null);
   const [threadId, setThreadId] = useState<string | null>(() => threadsByInstance.get(instanceId) ?? null);
@@ -82,23 +97,44 @@ export function AppAgentPanel({
   }, [instanceId, appName, threadId]);
 
   return (
-    <View style={styles.panel} testID="app-agent-panel" accessibilityLabel="Ask the agent">
+    <View
+      style={variant === 'sheet' ? styles.sheet : styles.panel}
+      testID="app-agent-panel"
+      accessibilityLabel="Ask the agent"
+    >
       <View style={styles.header}>
         <Text style={styles.title} numberOfLines={1}>
           Ask the agent
         </Text>
+        {onMinimize ? (
+          <Pressable
+            onPress={onMinimize}
+            accessibilityRole="button"
+            accessibilityLabel="Minimize"
+            testID="app-agent-minimize"
+            style={styles.iconButton}
+          >
+            <Ionicons name="chevron-down" size={22} color={theme.text} />
+          </Pressable>
+        ) : null}
         <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" testID="app-agent-close" style={styles.iconButton}>
           <Ionicons name="close" size={22} color={theme.text} />
         </Pressable>
       </View>
       {error ? <ErrorText testID="app-agent-error">{error}</ErrorText> : null}
-      {ctx ? <ContextCard ctx={ctx} /> : <ActivityIndicator color={theme.accent} style={styles.spinner} />}
+      {ctx ? (
+        <ContextCard ctx={ctx} collapsible={variant === 'sheet'} />
+      ) : (
+        <ActivityIndicator color={theme.accent} style={styles.spinner} />
+      )}
       {ctx && threadId ? (
         <AgentChat
           threadId={threadId}
           ctx={ctx}
           initialPrompt={initialPrompt ?? null}
           promptSeq={promptSeq}
+          onActivity={onActivity}
+          onComposerFocus={onComposerFocus}
         />
       ) : (
         <View style={styles.flex} />
@@ -107,7 +143,22 @@ export function AppAgentPanel({
   );
 }
 
-function ContextCard({ ctx }: { ctx: AppContext }) {
+function ContextCard({ ctx, collapsible }: { ctx: AppContext; collapsible: boolean }) {
+  const [open, setOpen] = useState(!collapsible);
+  if (!open) {
+    return (
+      <Pressable
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        testID="app-agent-context-toggle"
+        style={styles.context}
+      >
+        <Text style={styles.contextLine} numberOfLines={1}>
+          Context: {CONTEXT_FILES.join(', ')} · {ctx.space.name}
+        </Text>
+      </Pressable>
+    );
+  }
   return (
     <View style={styles.context} testID="app-agent-context">
       <Text style={styles.contextLine} testID="app-agent-instance">
@@ -131,13 +182,21 @@ function AgentChat({
   ctx,
   initialPrompt,
   promptSeq,
+  onActivity,
+  onComposerFocus,
 }: {
   threadId: string;
   ctx: AppContext;
   initialPrompt: string | null;
   promptSeq: number;
+  onActivity?: (activity: AgentActivity) => void;
+  onComposerFocus?: () => void;
 }) {
   const { turns, sendMessage, busy, hydrationState, pendingApproval, respondToApproval } = useChat(threadId);
+  const needsApproval = pendingApproval !== null;
+  useEffect(() => {
+    onActivity?.({ busy, needsApproval });
+  }, [busy, needsApproval, onActivity]);
   const [draft, setDraft] = useState('');
   const seeded = useRef(false);
   const queued = useRef<string[]>([]);
@@ -188,6 +247,7 @@ function AgentChat({
           placeholder="Ask about this app"
           placeholderTextColor={theme.textMuted}
           multiline
+          onFocus={onComposerFocus}
           testID="app-agent-composer"
           editable={!busy && pendingApproval === null}
         />
@@ -268,6 +328,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
     borderLeftWidth: 1,
     borderLeftColor: theme.border,
+  },
+  sheet: {
+    flex: 1,
+    backgroundColor: theme.surface,
   },
   header: {
     flexDirection: 'row',
