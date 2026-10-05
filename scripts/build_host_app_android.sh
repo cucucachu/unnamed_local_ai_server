@@ -11,7 +11,9 @@
 # else a one-command Gradle path when ANDROID_HOME is already set.
 #
 # Does not commit the APK (*.apk is gitignored). Does not complete
-# platform bootstrap. Does not touch the live compose stack.
+# platform bootstrap. A release build is then copied into every user's
+# Personal files as HomeAI.apk (scripts/publish_host_apk.sh, via the live
+# platform container); HOMEAI_APK_PUBLISH=0 skips that.
 
 set -euo pipefail
 
@@ -77,6 +79,11 @@ copy_apk() {
   cp "$apk" "$dest"
   log "APK: $dest"
   log "(gitignored; do not commit)"
+  # A debug APK needs Metro on the LAN, so only release builds are shared.
+  if [[ "$VARIANT" == release && "${HOMEAI_APK_PUBLISH:-1}" != 0 ]]; then
+    "$ROOT/scripts/publish_host_apk.sh" "$dest" \
+      || log "warning: could not copy the APK into users' Personal files (is the stack up?); retry with scripts/publish_host_apk.sh"
+  fi
 }
 
 if [[ -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" && -z "${HOMEAI_FORCE_DOCKER:-}" ]]; then

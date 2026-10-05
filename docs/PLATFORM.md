@@ -1238,7 +1238,9 @@ with that app's context.
 >
 > Build: `scripts/build_host_app_android.sh` runs `expo prebuild` then
 > Gradle in a throwaway Docker Android image (or host `ANDROID_HOME`).
-> Does not `eas login`. EAS `development` profile in
+> Does not `eas login`. A release build is copied into every active
+> user's personal space as `HomeAI.apk` (`scripts/publish_host_apk.sh`;
+> `HOMEAI_APK_PUBLISH=0` skips it). EAS `development` profile in
 > `services/frontend/eas.json` is the maintainer path for signed builds.
 > APK is gitignored (`*.apk`). Live check: pytest
 > `test_device_pairs.py`; install the debug APK is Tier B
