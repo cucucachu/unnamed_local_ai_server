@@ -245,7 +245,7 @@ signed in as yourself (G10).
       enrollment/admin still `public_origin`. Do not require agents to
       punch WAN 443 for Tier A. Human WAN steps:
       `infra/host/setup-public-https.md`.
-- [ ] (M15-06) Install the release APK from
+- [x] (M15-06) Install the release APK from
       `HOMEAI_APK_VARIANT=release
       EXPO_PUBLIC_API_HOST=http://<host LAN IP>,http://10.13.13.1
       scripts/build_host_app_android.sh` (Docker; no host SDK. The app uses
@@ -256,12 +256,15 @@ signed in as yourself (G10).
       `HomeAI.apk`, via `scripts/publish_host_apk.sh`), or an EAS development client
       the maintainer built — `eas.json` development profile; this host
       has no Android SDK). On the LAN: sign in on the web app → Settings
-      → Remote access → **Show pairing QR** → on the phone, Pair this
-      phone (paste the QR JSON if the camera isn't wired). Confirm
+      → Remote access → **Show pairing QR** → scan it with the phone
+      camera (opens the app) or **Scan pairing QR** in the app; pasting
+      the code also works. Confirm
       **Sign in with this device** after a biometric unlock. Revoke the
       pair; the phone can no longer sign in that way. Expo Go on the
       same account still uses password (`X-HomeAI-Client: native`). iOS
       is docs-only; no ipa.
+      Passed 2026-10-04 (Android release APK; pair, device sign-in with
+      TOTP, revoke. Fixes on the way: #241, #242, #245).
 
 > **PM sign-off: G15 passed ____**
 
