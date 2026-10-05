@@ -163,7 +163,7 @@ def test_threads_are_isolated_between_users(
                 assert response.status_code == 404, (method, path)
                 assert response.json() == {"detail": f"thread '{tid}' not found"}
             state = client.get(f"/api/threads/{tid}/state", headers=bob)
-            assert state.json() == {"pending_approval": None}
+            assert state.json() == {"pending_approval": None, "running": False}
             assert client.delete(f"/api/threads/{tid}", headers=bob).status_code == 204
 
             with client.websocket_connect(f"/ws/chat/{tid}", headers=bob) as ws:

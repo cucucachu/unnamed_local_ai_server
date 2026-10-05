@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.build import build_agent
+from app.agent.turn_runner import TurnRunner
 from app.api import chat, chat_ws, health
 from app.api import settings as settings_api
 from app.core.config import Settings
@@ -112,7 +113,11 @@ def create_app(
             app.state.turn_stats_store = turn_stats_store_override or InMemoryTurnStatsStore()
             install_orphan_adopter(app)
             app.state.agent = build_agent(app.state.settings, checkpointer_override)
-            yield
+            app.state.turn_runner = TurnRunner(app.state)
+            try:
+                yield
+            finally:
+                await app.state.turn_runner.shutdown()
             return
 
         pg_checkpointer = await build_postgres_checkpointer(app.state.settings.postgres_dsn)
@@ -127,7 +132,11 @@ def create_app(
             )
             install_orphan_adopter(app)
             app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver)
-            yield
+            app.state.turn_runner = TurnRunner(app.state)
+            try:
+                yield
+            finally:
+                await app.state.turn_runner.shutdown()
         finally:
             await pg_checkpointer.close()
 

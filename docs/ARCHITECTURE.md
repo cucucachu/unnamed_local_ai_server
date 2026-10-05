@@ -648,7 +648,9 @@ what another doc says it should be.
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
   `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05),
   `AGENT_RECURSION_LIMIT` (optional, default 200: LangGraph steps per chat
-  turn; LangGraph's own 25 cut off app builds), `AGENT_CONTEXT_TOKENS`
+  turn; LangGraph's own 25 cut off app builds), `AGENT_DETACHED_TURN_TIMEOUT_S`
+  (optional, default 3600: a turn no client is attached to is cancelled
+  after this long; M17-01), `AGENT_CONTEXT_TOKENS`
   (optional, defaults to `MODEL_CTX_SIZE`: the model's window; deepagents
   summarizes history and clips old tool arguments at 85% of it, and a
   llama-server overflow summarizes and retries), `POSTGRES_USER`
@@ -1524,6 +1526,8 @@ Server → client, in order within a turn:
 
 ```json
 {"type": "turn_start"}
+{"type": "turn_start", "replay": true,
+ "user_message": {"id": "str", "content": "str"}}          // M17-01: on connecting mid-turn (user_message omitted for an approval resume)
 {"type": "reasoning", "content": "str"}                   // M8-07: thought delta; not persisted to history
 {"type": "token", "content": "str"}                       // one per streamed model token chunk
 {"type": "tool_start", "tool_call_id": "str", "name": "str",
@@ -1573,8 +1577,8 @@ model does not emit reasoning deltas, so no `reasoning` frames appear;
 `token` frames are unchanged.
 
 On `cancel` mid-turn: the server cancels the turn task, awaits it, sends
-`turn_end {"status": "cancelled"}`, and — unlike a client disconnect —
-**keeps the connection open**; the per-thread lock is released normally
+`turn_end {"status": "cancelled"}`, and **keeps the connection open**;
+the per-thread lock is released normally
 and the thread's `updated_at` is still bumped, so the very next
 `user_message` on the same socket runs a normal turn. If the `cancel`
 lands after the turn already paused on an interrupt (between
@@ -1587,6 +1591,20 @@ sent an `approval_response` for that interrupt, that is applied instead
 and there is no re-announce (#189). The `error` frame
 path (unhandled model/agent exception) is unchanged by any of this — it
 still ends the turn with `error` + close code 1011, never a `turn_end`.
+
+**Detached turns (M17-01).** A turn runs in the agent server's
+`TurnRunner`, not in its socket: a client that disconnects mid-turn (a
+phone locking, a network switch) only detaches. The turn runs to its end
+and checkpoints as usual; with no client attached for
+`AGENT_DETACHED_TURN_TIMEOUT_S` (default 3600) it is cancelled. A socket
+that connects to the thread while the turn runs first receives
+`turn_start {"replay": true, ...}` and every frame the turn has sent so far,
+then the live frames, and may `cancel` it. Meanwhile `GET
+/api/threads/{id}/messages` returns the history the turn started from (its
+own steps come from the replay), and `GET /api/threads/{id}/state` returns
+`{"pending_approval": null, "running": true}`. The frontend reconnects
+after a drop mid-turn instead of failing the turn, and again when the app
+returns to the foreground.
 
 Category mapping by tool name: `ls|read_file|write_file|edit_file|glob|
 grep|delete` → `file`; `execute_code` → `exec`; `write_todos|task` →

@@ -225,7 +225,12 @@ async def get_thread_messages(
     record = await _owned_thread(request, thread_id, user.user_id)
 
     agent = request.app.state.agent
-    state = await agent.aget_state(graph_config(thread_id, record.active_checkpoint_id))
+    # M17-01: mid-turn, the turn's own steps come from its socket replay.
+    running = request.app.state.turn_runner.active(thread_id)
+    checkpoint_id = running.base_checkpoint_id if running else record.active_checkpoint_id
+    if running is not None and checkpoint_id is None:
+        return []
+    state = await agent.aget_state(graph_config(thread_id, checkpoint_id))
     # See module docstring: `state.values` is `{}` (not `{"messages": []}`)
     # when the row exists but no checkpoint has been written yet.
     messages = state.values.get("messages", [])
@@ -250,7 +255,7 @@ async def get_thread_messages(
 
 @router.get("/threads/{thread_id}/state")
 async def get_thread_state(thread_id: str, request: Request, user: CurrentUser) -> dict:
-    """`GET /api/threads/{id}/state` -> `{"pending_approval": {...} | null}` (M8-03).
+    """`GET /api/threads/{id}/state` -> `{"pending_approval": {...} | null, "running": bool}` (M8-03).
 
     Same shape as the `approval_request` frame's payload minus the frame's
     own `type` envelope. `useChat` (frontend) calls this once after history
@@ -267,10 +272,13 @@ async def get_thread_state(thread_id: str, request: Request, user: CurrentUser) 
     """
     record = await _thread_store(request).get(thread_id, user.user_id)
     if record is None:
-        return {"pending_approval": None}
+        return {"pending_approval": None, "running": False}
+    if request.app.state.turn_runner.active(thread_id) is not None:
+        # The running turn's socket replay announces any approval it reaches.
+        return {"pending_approval": None, "running": True}
     agent = request.app.state.agent
     pending_approval = await get_pending_approval(agent, thread_id, record.active_checkpoint_id)
-    return {"pending_approval": public_approval(pending_approval)}
+    return {"pending_approval": public_approval(pending_approval), "running": False}
 
 
 def _build_branch_points(

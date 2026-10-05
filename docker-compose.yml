@@ -273,6 +273,7 @@ services:
       WEB_FETCH_URL: ${WEB_FETCH_URL}
       WEB_FETCH_TOOL_MAX_CHARS: ${WEB_FETCH_TOOL_MAX_CHARS}
       AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT:-200}
+      AGENT_DETACHED_TURN_TIMEOUT_S: ${AGENT_DETACHED_TURN_TIMEOUT_S:-3600}
       AGENT_CONTEXT_TOKENS: ${AGENT_CONTEXT_TOKENS:-${MODEL_CTX_SIZE}}
       # The non-superuser `agent` role (M11-04, created by db-init): it can
       # reach only this database, never `homeai_platform`.

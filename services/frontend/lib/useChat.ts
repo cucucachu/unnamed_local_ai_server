@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 
 import { ApiError } from './api';
 import {
@@ -335,6 +336,38 @@ function toPendingApprovalAction(action: {
   };
 }
 
+interface ThreadSnapshot {
+  messages: ThreadMessage[];
+  pendingApproval: PendingApproval | null;
+  branches: ThreadBranchPoint[];
+}
+
+/** History, then the pending approval and branches (both best-effort: a
+ * failure there just means no card / no branch picker until the next live
+ * update). Throws only if the history fetch fails. */
+async function loadThread(threadId: string): Promise<ThreadSnapshot> {
+  const messages = await getThreadMessages(threadId);
+  let pendingApproval: PendingApproval | null = null;
+  try {
+    const state = await getThreadState(threadId);
+    if (state.pending_approval !== null) {
+      pendingApproval = {
+        interruptId: state.pending_approval.interrupt_id,
+        actions: state.pending_approval.actions.map(toPendingApprovalAction),
+      };
+    }
+  } catch {
+    // Best-effort, see above.
+  }
+  let branches: ThreadBranchPoint[] = [];
+  try {
+    branches = await getThreadBranches(threadId);
+  } catch {
+    // Best-effort, see above.
+  }
+  return { messages, pendingApproval, branches };
+}
+
 export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseChatResult {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [turnMetas, setTurnMetas] = useState<Record<string, ChatTurnMeta>>({});
@@ -376,40 +409,14 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     currentTurnUserIdRef.current = null;
     turnStartedAtRef.current = null;
 
-    getThreadMessages(threadId)
-      .then(async (messages) => {
+    // M8-03: a pending approval left over from before a reload is restored
+    // before flipping to `'done'`, so the composer/card don't flash the
+    // idle state for one frame and the socket opens with it populated.
+    loadThread(threadId)
+      .then((snapshot) => {
         if (cancelled) return;
-        setItems(mapHistoryToItems(messages));
-        setTurnMetas(extractTurnMetaFromHistory(messages));
-
-        // M8-03: restore a pending approval left over from before a
-        // reconnect/reload. Best-effort relative to hydration itself (a
-        // failure here just means no approval card shows up until the next
-        // live `approval_request`, not a hydration failure) — but we DO
-        // await it before flipping to `'done'` so the composer/card don't
-        // flash the idle state for one frame, and so the socket opens
-        // with `pendingApproval` already populated.
-        try {
-          const state = await getThreadState(threadId);
-          if (cancelled) return;
-          if (state.pending_approval !== null) {
-            const restored: PendingApproval = {
-              interruptId: state.pending_approval.interrupt_id,
-              actions: state.pending_approval.actions.map(toPendingApprovalAction),
-            };
-            pendingApprovalRef.current = restored;
-            setPendingApproval(restored);
-          }
-        } catch {
-          // Best-effort restore only — see comment above.
-        }
-        try {
-          const nextBranches = await getThreadBranches(threadId);
-          if (!cancelled) setBranches(nextBranches);
-        } catch {
-          if (!cancelled) setBranches([]);
-        }
-        if (!cancelled) setHydrationState('done');
+        applySnapshot(snapshot);
+        setHydrationState('done');
       })
       .catch((error) => {
         if (cancelled) return;
@@ -420,6 +427,14 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
       cancelled = true;
     };
   }, [threadId, hydrationAttempt]);
+
+  const applySnapshot = useCallback((snapshot: ThreadSnapshot) => {
+    setItems(mapHistoryToItems(snapshot.messages));
+    setTurnMetas(extractTurnMetaFromHistory(snapshot.messages));
+    pendingApprovalRef.current = snapshot.pendingApproval;
+    setPendingApproval(snapshot.pendingApproval);
+    setBranches(snapshot.branches);
+  }, []);
 
   const retryHydration = useCallback(() => {
     setHydrationAttempt((n) => n + 1);
@@ -446,7 +461,21 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     const socket = openChatSocket(
       threadId,
       {
-        onTurnStart: () => {
+        onTurnStart: (frame) => {
+          if (frame.replay) {
+            // M17-01: a turn that kept running while this socket was away (or
+            // started on another one). History stops where it began.
+            setBusy(true);
+            const message = frame.user_message;
+            if (message) {
+              currentTurnUserIdRef.current = message.id;
+              setItems((prev) =>
+                prev.some((item) => item.id === message.id)
+                  ? prev
+                  : [...prev, { id: message.id, kind: 'user', text: message.content }],
+              );
+            }
+          }
           turnStartedAtRef.current = Date.now();
           const userId = currentTurnUserIdRef.current ?? ORPHAN_TURN_KEY;
           setTurnMetas((prev) => ({
@@ -642,6 +671,25 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
           if (!cancelled) setHydrationState('not_found');
         },
         onConnectionStateChange: setConnectionState,
+        // M17-01: anything streamed before the drop is re-sent by the
+        // replay of a still-running turn, on top of fresh history.
+        beforeReconnect: async () => {
+          let snapshot: ThreadSnapshot;
+          try {
+            snapshot = await loadThread(threadId);
+          } catch (error) {
+            if (!cancelled && error instanceof ApiError && error.status === 404) {
+              setHydrationState('not_found');
+            }
+            throw error;
+          }
+          if (cancelled) return;
+          currentAssistantIdRef.current = null;
+          currentReasoningIdRef.current = null;
+          currentTurnUserIdRef.current = null;
+          setBusy(false);
+          applySnapshot(snapshot);
+        },
       },
       WebSocketImpl,
     );
@@ -654,6 +702,15 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- WebSocketImpl is a test-only override, stable in real usage
   }, [threadId, hydrationState]);
+
+  // M17-01: a phone suspends the app's sockets; reconnect (and catch up on
+  // any turn that ran meanwhile) as soon as it is back in the foreground.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') socketRef.current?.reconnectNow();
+    });
+    return () => subscription.remove();
+  }, []);
 
   const sendMessage = useCallback((text: string, options?: SendUserMessageOptions) => {
     const id = newUserMessageId();
