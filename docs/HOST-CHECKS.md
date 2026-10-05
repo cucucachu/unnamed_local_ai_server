@@ -245,8 +245,10 @@ signed in as yourself (G10).
       enrollment/admin still `public_origin`. Do not require agents to
       punch WAN 443 for Tier A. Human WAN steps:
       `infra/host/setup-public-https.md`.
-- [ ] (M15-06) Install the debug APK from
-      `scripts/build_host_app_android.sh` (or an EAS development client
+- [ ] (M15-06) Install the release APK from
+      `HOMEAI_APK_VARIANT=release EXPO_PUBLIC_API_HOST=http://10.13.13.1
+      scripts/build_host_app_android.sh` (Docker; no host SDK. JS is embedded,
+      so it works off the LAN over WireGuard; a debug APK needs Metro), or an EAS development client
       the maintainer built — `eas.json` development profile; this host
       has no Android SDK). On the LAN: sign in on the web app → Settings
       → Remote access → **Show pairing QR** → on the phone, Pair this
