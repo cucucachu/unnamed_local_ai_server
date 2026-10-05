@@ -83,6 +83,8 @@ class ThreadOut(BaseModel):
     title: str
     created_at: str
     updated_at: str
+    # M17-02: the routine this thread is a run of.
+    routine_id: str | None = None
 
 
 class ToolCallOut(BaseModel):
@@ -151,6 +153,7 @@ def _to_thread_out(record: ThreadRecord) -> ThreadOut:
         title=record.title,
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
+        routine_id=record.routine_id,
     )
 
 
@@ -204,10 +207,13 @@ async def create_thread(
 
 
 @router.get("/threads", response_model=list[ThreadOut])
-async def list_threads(request: Request, user: CurrentUser) -> list[ThreadOut]:
+async def list_threads(
+    request: Request, user: CurrentUser, routine_id: str | None = None
+) -> list[ThreadOut]:
+    """Newest activity first; `?routine_id=` lists that routine's runs, newest first."""
     await request.app.state.orphan_adopter.adopt()
     store = _thread_store(request)
-    records = await store.list_for_owner(user.user_id)
+    records = await store.list_for_owner(user.user_id, routine_id=routine_id)
     return [_to_thread_out(r) for r in records]
 
 

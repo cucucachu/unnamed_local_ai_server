@@ -17,8 +17,8 @@ from uuid import UUID
 
 from psycopg import AsyncConnection
 
-from app.core import sessions
-from app.core.errors import InvalidInput, Unauthorized
+from app.core import sessions, spaces, vfs
+from app.core.errors import InvalidInput, NotFound, Unauthorized
 from app.core.tokens import TokenError, TokenService
 
 DELEGATION_TTL = timedelta(minutes=15)
@@ -70,3 +70,38 @@ async def refresh(conn: AsyncConnection, tokens: TokenService, token: str) -> tu
     if not isinstance(thread_id, str) or not _THREAD_ID.fullmatch(thread_id):
         raise Unauthorized("unauthenticated")
     return await _issue(conn, tokens, claims, thread_id)
+
+
+async def space_role(
+    conn: AsyncConnection, tokens: TokenService, identity_token: str, space_path: str
+) -> tuple[str, str]:
+    """`(canonical path, role)` of the identity's user in an active space they belong to.
+
+    Only a space root names a space: `/personal` or `/spaces/<slug>`.
+    """
+    try:
+        claims = tokens.verify_token(identity_token, act="user")
+        user_id, session_id = UUID(str(claims["sub"])), UUID(str(claims.get("sid")))
+    except (TokenError, ValueError) as exc:
+        raise Unauthorized("unauthenticated") from exc
+    if await sessions.load_active(conn, session_id, user_id) is None:
+        raise Unauthorized("unauthenticated")
+
+    parts = vfs.parse(space_path)
+    if parts == (vfs.PERSONAL,):
+        space = await spaces.get_personal_space(conn, user_id)
+    elif len(parts) == 2 and parts[0] == vfs.SPACES:
+        space = await spaces.get_space_by_slug(conn, parts[1])
+        if space["kind"] != "shared":
+            raise NotFound("not_found")
+    else:
+        raise InvalidInput("invalid_space")
+    cur = await conn.execute(
+        "SELECT role FROM space_members WHERE space_id = %s AND user_id = %s",
+        (space["id"], user_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise NotFound("not_found")
+    canonical = f"/{vfs.PERSONAL}" if space["kind"] == "personal" else f"/{vfs.SPACES}/{space['slug']}"
+    return canonical, row["role"]

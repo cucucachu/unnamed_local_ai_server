@@ -1353,9 +1353,11 @@ appears in `GET /api/threads`. Threads created before M10-04 (no owner)
 belong to the bootstrap admin once one exists (see `agent-server` in §2).
 - `POST /api/threads` body `{"title": "optional string"}` → `201
   {"id": "<uuid>", "title": "New chat", "created_at": iso8601,
-  "updated_at": iso8601}`
+  "updated_at": iso8601, "routine_id": "<uuid>"|null}` (`routine_id`,
+  M17-02: set on a routine's runs)
 - `GET /api/threads` → `200 [{thread}, ...]`, the caller's own, ordered
-  by `updated_at` desc
+  by `updated_at` desc. `?routine_id=<uuid>`: only that routine's runs,
+  newest first
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
   "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null,
@@ -1395,6 +1397,38 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
   id is not a tip of this thread (unknown, or it still has children).
 - `DELETE /api/threads/{id}` → `204` (deletes the row and the
   checkpointer state for that thread)
+
+**Routines** (M17-02) — a saved prompt the agent runs later, as its owner,
+in one of their spaces. Owned like threads (row-level security on
+`routines.owner_user_id`; another user's routine is a `404`). Each run is a
+thread with `routine_id` set; deleting the routine keeps its runs as plain
+chats (`ON DELETE SET NULL`).
+- `{routine}` = `{"id", "name", "prompt", "space": "/personal"|"/spaces/<slug>",
+  "schedule", "timezone": IANA name, "enabled": bool, "next_run_at":
+  iso8601|null, "last_run_at": iso8601|null, "created_at", "updated_at"}`.
+- `schedule` (times local to `timezone`, an RRULE subset):
+  `{"kind": "once", "at": "YYYY-MM-DDTHH:MM"}`, `{"kind": "daily"|"weekdays",
+  "time": "HH:MM"}`, `{"kind": "weekly", "days": ["mon".."sun"], "time"}`,
+  `{"kind": "monthly", "day": 1-31, "time"}` (a day the month lacks runs on
+  its last day). `next_run_at` is UTC: a local time skipped by a DST jump
+  runs just after it (02:30 → 03:30), a repeated one at its first
+  occurrence. Null while disabled, or once a one-shot has run.
+- `GET /api/routines` → `200 [{routine}, ...]` by name.
+- `POST /api/routines` body `{"name", "prompt", "space"?: "/personal",
+  "schedule", "timezone", "enabled"?: true}` → `201 {routine}`. The caller
+  needs `editor` or `owner` on `space` (asked of the platform, `POST
+  /internal/space-access`; `403` otherwise, `422` for a space that isn't
+  theirs). `422` for an enabled schedule with no future run.
+- `GET /api/routines/{id}` → `{routine}`; `PATCH` with any subset of the
+  create fields → `{routine}` (`next_run_at` recomputed when `schedule`,
+  `timezone` or `enabled` change; a new `space` is checked again);
+  `DELETE` → `204`.
+- `POST /api/routines/{id}/run` → `202 {"thread_id"}`: a run now, in the
+  background (detached turn runner), on a delegation from the caller's
+  session. The space is checked again first. The run's first user message
+  is `Routine "<name>" (space <space>):` and the prompt; its title is
+  `<name> · <Mon D>`.
+- `GET /api/routines/{id}/runs` → `200 [{thread}, ...]`, newest first.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every

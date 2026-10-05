@@ -13,7 +13,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.build import build_agent
 from app.agent.turn_runner import TurnRunner
-from app.api import chat, chat_ws, health
+from app.api import chat, chat_ws, health, routines
 from app.api import settings as settings_api
 from app.core.config import Settings
 from app.core.delegation import DelegationClient, HttpDelegationClient
@@ -25,6 +25,7 @@ from app.core.identity import (
 )
 from app.core.orphans import OrphanAdopter, http_admin_lookup
 from app.db.checkpointer import build_postgres_checkpointer
+from app.db.routines import InMemoryRoutineStore, PgRoutineStore, RoutineStore
 from app.db.settings import InMemorySettingsStore, PgSettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
 from app.db.turn_stats import InMemoryTurnStatsStore, PgTurnStatsStore, TurnStatsStore
@@ -38,6 +39,7 @@ def create_app(
     thread_store_override: ThreadStore | None = None,
     settings_store_override: SettingsStore | None = None,
     turn_stats_store_override: TurnStatsStore | None = None,
+    routine_store_override: RoutineStore | None = None,
     identity_verifier_override: IdentityVerifier | None = None,
     delegation_client_override: DelegationClient | None = None,
 ) -> FastAPI:
@@ -79,6 +81,9 @@ def create_app(
     tests that don't pass an override get `InMemoryTurnStatsStore()` when a
     `checkpointer_override` is in play.
 
+    `routine_store_override` (M17-02): same again, defaulting to
+    `InMemoryRoutineStore` over the in-memory thread store.
+
     `identity_verifier_override` (M10-04) replaces the JWKS-backed verifier
     of `X-HomeAI-Identity` (`app/core/identity.py`). Unlike the stores it
     has no test-mode default: tests pass a fake that yields a fixed user,
@@ -111,6 +116,9 @@ def create_app(
             app.state.thread_store = thread_store_override or InMemoryThreadStore()
             app.state.settings_store = settings_store_override or InMemorySettingsStore()
             app.state.turn_stats_store = turn_stats_store_override or InMemoryTurnStatsStore()
+            app.state.routine_store = routine_store_override or InMemoryRoutineStore(
+                app.state.thread_store
+            )
             install_orphan_adopter(app)
             app.state.agent = build_agent(app.state.settings, checkpointer_override)
             app.state.turn_runner = TurnRunner(app.state)
@@ -130,6 +138,7 @@ def create_app(
             app.state.turn_stats_store = turn_stats_store_override or PgTurnStatsStore(
                 pg_checkpointer.pool
             )
+            app.state.routine_store = routine_store_override or PgRoutineStore(pg_checkpointer.pool)
             install_orphan_adopter(app)
             app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver)
             app.state.turn_runner = TurnRunner(app.state)
@@ -153,6 +162,7 @@ def create_app(
     app.include_router(health.router, prefix="/api")
     app.include_router(chat.router, prefix="/api", dependencies=authenticated)
     app.include_router(settings_api.router, prefix="/api", dependencies=authenticated)
+    app.include_router(routines.router, prefix="/api", dependencies=authenticated)
     # No prefix: the WS route's own path (`/ws/chat/{thread_id}`) must match
     # Caddy's `/ws/*` routing exactly (see `infra/caddy/Caddyfile`), not be
     # nested under `/api` like the REST routes above. It authenticates itself
