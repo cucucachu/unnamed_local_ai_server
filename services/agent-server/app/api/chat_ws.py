@@ -87,12 +87,11 @@ invalid frame while idle.
   only `name`/`args`/`description`. `_pending_approval_from_state` (shared
   with `GET /api/threads/{id}/state` in `app/api/chat.py`) recovers the
   ids by re-reading the checkpointed state's last `AIMessage.tool_calls`
-  and zipping the subset whose `name` is one of the four mutating tools
-  (in original call order) against `action_requests` (built in that exact
-  same subset+order by `HumanInTheLoopMiddleware.after_model` — see
-  `build.py`'s `_hitl_enabled`, which returns the same bool for every
-  mutating tool call in a turn, so "which calls interrupted" is fully
-  determined by tool name membership alone, not by call-specific state).
+  and matching each of `action_requests` (built in call order by
+  `HumanInTheLoopMiddleware.after_model`, args copied from the call) to the
+  first unclaimed mutating call with the same name and args. Not every
+  mutating call need have interrupted: a routine's `allow_writes` mode
+  (M17-05) stops only deletes.
   This needs no extra persistent storage: everything is reconstructed from
   the checkpointer's own state on every read.
 - Resuming: `{"type": "approval_response", ...}` (or a `cancel`,
@@ -474,9 +473,9 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
     interrupt. See the module docstring's M8-03 section for the full
     tool_call_id-recovery reasoning: `HumanInTheLoopMiddleware.after_model`
     raises exactly one `Interrupt` whose `value["action_requests"]` doesn't
-    carry a `tool_call_id`, so this zips it against the last `AIMessage`'s
-    tool calls filtered to `MUTATING_TOOL_NAMES` (same subset+order the
-    middleware itself used to build `action_requests`).
+    carry a `tool_call_id`, so each request is matched to the last
+    `AIMessage`'s tool call with the same name and arguments (the
+    middleware copies both from the call, in call order).
 
     M13-02: an app tool raises its own interrupt from inside the tool
     (`app/agent/app_tools.py`), carrying its `tool_call_id`, and parallel
@@ -496,11 +495,20 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
 
     messages = state.values.get("messages", [])
     last_ai_msg = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
-    middleware_ids = iter(
-        [tc["id"] for tc in last_ai_msg.tool_calls if tc["name"] in MUTATING_TOOL_NAMES]
-        if last_ai_msg is not None
-        else []
-    )
+    # Not every mutating call need have stopped (a routine's `allow_writes`
+    # mode stops only deletes), so each request takes the first unclaimed
+    # call with its name and arguments, in call order.
+    unclaimed = [
+        tc
+        for tc in (last_ai_msg.tool_calls if last_ai_msg is not None else [])
+        if tc["name"] in MUTATING_TOOL_NAMES
+    ]
+
+    def middleware_id(name: str, args: Any) -> str:
+        for index, call in enumerate(unclaimed):
+            if call["name"] == name and call.get("args") == args:
+                return unclaimed.pop(index)["id"]
+        return ""
 
     actions = []
     groups = []
@@ -508,7 +516,9 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
         action_requests = interrupt.value["action_requests"]
         for action_request in action_requests:
             name = action_request.get("name", "")
-            tool_call_id = action_request.get("tool_call_id") or next(middleware_ids, "")
+            tool_call_id = action_request.get("tool_call_id") or middleware_id(
+                name, action_request.get("args")
+            )
             actions.append(
                 {
                     "tool_call_id": tool_call_id,
@@ -553,8 +563,14 @@ def graph_config(
     hitl_enabled: bool | None = None,
     thinking_enabled: bool | None = None,
     delegation: Delegation | None = None,
+    approval_mode: str | None = None,
 ) -> dict[str, Any]:
-    """RunnableConfig for this thread, optionally pinned to a checkpoint (M8-05)."""
+    """RunnableConfig for this thread, optionally pinned to a checkpoint (M8-05).
+
+    `approval_mode` (a routine run's, M17-05) is a string, so LangGraph also
+    writes it into each checkpoint's metadata - which is how a resume from a
+    chat (`paused_approval_mode`) answers under the mode the run paused in.
+    """
     configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": ""}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
@@ -564,7 +580,20 @@ def graph_config(
         configurable["thinking_enabled"] = thinking_enabled
     if delegation is not None:
         configurable["delegation"] = delegation
+    if approval_mode is not None:
+        configurable["approval_mode"] = approval_mode
     return {"configurable": configurable}
+
+
+async def paused_approval_mode(agent: Any, thread_id: str) -> str | None:
+    """The approval mode the thread's pending approval was raised under (None: a chat's).
+
+    The HITL middleware decides again on resume which calls needed approval,
+    so a resume must run under the same mode or the decisions won't line up.
+    """
+    state = await agent.aget_state(graph_config(thread_id))
+    mode = (state.metadata or {}).get("approval_mode")
+    return mode if isinstance(mode, str) else None
 
 
 def checkpoint_id_of(config_or_state: Any) -> str | None:
@@ -1107,6 +1136,15 @@ async def _start_turn(
             lock.release()
 
 
+async def _track_routine_run(
+    app_state: Any, thread_id: str, user_id: str, turn: ActiveTurn
+) -> None:
+    """A routine run's approval answered here: its run record follows the turn (M17-05)."""
+    run = await app_state.routine_store.run_for_thread(thread_id, user_id)
+    if run is not None and run.status == "waiting_approval":
+        app_state.routine_scheduler.track_resumed(run, turn)
+
+
 async def _active_tip(
     thread_store: Any, thread_id: str, user_id: str
 ) -> tuple[str | None, str | None]:
@@ -1216,10 +1254,13 @@ async def _serve(
                 thinking_enabled=await _current_thinking_enabled(websocket, user_id),
                 delegation=delegation,
                 detached_timeout_s=detached_timeout_s,
+                approval_mode=await paused_approval_mode(websocket.app.state.agent, thread_id),
             )
             started = await _start_turn(
                 websocket, runner, resume, _active_tip(thread_store, thread_id, user_id)
             )
+            if started is not None:
+                await _track_routine_run(websocket.app.state, thread_id, user_id, started[0])
             if started is None or not await follow(*started):
                 return
             continue

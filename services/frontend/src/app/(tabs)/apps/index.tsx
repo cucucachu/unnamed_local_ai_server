@@ -4,6 +4,7 @@ import type { ComponentProps } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { RoutineInbox, type RoutineInboxHandle } from '@/components/RoutineInbox';
 import { Badge, Card, LoadState, SectionTitle, settingsStyles, ActionButton } from '@/components/SettingsUI';
 import { listInstalledApps, type Instance } from '@/lib/apps';
 import { isReadOnly, type Space } from '@/lib/platform';
@@ -28,18 +29,23 @@ function spaceLabel(space: Space): string {
  * opens the existing native host routes. System tiles open
  * the existing Chat, Files, and Settings host screens; installed apps stay
  * grouped by space with a switcher, catalog entry, and update badges.
- * Tapping an instance opens the runner (`[instanceId].tsx`).
+ * Tapping an instance opens the runner (`[instanceId].tsx`). Routine runs
+ * needing approval, or newly finished, are listed above (M17-05).
  * Reloads whenever the tab regains focus, so a newly installed app shows up.
  */
 export default function HomeScreen() {
   const router = useRouter();
   const { data, error, reload } = useLoad(listInstalledApps);
   const [spaceId, setSpaceId] = useState(ALL_SPACES);
+  const inbox = useRef<RoutineInboxHandle>(null);
 
   const focused = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      if (focused.current) reload();
+      if (focused.current) {
+        reload();
+        inbox.current?.reload();
+      }
       focused.current = true;
     }, [reload]),
   );
@@ -94,6 +100,8 @@ export default function HomeScreen() {
           ))}
         </ScrollView>
       ) : null}
+
+      <RoutineInbox ref={inbox} />
 
       <View style={styles.group} testID="home-system">
         <SectionTitle>System</SectionTitle>

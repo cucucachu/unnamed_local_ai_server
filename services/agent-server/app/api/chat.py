@@ -85,6 +85,8 @@ class ThreadOut(BaseModel):
     updated_at: str
     # M17-02: the routine this thread is a run of.
     routine_id: str | None = None
+    # M17-05: that run is paused on an approval.
+    needs_approval: bool = False
 
 
 class ToolCallOut(BaseModel):
@@ -214,7 +216,10 @@ async def list_threads(
     await request.app.state.orphan_adopter.adopt()
     store = _thread_store(request)
     records = await store.list_for_owner(user.user_id, routine_id=routine_id)
-    return [_to_thread_out(r) for r in records]
+    waiting = await request.app.state.routine_store.waiting_thread_ids(user.user_id)
+    return [
+        _to_thread_out(r).model_copy(update={"needs_approval": r.id in waiting}) for r in records
+    ]
 
 
 async def _owned_thread(request: Request, thread_id: str, user_id: str) -> ThreadRecord:

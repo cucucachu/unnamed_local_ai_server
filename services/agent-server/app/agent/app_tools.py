@@ -15,6 +15,10 @@ statement writes, the migration's steps):
 - `app_sql` writes and `app_action` calls ask when the instance is in a
   shared space and HITL is on (`configurable["hitl_enabled"]`); reads never do.
 
+In a routine run its approval mode decides instead (`app.agent.approvals`,
+M17-05): `allow_writes` skips those asks (a migration still asks),
+`read_only` refuses every write.
+
 The interrupt carries the same `HITLRequest` shape the middleware uses, plus
 the call's `tool_call_id`, so `app/api/chat_ws.py` shows it as an ordinary
 approval card. LangGraph re-runs an interrupted tool from the top on resume,
@@ -42,6 +46,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from langgraph.types import interrupt
 
+from app.agent import approvals
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -344,12 +349,8 @@ def _ask_user(name: str, args: dict, description: str, tool_call_id: str) -> tup
     return False, reason if isinstance(reason, str) and reason else "The user rejected it."
 
 
-def _hitl_enabled(config: RunnableConfig) -> bool:
-    return bool((config.get("configurable") or {}).get("hitl_enabled", True))
-
-
-def _needs_write_approval(inst: dict, config: RunnableConfig) -> bool:
-    return inst["space"]["kind"] == "shared" and _hitl_enabled(config)
+def _needs_write_approval(inst: dict, config: RunnableConfig, tool_name: str) -> bool:
+    return inst["space"]["kind"] == "shared" and approvals.needs_approval(config, tool_name)
 
 
 def _vpath_is_shared(path: object) -> bool:
@@ -358,7 +359,7 @@ def _vpath_is_shared(path: object) -> bool:
 
 def _needs_files_approval(params: dict[str, Any], config: RunnableConfig) -> bool:
     """Files privileged actions: HITL when a shared space is involved, like app_sql writes."""
-    return _hitl_enabled(config) and (
+    return approvals.needs_approval(config, "app_action") and (
         _vpath_is_shared(params.get("src")) or _vpath_is_shared(params.get("dst"))
     )
 
@@ -723,7 +724,9 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 return f"Error: {_why(reply)}"
             if inst["space"]["role"] == "viewer":
                 return f"Error: the user can only view {_space_label(inst['space'])}; this statement writes."
-            if _needs_write_approval(inst, config):
+            if approvals.is_read_only(config):
+                return approvals.read_only_error("change app data (this statement writes)")
+            if _needs_write_approval(inst, config, "app_sql"):
                 description = (
                     f"Change data in {inst['app']['name']} in {_space_label(inst['space'])}:\n{sql}"
                     + (f"\nparams: {_json(params)}" if params else "")
@@ -792,7 +795,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 return inst
             if inst["space"]["role"] == "viewer":
                 return f"Error: the user can only view {_space_label(inst['space'])}; actions change data."
-            if _needs_write_approval(inst, config):
+            if _needs_write_approval(inst, config, "app_action"):
                 app = cat.app(inst["app_id"]) or {}
                 action_sql = "(the action's SQL isn't visible to this user)"
                 if app.get("source_path"):

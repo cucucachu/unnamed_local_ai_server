@@ -1357,7 +1357,8 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
   M17-02: set on a routine's runs)
 - `GET /api/threads` → `200 [{thread}, ...]`, the caller's own, ordered
   by `updated_at` desc. `?routine_id=<uuid>`: only that routine's runs,
-  newest first
+  newest first. Each also has `"needs_approval": bool` (M17-05): it's a
+  routine run paused on an approval
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
   "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null,
@@ -1405,8 +1406,9 @@ in one of their spaces. Owned like threads (row-level security on
 `routine_id` set. Deleting the routine deletes its run records but keeps
 their threads as plain chats (`ON DELETE SET NULL`).
 - `{routine}` = `{"id", "name", "prompt", "space": "/personal"|"/spaces/<slug>",
-  "schedule", "timezone": IANA name, "enabled": bool, "next_run_at":
-  iso8601|null, "last_run_at": iso8601|null, "created_at", "updated_at"}`.
+  "schedule", "timezone": IANA name, "enabled": bool, "approval_mode":
+  "ask"|"allow_writes"|"read_only", "next_run_at": iso8601|null,
+  "last_run_at": iso8601|null, "created_at", "updated_at"}`.
 - `schedule` (times local to `timezone`, an RRULE subset):
   `{"kind": "once", "at": "YYYY-MM-DDTHH:MM"}`, `{"kind": "daily"|"weekdays",
   "time": "HH:MM"}`, `{"kind": "weekly", "days": ["mon".."sun"], "time"}`,
@@ -1416,7 +1418,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   occurrence. Null while disabled, or once a one-shot has run.
 - `GET /api/routines` → `200 [{routine}, ...]` by name.
 - `POST /api/routines` body `{"name", "prompt", "space"?: "/personal",
-  "schedule", "timezone", "enabled"?: true}` → `201 {routine}`. The caller
+  "schedule", "timezone", "enabled"?: true, "approval_mode"?: "ask"}` →
+  `201 {routine}`. The caller
   needs `editor` or `owner` on `space` (asked of the platform, `POST
   /internal/space-access`; `403` otherwise, `422` for a space that isn't
   theirs). `422` for an enabled schedule with no future run.
@@ -1429,8 +1432,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   iso8601|null, "created_at"}`.
   - `status` is one of `queued`, `running`, `succeeded`, `failed`,
     `timed_out`, `missed` (never started: too late, or the routine was
-    turned off while queued), or `waiting_approval` (a HITL approval is
-    pending in its chat).
+    turned off while queued), `waiting_approval` (an approval is pending
+    in its chat), or `expired` (nobody answered it in time).
   - `detail` says why, for anything but `succeeded`.
   - A run that never started has no thread.
 - `POST /api/routines/{id}/run` → `202 {run}`: a run now, in the background
@@ -1473,6 +1476,36 @@ their threads as plain chats (`ON DELETE SET NULL`).
     revoked once its run is over.
   - **Restarts.** At startup, runs a restart cut off are `failed`
     ("interrupted by a server restart"), and queued ones are queued again.
+- **Approval modes** (M17-05, `app/agent/approvals.py`). A run passes its
+  routine's `approval_mode` in `configurable["approval_mode"]`; the chat
+  `hitl_enabled` setting doesn't apply to it.
+  - `ask` (the default): everything a chat with HITL on asks about pauses
+    the run (`waiting_approval`) until the owner answers in its chat.
+  - `allow_writes`: file writes and edits, `execute_code`, app data writes,
+    app actions and building apps go ahead. `delete` and
+    `approve_migration` still ask. A scheduled run's grant reaches only the
+    routine's space.
+  - `read_only`: those tools are refused with a tool error the model reads
+    (`ReadOnlyRunMiddleware`; `app_sql` refuses a statement that writes).
+  - LangGraph writes the mode into each checkpoint's metadata. Answering in
+    the chat resumes under the mode the run paused in, so HITL's re-check
+    of which calls needed approval matches the decisions. The run's
+    record then follows the resumed turn to its end.
+  - **Expiry.** A run left `waiting_approval` for `ROUTINE_APPROVAL_TTL_S`
+    (24 h) is answered reject-all on the next poll, under the same GPU cap
+    and the routine's grant. The model is told nobody answered, and the
+    run is recorded `expired`. If the grant is gone it's recorded
+    `expired` without resuming. A one-shot keeps its grant until its paused
+    run is answered or expires.
+- **Inbox** (M17-05): the caller's ended and paused runs, for in-app
+  notifications (the Home tab badge and Home's Routines list).
+  - `GET /api/inbox` → `200 {"unread": int, "items": [{run} + {"routine_id",
+    "routine_name", "unread": bool}, ...]}`, newest 50 by `finished_at` (a
+    paused run's is when it paused).
+  - `POST /api/inbox/read` body `{"run_ids"?: [uuid]}` (absent: all) →
+    the same.
+  - `routine_runs.seen_at` records reads. Any status change clears it, so
+    a paused run that later finishes is unread again.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every

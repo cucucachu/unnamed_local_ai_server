@@ -277,6 +277,7 @@ services:
       ROUTINES_MAX_CONCURRENT: ${ROUTINES_MAX_CONCURRENT:-1}
       ROUTINES_MISSED_GRACE_S: ${ROUTINES_MISSED_GRACE_S:-3600}
       ROUTINE_RUN_TIMEOUT_S: ${ROUTINE_RUN_TIMEOUT_S:-1800}
+      ROUTINE_APPROVAL_TTL_S: ${ROUTINE_APPROVAL_TTL_S:-86400}
       AGENT_CONTEXT_TOKENS: ${AGENT_CONTEXT_TOKENS:-${MODEL_CTX_SIZE}}
       # The non-superuser `agent` role (M11-04, created by db-init): it can
       # reach only this database, never `homeai_platform`.

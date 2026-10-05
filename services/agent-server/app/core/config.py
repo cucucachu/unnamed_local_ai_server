@@ -42,13 +42,15 @@ class Settings(BaseSettings):
     # turns of any kind may be running when a routine run starts (chats never
     # wait on routines). A run more than `routines_missed_grace_s` late is
     # recorded as missed instead; one still going after `routine_run_timeout_s`
-    # is cancelled. Off for an agent-server that shares the database but
-    # mustn't run routines (the M16 eval candidate).
+    # is cancelled. A run's approval left unanswered for
+    # `routine_approval_ttl_s` is rejected (M17-05). Off for an agent-server
+    # that shares the database but mustn't run routines (the M16 candidate).
     routines_scheduler_enabled: bool = True
     routines_poll_s: float = 30
     routines_max_concurrent: int = Field(default=1, ge=1)
     routines_missed_grace_s: float = 3600
     routine_run_timeout_s: float = 1800
+    routine_approval_ttl_s: float = 86400
 
     # Identity JWKS, the files API the agent's file tools use, and the
     # service-auth `/internal/*` routes (bootstrap admin, delegations).
