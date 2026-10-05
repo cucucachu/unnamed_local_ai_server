@@ -79,11 +79,13 @@ from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolCall
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agent import approvals
 from app.agent.app_tools import make_app_tools
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
-from app.agent.prompts import APP_AUTHORING_GUIDE, SYSTEM_PROMPT
+from app.agent.prompts import APP_AUTHORING_GUIDE, ROUTINES_GUIDE, SYSTEM_PROMPT
+from app.agent.routine_tools import make_routine_tools
 from app.agent.tool_errors import CompactToolErrorsMiddleware
 from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
 from app.core.config import Settings
@@ -97,16 +99,13 @@ MUTATING_TOOL_NAMES: tuple[str, ...] = ("write_file", "edit_file", "delete", "ex
 def _hitl_enabled(request: ToolCallRequest) -> bool:
     """`InterruptOnConfig.when` predicate shared by all four mutating tools.
 
-    Reads the per-turn flag `chat_ws.py` sets in `config["configurable"]
-    ["hitl_enabled"]` for this run. Defaults to `True` (matching
-    `SettingsDocument.hitl_enabled`'s own default) if the caller ever
-    invokes the agent without setting it (e.g. a stray direct `.ainvoke()`
-    from a test/script) — HITL-on-by-default is the safer failure mode for
-    a middleware that guards file writes and code execution.
+    In a chat, the per-turn flag `chat_ws.py` sets in `config["configurable"]
+    ["hitl_enabled"]`; in a routine run, its approval mode (M17-05,
+    `app.agent.approvals`). HITL-on when neither is set (e.g. a stray direct
+    `.ainvoke()` from a test/script) — the safer failure mode for a
+    middleware that guards file writes and code execution.
     """
-    config = request.runtime.config or {}
-    configurable = config.get("configurable") or {}
-    return bool(configurable.get("hitl_enabled", True))
+    return approvals.needs_approval(request.runtime.config, request.tool_call["name"])
 
 
 def _virtual_path(path: Any) -> str:
@@ -162,17 +161,21 @@ def build_backend(settings: Settings) -> CompositeBackend:
     )
 
 
-def build_agent(settings: Settings, checkpointer) -> CompiledStateGraph:
+def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> CompiledStateGraph:
+    """`app_state` (the app's stores and delegation client) adds the routine tools (M17-07)."""
+    routine_tools = make_routine_tools(app_state) if app_state is not None else []
+    prompt = SYSTEM_PROMPT + APP_AUTHORING_GUIDE + (ROUTINES_GUIDE if routine_tools else "")
     return create_deep_agent(
         model=build_model(settings),
         backend=build_backend(settings),
-        middleware=[CompactToolErrorsMiddleware()],
-        system_prompt=SYSTEM_PROMPT + APP_AUTHORING_GUIDE,
+        middleware=[CompactToolErrorsMiddleware(), approvals.ReadOnlyRunMiddleware()],
+        system_prompt=prompt,
         tools=[
             make_execute_code_tool(settings),
             make_web_search_tool(settings),
             make_web_fetch_tool(settings),
             *make_app_tools(settings),
+            *routine_tools,
         ],
         checkpointer=checkpointer,
         interrupt_on={name: _interrupt_on_config() for name in MUTATING_TOOL_NAMES},

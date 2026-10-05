@@ -17,8 +17,8 @@ from uuid import UUID
 
 from psycopg import AsyncConnection
 
-from app.core import sessions
-from app.core.errors import InvalidInput, Unauthorized
+from app.core import sessions, spaces, vfs
+from app.core.errors import Forbidden, InvalidInput, NotFound, Unauthorized
 from app.core.tokens import TokenError, TokenService
 
 DELEGATION_TTL = timedelta(minutes=15)
@@ -33,6 +33,15 @@ async def _issue(
         user_id, session_id = UUID(str(claims["sub"])), UUID(str(claims.get("sid")))
     except ValueError as exc:
         raise Unauthorized("unauthenticated") from exc
+    return await issue(conn, tokens, user_id, session_id, thread_id)
+
+
+async def issue(
+    conn: AsyncConnection, tokens: TokenService, user_id: UUID, session_id: UUID, thread_id: str
+) -> tuple[str, datetime]:
+    """A delegation for `thread_id` on an active session (a chat's, or a routine grant)."""
+    if not _THREAD_ID.fullmatch(thread_id):
+        raise InvalidInput("invalid_thread_id")
     row = await sessions.load_active(conn, session_id, user_id)
     if row is None:
         raise Unauthorized("unauthenticated")
@@ -70,3 +79,79 @@ async def refresh(conn: AsyncConnection, tokens: TokenService, token: str) -> tu
     if not isinstance(thread_id, str) or not _THREAD_ID.fullmatch(thread_id):
         raise Unauthorized("unauthenticated")
     return await _issue(conn, tokens, claims, thread_id)
+
+
+async def acting_user(
+    conn: AsyncConnection,
+    tokens: TokenService,
+    *,
+    identity_token: str | None = None,
+    delegation_token: str | None = None,
+) -> UUID:
+    """The user behind an identity token, or a chat's delegation (M17-07), on an active session.
+
+    A routine run's delegation is refused (`routine_run`): a routine may not
+    make or re-grant routines, which would outlive its own grant's scope.
+    """
+    if (identity_token is None) == (delegation_token is None):
+        raise InvalidInput("one_token")
+    token, act = (
+        (identity_token, "user") if identity_token is not None else (delegation_token, "agent")
+    )
+    try:
+        claims = tokens.verify_token(token, act=act)
+        user_id, session_id = UUID(str(claims["sub"])), UUID(str(claims.get("sid")))
+    except (TokenError, ValueError) as exc:
+        raise Unauthorized("unauthenticated") from exc
+    row = await sessions.load_active(conn, session_id, user_id)
+    if row is None:
+        raise Unauthorized("unauthenticated")
+    if row["routine_id"] is not None:
+        raise Forbidden("routine_run")
+    return user_id
+
+
+async def space_role(
+    conn: AsyncConnection,
+    tokens: TokenService,
+    space_path: str,
+    *,
+    identity_token: str | None = None,
+    delegation_token: str | None = None,
+) -> tuple[str, str]:
+    """`(canonical path, role)` of the caller (`acting_user`) in an active space they belong to.
+
+    Only a space root names a space: `/personal` or `/spaces/<slug>`.
+    """
+    user_id = await acting_user(
+        conn, tokens, identity_token=identity_token, delegation_token=delegation_token
+    )
+    space, role = await member_space(conn, user_id, space_path)
+    return canonical_space(space), role
+
+
+def canonical_space(space: spaces.Row) -> str:
+    return f"/{vfs.PERSONAL}" if space["kind"] == "personal" else f"/{vfs.SPACES}/{space['slug']}"
+
+
+async def member_space(
+    conn: AsyncConnection, user_id: UUID, space_path: str
+) -> tuple[spaces.Row, str]:
+    """`(space, role)` for a space root path the user belongs to; NotFound otherwise."""
+    parts = vfs.parse(space_path)
+    if parts == (vfs.PERSONAL,):
+        space = await spaces.get_personal_space(conn, user_id)
+    elif len(parts) == 2 and parts[0] == vfs.SPACES:
+        space = await spaces.get_space_by_slug(conn, parts[1])
+        if space["kind"] != "shared":
+            raise NotFound("not_found")
+    else:
+        raise InvalidInput("invalid_space")
+    cur = await conn.execute(
+        "SELECT role FROM space_members WHERE space_id = %s AND user_id = %s",
+        (space["id"], user_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise NotFound("not_found")
+    return space, row["role"]

@@ -119,8 +119,19 @@ export function unwrapFileLinkCodeSpans(source: string): string {
   return source.replace(/`(\[[^\]]+\]\(file:[^)]+\))`/g, '$1');
 }
 
+/** A line break inside `textgroup`'s wrapping row: the library's `"\n"`
+ * `<Text>` is just another item in that row and breaks nothing (#270), but a
+ * full-width item pushes what follows onto the next one. */
+function LineBreak({ nodeKey }: { nodeKey: string }): ReactElement {
+  return <View key={nodeKey} style={styles.lineBreak} testID="markdown-line-break" />;
+}
+
 export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement {
   const rules = {
+    // Chat text puts one item per line without blank lines or list markers,
+    // so a single newline (a softbreak) is a line break here too.
+    softbreak: (node: ASTNode) => <LineBreak key={node.key} nodeKey={node.key} />,
+    hardbreak: (node: ASTNode) => <LineBreak key={node.key} nodeKey={node.key} />,
     // Default `textgroup` is a `<Text>` wrapper; Pressable `file:` links
     // nested inside it are flattened away on web (no `data-testid`).
     textgroup: (node: ASTNode, children: ReactNode[]) => (
@@ -478,6 +489,10 @@ const styles = StyleSheet.create({
     minWidth: 72,
     borderRightWidth: 1,
     borderRightColor: theme.border,
+  },
+  lineBreak: {
+    width: '100%',
+    height: 0,
   },
   imageAlt: {
     color: theme.textMuted,

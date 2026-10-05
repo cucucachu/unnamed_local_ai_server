@@ -99,6 +99,8 @@ class MePatchRequest(BaseModel):
 class SessionOut(BaseModel):
     id: UUID
     device_label: str | None
+    # Set for a routine grant (an unattended run's identity), not a device.
+    routine_id: str | None = None
     created_at: datetime
     last_seen_at: datetime
     expires_at: datetime
@@ -479,6 +481,43 @@ class HitlApprovalRequest(BaseModel):
 class HitlApprovalOut(BaseModel):
     token: str
     expires_in_s: float
+
+
+class SpaceAccessRequest(BaseModel):
+    # Exactly one: a person's identity token, or a chat's delegation (M17-07).
+    identity_token: Secret | None = None
+    delegation_token: Secret | None = None
+    space: Short
+
+
+class SpaceAccessOut(BaseModel):
+    space: str
+    role: str
+
+
+class RoutineGrantRequest(BaseModel):
+    # Exactly one, as for `SpaceAccessRequest`.
+    identity_token: Secret | None = None
+    delegation_token: Secret | None = None
+    routine_id: Short
+    space: Short
+    label: Short | None = None
+
+
+class RoutineGrantOut(BaseModel):
+    grant: str
+    grant_id: UUID
+    space: str
+
+
+class RoutineGrantExchangeRequest(BaseModel):
+    grant: Secret
+    routine_id: Short
+    thread_id: Short
+
+
+class RoutineGrantRevokeRequest(BaseModel):
+    grant: Secret
 
 
 class ExecGrantsRequest(BaseModel):

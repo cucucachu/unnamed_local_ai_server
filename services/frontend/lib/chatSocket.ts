@@ -12,6 +12,12 @@ export type ToolStatus = 'success' | 'error';
 
 export interface TurnStartFrame {
   type: 'turn_start';
+  /** M17-01: set when this socket connected to a turn already running; the
+   * frames it has sent so far follow. */
+  replay?: boolean;
+  /** M17-01: on a replay, the message that started the turn (absent for an
+   * approval resume). */
+  user_message?: { id: string; content: string };
 }
 
 export interface TokenFrame {
@@ -140,9 +146,10 @@ export interface ApprovalResponseFrame {
 
 /** Connection lifecycle states a UI can render directly (e.g. a "connecting…"
  * pill). `closed` covers both an explicit client-initiated `close()` and a
- * terminal disconnect (mid-turn drop, or reconnect attempts exhausted) —
- * there's no automatic recovery from `closed` in either case, so a UI
- * doesn't need to distinguish them beyond "not connected, not retrying". */
+ * terminal disconnect (thread not found, or reconnect attempts exhausted) —
+ * there's no automatic recovery from `closed` short of `reconnectNow()`, so
+ * a UI doesn't need to distinguish them beyond "not connected, not
+ * retrying". */
 export type ChatConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
 export interface ChatSocketHandlers {
@@ -158,6 +165,10 @@ export interface ChatSocketHandlers {
   /** The server closed with `4404`: the thread doesn't exist or isn't the
    * caller's. Terminal — no reconnect follows. */
   onNotFound?: () => void;
+  /** M17-01: awaited before each reconnect, e.g. to re-fetch history so the
+   * replay of a turn still running (a drop mid-turn doesn't stop it) lands on
+   * top of it. A rejection is ignored. */
+  beforeReconnect?: () => Promise<void>;
   /** Optional: fires whenever the socket's own connection lifecycle state
    * changes (independent of any particular frame). Additive — existing
    * callers that don't pass it are unaffected. */
@@ -177,10 +188,13 @@ export interface ChatSocket {
   approvalResponse(interruptId: string, decisions: ApprovalDecision[]): void;
   /** Cleanly close the socket; cancels any pending reconnect attempt. */
   close(): void;
+  /** M17-01: reconnect now unless open or connecting (e.g. the app came back
+   * to the foreground), resetting the backoff. No-op after `close()` or a
+   * `4404`. */
+  reconnectNow(): void;
 }
 
-/** 1s / 2s / 4s backoff, max 3 reconnect attempts — only used for drops
- * *outside* an in-flight turn (see `handleClose` below). */
+/** 1s / 2s / 4s backoff, max 3 reconnect attempts. */
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000];
 
 /** Minimal surface of the WebSocket API this module depends on, so tests can
@@ -229,11 +243,9 @@ export function openChatSocket(
   const url = wsUrl(`/ws/chat/${threadId}`);
 
   let socket: WebSocketLike | null = null;
-  // Tracks whether we're between `turn_start` and `turn_end`/`error` — a
-  // drop while this is true means we lost part of an in-flight response,
-  // which reconnect-and-carry-on could silently confuse a mid-render UI.
-  let turnInFlight = false;
   let closedByClient = false;
+  let notFound = false;
+  let connecting = false;
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   // `WebSocket.send` throws while CONNECTING, so frames sent before `onopen`
@@ -257,7 +269,6 @@ export function openChatSocket(
   function dispatch(frame: ServerFrame): void {
     switch (frame.type) {
       case 'turn_start':
-        turnInFlight = true;
         handlers.onTurnStart?.(frame);
         return;
       case 'token':
@@ -276,11 +287,9 @@ export function openChatSocket(
         handlers.onApprovalRequest?.(frame);
         return;
       case 'turn_end':
-        turnInFlight = false;
         handlers.onTurnEnd?.(frame);
         return;
       case 'error':
-        turnInFlight = false;
         handlers.onError?.(frame);
         return;
       default:
@@ -325,15 +334,33 @@ export function openChatSocket(
     reconnectAttempts += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      connect();
+      void reconnect();
     }, delay);
+  }
+
+  async function reconnect(): Promise<void> {
+    if (!handlers.beforeReconnect) {
+      connect();
+      return;
+    }
+    connecting = true;
+    try {
+      await handlers.beforeReconnect();
+    } catch {
+      // The connect below fails and retries too if the server is still away.
+    }
+    if (closedByClient) {
+      connecting = false;
+      return;
+    }
+    connect();
   }
 
   function handleClose(event: unknown, opened: boolean): void {
     if (closedByClient) return;
 
     if ((event as { code?: unknown } | null)?.code === WS_CLOSE_NOT_FOUND) {
-      turnInFlight = false;
+      notFound = true;
       handlers.onConnectionStateChange?.('closed');
       handlers.onNotFound?.();
       return;
@@ -346,23 +373,11 @@ export function openChatSocket(
       void probeSession();
     }
 
-    if (turnInFlight) {
-      // Drop mid-turn: surface it instead of silently reconnecting into a
-      // UI that's mid-render of a response (spec judgement call, see
-      // module doc / ticket report).
-      turnInFlight = false;
-      handlers.onConnectionStateChange?.('closed');
-      handlers.onError?.({
-        type: 'error',
-        message: 'chat socket disconnected while a turn was in progress',
-      });
-      return;
-    }
-
     scheduleReconnect();
   }
 
   function connect(): void {
+    connecting = true;
     handlers.onConnectionStateChange?.(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
     const headers = authHeaders();
     socket =
@@ -374,6 +389,7 @@ export function openChatSocket(
     socket.onopen = () => {
       opened = true;
       isOpen = true;
+      connecting = false;
       reconnectAttempts = 0;
       handlers.onConnectionStateChange?.('open');
       const pending = outbox;
@@ -386,7 +402,9 @@ export function openChatSocket(
     // it in both places would double-fire.
     socket.onerror = () => {};
     socket.onclose = (event) => {
+      if (current !== socket) return;
       isOpen = false;
+      connecting = false;
       handleClose(event, opened);
     };
   }
@@ -426,6 +444,12 @@ export function openChatSocket(
       clearReconnectTimer();
       socket?.close();
       handlers.onConnectionStateChange?.('closed');
+    },
+    reconnectNow(): void {
+      if (closedByClient || notFound || isOpen || connecting) return;
+      clearReconnectTimer();
+      reconnectAttempts = 0;
+      void reconnect();
     },
   };
 }

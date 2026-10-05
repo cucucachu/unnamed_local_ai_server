@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from app.core.delegation import DelegationDenied, DelegationUnavailable, Grant
+from app.core.delegation import Caller, DelegationDenied, DelegationUnavailable, Grant
 from tests.fake_identity import TEST_USER_ID
 
 AGENT_TOKEN = "fake-agent-service-token"
@@ -105,6 +105,15 @@ class Minted:
 
 
 @dataclass
+class RoutineGrant:
+    user_id: str
+    routine_id: str
+    space: str
+    label: str
+    session_id: str
+
+
+@dataclass
 class FakePlatform:
     base_url: str = ""
     ttl: timedelta = timedelta(minutes=15)
@@ -119,6 +128,9 @@ class FakePlatform:
     members: dict[str, dict[str, str]] = field(default_factory=dict)
     grants: dict[str, Minted] = field(default_factory=dict)
     exchanges: list[tuple[str, str]] = field(default_factory=list)
+    # Live routine grants (M17-03); revoking one revokes its session.
+    routine_grants: dict[str, RoutineGrant] = field(default_factory=dict)
+    grant_exchanges: list[tuple[str, str]] = field(default_factory=list)
     refreshes: list[str] = field(default_factory=list)
     # (method, path, bearer) for every files API request
     file_requests: list[tuple[str, str, str | None]] = field(default_factory=list)
@@ -168,6 +180,67 @@ class FakePlatform:
         if minted is None:
             raise DelegationDenied("unauthenticated")
         return self._mint(minted.user_id, minted.session_id, minted.thread_id)
+
+    def caller_user(self, caller: Caller) -> str:
+        """The user behind an identity token or a chat's delegation; a routine run's is refused."""
+        if caller.delegation_token is not None:
+            minted = self.principal(caller.delegation_token)
+            if minted is None:
+                raise DelegationDenied("unauthenticated")
+            if minted.session_id.startswith("routine-session-"):
+                raise DelegationDenied("routine_run")
+            return minted.user_id
+        token = caller.identity_token or ""
+        user_id, session_id = self.identities.get(token, (TEST_USER_ID, TEST_SESSION_ID))
+        if session_id in self.revoked_sessions:
+            raise DelegationDenied("unauthenticated")
+        return user_id
+
+    def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        user_id = self.caller_user(caller)
+        parts = [p for p in space.split("/") if p]
+        if parts == ["personal"]:
+            return "/personal", "owner"
+        if len(parts) == 2 and parts[0] == "spaces":
+            slug = parts[1].lower()
+            role = self.members.get(slug, {}).get(user_id)
+            return (f"/spaces/{slug}", role) if role else None
+        return None
+
+    def issue_routine_grant(
+        self, caller: Caller, routine_id: str, space: str, label: str
+    ) -> str | None:
+        access = self.space_role(caller, space)
+        if access is None or access[1] not in ("owner", "editor"):
+            return None
+        user_id = self.caller_user(caller)
+        for grant, held in list(self.routine_grants.items()):
+            if (held.user_id, held.routine_id) == (user_id, routine_id):
+                self.revoke_routine_grant(grant)
+        n = next(self._counter)
+        grant = f"hr_{n}"
+        self.routine_grants[grant] = RoutineGrant(
+            user_id, routine_id, access[0], label, f"routine-session-{n}"
+        )
+        return grant
+
+    def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        held = self.routine_grants.get(grant)
+        if held is None or held.routine_id != routine_id:
+            raise DelegationDenied("unauthenticated")
+        self.grant_exchanges.append((grant, thread_id))
+        return self._mint(held.user_id, held.session_id, thread_id)
+
+    def revoke_routine_grant(self, grant: str) -> None:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        held = self.routine_grants.pop(grant, None)
+        if held is not None:
+            self.revoked_sessions.add(held.session_id)
 
     def principal(self, bearer: str | None) -> Minted | None:
         minted = self.grants.get(bearer or "")
@@ -281,3 +354,17 @@ class FakeDelegationClient:
 
     async def refresh(self, token: str) -> Grant:
         return self.platform.refresh(token)
+
+    async def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        return self.platform.space_role(caller, space)
+
+    async def issue_routine_grant(
+        self, caller: Caller, routine_id: str, space: str, label: str
+    ) -> str | None:
+        return self.platform.issue_routine_grant(caller, routine_id, space, label)
+
+    async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        return self.platform.exchange_routine_grant(grant, routine_id, thread_id)
+
+    async def revoke_routine_grant(self, grant: str) -> None:
+        self.platform.revoke_routine_grant(grant)

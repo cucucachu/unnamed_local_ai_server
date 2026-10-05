@@ -133,6 +133,49 @@ describe('ThreadListScreen — list', () => {
     expect(rendered).toContain('Thread B');
   });
 
+  it('marks a routine run paused on an approval as needing approval', async () => {
+    const paused: Thread = { ...THREAD_B, routine_id: 'routine-1', needs_approval: true };
+    mockThreadsApi({ GET: () => ({ ok: true, status: 200, body: [THREAD_A, paused] }) });
+
+    const renderer = await renderScreen();
+    const badges = renderer.root.findAll(
+      (node) => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith('thread-needs-approval-'),
+    );
+
+    expect(badges.map((node) => node.props.testID)).toEqual(['thread-needs-approval-thread-b']);
+    expect(textOf(renderer)).toContain('Needs approval');
+  });
+
+  it('badges routine runs and can hide them', async () => {
+    const run: Thread = { ...THREAD_B, title: 'Morning brief · Oct 5', routine_id: 'routine-1' };
+    mockThreadsApi({ GET: () => ({ ok: true, status: 200, body: [THREAD_A, run] }) });
+
+    const renderer = await renderScreen();
+    const hostIds = (prefix: string) =>
+      renderer.root
+        .findAll((node) => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith(prefix))
+        .map((node) => node.props.testID);
+
+    expect(hostIds('thread-routine-')).toEqual(['thread-routine-thread-b']);
+    expect(textOf(renderer)).toContain('Morning brief · Oct 5');
+
+    const filter = renderer.root.findByProps({ accessibilityLabel: 'Show routine runs' });
+    await act(async () => filter.props.onPress());
+    expect(textOf(renderer)).not.toContain('Morning brief · Oct 5');
+    expect(textOf(renderer)).toContain('Thread A');
+
+    await act(async () => renderer.root.findByProps({ accessibilityLabel: 'Show routine runs' }).props.onPress());
+    expect(textOf(renderer)).toContain('Morning brief · Oct 5');
+  });
+
+  it('has no routine filter when there are no routine runs', async () => {
+    mockThreadsApi({ GET: () => ({ ok: true, status: 200, body: [THREAD_A] }) });
+
+    const renderer = await renderScreen();
+
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Show routine runs' })).toHaveLength(0);
+  });
+
   it('shows an error state with a retry option when the initial fetch fails', async () => {
     mockThreadsApi({ GET: () => ({ ok: false, status: 500, body: { detail: 'db unavailable' } }) });
 

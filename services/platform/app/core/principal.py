@@ -12,7 +12,9 @@ Two credentials are accepted, in this order:
    only valid at `/internal/auth/verify`, never here.
 
 Either way the session the token names must still be active and its user
-enabled, and role/step-up come from the database, not the token.
+enabled, and role/step-up come from the database, not the token. A
+delegation minted from a routine grant is also confined to the grant's space
+(`Principal.space_scope`).
 """
 
 from __future__ import annotations
@@ -46,6 +48,8 @@ class Principal:
     thread_id: str | None = None
     # Numeric owner of files created on the user's behalf.
     uid: int | None = None
+    # A routine run's delegation reaches only its routine's space.
+    space_scope: UUID | None = None
 
     @property
     def is_agent(self) -> bool:
@@ -116,6 +120,7 @@ async def _principal(conn: AsyncConnection, claims: dict) -> Principal:
         stepped_up=row["stepped_up"],
         thread_id=thread_id if isinstance(thread_id, str) else None,
         uid=row["uid"],
+        space_scope=row["routine_space_id"],
     )
 
 

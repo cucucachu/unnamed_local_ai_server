@@ -1,7 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
 
+import { useInboxUnread } from '@/lib/inbox';
+
 export default function TabsLayout() {
+  const unread = useInboxUnread();
   return (
     <Tabs>
       {/* Hidden redirect-only route so `/` resolves to Home (`/apps`) —
@@ -14,6 +17,8 @@ export default function TabsLayout() {
         options={{
           title: 'Home',
           headerShown: false,
+          // M17-05: unread routine runs (finished, failed, needing approval).
+          tabBarBadge: unread ? unread : undefined,
           tabBarIcon: ({ color, focused, size }) => (
             <Ionicons name={focused ? 'home' : 'home-outline'} color={color} size={size} />
           ),

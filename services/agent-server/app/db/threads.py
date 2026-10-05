@@ -57,6 +57,8 @@ class ThreadRecord:
     # M8-05: tip the history/WS paths should read. `None` = chronological latest.
     active_checkpoint_id: str | None = None
     owner_user_id: str | None = None
+    # M17-02: set on a routine's run threads.
+    routine_id: str | None = None
 
 
 class ThreadStore(Protocol):
@@ -70,9 +72,15 @@ class ThreadStore(Protocol):
     `owner_user_id` and returns how many it moved.
     """
 
-    async def create(self, owner_user_id: str, title: str | None) -> ThreadRecord: ...
+    async def create(
+        self, owner_user_id: str, title: str | None, routine_id: str | None = None
+    ) -> ThreadRecord: ...
 
-    async def list_for_owner(self, owner_user_id: str) -> list[ThreadRecord]: ...
+    async def list_for_owner(
+        self, owner_user_id: str, routine_id: str | None = None
+    ) -> list[ThreadRecord]:
+        """Newest activity first; with `routine_id`, only that routine's runs, newest first."""
+        ...
 
     async def get(self, thread_id: str, owner_user_id: str) -> ThreadRecord | None: ...
 
@@ -115,29 +123,45 @@ class PgThreadStore:
     checkpoints stay in the LangGraph tables, unreachable.
     """
 
-    _SELECT_COLUMNS = "id, title, created_at, updated_at, active_checkpoint_id, owner_user_id"
+    _SELECT_COLUMNS = (
+        "id, title, created_at, updated_at, active_checkpoint_id, owner_user_id, routine_id"
+    )
 
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
 
-    async def create(self, owner_user_id: str, title: str | None) -> ThreadRecord:
+    async def create(
+        self, owner_user_id: str, title: str | None, routine_id: str | None = None
+    ) -> ThreadRecord:
         row_title = title if title else DEFAULT_TITLE
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                f"INSERT INTO threads (title, owner_user_id) VALUES (%s, %s) "
+                f"INSERT INTO threads (title, owner_user_id, routine_id) VALUES (%s, %s, %s) "
                 f"RETURNING {self._SELECT_COLUMNS}",
-                (row_title, owner_user_id),
+                (row_title, owner_user_id, routine_id),
             )
             row = await cur.fetchone()
         return _record_from_row(row)
 
-    async def list_for_owner(self, owner_user_id: str) -> list[ThreadRecord]:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
+    async def list_for_owner(
+        self, owner_user_id: str, routine_id: str | None = None
+    ) -> list[ThreadRecord]:
+        if routine_id is None:
+            query = (
                 f"SELECT {self._SELECT_COLUMNS} FROM threads WHERE owner_user_id = %s "
-                "ORDER BY updated_at DESC",
-                (owner_user_id,),
+                "ORDER BY updated_at DESC"
             )
+            params: tuple = (owner_user_id,)
+        elif not _is_valid_uuid(routine_id):
+            return []
+        else:
+            query = (
+                f"SELECT {self._SELECT_COLUMNS} FROM threads "
+                "WHERE owner_user_id = %s AND routine_id = %s ORDER BY created_at DESC"
+            )
+            params = (owner_user_id, routine_id)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(query, params)
             rows = await cur.fetchall()
         return [_record_from_row(row) for row in rows]
 
@@ -208,6 +232,7 @@ def _record_from_row(row: dict) -> ThreadRecord:
         updated_at=row["updated_at"],
         active_checkpoint_id=row.get("active_checkpoint_id"),
         owner_user_id=str(row["owner_user_id"]) if row.get("owner_user_id") else None,
+        routine_id=str(row["routine_id"]) if row.get("routine_id") else None,
     )
 
 
@@ -238,7 +263,11 @@ class InMemoryThreadStore:
         self._recency[thread_id] = next(self._counter)
 
     def insert(
-        self, thread_id: str, owner_user_id: str | None, title: str = DEFAULT_TITLE
+        self,
+        thread_id: str,
+        owner_user_id: str | None,
+        title: str = DEFAULT_TITLE,
+        routine_id: str | None = None,
     ) -> ThreadRecord:
         now = datetime.now(UTC)
         record = ThreadRecord(
@@ -247,17 +276,35 @@ class InMemoryThreadStore:
             created_at=now,
             updated_at=now,
             owner_user_id=owner_user_id,
+            routine_id=routine_id,
         )
         self._rows[thread_id] = record
         self._bump_recency(thread_id)
         return record
 
-    async def create(self, owner_user_id: str, title: str | None) -> ThreadRecord:
-        return self.insert(str(uuid.uuid4()), owner_user_id, title if title else DEFAULT_TITLE)
+    async def create(
+        self, owner_user_id: str, title: str | None, routine_id: str | None = None
+    ) -> ThreadRecord:
+        return self.insert(
+            str(uuid.uuid4()), owner_user_id, title if title else DEFAULT_TITLE, routine_id
+        )
 
-    async def list_for_owner(self, owner_user_id: str) -> list[ThreadRecord]:
+    async def list_for_owner(
+        self, owner_user_id: str, routine_id: str | None = None
+    ) -> list[ThreadRecord]:
         owned = [r for r in self._rows.values() if r.owner_user_id == owner_user_id]
-        return sorted(owned, key=lambda r: self._recency.get(r.id, 0), reverse=True)
+        if routine_id is None:
+            return sorted(owned, key=lambda r: self._recency.get(r.id, 0), reverse=True)
+        runs = [r for r in owned if r.routine_id == routine_id]
+        # Insertion order stands in for created_at (see the recency note above).
+        order = list(self._rows)
+        return sorted(runs, key=lambda r: order.index(r.id), reverse=True)
+
+    def detach_routine(self, routine_id: str) -> None:
+        """`ON DELETE SET NULL` for `threads.routine_id`."""
+        for record in list(self._rows.values()):
+            if record.routine_id == routine_id:
+                self._rows[record.id] = replace(record, routine_id=None)
 
     async def get(self, thread_id: str, owner_user_id: str) -> ThreadRecord | None:
         record = self._rows.get(thread_id)

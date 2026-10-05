@@ -8,6 +8,11 @@ whenever less than `REFRESH_MARGIN` is left, for as long as the socket is
 open. The platform only mints either while the user's session is active, so
 a revoked session stops the next turn and every file call in flight.
 
+A scheduled routine run has no socket: it exchanges the routine's grant
+(`/internal/routine-grants/exchange`, M17-03) instead of an identity token,
+then refreshes the same way. That delegation reaches only the routine's
+space.
+
 `Delegation` is what a run's `config["configurable"]["delegation"]` holds.
 It's an object, not the token string, on purpose: LangGraph copies every
 `str`/`int`/`float`/`bool` in `configurable` into the checkpoint metadata it
@@ -47,10 +52,47 @@ class Grant:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class Caller:
+    """Who asks the platform about spaces and routine grants: a person through the
+    app (their identity token) or the agent in their chat (its delegation, M17-07)."""
+
+    identity_token: str | None = None
+    delegation_token: str | None = None
+
+    def body(self) -> dict[str, str]:
+        if self.delegation_token is not None:
+            return {"delegation_token": self.delegation_token}
+        return {"identity_token": self.identity_token or ""}
+
+    def __repr__(self) -> str:
+        return "Caller(delegation)" if self.delegation_token is not None else "Caller(identity)"
+
+
 class DelegationClient(Protocol):
     async def exchange(self, identity_token: str, thread_id: str) -> Grant: ...
 
     async def refresh(self, token: str) -> Grant: ...
+
+    async def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        """`(canonical space path, role)` of the caller's user, or None if
+        `space` isn't one of theirs (M17-02)."""
+        ...
+
+    async def issue_routine_grant(
+        self, caller: Caller, routine_id: str, space: str, label: str
+    ) -> str | None:
+        """A routine grant (M17-03) for a space the caller's user may edit, else None.
+
+        A routine run's own delegation is refused (`DelegationDenied`).
+        """
+        ...
+
+    async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        """A delegation for one run; `DelegationDenied` once the grant is dead."""
+        ...
+
+    async def revoke_routine_grant(self, grant: str) -> None: ...
 
 
 class HttpDelegationClient:
@@ -59,7 +101,7 @@ class HttpDelegationClient:
         self._agent_token = agent_token
         self._timeout_s = timeout_s
 
-    async def _post(self, path: str, body: dict[str, str]) -> Grant:
+    async def _call(self, path: str, body: dict[str, str]) -> httpx.Response:
         if not self._agent_token:
             raise DelegationUnavailable("PLATFORM_AGENT_TOKEN is not set")
         try:
@@ -73,6 +115,10 @@ class HttpDelegationClient:
             raise DelegationUnavailable(repr(exc)) from exc
         if response.status_code == 401:
             raise DelegationDenied(response.text)
+        return response
+
+    async def _post(self, path: str, body: dict[str, str]) -> Grant:
+        response = await self._call(path, body)
         if response.status_code != 200:
             raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
         payload = response.json()
@@ -85,6 +131,44 @@ class HttpDelegationClient:
 
     async def refresh(self, token: str) -> Grant:
         return await self._post("/internal/delegations/refresh", {"token": token})
+
+    async def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        path = "/internal/space-access"
+        response = await self._call(path, caller.body() | {"space": space})
+        if response.status_code == 403:
+            raise DelegationDenied(response.text)
+        if response.status_code in (404, 422):
+            return None
+        if response.status_code != 200:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
+        payload = response.json()
+        return payload["space"], payload["role"]
+
+    async def issue_routine_grant(
+        self, caller: Caller, routine_id: str, space: str, label: str
+    ) -> str | None:
+        path = "/internal/routine-grants"
+        body = caller.body() | {"routine_id": routine_id, "space": space, "label": label}
+        response = await self._call(path, body)
+        if response.status_code == 403 and "routine_run" in response.text:
+            raise DelegationDenied(response.text)
+        if response.status_code in (403, 404, 422):
+            return None
+        if response.status_code != 200:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
+        return response.json()["grant"]
+
+    async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
+        return await self._post(
+            "/internal/routine-grants/exchange",
+            {"grant": grant, "routine_id": routine_id, "thread_id": thread_id},
+        )
+
+    async def revoke_routine_grant(self, grant: str) -> None:
+        path = "/internal/routine-grants/revoke"
+        response = await self._call(path, {"grant": grant})
+        if response.status_code != 204:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
 
 
 class Delegation:

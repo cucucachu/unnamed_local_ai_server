@@ -83,6 +83,10 @@ class ThreadOut(BaseModel):
     title: str
     created_at: str
     updated_at: str
+    # M17-02: the routine this thread is a run of.
+    routine_id: str | None = None
+    # M17-05: that run is paused on an approval.
+    needs_approval: bool = False
 
 
 class ToolCallOut(BaseModel):
@@ -151,6 +155,7 @@ def _to_thread_out(record: ThreadRecord) -> ThreadOut:
         title=record.title,
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
+        routine_id=record.routine_id,
     )
 
 
@@ -204,11 +209,17 @@ async def create_thread(
 
 
 @router.get("/threads", response_model=list[ThreadOut])
-async def list_threads(request: Request, user: CurrentUser) -> list[ThreadOut]:
+async def list_threads(
+    request: Request, user: CurrentUser, routine_id: str | None = None
+) -> list[ThreadOut]:
+    """Newest activity first; `?routine_id=` lists that routine's runs, newest first."""
     await request.app.state.orphan_adopter.adopt()
     store = _thread_store(request)
-    records = await store.list_for_owner(user.user_id)
-    return [_to_thread_out(r) for r in records]
+    records = await store.list_for_owner(user.user_id, routine_id=routine_id)
+    waiting = await request.app.state.routine_store.waiting_thread_ids(user.user_id)
+    return [
+        _to_thread_out(r).model_copy(update={"needs_approval": r.id in waiting}) for r in records
+    ]
 
 
 async def _owned_thread(request: Request, thread_id: str, user_id: str) -> ThreadRecord:
@@ -225,7 +236,12 @@ async def get_thread_messages(
     record = await _owned_thread(request, thread_id, user.user_id)
 
     agent = request.app.state.agent
-    state = await agent.aget_state(graph_config(thread_id, record.active_checkpoint_id))
+    # M17-01: mid-turn, the turn's own steps come from its socket replay.
+    running = request.app.state.turn_runner.active(thread_id)
+    checkpoint_id = running.base_checkpoint_id if running else record.active_checkpoint_id
+    if running is not None and checkpoint_id is None:
+        return []
+    state = await agent.aget_state(graph_config(thread_id, checkpoint_id))
     # See module docstring: `state.values` is `{}` (not `{"messages": []}`)
     # when the row exists but no checkpoint has been written yet.
     messages = state.values.get("messages", [])
@@ -250,7 +266,7 @@ async def get_thread_messages(
 
 @router.get("/threads/{thread_id}/state")
 async def get_thread_state(thread_id: str, request: Request, user: CurrentUser) -> dict:
-    """`GET /api/threads/{id}/state` -> `{"pending_approval": {...} | null}` (M8-03).
+    """`GET /api/threads/{id}/state` -> `{"pending_approval": {...} | null, "running": bool}` (M8-03).
 
     Same shape as the `approval_request` frame's payload minus the frame's
     own `type` envelope. `useChat` (frontend) calls this once after history
@@ -267,10 +283,13 @@ async def get_thread_state(thread_id: str, request: Request, user: CurrentUser) 
     """
     record = await _thread_store(request).get(thread_id, user.user_id)
     if record is None:
-        return {"pending_approval": None}
+        return {"pending_approval": None, "running": False}
+    if request.app.state.turn_runner.active(thread_id) is not None:
+        # The running turn's socket replay announces any approval it reaches.
+        return {"pending_approval": None, "running": True}
     agent = request.app.state.agent
     pending_approval = await get_pending_approval(agent, thread_id, record.active_checkpoint_id)
-    return {"pending_approval": public_approval(pending_approval)}
+    return {"pending_approval": public_approval(pending_approval), "running": False}
 
 
 def _build_branch_points(

@@ -1094,3 +1094,52 @@ describe('mapHistoryToItems', () => {
     });
   }
 });
+
+describe('useChat — detached turns (M17-01)', () => {
+  it('re-fetches history before reconnecting, then rebuilds the running turn from its replay', async () => {
+    const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
+
+    act(() => {
+      hook.current().sendMessage('count to three');
+    });
+    const userId = findItem(hook.current().items, 'user').id;
+    act(() => {
+      latestSocket().emit({ type: 'turn_start' });
+      latestSocket().emit({ type: 'token', content: 'one ' });
+    });
+
+    // The server kept the turn going; history still stops at its start.
+    mockThreadMessages([{ id: 'h-1', role: 'user', content: 'earlier', tool_name: null, tool_calls: null }]);
+    act(() => latestSocket().onclose?.({}));
+    expect(hook.current().items.some((item) => item.kind === 'error')).toBe(false);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(hook.current().items.map((item) => item.id)).toEqual(['h-1']);
+
+    act(() => {
+      latestSocket().onopen?.({});
+      latestSocket().emit({
+        type: 'turn_start',
+        replay: true,
+        user_message: { id: userId, content: 'count to three' },
+      });
+      latestSocket().emit({ type: 'token', content: 'one ' });
+    });
+    expect(hook.current().busy).toBe(true);
+
+    act(() => {
+      latestSocket().emit({ type: 'token', content: 'two three' });
+      latestSocket().emit({ type: 'turn_end', status: 'completed', duration_ms: 900 });
+    });
+    const { items, busy, turns } = hook.current();
+    expect(busy).toBe(false);
+    expect(items.map((item) => item.kind)).toEqual(['user', 'user', 'assistant']);
+    expect(findItem(items, 'user', 1)).toMatchObject({ id: userId, text: 'count to three' });
+    expect(findItem(items, 'assistant').text).toBe('one two three');
+    expect(turns[turns.length - 1].status).toBe('completed');
+  });
+});

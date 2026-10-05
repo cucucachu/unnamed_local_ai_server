@@ -455,4 +455,4 @@ async def test_thread_state_is_null_when_nothing_pending(fake_model: FakeModel, 
 
         state_response = client.get("/api/threads/hitl-state-empty-thread/state")
         assert state_response.status_code == 200
-        assert state_response.json() == {"pending_approval": None}
+        assert state_response.json() == {"pending_approval": None, "running": False}

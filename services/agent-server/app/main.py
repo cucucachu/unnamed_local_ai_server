@@ -7,12 +7,14 @@ what the Dockerfile's `uv run uvicorn app.main:app` command serves.
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import Depends, FastAPI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.build import build_agent
-from app.api import chat, chat_ws, health
+from app.agent.turn_runner import TurnRunner
+from app.api import chat, chat_ws, health, routines
 from app.api import settings as settings_api
 from app.core.config import Settings
 from app.core.delegation import DelegationClient, HttpDelegationClient
@@ -24,9 +26,11 @@ from app.core.identity import (
 )
 from app.core.orphans import OrphanAdopter, http_admin_lookup
 from app.db.checkpointer import build_postgres_checkpointer
+from app.db.routines import InMemoryRoutineStore, PgRoutineStore, RoutineStore
 from app.db.settings import InMemorySettingsStore, PgSettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
 from app.db.turn_stats import InMemoryTurnStatsStore, PgTurnStatsStore, TurnStatsStore
+from app.routines.scheduler import RoutineScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,7 @@ def create_app(
     thread_store_override: ThreadStore | None = None,
     settings_store_override: SettingsStore | None = None,
     turn_stats_store_override: TurnStatsStore | None = None,
+    routine_store_override: RoutineStore | None = None,
     identity_verifier_override: IdentityVerifier | None = None,
     delegation_client_override: DelegationClient | None = None,
 ) -> FastAPI:
@@ -78,6 +83,9 @@ def create_app(
     tests that don't pass an override get `InMemoryTurnStatsStore()` when a
     `checkpointer_override` is in play.
 
+    `routine_store_override` (M17-02): same again, defaulting to
+    `InMemoryRoutineStore` over the in-memory thread store.
+
     `identity_verifier_override` (M10-04) replaces the JWKS-backed verifier
     of `X-HomeAI-Identity` (`app/core/identity.py`). Unlike the stores it
     has no test-mode default: tests pass a fake that yields a fixed user,
@@ -104,15 +112,41 @@ def create_app(
         )
 
     @asynccontextmanager
+    async def _running_turns(app: FastAPI) -> AsyncIterator[None]:
+        """The turn runner and the routine scheduler (M17-04), stopped in that order."""
+        settings = app.state.settings
+        scheduler = RoutineScheduler(
+            app.state,
+            poll_s=settings.routines_poll_s,
+            max_concurrent=settings.routines_max_concurrent,
+            grace=timedelta(seconds=settings.routines_missed_grace_s),
+            run_timeout_s=settings.routine_run_timeout_s,
+            approval_ttl=timedelta(seconds=settings.routine_approval_ttl_s),
+        )
+        app.state.routine_scheduler = scheduler
+        try:
+            if settings.routines_scheduler_enabled:
+                await scheduler.start()
+            yield
+        finally:
+            await scheduler.stop()
+            await app.state.turn_runner.shutdown()
+
+    @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if checkpointer_override is not None:
             app.state.checkpointer = checkpointer_override
             app.state.thread_store = thread_store_override or InMemoryThreadStore()
             app.state.settings_store = settings_store_override or InMemorySettingsStore()
             app.state.turn_stats_store = turn_stats_store_override or InMemoryTurnStatsStore()
+            app.state.routine_store = routine_store_override or InMemoryRoutineStore(
+                app.state.thread_store
+            )
             install_orphan_adopter(app)
-            app.state.agent = build_agent(app.state.settings, checkpointer_override)
-            yield
+            app.state.agent = build_agent(app.state.settings, checkpointer_override, app.state)
+            app.state.turn_runner = TurnRunner(app.state)
+            async with _running_turns(app):
+                yield
             return
 
         pg_checkpointer = await build_postgres_checkpointer(app.state.settings.postgres_dsn)
@@ -125,9 +159,12 @@ def create_app(
             app.state.turn_stats_store = turn_stats_store_override or PgTurnStatsStore(
                 pg_checkpointer.pool
             )
+            app.state.routine_store = routine_store_override or PgRoutineStore(pg_checkpointer.pool)
             install_orphan_adopter(app)
-            app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver)
-            yield
+            app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver, app.state)
+            app.state.turn_runner = TurnRunner(app.state)
+            async with _running_turns(app):
+                yield
         finally:
             await pg_checkpointer.close()
 
@@ -144,6 +181,7 @@ def create_app(
     app.include_router(health.router, prefix="/api")
     app.include_router(chat.router, prefix="/api", dependencies=authenticated)
     app.include_router(settings_api.router, prefix="/api", dependencies=authenticated)
+    app.include_router(routines.router, prefix="/api", dependencies=authenticated)
     # No prefix: the WS route's own path (`/ws/chat/{thread_id}`) must match
     # Caddy's `/ws/*` routing exactly (see `infra/caddy/Caddyfile`), not be
     # nested under `/api` like the REST routes above. It authenticates itself

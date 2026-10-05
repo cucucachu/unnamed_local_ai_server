@@ -648,7 +648,9 @@ what another doc says it should be.
   `MODEL_NAME`, `EXEC_MANAGER_URL`, `EXEC_DEFAULT_TIMEOUT_S`,
   `WEB_FETCH_URL`, `WEB_FETCH_TOOL_MAX_CHARS` (M7-05),
   `AGENT_RECURSION_LIMIT` (optional, default 200: LangGraph steps per chat
-  turn; LangGraph's own 25 cut off app builds), `AGENT_CONTEXT_TOKENS`
+  turn; LangGraph's own 25 cut off app builds), `AGENT_DETACHED_TURN_TIMEOUT_S`
+  (optional, default 3600: a turn no client is attached to is cancelled
+  after this long; M17-01), `AGENT_CONTEXT_TOKENS`
   (optional, defaults to `MODEL_CTX_SIZE`: the model's window; deepagents
   summarizes history and clips old tool arguments at 85% of it, and a
   llama-server overflow summarizes and retries), `POSTGRES_USER`
@@ -1351,9 +1353,12 @@ appears in `GET /api/threads`. Threads created before M10-04 (no owner)
 belong to the bootstrap admin once one exists (see `agent-server` in §2).
 - `POST /api/threads` body `{"title": "optional string"}` → `201
   {"id": "<uuid>", "title": "New chat", "created_at": iso8601,
-  "updated_at": iso8601}`
+  "updated_at": iso8601, "routine_id": "<uuid>"|null}` (`routine_id`,
+  M17-02: set on a routine's runs)
 - `GET /api/threads` → `200 [{thread}, ...]`, the caller's own, ordered
-  by `updated_at` desc
+  by `updated_at` desc. `?routine_id=<uuid>`: only that routine's runs,
+  newest first. Each also has `"needs_approval": bool` (M17-05): it's a
+  routine run paused on an approval
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
   "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null,
@@ -1394,6 +1399,141 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
 - `DELETE /api/threads/{id}` → `204` (deletes the row and the
   checkpointer state for that thread)
 
+**Routines** (M17-02) — a saved prompt the agent runs later, as its owner,
+in one of their spaces. Owned like threads (row-level security on
+`routines.owner_user_id`; another user's routine is a `404`). Each run
+(M17-04) is a `routine_runs` record, and once started, a thread with
+`routine_id` set. Deleting the routine deletes its run records but keeps
+their threads as plain chats (`ON DELETE SET NULL`).
+- `{routine}` = `{"id", "name", "prompt", "space": "/personal"|"/spaces/<slug>",
+  "schedule", "timezone": IANA name, "enabled": bool, "approval_mode":
+  "ask"|"allow_writes"|"read_only", "next_run_at": iso8601|null,
+  "last_run_at": iso8601|null, "created_at", "updated_at", "last_run":
+  {"id", "status", "finished_at", "thread_id"}|null}`. `last_run` (M17-06)
+  is its newest run record; it's on the list and on `GET /api/routines/{id}`,
+  and null on create/update responses.
+- `schedule` (times local to `timezone`, an RRULE subset):
+  `{"kind": "once", "at": "YYYY-MM-DDTHH:MM"}`, `{"kind": "daily"|"weekdays",
+  "time": "HH:MM"}`, `{"kind": "weekly", "days": ["mon".."sun"], "time"}`,
+  `{"kind": "monthly", "day": 1-31, "time"}` (a day the month lacks runs on
+  its last day). `next_run_at` is UTC: a local time skipped by a DST jump
+  runs just after it (02:30 → 03:30), a repeated one at its first
+  occurrence. Null while disabled, or once a one-shot has run.
+- `GET /api/routines` → `200 [{routine}, ...]` by name.
+- `POST /api/routines` body `{"name", "prompt", "space"?: "/personal",
+  "schedule", "timezone", "enabled"?: true, "approval_mode"?: "ask"}` →
+  `201 {routine}`. The caller
+  needs `editor` or `owner` on `space` (asked of the platform, `POST
+  /internal/space-access`; `403` otherwise, `422` for a space that isn't
+  theirs). `422` for an enabled schedule with no future run.
+- `GET /api/routines/{id}` → `{routine}`; `PATCH` with any subset of the
+  create fields → `{routine}` (`next_run_at` recomputed when `schedule`,
+  `timezone` or `enabled` change; a new `space` is checked again);
+  `DELETE` → `204`.
+- `{run}` = `{"id", "trigger": "schedule"|"manual", "status", "detail":
+  str|null, "thread_id": uuid|null, "due_at", "started_at", "finished_at":
+  iso8601|null, "created_at"}`.
+  - `status` is one of `queued`, `running`, `succeeded`, `failed`,
+    `timed_out`, `missed` (never started: too late, or the routine was
+    turned off while queued), `waiting_approval` (an approval is pending
+    in its chat), or `expired` (nobody answered it in time).
+  - `detail` says why, for anything but `succeeded`.
+  - A run that never started has no thread.
+- `POST /api/routines/{id}/run` → `202 {run}`: a run now, in the background
+  (detached turn runner, no queue), on a delegation from the caller's
+  session. The space is checked again first. The run's first user message
+  is `Routine "<name>" (space <space>):` and the prompt; its title is
+  `<name> · <Mon D>`.
+- `GET /api/routines/{id}/runs` → `200 [{run}, ...]`, newest first.
+- An enabled routine holds a platform **routine grant** (M17-03,
+  `docs/PLATFORM.md` §4 "Routine grant") in `routines.grant_token`, never
+  returned by the API.
+  - It's issued from the caller's identity on create, on enable, and on a
+    move to another space; it's revoked on disable and delete. `503` if the
+    platform can't be asked.
+  - A scheduled run (`app.routines.runs.grant_delegation`) exchanges it for
+    the run's delegation, which reaches only the routine's space.
+  - A refused exchange disables the routine (`enabled=false`, no
+    `next_run_at`, grant cleared). That is how revoking it in Settings →
+    Sessions, a password change, or lost edit rights turn it off.
+- **Scheduler** (M17-04, `app/routines/scheduler.py`). It is on unless
+  `ROUTINES_SCHEDULER_ENABLED=false`, which an agent-server sharing the
+  database must set: the M16 eval candidate.
+  - **Claiming.** Every 30 s (`ROUTINES_POLL_S`) it claims every user's due
+    routines as the RLS bypass role: `FOR UPDATE SKIP LOCKED`, with
+    `next_run_at` moved to the first time after now in the same
+    transaction. So a due time fires once, even across a restart or a
+    second process, and an outage never fires a backlog.
+  - **Missed runs.** A claim more than `ROUTINES_MISSED_GRACE_S` (1 h) late
+    is recorded `missed`; otherwise it's `queued`. A queued run that waits
+    past the grace for a free slot is `missed` too.
+  - **GPU cap.** A queued run starts only while fewer than
+    `ROUTINES_MAX_CONCURRENT` (1) turns of *any* kind run. Chats never wait
+    on routines.
+  - **Running.** A started run gets its thread and a delegation from the
+    routine's grant (a refused grant fails the run and disables the
+    routine). It then runs as a detached turn with the usual recursion
+    limit, and is cancelled (`timed_out`) after `ROUTINE_RUN_TIMEOUT_S`
+    (30 min). Run-now gets the same time limit.
+  - **One-shots.** A one-shot is disabled when claimed, and its grant is
+    revoked once its run is over.
+  - **Restarts.** At startup, runs a restart cut off are `failed`
+    ("interrupted by a server restart"), and queued ones are queued again.
+- **Approval modes** (M17-05, `app/agent/approvals.py`). A run passes its
+  routine's `approval_mode` in `configurable["approval_mode"]`; the chat
+  `hitl_enabled` setting doesn't apply to it.
+  - `ask` (the default): everything a chat with HITL on asks about pauses
+    the run (`waiting_approval`) until the owner answers in its chat.
+  - `allow_writes`: file writes and edits, `execute_code`, app data writes,
+    app actions and building apps go ahead. `delete` and
+    `approve_migration` still ask. A scheduled run's grant reaches only the
+    routine's space.
+  - `read_only`: those tools are refused with a tool error the model reads
+    (`ReadOnlyRunMiddleware`; `app_sql` refuses a statement that writes).
+  - LangGraph writes the mode into each checkpoint's metadata. Answering in
+    the chat resumes under the mode the run paused in, so HITL's re-check
+    of which calls needed approval matches the decisions. The run's
+    record then follows the resumed turn to its end.
+  - **Expiry.** A run left `waiting_approval` for `ROUTINE_APPROVAL_TTL_S`
+    (24 h) is answered reject-all on the next poll, under the same GPU cap
+    and the routine's grant. The model is told nobody answered, and the
+    run is recorded `expired`. If the grant is gone it's recorded
+    `expired` without resuming. A one-shot keeps its grant until its paused
+    run is answered or expires.
+- **Frontend** (M17-06): Settings → Routines lists them, with the schedule
+  in words, the next run, the last result and an on/off switch
+  (`src/app/(tabs)/settings/routines/`). A routine's page has Run now
+  (which opens the run's chat), edit, delete and its runs. The editor
+  (`components/RoutineForm.tsx`) covers the name, prompt, a space the user
+  can edit, the schedule, the timezone (the device's by default) and the
+  approval mode. The chats list badges routine runs and can hide them.
+- **Agent tools** (M17-07, `app/agent/routine_tools.py`): `current_time`,
+  `list_routines`, `create_routine`, `update_routine`, `delete_routine`,
+  so "every weekday at 7, summarize my notes" in a chat becomes a routine.
+  - They save through `app/routines/service.py`, the same code as the API
+    above, but as the chat turn's delegation: the platform checks the space
+    and issues the grant for the user behind it (`docs/PLATFORM.md` §4).
+    The turn's user is `configurable["user_id"]`.
+  - Creating, changing (except just turning one off) and deleting always
+    ask first, whatever the HITL setting. The card has the schedule in
+    words, the first run and the prompt; bad input is refused before it.
+  - The schedule arguments are flat (`repeat`, `time`, `date`, `days`,
+    `day_of_month`), which small models fill in more reliably than the
+    nested shape. The timezone defaults to the user's setting, else UTC.
+  - In a routine run only `current_time` works; the others refuse (and the
+    platform refuses a routine run's delegation anyway).
+  - The model learns the date from `current_time`, not the system prompt,
+    so the prompt stays byte-identical for llama.cpp's prefix cache.
+- **Inbox** (M17-05): the caller's ended and paused runs, for in-app
+  notifications (the Home tab badge and Home's Routines list).
+  - `GET /api/inbox` → `200 {"unread": int, "items": [{run} + {"routine_id",
+    "routine_name", "unread": bool}, ...]}`, newest 50 by `finished_at` (a
+    paused run's is when it paused).
+  - `POST /api/inbox/read` body `{"run_ids"?: [uuid]}` (absent: all) →
+    the same.
+  - `routine_runs.seen_at` records reads. Any status change clears it, so
+    a paused run that later finishes is unread again.
+
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every
 completed (or cancelled / awaiting-approval) turn stores the new tip
@@ -1416,13 +1556,16 @@ see "Platform API" → "Files"). agent-server's `/api/files*` and
 `(user_id, key)`); the pre-M10 global document was moved to the bootstrap
 admin. The WS reads the connected user's values each turn.
 - `GET /api/settings` → `200 {"hitl_enabled": bool, "thinking_enabled":
-  bool, "edit_mode_default": "truncate"|"fork"}` — the full document,
-  defaults applied for any key not yet stored (`hitl_enabled` defaults
-  `true`, `thinking_enabled` defaults `false`, `edit_mode_default` defaults
-  `"truncate"`)
-- `PUT /api/settings` body: any subset of the three fields above → `200`
-  the full merged document; `422` on an unknown extra key or a wrong
-  type/invalid literal value; persists to Postgres (survives a restart)
+  bool, "edit_mode_default": "truncate"|"fork", "timezone": str|null}` —
+  the full document, defaults applied for any key not yet stored
+  (`hitl_enabled` defaults `true`, `thinking_enabled` defaults `false`,
+  `edit_mode_default` defaults `"truncate"`, `timezone` `null`).
+  `timezone` (M17-07) is an IANA zone the app sets from the device whenever
+  they differ; it's the default for routines the agent makes.
+- `PUT /api/settings` body: any subset of the fields above → `200`
+  the full merged document; `422` on an unknown extra key, a wrong
+  type/invalid literal value or an unknown timezone; persists to Postgres
+  (survives a restart)
 
 ### WebSocket chat protocol (`/ws/chat/{thread_id}`)
 
@@ -1524,6 +1667,8 @@ Server → client, in order within a turn:
 
 ```json
 {"type": "turn_start"}
+{"type": "turn_start", "replay": true,
+ "user_message": {"id": "str", "content": "str"}}          // M17-01: on connecting mid-turn (user_message omitted for an approval resume)
 {"type": "reasoning", "content": "str"}                   // M8-07: thought delta; not persisted to history
 {"type": "token", "content": "str"}                       // one per streamed model token chunk
 {"type": "tool_start", "tool_call_id": "str", "name": "str",
@@ -1573,8 +1718,8 @@ model does not emit reasoning deltas, so no `reasoning` frames appear;
 `token` frames are unchanged.
 
 On `cancel` mid-turn: the server cancels the turn task, awaits it, sends
-`turn_end {"status": "cancelled"}`, and — unlike a client disconnect —
-**keeps the connection open**; the per-thread lock is released normally
+`turn_end {"status": "cancelled"}`, and **keeps the connection open**;
+the per-thread lock is released normally
 and the thread's `updated_at` is still bumped, so the very next
 `user_message` on the same socket runs a normal turn. If the `cancel`
 lands after the turn already paused on an interrupt (between
@@ -1587,6 +1732,20 @@ sent an `approval_response` for that interrupt, that is applied instead
 and there is no re-announce (#189). The `error` frame
 path (unhandled model/agent exception) is unchanged by any of this — it
 still ends the turn with `error` + close code 1011, never a `turn_end`.
+
+**Detached turns (M17-01).** A turn runs in the agent server's
+`TurnRunner`, not in its socket: a client that disconnects mid-turn (a
+phone locking, a network switch) only detaches. The turn runs to its end
+and checkpoints as usual; with no client attached for
+`AGENT_DETACHED_TURN_TIMEOUT_S` (default 3600) it is cancelled. A socket
+that connects to the thread while the turn runs first receives
+`turn_start {"replay": true, ...}` and every frame the turn has sent so far,
+then the live frames, and may `cancel` it. Meanwhile `GET
+/api/threads/{id}/messages` returns the history the turn started from (its
+own steps come from the replay), and `GET /api/threads/{id}/state` returns
+`{"pending_approval": null, "running": true}`. The frontend reconnects
+after a drop mid-turn instead of failing the turn, and again when the app
+returns to the foreground.
 
 Category mapping by tool name: `ls|read_file|write_file|edit_file|glob|
 grep|delete` → `file`; `execute_code` → `exec`; `write_todos|task` →

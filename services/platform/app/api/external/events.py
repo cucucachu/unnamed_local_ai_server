@@ -26,9 +26,11 @@ WS_CLOSE_UNAUTHORIZED = 4401
 async def _refresh(websocket: WebSocket, sub: Subscriber) -> bool:
     """Reload the subscriber's spaces; False once its session is no longer active."""
     async with websocket.app.state.db_pool.connection() as conn:
-        if await sessions.load_active(conn, sub.session_id, sub.user_id) is None:
+        session = await sessions.load_active(conn, sub.session_id, sub.user_id)
+        if session is None:
             return False
-        sub.spaces = frozenset(s["id"] for s in await spaces.list_user_spaces(conn, sub.user_id))
+        rows = await spaces.list_user_spaces(conn, sub.user_id, only=session["routine_space_id"])
+        sub.spaces = frozenset(s["id"] for s in rows)
     return True
 
 
