@@ -208,10 +208,10 @@ personal and family). Phone is Tier B. Setup: stack up with Caddy from
 `main`, builder image built, signed in as yourself (G10). Two people, two
 phones.
 
-- [ ] (M14-06) Two phones: Phone A (author) publishes an app from Personal into the family catalog. Phone B (family editor) opens Catalog, confirms permissions, and installs. Phone A publishes an update; Phone B sees the update badge on Home and approves it. **(GATE G14)**
-- [ ] (M14-06) Two phones: Calendar is installed in Personal and the family space, each with an event. Family has Planner with calendar `events` reads granted — Planner shows both spaces' events. (A working copy in the family Apps folder auto-grants reads; a pinned Catalog install must send `granted_reads`. The install sheet does not prompt for reads yet.) **(GATE G14)**
+- [x] (M14-06) Two phones: Phone A (author) publishes an app from Personal into the family catalog. Phone B (family editor) opens Catalog, confirms permissions, and installs. Phone A publishes an update; Phone B sees the update badge on Home and approves it. **(GATE G14)**
+- [x] (M14-06) Two phones: Calendar is installed in Personal and the family space, each with an event. Family has Planner with calendar `events` reads granted — Planner shows both spaces' events. (A working copy in the family Apps folder auto-grants reads; a pinned Catalog install must send `granted_reads`. The install sheet does not prompt for reads yet.) **(GATE G14)**
 
-> **PM sign-off: G14 passed ____**
+> **PM sign-off: G14 passed 2026-10-04** (health tracker published to fam and updated; Calendar ×2 + Planner built by the agent. Fixes found on the way: #227, #234, #235, #236)
 
 ## M15
 
