@@ -15,6 +15,7 @@ from app.api.internal import (
     health,
     hitl,
     jwks,
+    routine_grants,
     space_access,
 )
 
@@ -27,3 +28,4 @@ router.include_router(delegations.router)
 router.include_router(exec_grants.router)
 router.include_router(hitl.router)
 router.include_router(space_access.router)
+router.include_router(routine_grants.router)

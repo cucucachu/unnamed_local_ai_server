@@ -57,6 +57,9 @@ async def test_round_trip_and_owner_isolation(pg_server: PgServer) -> None:
         assert updated.schedule["kind"] == "monthly"
         assert updated.last_run_at == ran
         assert updated.updated_at > created.updated_at
+        assert created.grant_token is None
+        granted = await store.update(created.id, owner, {"grant_token": "hr_secret"})
+        assert (await store.get(created.id, owner)).grant_token == granted.grant_token == "hr_secret"
         with pytest.raises(ValueError):
             await store.update(created.id, owner, {"owner_user_id": other})
         assert await store.get("not-a-uuid", owner) is None

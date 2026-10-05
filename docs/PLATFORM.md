@@ -260,6 +260,46 @@ session cookie/bearer and returns `200` with `X-HomeAI-Identity: <JWT>`, or
   member, `401` without an active session. agent-server asks before saving
   a routine that runs in that space; only `editor` and `owner` may.
 
+### Routine grant (unattended runs, M17-03)
+
+A scheduled routine run has no socket and no person behind it. It acts
+through a **routine grant**, issued while a logged-in user creates or
+enables the routine:
+
+- `POST /internal/routine-grants` (`PLATFORM_AGENT_TOKEN`) with
+  `{identity_token, routine_id, space, label?}` → `{grant, grant_id,
+  space}`. The identity's session must be active, and its user `editor` or
+  `owner` of the space (`403`/`404`/`422` otherwise, as for
+  `space-access`). Any earlier grant for the same (user, routine) is
+  revoked.
+- The grant is a **`sessions` row** with `routine_id` and
+  `routine_space_id` set. Its secret is `hr_` + 32 random bytes, stored
+  only as a SHA-256; agent-server keeps the plaintext with the routine.
+  - Being a session, it dies everywhere a session does: on a password
+    change, a disable, or a revoke in Settings → Sessions (which lists
+    grants with `routine_id` set).
+  - It also needs edit rights on its active space. That is re-checked with
+    the session on every delegated request, so a demotion stops a run in
+    flight.
+  - It is never a login: `/internal/auth/verify` and every other opaque
+    token lookup skip these rows.
+- `POST /internal/routine-grants/exchange` with `{grant, routine_id,
+  thread_id}` → `{token, expires_at}`: an ordinary delegation (`act=agent`,
+  `thr=<run thread>`, `sid=<grant>`), refreshed through
+  `/internal/delegations/refresh` like a chat's.
+  - The answer is `401` once the grant is dead or names another routine.
+  - A grant refused for lost rights is revoked, so regaining them doesn't
+    revive it.
+  - agent-server then disables the routine.
+- `POST /internal/routine-grants/revoke` with `{grant}` → `204`
+  (idempotent): the routine was disabled or deleted.
+- A grant's delegations reach **only its space** (`Principal.space_scope`):
+  - `authorize_space` answers `404` for any other space;
+  - space listings (`/spaces`, the `/` and `/spaces` file roots, events) and
+    app lookups and `reads` show only it;
+  - its exec container mounts only that space.
+- No admin powers, as for any `act=agent` token.
+
 ### Service-to-service auth
 
 Internal endpoints (`/internal/*` other than `jwks` and `auth/verify`)

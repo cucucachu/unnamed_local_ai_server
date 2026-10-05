@@ -3,7 +3,8 @@
 `authorize_space(conn, principal, space_id, need)` is how every route that
 touches a space's contents (files, app instances, ...) decides access:
 
-- not a member, unknown id, or archived -> `404 not_found` (ids don't leak);
+- not a member, unknown id, or archived -> `404 not_found` (ids don't leak),
+  as is any space but its own for a routine run (`Principal.space_scope`);
 - `need="manage"` from an agent delegation -> `403 agent_not_allowed`;
 - a member whose role is below `need` -> `403 insufficient_role`
   (`viewer` = read, `editor` = write, `owner` = manage).
@@ -204,14 +205,19 @@ async def get_personal_space(conn: AsyncConnection, user_id: UUID) -> Row:
     return row
 
 
-async def list_user_spaces(conn: AsyncConnection, user_id: UUID) -> list[Row]:
-    """Active spaces the user belongs to, with their `role`: personal first, then by name."""
+async def list_user_spaces(
+    conn: AsyncConnection, user_id: UUID, *, only: UUID | None = None
+) -> list[Row]:
+    """Active spaces the user belongs to, with their `role`: personal first, then by name.
+
+    `only` narrows it to one space - a routine run's `Principal.space_scope`.
+    """
     cur = await conn.execute(
         f"SELECT {SPACE_COLUMNS}, m.role FROM spaces s "
         "JOIN space_members m ON m.space_id = s.id AND m.user_id = %s "
-        "WHERE s.archived_at IS NULL "
+        "WHERE s.archived_at IS NULL AND (%s::uuid IS NULL OR s.id = %s) "
         "ORDER BY s.kind = 'shared', lower(s.name), s.slug",
-        (user_id,),
+        (user_id, only, only),
     )
     return await cur.fetchall()
 
@@ -248,6 +254,8 @@ async def authorize_space(
 ) -> SpaceAccess:
     """The caller's access to an active space, or raise (see the module docstring)."""
     required = NEED_RANK[need]
+    if principal.space_scope is not None and principal.space_scope != space_id:
+        raise NotFound("not_found")
     cur = await conn.execute(
         f"SELECT {SPACE_COLUMNS}, m.role FROM spaces s "
         "JOIN space_members m ON m.space_id = s.id AND m.user_id = %s "

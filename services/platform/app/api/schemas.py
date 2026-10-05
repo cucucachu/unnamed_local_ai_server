@@ -99,6 +99,8 @@ class MePatchRequest(BaseModel):
 class SessionOut(BaseModel):
     id: UUID
     device_label: str | None
+    # Set for a routine grant (an unattended run's identity), not a device.
+    routine_id: str | None = None
     created_at: datetime
     last_seen_at: datetime
     expires_at: datetime
@@ -489,6 +491,29 @@ class SpaceAccessRequest(BaseModel):
 class SpaceAccessOut(BaseModel):
     space: str
     role: str
+
+
+class RoutineGrantRequest(BaseModel):
+    identity_token: Secret
+    routine_id: Short
+    space: Short
+    label: Short | None = None
+
+
+class RoutineGrantOut(BaseModel):
+    grant: str
+    grant_id: UUID
+    space: str
+
+
+class RoutineGrantExchangeRequest(BaseModel):
+    grant: Secret
+    routine_id: Short
+    thread_id: Short
+
+
+class RoutineGrantRevokeRequest(BaseModel):
+    grant: Secret
 
 
 class ExecGrantsRequest(BaseModel):

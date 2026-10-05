@@ -18,6 +18,7 @@ SHIPPED = [
     (9, "webauthn"),
     (10, "public_https"),
     (11, "device_pairs"),
+    (12, "routine_grants"),
 ]
 
 
@@ -66,6 +67,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0009_webauthn.sql",
             "0010_public_https.sql",
             "0011_device_pairs.sql",
+            "0012_routine_grants.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}

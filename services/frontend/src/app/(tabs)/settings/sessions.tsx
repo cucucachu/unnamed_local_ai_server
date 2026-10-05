@@ -9,8 +9,9 @@ import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
-/** Settings → Sessions: every device signed in to this account, with
- * revoke. Revoking this device's own session signs out here too. */
+/** Settings → Sessions: every device signed in to this account, and every
+ * routine allowed to run unattended, with revoke. Revoking this device's own
+ * session signs out here too; revoking a routine's turns that routine off. */
 export default function SessionsScreen() {
   const { logout } = useAuth();
   const { message: toast, showToast } = useToast();
@@ -32,8 +33,9 @@ export default function SessionsScreen() {
     <View style={styles.container}>
       <SettingsFrame title="Sessions" testID="settings-sessions-screen">
         <Text style={settingsStyles.muted}>
-          Devices signed in to your account. Revoke any you don&apos;t recognize. Changing your password signs out
-          every device but this one.
+          Devices signed in to your account, and routines that run on their own. Revoke any you don&apos;t
+          recognize; revoking a routine turns it off. Changing your password signs out every device but this one
+          and turns off your routines.
         </Text>
         {sessions === null ? (
           <LoadState error={error} onRetry={reload} />
@@ -49,9 +51,12 @@ export default function SessionsScreen() {
                   <View style={styles.titleRow}>
                     <Text style={settingsStyles.rowTitle}>{session.device_label ?? 'Unknown device'}</Text>
                     {session.current ? <Badge label="This device" tone="accent" testID="session-current" /> : null}
+                    {session.routine_id ? <Badge label="Routine" testID={`session-routine-${session.id}`} /> : null}
                   </View>
                   <Text style={settingsStyles.muted}>
-                    Active {relativeTime(session.last_seen_at)} · signed in {relativeTime(session.created_at)}
+                    {session.routine_id
+                      ? `Runs on its own · allowed ${relativeTime(session.created_at)}`
+                      : `Active ${relativeTime(session.last_seen_at)} · signed in ${relativeTime(session.created_at)}`}
                   </Text>
                 </View>
                 <ActionButton

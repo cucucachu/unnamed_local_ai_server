@@ -1429,6 +1429,17 @@ chats (`ON DELETE SET NULL`).
   is `Routine "<name>" (space <space>):` and the prompt; its title is
   `<name> · <Mon D>`.
 - `GET /api/routines/{id}/runs` → `200 [{thread}, ...]`, newest first.
+- An enabled routine holds a platform **routine grant** (M17-03,
+  `docs/PLATFORM.md` §4 "Routine grant") in `routines.grant_token`, never
+  returned by the API.
+  - It's issued from the caller's identity on create, on enable, and on a
+    move to another space; it's revoked on disable and delete. `503` if the
+    platform can't be asked.
+  - A scheduled run (`app.routines.runs.grant_delegation`) exchanges it for
+    the run's delegation, which reaches only the routine's space.
+  - A refused exchange disables the routine (`enabled=false`, no
+    `next_run_at`, grant cleared). That is how revoking it in Settings →
+    Sessions, a password change, or lost edit rights turn it off.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every

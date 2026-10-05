@@ -6,6 +6,8 @@ changed membership shows up in the very next `ensure`/`execute`:
 
 - `uid` is the user's; `gid` is their personal space's, the container's
   primary group; `gids` is every space they belong to (personal first).
+  A routine run's delegation gets only its routine's space, in `gids`
+  and in the mounts below (`gid` stays the personal one).
 - one bind per space: the personal space at `/files/personal`, each shared
   space at `/files/spaces/<slug>`, read-only for a viewer.
 - one read-only bind per live app instance in those spaces (M13-02): its
@@ -145,6 +147,8 @@ async def for_delegation(
     personal = next((s for s in member_of if s["kind"] == "personal"), None)
     if personal is None:
         raise NotFound("no_personal_space")
+    if user["routine_space_id"] is not None:
+        member_of = [s for s in member_of if s["id"] == user["routine_space_id"]]
 
     host_root = PurePosixPath(spaces_host_dir)
     mounts = []

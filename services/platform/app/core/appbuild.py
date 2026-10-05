@@ -541,6 +541,7 @@ FROM app_instances i
 JOIN apps a ON a.id = i.app_id AND a.archived_at IS NULL
 JOIN spaces s ON s.id = i.space_id AND s.archived_at IS NULL
 JOIN space_members m ON m.space_id = s.id AND m.user_id = %(user)s
+    AND (%(scope)s::uuid IS NULL OR s.id = %(scope)s)
 JOIN app_versions v ON v.id = i.version_id
     OR (i.version_id IS NULL AND v.app_id = i.app_id AND v.kind = 'working')
 WHERE i.uninstalled_at IS NULL AND a.slug = %(slug)s AND a.id <> %(app)s
@@ -580,7 +581,13 @@ async def _reads_stand_ins(
         slug, name, version = read.get("app"), read.get("export"), read.get("version")
         async with pool.connection() as conn:
             cur = await conn.execute(
-                _EXPORTERS, {"user": principal.user_id, "slug": slug, "app": app_id}
+                _EXPORTERS,
+                {
+                    "user": principal.user_id,
+                    "scope": principal.space_scope,
+                    "slug": slug,
+                    "app": app_id,
+                },
             )
             rows = await cur.fetchall()
         for row in rows:

@@ -34,7 +34,8 @@ def _out(access: spaces.SpaceAccess) -> SpaceOut:
 @router.get("", response_model=SpaceList)
 async def list_my_spaces(request: Request, principal: CurrentUser):
     async with request.app.state.db_pool.connection() as conn:
-        return SpaceList(spaces=await spaces.list_user_spaces(conn, principal.user_id))
+        rows = await spaces.list_user_spaces(conn, principal.user_id, only=principal.space_scope)
+    return SpaceList(spaces=rows)
 
 
 @router.post("", response_model=SpaceOut, status_code=status.HTTP_201_CREATED)

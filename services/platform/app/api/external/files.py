@@ -165,7 +165,7 @@ def _space_entry(storage, space: spaces.Row, role: str | None) -> FileEntryOut:
 
 async def _synthetic_entries(request: Request, principal: Principal, kind: str):
     async with request.app.state.db_pool.connection() as conn:
-        rows = await spaces.list_user_spaces(conn, principal.user_id)
+        rows = await spaces.list_user_spaces(conn, principal.user_id, only=principal.space_scope)
     storage = request.app.state.storage
     shared = [_space_entry(storage, r, r["role"]) for r in rows if r["kind"] == "shared"]
     if kind == "spaces":
@@ -478,7 +478,7 @@ async def _trees(request: Request, principal: Principal, path: str | None):
     if r.kind == "space":
         return r.vpath, [agentfs.Tree(storage, r.space["id"], r.rel, r.prefix)]
     async with request.app.state.db_pool.connection() as conn:
-        rows = await spaces.list_user_spaces(conn, principal.user_id)
+        rows = await spaces.list_user_spaces(conn, principal.user_id, only=principal.space_scope)
     trees = [
         agentfs.Tree(storage, row["id"], (), vfs.space_prefix(row))
         for row in rows
