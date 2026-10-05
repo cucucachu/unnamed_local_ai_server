@@ -228,6 +228,10 @@ signed in as yourself (G10).
       named for this phone → scan the QR in a WireGuard app → the tunnel
       comes up and `http://homeai.local` (or `http://10.13.13.1`) loads
       the UI. Revoke the device; the tunnel no longer reaches the box.
+- [x] (M15-01) Off the LAN: router forwards UDP 51820 to the host,
+      `WIREGUARD_ENDPOINT` is a dynamic DNS name; phone on cellular with
+      the tunnel on loads `http://10.13.13.1`, signs in, and chats.
+      Passed 2026-10-04 (TP-Link DDNS, Android browser).
 - [ ] (M15-03) Optional: if you already have a DuckDNS name and token,
       split-DNS `HOMEAI_DOMAIN` to this host's LAN IPv4
       (`docs/NETWORKING.md`) and open `https://$HOMEAI_DOMAIN` on the LAN.
