@@ -29,28 +29,75 @@ set -euo pipefail
 # Given `Q4_K_M` doesn't exist, this script defaults to `Q4_0` (the smallest
 # available real quant) instead. Pass `Q8_0` or `BF16` as the [quant] arg to
 # fetch a bigger one.
+#
+# --model qwen3.8-27b (M16-01) fetches the Qwen3.8-27B candidate instead
+# (ggml-org/Qwen3.8-27B-GGUF: dense, Apache-2.0, default Q4_K_M; `mtp`
+# fetches its speculative-decoding head). Those files are sha256-pinned
+# below and verified after download.
+#
+#   fetch-model.sh [--model gemma|qwen3.8-27b] [quant|mtp] [--force]
 
-REPO="ggml-org/gemma-4-26B-A4B-it-GGUF"
-DEFAULT_QUANT="Q4_0"
-
-QUANT="${DEFAULT_QUANT}"
+MODEL="gemma"
+QUANT=""
 FORCE=0
 for arg in "$@"; do
   case "${arg}" in
     --force)
       FORCE=1
       ;;
+    --model=*)
+      MODEL="${arg#--model=}"
+      ;;
+    --model)
+      MODEL="__next__"
+      ;;
     -*)
       echo "Unknown flag: ${arg}" >&2
       exit 1
       ;;
     *)
-      QUANT="${arg}"
+      if [[ "${MODEL}" == "__next__" ]]; then
+        MODEL="${arg}"
+      else
+        QUANT="${arg}"
+      fi
       ;;
   esac
 done
 
-FILENAME="gemma-4-26B-A4B-it-${QUANT}.gguf"
+declare -A SHA256=()
+case "${MODEL}" in
+  gemma)
+    REPO="ggml-org/gemma-4-26B-A4B-it-GGUF"
+    DEFAULT_QUANT="Q4_0"
+    QUANT="${QUANT:-${DEFAULT_QUANT}}"
+    FILENAME="gemma-4-26B-A4B-it-${QUANT}.gguf"
+    ;;
+  qwen3.8-27b)
+    REPO="ggml-org/Qwen3.8-27B-GGUF"
+    DEFAULT_QUANT="Q4_K_M"
+    QUANT="${QUANT:-${DEFAULT_QUANT}}"
+    SHA256=(
+      [Qwen3.8-27B-Q4_K_M.gguf]=c600de0300ae8a0eb3a6c0b8b5561b8b96f16bd2c863c2a66c42de29d391a747
+      [Qwen3.8-27B-Q8_0.gguf]=aab65c67ef0dad127960efef9247f1832bca105faa1c7a052cc039b223cf86a1
+      [mtp-Qwen3.8-27B-Q8_0.gguf]=6447a4e9d29fa6eba89ed508b2127b0803f91bac3ec6cec725fa209f2c3d309d
+    )
+    if [[ "${QUANT}" == "mtp" ]]; then
+      FILENAME="mtp-Qwen3.8-27B-Q8_0.gguf"
+    else
+      FILENAME="Qwen3.8-27B-${QUANT}.gguf"
+    fi
+    if [[ -z "${SHA256[${FILENAME}]:-}" ]]; then
+      echo "No pinned checksum for ${FILENAME}; known: ${!SHA256[*]}" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Unknown --model: ${MODEL} (gemma, qwen3.8-27b)" >&2
+    exit 1
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODELS_DIR="${SCRIPT_DIR}/models"
 TARGET="${MODELS_DIR}/${FILENAME}"
@@ -67,10 +114,18 @@ fi
 echo "Fetching ${FILENAME} from ${REPO} into ${MODELS_DIR}/ ..."
 uvx --from huggingface_hub hf download "${REPO}" "${FILENAME}" --local-dir "${MODELS_DIR}"
 
+if [[ -n "${SHA256[${FILENAME}]:-}" ]]; then
+  echo "Verifying sha256 ..."
+  echo "${SHA256[${FILENAME}]}  ${TARGET}" | sha256sum -c -
+fi
+
 SIZE="$(du -h "${TARGET}" | cut -f1)"
 echo "Done: ${TARGET} (${SIZE})"
 
-if [[ "${QUANT}" != "${DEFAULT_QUANT}" ]]; then
+if [[ "${MODEL}" == "gemma" && "${QUANT}" != "${DEFAULT_QUANT}" ]]; then
   echo "NOTE: fetched a non-default quant (${QUANT})."
   echo "Set MODEL_FILE=${FILENAME} in .env before running 'docker compose up -d model-runner'."
+elif [[ "${MODEL}" != "gemma" ]]; then
+  echo "Candidate model: set CANDIDATE_MODEL_FILE=${FILENAME} (if not the default) and run"
+  echo "'docker compose --profile candidate up -d model-candidate'."
 fi

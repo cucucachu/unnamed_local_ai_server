@@ -240,6 +240,37 @@ services:
       retries: 20
       start_period: 300s   # model load takes minutes
 
+  # M16-01: a second llama-server for evaluating another model next to the
+  # live one. Opt-in (`--profile candidate`); never replaces model-runner.
+  # Point an eval at it with MODEL_BASE_URL=http://model-candidate:8080/v1.
+  model-candidate:
+    build: ./services/model-runner
+    profiles: [candidate]
+    restart: "no"
+    networks: [homeai-internal]
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID}"
+      - "${VIDEO_GID}"
+    ipc: host
+    volumes:
+      - ./services/model-runner/models:/models:ro
+    command: >
+      --model /models/${CANDIDATE_MODEL_FILE:-Qwen3.8-27B-Q4_K_M.gguf}
+      --host 0.0.0.0 --port 8080
+      --n-gpu-layers 999
+      --jinja
+      --ctx-size ${CANDIDATE_CTX_SIZE:-65536}
+      ${CANDIDATE_SAMPLING:---temp 1.0 --top-p 0.95 --top-k 20}
+      ${CANDIDATE_EXTRA_ARGS:---verbose --reasoning-format deepseek}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 300s
+
   agent-server:
     build:
       context: ./services/agent-server
