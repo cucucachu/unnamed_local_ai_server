@@ -267,6 +267,7 @@ class TurnRunner:
             thinking_enabled=request.thinking_enabled,
             delegation=request.delegation,
             approval_mode=request.approval_mode,
+            user_id=request.user_id,
         )
         config["recursion_limit"] = self._state.settings.agent_recursion_limit
 

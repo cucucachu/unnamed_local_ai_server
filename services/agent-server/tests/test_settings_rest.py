@@ -69,6 +69,7 @@ async def test_get_defaults_when_nothing_stored(settings_client: AsyncClient) ->
         "hitl_enabled": True,
         "thinking_enabled": False,
         "edit_mode_default": "truncate",
+        "timezone": None,
     }
 
 
@@ -85,6 +86,7 @@ async def test_put_partial_merges_and_persists(settings_client: AsyncClient) -> 
         "hitl_enabled": False,
         "thinking_enabled": False,
         "edit_mode_default": "truncate",
+        "timezone": None,
     }
 
     # GET after PUT reflects the change.
@@ -103,6 +105,7 @@ async def test_put_multiple_fields_at_once(settings_client: AsyncClient) -> None
         "hitl_enabled": True,
         "thinking_enabled": True,
         "edit_mode_default": "fork",
+        "timezone": None,
     }
 
 
@@ -115,6 +118,7 @@ async def test_put_second_call_only_touches_its_own_fields(settings_client: Asyn
         "hitl_enabled": False,  # preserved from the first PUT
         "thinking_enabled": True,
         "edit_mode_default": "truncate",
+        "timezone": None,
     }
 
 
@@ -126,6 +130,7 @@ async def test_put_empty_body_is_a_noop(settings_client: AsyncClient) -> None:
         "hitl_enabled": True,
         "thinking_enabled": False,
         "edit_mode_default": "truncate",
+        "timezone": None,
     }
 
 
@@ -167,3 +172,17 @@ async def test_put_invalid_request_does_not_persist_partial_state(
 
     get_response = await settings_client.get("/api/settings")
     assert get_response.json()["hitl_enabled"] is True  # untouched
+
+
+async def test_put_timezone(settings_client: AsyncClient) -> None:
+    response = await settings_client.put("/api/settings", json={"timezone": "Europe/Paris"})
+
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "Europe/Paris"
+    assert (await settings_client.get("/api/settings")).json()["timezone"] == "Europe/Paris"
+
+
+async def test_put_unknown_timezone_is_422(settings_client: AsyncClient) -> None:
+    response = await settings_client.put("/api/settings", json={"timezone": "Mars/Olympus"})
+
+    assert response.status_code == 422

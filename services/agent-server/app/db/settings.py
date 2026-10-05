@@ -47,6 +47,9 @@ class SettingsDocument(BaseModel):
     hitl_enabled: bool = True
     thinking_enabled: bool = False
     edit_mode_default: Literal["truncate", "fork"] = "truncate"
+    # The user's IANA zone, which the app keeps in step with the device; the
+    # default for routines the agent makes (M17-07). None until it's first set.
+    timezone: str | None = None
 
 
 class SettingsStore(Protocol):

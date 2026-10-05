@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api';
+import { deviceTimezone } from '@/lib/routines';
 import { getSettings, updateSettings, type SettingsDocument, type SettingsPartial } from '@/lib/settings';
 
 /**
@@ -98,7 +99,16 @@ export function SettingsProvider({ children, onError, reloadKey }: SettingsProvi
     let cancelled = false;
     getSettings()
       .then((doc) => {
-        if (!cancelled) setSettings(doc);
+        if (cancelled) return;
+        setSettings(doc);
+        const timezone = deviceTimezone();
+        if (doc.timezone !== timezone) {
+          updateSettings({ timezone })
+            .then((merged) => {
+              if (!cancelled) setSettings((current) => current && { ...current, timezone: merged.timezone });
+            })
+            .catch(() => {});
+        }
       })
       .catch((error) => {
         if (!cancelled) {

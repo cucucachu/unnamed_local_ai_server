@@ -1507,6 +1507,23 @@ their threads as plain chats (`ON DELETE SET NULL`).
   (`components/RoutineForm.tsx`) covers the name, prompt, a space the user
   can edit, the schedule, the timezone (the device's by default) and the
   approval mode. The chats list badges routine runs and can hide them.
+- **Agent tools** (M17-07, `app/agent/routine_tools.py`): `current_time`,
+  `list_routines`, `create_routine`, `update_routine`, `delete_routine`,
+  so "every weekday at 7, summarize my notes" in a chat becomes a routine.
+  - They save through `app/routines/service.py`, the same code as the API
+    above, but as the chat turn's delegation: the platform checks the space
+    and issues the grant for the user behind it (`docs/PLATFORM.md` §4).
+    The turn's user is `configurable["user_id"]`.
+  - Creating, changing (except just turning one off) and deleting always
+    ask first, whatever the HITL setting. The card has the schedule in
+    words, the first run and the prompt; bad input is refused before it.
+  - The schedule arguments are flat (`repeat`, `time`, `date`, `days`,
+    `day_of_month`), which small models fill in more reliably than the
+    nested shape. The timezone defaults to the user's setting, else UTC.
+  - In a routine run only `current_time` works; the others refuse (and the
+    platform refuses a routine run's delegation anyway).
+  - The model learns the date from `current_time`, not the system prompt,
+    so the prompt stays byte-identical for llama.cpp's prefix cache.
 - **Inbox** (M17-05): the caller's ended and paused runs, for in-app
   notifications (the Home tab badge and Home's Routines list).
   - `GET /api/inbox` → `200 {"unread": int, "items": [{run} + {"routine_id",
@@ -1539,13 +1556,16 @@ see "Platform API" → "Files"). agent-server's `/api/files*` and
 `(user_id, key)`); the pre-M10 global document was moved to the bootstrap
 admin. The WS reads the connected user's values each turn.
 - `GET /api/settings` → `200 {"hitl_enabled": bool, "thinking_enabled":
-  bool, "edit_mode_default": "truncate"|"fork"}` — the full document,
-  defaults applied for any key not yet stored (`hitl_enabled` defaults
-  `true`, `thinking_enabled` defaults `false`, `edit_mode_default` defaults
-  `"truncate"`)
-- `PUT /api/settings` body: any subset of the three fields above → `200`
-  the full merged document; `422` on an unknown extra key or a wrong
-  type/invalid literal value; persists to Postgres (survives a restart)
+  bool, "edit_mode_default": "truncate"|"fork", "timezone": str|null}` —
+  the full document, defaults applied for any key not yet stored
+  (`hitl_enabled` defaults `true`, `thinking_enabled` defaults `false`,
+  `edit_mode_default` defaults `"truncate"`, `timezone` `null`).
+  `timezone` (M17-07) is an IANA zone the app sets from the device whenever
+  they differ; it's the default for routines the agent makes.
+- `PUT /api/settings` body: any subset of the fields above → `200`
+  the full merged document; `422` on an unknown extra key, a wrong
+  type/invalid literal value or an unknown timezone; persists to Postgres
+  (survives a restart)
 
 ### WebSocket chat protocol (`/ws/chat/{thread_id}`)
 

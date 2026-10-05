@@ -143,7 +143,7 @@ def create_app(
                 app.state.thread_store
             )
             install_orphan_adopter(app)
-            app.state.agent = build_agent(app.state.settings, checkpointer_override)
+            app.state.agent = build_agent(app.state.settings, checkpointer_override, app.state)
             app.state.turn_runner = TurnRunner(app.state)
             async with _running_turns(app):
                 yield
@@ -161,7 +161,7 @@ def create_app(
             )
             app.state.routine_store = routine_store_override or PgRoutineStore(pg_checkpointer.pool)
             install_orphan_adopter(app)
-            app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver)
+            app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver, app.state)
             app.state.turn_runner = TurnRunner(app.state)
             async with _running_turns(app):
                 yield

@@ -18,7 +18,7 @@ from uuid import UUID
 from psycopg import AsyncConnection
 
 from app.core import sessions, spaces, vfs
-from app.core.errors import InvalidInput, NotFound, Unauthorized
+from app.core.errors import Forbidden, InvalidInput, NotFound, Unauthorized
 from app.core.tokens import TokenError, TokenService
 
 DELEGATION_TTL = timedelta(minutes=15)
@@ -81,20 +81,51 @@ async def refresh(conn: AsyncConnection, tokens: TokenService, token: str) -> tu
     return await _issue(conn, tokens, claims, thread_id)
 
 
-async def space_role(
-    conn: AsyncConnection, tokens: TokenService, identity_token: str, space_path: str
-) -> tuple[str, str]:
-    """`(canonical path, role)` of the identity's user in an active space they belong to.
+async def acting_user(
+    conn: AsyncConnection,
+    tokens: TokenService,
+    *,
+    identity_token: str | None = None,
+    delegation_token: str | None = None,
+) -> UUID:
+    """The user behind an identity token, or a chat's delegation (M17-07), on an active session.
 
-    Only a space root names a space: `/personal` or `/spaces/<slug>`.
+    A routine run's delegation is refused (`routine_run`): a routine may not
+    make or re-grant routines, which would outlive its own grant's scope.
     """
+    if (identity_token is None) == (delegation_token is None):
+        raise InvalidInput("one_token")
+    token, act = (
+        (identity_token, "user") if identity_token is not None else (delegation_token, "agent")
+    )
     try:
-        claims = tokens.verify_token(identity_token, act="user")
+        claims = tokens.verify_token(token, act=act)
         user_id, session_id = UUID(str(claims["sub"])), UUID(str(claims.get("sid")))
     except (TokenError, ValueError) as exc:
         raise Unauthorized("unauthenticated") from exc
-    if await sessions.load_active(conn, session_id, user_id) is None:
+    row = await sessions.load_active(conn, session_id, user_id)
+    if row is None:
         raise Unauthorized("unauthenticated")
+    if row["routine_id"] is not None:
+        raise Forbidden("routine_run")
+    return user_id
+
+
+async def space_role(
+    conn: AsyncConnection,
+    tokens: TokenService,
+    space_path: str,
+    *,
+    identity_token: str | None = None,
+    delegation_token: str | None = None,
+) -> tuple[str, str]:
+    """`(canonical path, role)` of the caller (`acting_user`) in an active space they belong to.
+
+    Only a space root names a space: `/personal` or `/spaces/<slug>`.
+    """
+    user_id = await acting_user(
+        conn, tokens, identity_token=identity_token, delegation_token=delegation_token
+    )
     space, role = await member_space(conn, user_id, space_path)
     return canonical_space(space), role
 

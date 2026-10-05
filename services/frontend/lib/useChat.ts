@@ -174,6 +174,11 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   app_sql: 'app',
   app_action: 'app',
   approve_migration: 'app',
+  current_time: 'plan',
+  list_routines: 'plan',
+  create_routine: 'plan',
+  update_routine: 'plan',
+  delete_routine: 'plan',
 };
 
 function categoryForToolName(name: string): ToolCategory {

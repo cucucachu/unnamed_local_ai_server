@@ -1,6 +1,8 @@
 import { createElement, useEffect } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
+import { deviceTimezone } from '@/lib/routines';
+
 import { SettingsProvider, useSettings } from '../SettingsProvider';
 
 /** Routes `global.fetch` by HTTP method — same shape as `chat/
@@ -17,7 +19,12 @@ function mockSettingsApi(routes: Partial<Record<'GET' | 'PUT', () => { ok: boole
   return fetchMock;
 }
 
-const DEFAULTS = { hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate' as const };
+const DEFAULTS = {
+  hitl_enabled: true,
+  thinking_enabled: false,
+  edit_mode_default: 'truncate' as const,
+  timezone: deviceTimezone(),
+};
 
 // A plain mutable object (not a captured outer `let` reassigned during
 // render, which the `react-hooks/globals` lint rule disallows) that the
@@ -68,6 +75,27 @@ describe('SettingsProvider', () => {
 
     expect(capturedRef.current?.loading).toBe(false);
     expect(capturedRef.current?.settings).toEqual(DEFAULTS);
+  });
+
+  it("sets the user's timezone from the device when it differs", async () => {
+    const fetchMock = mockSettingsApi({
+      GET: () => ({ ok: true, status: 200, body: { ...DEFAULTS, timezone: null } }),
+      PUT: () => ({ ok: true, status: 200, body: DEFAULTS }),
+    });
+
+    await renderProvider();
+
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+    expect(puts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ timezone: deviceTimezone() }]);
+    expect(capturedRef.current?.settings).toEqual(DEFAULTS);
+  });
+
+  it('leaves a matching timezone alone', async () => {
+    const fetchMock = mockSettingsApi({ GET: () => ({ ok: true, status: 200, body: DEFAULTS }) });
+
+    await renderProvider();
+
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false);
   });
 
   it('applies an update optimistically, then adopts the server-merged response', async () => {
