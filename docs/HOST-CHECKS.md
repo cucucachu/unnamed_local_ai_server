@@ -266,5 +266,5 @@ signed in as yourself (G10).
       Passed 2026-10-04 (Android release APK; pair, device sign-in with
       TOTP, revoke. Fixes on the way: #241, #242, #245).
 
-> **PM sign-off: G15 passed ____**
+> **PM sign-off: G15 passed 2026-10-04** (remote access over WireGuard, on and off the LAN, plus the Android host app with device pairing. Deferred: M15-03 domain and M15-05 public HTTPS, since VPN covers current needs; a real domain needs a non-DuckDNS DNS-01 provider. Fixes found on the way: #239, #240, #241, #242, #245)
 
