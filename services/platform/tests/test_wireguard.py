@@ -33,7 +33,7 @@ def test_client_config_text():
     assert "[Interface]" in text
     assert "PrivateKey = CLIENTPRIV" in text
     assert "Address = 10.13.13.4/32" in text
-    assert "DNS = 10.13.13.1" in text
+    assert "DNS" not in text
     assert "[Peer]" in text
     assert "PublicKey = SERVERPUB" in text
     assert "AllowedIPs = 10.13.13.0/24" in text
@@ -84,7 +84,7 @@ async def test_create_lists_revoke_and_config_file(platform):
     assert body["address"] != str(wg.SERVER_HOST)
     config = body["config"]
     assert f"Address = {body['address']}/32" in config
-    assert "DNS = 10.13.13.1" in config
+    assert "DNS" not in config
     assert "AllowedIPs = 10.13.13.0/24" in config
     assert "Endpoint = homeai.local:51820" in config
     assert "PrivateKey = " in config

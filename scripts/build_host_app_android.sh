@@ -2,7 +2,8 @@
 # Build a debug or release APK of the Home AI host app (Expo prebuild +
 # Gradle) without a host Android SDK/JDK and without `eas login`.
 #
-#   HOMEAI_APK_VARIANT=release EXPO_PUBLIC_API_HOST=http://10.13.13.1 \
+#   HOMEAI_APK_VARIANT=release \
+#     EXPO_PUBLIC_API_HOST=http://192.168.0.108,http://10.13.13.1 \
 #     scripts/build_host_app_android.sh
 #
 # Maintainer signed/store builds use EAS (`services/frontend/eas.json`
@@ -23,7 +24,9 @@ OUT_DIR="${HOMEAI_APK_OUT:-$FRONTEND/dist}"
 # debug: a dev client that loads JS from Metro (LAN only). release: the JS
 # bundle is embedded, signed with the prebuild's debug keystore, so it runs
 # with no Metro (e.g. off the LAN over WireGuard). Set EXPO_PUBLIC_API_HOST
-# for the server it talks to (it overrides services/frontend/.env).
+# for the server it talks to (it overrides services/frontend/.env): a
+# comma list is tried in order, so put the host's LAN address first and
+# the WireGuard 10.13.13.1 second to need the VPN only away from home.
 VARIANT="${HOMEAI_APK_VARIANT:-debug}"
 case "$VARIANT" in
   debug) TASK=assembleDebug ;;

@@ -55,9 +55,11 @@ SERVER_PUB_NAME = "server.pub"
 CONF_NAME = "wg0.conf"
 
 # Interface stanza for a client; `AllowedIPs` is the tunnel only (split
-# tunnel). Full-tunnel / split-DNS is M15-03.
+# tunnel). No `DNS =`: the tunnel resolver answers only homeai.local
+# (--no-resolv, no internet egress), and phones/wg-quick send *every*
+# lookup to a tunnel DNS server, which took the rest of the internet down.
+# Over the VPN, use http://10.13.13.1.
 CLIENT_ALLOWED_IPS = "10.13.13.0/24"
-CLIENT_DNS = "10.13.13.1"
 KEEPALIVE = 25
 
 
@@ -87,7 +89,6 @@ def client_config(
     address: str,
     server_public_key: str,
     endpoint: str,
-    dns: str = CLIENT_DNS,
     allowed_ips: str = CLIENT_ALLOWED_IPS,
     keepalive: int = KEEPALIVE,
 ) -> str:
@@ -97,7 +98,6 @@ def client_config(
         "[Interface]\n"
         f"PrivateKey = {private_key}\n"
         f"Address = {host}/32\n"
-        f"DNS = {dns}\n"
         "\n"
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"

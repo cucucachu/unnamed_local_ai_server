@@ -1304,9 +1304,10 @@ with that app's context.
 > host step (`sudo modprobe wireguard`, `infra/host/setup-wireguard.md`).
 > Tunnel subnet **10.13.13.0/24** (server **10.13.13.1**), chosen not to
 > collide with home LAN `192.168.x` or Docker `172.x`. Client configs set
-> `DNS = 10.13.13.1` and `AllowedIPs = 10.13.13.0/24`; the sidecar answers
-> `homeai.local` (and `HOMEAI_DOMAIN` when set) and proxies `:80`/`:443`
-> to Caddy. It is not a recursive resolver (`--no-resolv`).
+> `AllowedIPs = 10.13.13.0/24` and no `DNS =` (a tunnel resolver gets every
+> lookup on the device, and the sidecar is not a recursive resolver:
+> `--no-resolv`, no egress); the sidecar answers `homeai.local` (and
+> `HOMEAI_DOMAIN` when set) and proxies `:80`/`:443` to Caddy.
 >
 > **As built (M15-03)** — optional `HOMEAI_DOMAIN` + `DUCKDNS_TOKEN`.
 > Empty domain (the default; not required in `.env`) keeps `:80` and
