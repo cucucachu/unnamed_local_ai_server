@@ -201,6 +201,8 @@ async def test_paused_runs_and_the_inbox(pg_server: PgServer) -> None:
         assert await routines.run_for_thread(thread.id, alice) == paused
         assert await routines.run_for_thread("not-a-uuid", alice) is None
         assert await routines.waiting_thread_ids(alice) == {thread.id}
+        latest = await routines.latest_runs(alice)
+        assert {k: v.id for k, v in latest.items()} == {routine.id: done.id}
 
         rls.bind_user(None)
         stale = await routines.stale_waiting(paused_at + timedelta(seconds=1))

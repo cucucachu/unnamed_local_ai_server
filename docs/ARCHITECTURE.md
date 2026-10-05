@@ -1408,7 +1408,10 @@ their threads as plain chats (`ON DELETE SET NULL`).
 - `{routine}` = `{"id", "name", "prompt", "space": "/personal"|"/spaces/<slug>",
   "schedule", "timezone": IANA name, "enabled": bool, "approval_mode":
   "ask"|"allow_writes"|"read_only", "next_run_at": iso8601|null,
-  "last_run_at": iso8601|null, "created_at", "updated_at"}`.
+  "last_run_at": iso8601|null, "created_at", "updated_at", "last_run":
+  {"id", "status", "finished_at", "thread_id"}|null}`. `last_run` (M17-06)
+  is its newest run record; it's on the list and on `GET /api/routines/{id}`,
+  and null on create/update responses.
 - `schedule` (times local to `timezone`, an RRULE subset):
   `{"kind": "once", "at": "YYYY-MM-DDTHH:MM"}`, `{"kind": "daily"|"weekdays",
   "time": "HH:MM"}`, `{"kind": "weekly", "days": ["mon".."sun"], "time"}`,
@@ -1497,6 +1500,13 @@ their threads as plain chats (`ON DELETE SET NULL`).
     run is recorded `expired`. If the grant is gone it's recorded
     `expired` without resuming. A one-shot keeps its grant until its paused
     run is answered or expires.
+- **Frontend** (M17-06): Settings → Routines lists them, with the schedule
+  in words, the next run, the last result and an on/off switch
+  (`src/app/(tabs)/settings/routines/`). A routine's page has Run now
+  (which opens the run's chat), edit, delete and its runs. The editor
+  (`components/RoutineForm.tsx`) covers the name, prompt, a space the user
+  can edit, the schedule, the timezone (the device's by default) and the
+  approval mode. The chats list badges routine runs and can hide them.
 - **Inbox** (M17-05): the caller's ended and paused runs, for in-app
   notifications (the Home tab badge and Home's Routines list).
   - `GET /api/inbox` → `200 {"unread": int, "items": [{run} + {"routine_id",

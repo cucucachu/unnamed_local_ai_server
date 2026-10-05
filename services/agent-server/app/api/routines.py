@@ -5,7 +5,8 @@ A routine runs as its owner in one of their spaces; saving one there needs
 token). `schedule`/`timezone` drive `next_run_at` (see
 `app.routines.schedule`); the scheduler (M17-04) fires due routines, and
 `POST /routines/{id}/run` starts a run now. `GET /routines/{id}/runs` lists
-its run records (status, timing, and the thread each one ran in).
+its run records (status, timing, and the thread each one ran in); a
+routine's `last_run` (M17-06) is the newest of them.
 
 An enabled routine holds a platform routine grant (M17-03) for its
 scheduled runs: issued from the caller's identity when the routine is
@@ -74,6 +75,13 @@ class RoutinePatch(BaseModel):
     _tz = field_validator("timezone")(_check_timezone)
 
 
+class LastRun(BaseModel):
+    id: str
+    status: str
+    finished_at: datetime | None
+    thread_id: str | None
+
+
 class RoutineOut(BaseModel):
     id: str
     name: str
@@ -87,6 +95,7 @@ class RoutineOut(BaseModel):
     last_run_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    last_run: LastRun | None = None
 
 
 class RunOut(BaseModel):
@@ -105,8 +114,13 @@ def _store(request: Request) -> RoutineStore:
     return request.app.state.routine_store
 
 
-def _out(record: RoutineRecord) -> RoutineOut:
-    return RoutineOut(**{name: getattr(record, name) for name in RoutineOut.model_fields})
+def _out(record: RoutineRecord, last_run: RunRecord | None = None) -> RoutineOut:
+    fields = {name: getattr(record, name) for name in RoutineOut.model_fields if name != "last_run"}
+    if last_run is not None:
+        fields["last_run"] = LastRun(
+            **{name: getattr(last_run, name) for name in LastRun.model_fields}
+        )
+    return RoutineOut(**fields)
 
 
 def _run_out(record: RunRecord) -> RunOut:
@@ -182,7 +196,9 @@ def _next_run_at(schedule: dict, timezone: str, enabled: bool) -> datetime | Non
 
 @router.get("/routines", response_model=list[RoutineOut])
 async def list_routines(request: Request, user: CurrentUser) -> list[RoutineOut]:
-    return [_out(r) for r in await _store(request).list_for_owner(user.user_id)]
+    store = _store(request)
+    latest = await store.latest_runs(user.user_id)
+    return [_out(r, latest.get(r.id)) for r in await store.list_for_owner(user.user_id)]
 
 
 @router.post("/routines", status_code=201, response_model=RoutineOut)
@@ -214,7 +230,9 @@ async def create_routine(body: RoutineIn, request: Request, user: CurrentUser) -
 
 @router.get("/routines/{routine_id}", response_model=RoutineOut)
 async def get_routine(routine_id: str, request: Request, user: CurrentUser) -> RoutineOut:
-    return _out(await _owned(request, routine_id, user.user_id))
+    record = await _owned(request, routine_id, user.user_id)
+    runs = await _store(request).list_runs(routine_id, user.user_id)
+    return _out(record, runs[0] if runs else None)
 
 
 @router.patch("/routines/{routine_id}", response_model=RoutineOut)

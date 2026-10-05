@@ -20,6 +20,9 @@ export default function SettingsLayout() {
         <Stack.Screen name="remote" />
         <Stack.Screen name="spaces/index" />
         <Stack.Screen name="spaces/[spaceId]" />
+        <Stack.Screen name="routines/index" />
+        <Stack.Screen name="routines/edit" />
+        <Stack.Screen name="routines/[routineId]" />
         <Stack.Protected guard={isAdmin}>
           <Stack.Screen name="users" />
           <Stack.Screen name="invites" />

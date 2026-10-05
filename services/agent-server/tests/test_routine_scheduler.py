@@ -336,3 +336,18 @@ def test_a_routine_turned_off_while_queued_is_skipped(client, harness) -> None:
 )
 def test_turn_outcomes_map_to_run_statuses(outcome, timed_out, status) -> None:
     assert _ended(outcome, timed_out)[0] == status
+
+
+def test_a_routines_last_run_is_listed(client, harness, fake_model) -> None:
+    routine = _create(client)
+    assert routine["last_run"] is None
+    fake_model.queue(TextTurn("your brief"))
+    h = harness()
+    h.start()
+    h.tick()
+    h.idle()
+    (run,) = _runs(client, routine["id"])
+    expected = {k: run[k] for k in ("id", "status", "finished_at", "thread_id")}
+    (listed,) = client.get("/api/routines", headers=HEADERS).json()
+    assert listed["last_run"] == expected
+    assert _routine(client, routine["id"])["last_run"] == expected

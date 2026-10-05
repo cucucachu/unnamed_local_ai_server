@@ -108,6 +108,13 @@ export default function SettingsScreen() {
           testID="settings-nav-remote"
         />
         <NavRow
+          icon="alarm-outline"
+          title="Routines"
+          description="Prompts the agent runs for you on a schedule"
+          onPress={() => router.push('/settings/routines')}
+          testID="settings-nav-routines"
+        />
+        <NavRow
           icon="people-outline"
           title="Spaces"
           description="Your spaces and who can use them"
