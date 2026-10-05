@@ -1,12 +1,12 @@
 """Postgres row-level security for agent-server's tables (#194).
 
-Every user-data table (`threads`, `user_settings`, the LangGraph checkpoint
-tables, `turn_stats`) has `FORCE ROW LEVEL SECURITY` and a policy keyed on
-the session setting `app.user_id`: a row is visible, and may be written, only
-while that setting names the user who owns it. `threads` and `user_settings`
-carry the owner themselves; the thread-keyed tables match
-`thread_id` against the ids of the caller's own threads. The pre-M10-04
-global `settings` table has no policy at all, so it's invisible. `agent`
+Every user-data table (`threads`, `routines`, `user_settings`, the LangGraph
+checkpoint tables, `turn_stats`) has `FORCE ROW LEVEL SECURITY` and a policy
+keyed on the session setting `app.user_id`: a row is visible, and may be
+written, only while that setting names the user who owns it. `threads`,
+`routines` and `user_settings` carry the owner themselves; the thread-keyed
+tables match `thread_id` against the ids of the caller's own threads. The
+pre-M10-04 global `settings` table has no policy at all, so it's invisible. `agent`
 owns these tables, which is why the policies must be *forced*: an owner
 otherwise bypasses them.
 
@@ -51,6 +51,7 @@ _OWN_THREAD_IDS = f"SELECT id::text FROM threads WHERE owner_user_id = {_CURRENT
 # Table -> the condition a row must meet (both to be seen and to be written).
 _POLICIES = {
     "threads": f"owner_user_id = {_CURRENT_USER}",
+    "routines": f"owner_user_id = {_CURRENT_USER}",
     "user_settings": f"user_id = {_CURRENT_USER}",
     "checkpoints": f"thread_id IN ({_OWN_THREAD_IDS})",
     "checkpoint_blobs": f"thread_id IN ({_OWN_THREAD_IDS})",

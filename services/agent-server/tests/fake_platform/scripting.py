@@ -169,6 +169,21 @@ class FakePlatform:
             raise DelegationDenied("unauthenticated")
         return self._mint(minted.user_id, minted.session_id, minted.thread_id)
 
+    def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        user_id, session_id = self.identities.get(identity_token, (TEST_USER_ID, TEST_SESSION_ID))
+        if session_id in self.revoked_sessions:
+            raise DelegationDenied("unauthenticated")
+        parts = [p for p in space.split("/") if p]
+        if parts == ["personal"]:
+            return "/personal", "owner"
+        if len(parts) == 2 and parts[0] == "spaces":
+            slug = parts[1].lower()
+            role = self.members.get(slug, {}).get(user_id)
+            return (f"/spaces/{slug}", role) if role else None
+        return None
+
     def principal(self, bearer: str | None) -> Minted | None:
         minted = self.grants.get(bearer or "")
         if minted is None or minted.session_id in self.revoked_sessions:
@@ -281,3 +296,6 @@ class FakeDelegationClient:
 
     async def refresh(self, token: str) -> Grant:
         return self.platform.refresh(token)
+
+    async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
+        return self.platform.space_role(identity_token, space)

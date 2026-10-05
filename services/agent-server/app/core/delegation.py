@@ -52,6 +52,11 @@ class DelegationClient(Protocol):
 
     async def refresh(self, token: str) -> Grant: ...
 
+    async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
+        """`(canonical space path, role)` of the identity's user, or None if
+        `space` isn't one of theirs (M17-02)."""
+        ...
+
 
 class HttpDelegationClient:
     def __init__(self, platform_url: str, agent_token: str, timeout_s: float = 5.0) -> None:
@@ -59,7 +64,7 @@ class HttpDelegationClient:
         self._agent_token = agent_token
         self._timeout_s = timeout_s
 
-    async def _post(self, path: str, body: dict[str, str]) -> Grant:
+    async def _call(self, path: str, body: dict[str, str]) -> httpx.Response:
         if not self._agent_token:
             raise DelegationUnavailable("PLATFORM_AGENT_TOKEN is not set")
         try:
@@ -73,6 +78,10 @@ class HttpDelegationClient:
             raise DelegationUnavailable(repr(exc)) from exc
         if response.status_code == 401:
             raise DelegationDenied(response.text)
+        return response
+
+    async def _post(self, path: str, body: dict[str, str]) -> Grant:
+        response = await self._call(path, body)
         if response.status_code != 200:
             raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
         payload = response.json()
@@ -85,6 +94,16 @@ class HttpDelegationClient:
 
     async def refresh(self, token: str) -> Grant:
         return await self._post("/internal/delegations/refresh", {"token": token})
+
+    async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
+        path = "/internal/space-access"
+        response = await self._call(path, {"identity_token": identity_token, "space": space})
+        if response.status_code in (404, 422):
+            return None
+        if response.status_code != 200:
+            raise DelegationUnavailable(f"{path}: HTTP {response.status_code}")
+        payload = response.json()
+        return payload["space"], payload["role"]
 
 
 class Delegation:

@@ -481,6 +481,16 @@ class HitlApprovalOut(BaseModel):
     expires_in_s: float
 
 
+class SpaceAccessRequest(BaseModel):
+    identity_token: Secret
+    space: Short
+
+
+class SpaceAccessOut(BaseModel):
+    space: str
+    role: str
+
+
 class ExecGrantsRequest(BaseModel):
     delegation: Secret
 

@@ -30,6 +30,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.db.rls import RlsConnectionPool, rls_ddl
+from app.db.routines import ROUTINES_DDL
 from app.db.settings import LEGACY_SETTINGS_TABLE_DDL, USER_SETTINGS_TABLE_DDL
 from app.db.turn_stats import TURN_STATS_TABLE_DDL
 
@@ -121,6 +122,8 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
         await conn.execute(LEGACY_SETTINGS_TABLE_DDL)
         await conn.execute(USER_SETTINGS_TABLE_DDL)
         await conn.execute(TURN_STATS_TABLE_DDL)
+        for statement in ROUTINES_DDL:
+            await conn.execute(statement)
         async with conn.transaction():
             await conn.execute("SET LOCAL lock_timeout = '60s'")
             for statement in rls_ddl():

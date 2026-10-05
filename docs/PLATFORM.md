@@ -254,6 +254,11 @@ session cookie/bearer and returns `200` with `X-HomeAI-Identity: <JWT>`, or
   on the same socket gets a fresh delegation for the approver, who is
   that socket's user and must own the thread; a resume from a new socket
   exchanges that socket's identity token.
+- `POST /internal/space-access` (M17-02, `PLATFORM_AGENT_TOKEN`) with
+  `{identity_token, space}` → `{space, role}`: the identity's user's role in
+  `/personal` or `/spaces/<slug>` (canonicalized), `404` if they aren't a
+  member, `401` without an active session. agent-server asks before saving
+  a routine that runs in that space; only `editor` and `owner` may.
 
 ### Service-to-service auth
 
