@@ -26,6 +26,6 @@ def build_model(settings: Settings) -> ReasoningChatOpenAI:
         temperature=1.0,
         streaming=True,
         max_retries=1,
-        timeout=600,
+        timeout=settings.model_timeout_s,
         profile={"max_input_tokens": settings.agent_context_tokens},
     )
