@@ -4,8 +4,8 @@ A routine runs as its owner in one of their spaces; saving one there needs
 `editor` or `owner` (asked of the platform with the caller's identity
 token). `schedule`/`timezone` drive `next_run_at` (see
 `app.routines.schedule`); the scheduler (M17-04) fires due routines, and
-`POST /routines/{id}/run` starts a run now. Runs are threads with
-`routine_id` set, listed by `GET /routines/{id}/runs`.
+`POST /routines/{id}/run` starts a run now. `GET /routines/{id}/runs` lists
+its run records (status, timing, and the thread each one ran in).
 
 An enabled routine holds a platform routine grant (M17-03) for its
 scheduled runs: issued from the caller's identity when the routine is
@@ -20,12 +20,11 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from app.api.chat import ThreadOut, _to_thread_out
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, CurrentUser
-from app.db.routines import NewRoutine, RoutineRecord, RoutineStore
+from app.db.routines import NewRoutine, RoutineRecord, RoutineStore, RunRecord
 from app.routines import schedule as sched
-from app.routines.runs import create_run_thread, launch_run
+from app.routines.runs import create_run_thread
 
 router = APIRouter()
 
@@ -83,7 +82,15 @@ class RoutineOut(BaseModel):
 
 
 class RunOut(BaseModel):
-    thread_id: str
+    id: str
+    trigger: str
+    status: str
+    detail: str | None
+    thread_id: str | None
+    due_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
 
 
 def _store(request: Request) -> RoutineStore:
@@ -92,6 +99,10 @@ def _store(request: Request) -> RoutineStore:
 
 def _out(record: RoutineRecord) -> RoutineOut:
     return RoutineOut(**{name: getattr(record, name) for name in RoutineOut.model_fields})
+
+
+def _run_out(record: RunRecord) -> RunOut:
+    return RunOut(**{name: getattr(record, name) for name in RunOut.model_fields})
 
 
 def _now() -> datetime:
@@ -255,12 +266,11 @@ async def run_routine(routine_id: str, request: Request, user: CurrentUser) -> R
         if isinstance(exc, DelegationDenied):
             raise HTTPException(status_code=401, detail="unauthenticated") from exc
         raise HTTPException(status_code=503, detail="platform unavailable") from exc
-    await launch_run(request.app.state, routine, thread, delegation)
-    return RunOut(thread_id=thread.id)
+    run = await request.app.state.routine_scheduler.start_manual(routine, thread, delegation)
+    return _run_out(run)
 
 
-@router.get("/routines/{routine_id}/runs", response_model=list[ThreadOut])
-async def list_runs(routine_id: str, request: Request, user: CurrentUser) -> list[ThreadOut]:
+@router.get("/routines/{routine_id}/runs", response_model=list[RunOut])
+async def list_runs(routine_id: str, request: Request, user: CurrentUser) -> list[RunOut]:
     await _owned(request, routine_id, user.user_id)
-    runs = await request.app.state.thread_store.list_for_owner(user.user_id, routine_id=routine_id)
-    return [_to_thread_out(r) for r in runs]
+    return [_run_out(r) for r in await _store(request).list_runs(routine_id, user.user_id)]

@@ -1,22 +1,27 @@
-"""Starting a routine's run (M17-02 run-now; the M17-04 scheduler reuses this).
+"""A routine's run: start it, and record how it ended (M17-02, M17-04).
 
 A run is a fresh thread (`routine_id` set) whose first user message is the
 routine's prompt, run headlessly by the detached turn runner (M17-01) as
 the routine's owner: on the caller's delegation for run-now, on one
 exchanged from the routine's grant (`grant_delegation`) when scheduled.
+Its `routine_runs` record follows it from `running` to `succeeded`,
+`failed`, `timed_out` (cancelled after the run timeout) or
+`waiting_approval` (a HITL approval is pending in its thread).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from app.agent.turn_runner import ActiveTurn, TurnRequest
+from app.agent.turn_runner import ActiveTurn, TurnOutcome, TurnRequest
 from app.core.delegation import Delegation, DelegationDenied
-from app.db.routines import RoutineRecord
+from app.db.routines import RoutineRecord, RunRecord, RunStatus
 from app.db.threads import ThreadRecord
 from app.routines.schedule import zone
 
@@ -84,3 +89,44 @@ async def launch_run(
         routine.id, routine.owner_user_id, {"last_run_at": datetime.now(UTC)}
     )
     return turn
+
+
+MAX_DETAIL = 500
+
+
+def _ended(outcome: TurnOutcome, timed_out: bool) -> tuple[RunStatus, str | None]:
+    if timed_out:
+        return "timed_out", "cancelled: still running at the run time limit"
+    if outcome.status == "completed":
+        return "succeeded", None
+    if outcome.status == "awaiting_approval":
+        return "waiting_approval", "waiting for an approval in its chat"
+    if outcome.status == "cancelled":
+        return "failed", "cancelled"
+    if isinstance(outcome.error, DelegationDenied):
+        return "failed", "lost access: the routine's permission was revoked"
+    error = outcome.error
+    return "failed", (str(error) or type(error).__name__)[:MAX_DETAIL] if error else None
+
+
+async def finish_run(
+    app_state: Any,
+    run: RunRecord,
+    turn: ActiveTurn,
+    timeout_s: float,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> RunRecord:
+    """Wait for the run's turn (cancelling it at `timeout_s`) and record how it ended."""
+    timed_out = False
+    try:
+        outcome = await asyncio.wait_for(turn.wait(), timeout_s)
+    except TimeoutError:
+        turn.cancel()
+        outcome = await turn.wait()
+        # It may have ended on its own just as time ran out.
+        timed_out = outcome.status == "cancelled"
+    status, detail = _ended(outcome, timed_out)
+    finished = await app_state.routine_store.update_run(
+        run.id, run.owner_user_id, {"status": status, "detail": detail, "finished_at": clock()}
+    )
+    return finished or run

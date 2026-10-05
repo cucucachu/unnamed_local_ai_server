@@ -1,10 +1,10 @@
 """Postgres row-level security for agent-server's tables (#194).
 
-Every user-data table (`threads`, `routines`, `user_settings`, the LangGraph
-checkpoint tables, `turn_stats`) has `FORCE ROW LEVEL SECURITY` and a policy
+Every user-data table (`threads`, `routines`, `routine_runs`,
+`user_settings`, the LangGraph checkpoint tables, `turn_stats`) has `FORCE ROW LEVEL SECURITY` and a policy
 keyed on the session setting `app.user_id`: a row is visible, and may be
 written, only while that setting names the user who owns it. `threads`,
-`routines` and `user_settings` carry the owner themselves; the thread-keyed
+`routines`, `routine_runs` and `user_settings` carry the owner themselves; the thread-keyed
 tables match `thread_id` against the ids of the caller's own threads. The
 pre-M10-04 global `settings` table has no policy at all, so it's invisible. `agent`
 owns these tables, which is why the policies must be *forced*: an owner
@@ -21,7 +21,8 @@ checked out with no user bound carries no setting and sees no rows.
 The one deliberate bypass is `system_transaction`: a transaction that `SET
 LOCAL ROLE`s to `agent_rls_bypass` (a BYPASSRLS role that `db-init` creates
 and lets `agent` switch to) — used only to hand pre-Stage-3 data to the
-bootstrap admin. Startup DDL and LangGraph's migrations are unaffected: RLS
+bootstrap admin, and by the routine scheduler (M17-04) to find every user's
+due routines and its own interrupted runs. Startup DDL and LangGraph's migrations are unaffected: RLS
 filters rows, not DDL.
 
 This guards against agent-server code paths that forget an ownership check;
@@ -52,6 +53,7 @@ _OWN_THREAD_IDS = f"SELECT id::text FROM threads WHERE owner_user_id = {_CURRENT
 _POLICIES = {
     "threads": f"owner_user_id = {_CURRENT_USER}",
     "routines": f"owner_user_id = {_CURRENT_USER}",
+    "routine_runs": f"owner_user_id = {_CURRENT_USER}",
     "user_settings": f"user_id = {_CURRENT_USER}",
     "checkpoints": f"thread_id IN ({_OWN_THREAD_IDS})",
     "checkpoint_blobs": f"thread_id IN ({_OWN_THREAD_IDS})",
@@ -79,9 +81,12 @@ def rls_ddl() -> list[str]:
             f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY",
             f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY",
         ]
-    # Exactly what `adopt_orphans` / `adopt_legacy` run as the bypass role.
+    # Exactly what `adopt_orphans` / `adopt_legacy` and the routine
+    # scheduler's `claim_due` / `recover_interrupted` run as the bypass role.
     statements += [
         f"GRANT SELECT, UPDATE ON threads TO {BYPASS_ROLE}",
+        f"GRANT SELECT, UPDATE ON routines TO {BYPASS_ROLE}",
+        f"GRANT SELECT, INSERT, UPDATE ON routine_runs TO {BYPASS_ROLE}",
         f"GRANT SELECT, INSERT ON user_settings TO {BYPASS_ROLE}",
         f"GRANT SELECT, DELETE ON settings TO {BYPASS_ROLE}",
     ]
