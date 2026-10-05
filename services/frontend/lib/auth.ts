@@ -2,8 +2,8 @@ import { Platform } from 'react-native';
 
 import { ApiError, apiFetch } from './api';
 import { homeAiClientHeader } from './client';
-import { loadPairedDeviceId, savePairedDeviceId } from './devicePairStore';
-import { generateDeviceKey, signChallenge } from './deviceKey';
+import { clearPairedDeviceId, loadPairedDeviceId, savePairedDeviceId } from './devicePairStore';
+import { deleteDeviceKey, generateDeviceKey, signChallenge } from './deviceKey';
 import { confirmDevicePresence } from './localAuth';
 import { setSessionToken } from './session';
 import { clearStoredToken, loadStoredToken, saveStoredToken } from './tokenStore';
@@ -185,6 +185,14 @@ export async function pairThisDevice(payloadJson: string, name?: string): Promis
   return finishDeviceLogin({ deviceId: device.id, signature: loginSig });
 }
 
+/** Drop the local pair (stored device id + Keystore key) so the phone can
+ * pair again. Used once the platform no longer accepts it (revoked, or the
+ * key on the phone no longer matches the one enrolled). */
+export async function forgetPairedDevice(): Promise<void> {
+  await clearPairedDeviceId();
+  await deleteDeviceKey();
+}
+
 export { loadPairedDeviceId };
 
 export async function beginPasskeyLogin(username: string): Promise<Record<string, unknown>> {
@@ -281,6 +289,8 @@ const MESSAGES: Record<string, string> = {
   no_passkey: 'No passkey is registered on this account.',
   passkey_exists: 'That passkey is already registered.',
   invalid_pairing_qr: "That pairing code isn't valid. Scan or paste the QR from Settings on the LAN.",
+  already_used: 'That pairing code was already used. Make a new one in Settings on the LAN.',
+  invalid_token: 'That pairing code expired. Make a new one in Settings on the LAN.',
   biometric_cancelled: 'Unlock cancelled.',
 };
 
