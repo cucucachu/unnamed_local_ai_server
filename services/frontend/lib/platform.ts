@@ -141,15 +141,18 @@ export interface HostPairBegin {
   expires_at: string;
 }
 
-/** JSON encoded in the pairing QR (no expires_at — that's UI-only). */
+/** The pairing QR: a `homeai://pair?…` link, so the phone camera opens the
+ * host app's pair screen (no expires_at — that's UI-only). */
 export function pairingQrValue(payload: HostPairBegin): string {
-  return JSON.stringify({
-    v: payload.v,
-    kind: payload.kind,
-    token: payload.token,
-    challenge: payload.challenge,
-    user: payload.user,
-  });
+  const query = [
+    ['v', String(payload.v)],
+    ['token', payload.token],
+    ['challenge', payload.challenge],
+    ['user', payload.user],
+  ]
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `homeai://pair?${query}`;
 }
 
 export async function listHostDevices(): Promise<HostDevice[]> {

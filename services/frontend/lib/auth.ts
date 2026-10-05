@@ -163,23 +163,52 @@ export async function loginWithPairedDevice(totpCode?: string): Promise<User> {
   return finishDeviceLogin({ deviceId, signature, totpCode });
 }
 
+export const PAIR_LINK_PREFIX = 'homeai://pair?';
+
+/** The token + challenge from a pairing QR: either the `homeai://pair?…`
+ * link (what Settings renders, so the phone camera opens the app) or the
+ * older JSON payload. `null` when it is neither. */
+export function parsePairingPayload(text: string): { token: string; challenge: string } | null {
+  const trimmed = text.trim();
+  let token: string | null | undefined;
+  let challenge: string | null | undefined;
+  if (trimmed.startsWith(PAIR_LINK_PREFIX)) {
+    const params: Record<string, string> = {};
+    for (const part of trimmed.slice(PAIR_LINK_PREFIX.length).split('&')) {
+      const [key, value = ''] = part.split('=');
+      params[decodeURIComponent(key)] = decodeURIComponent(value);
+    }
+    token = params.token;
+    challenge = params.challenge;
+  } else {
+    try {
+      const json = JSON.parse(trimmed) as { token?: string; challenge?: string; kind?: string };
+      if (json.kind !== 'homeai-host-pair') return null;
+      ({ token, challenge } = json);
+    } catch {
+      return null;
+    }
+  }
+  return token && challenge ? { token, challenge } : null;
+}
+
 /** Host-app first pair: generate a Keystore key, consume the LAN QR, then
  * sign in with the new pair (the key is still unlocked). */
-export async function pairThisDevice(payloadJson: string, name?: string): Promise<User> {
-  let payload: { token?: string; challenge?: string; kind?: string };
-  try {
-    payload = JSON.parse(payloadJson) as { token?: string; challenge?: string; kind?: string };
-  } catch {
-    throw new ApiError(422, 'invalid_pairing_qr');
-  }
-  if (payload.kind !== 'homeai-host-pair' || !payload.token || !payload.challenge) {
-    throw new ApiError(422, 'invalid_pairing_qr');
-  }
+export async function pairThisDevice(payloadText: string, name?: string): Promise<User> {
+  const payload = parsePairingPayload(payloadText);
+  if (!payload) throw new ApiError(422, 'invalid_pairing_qr');
   if (!(await confirmDevicePresence())) throw new ApiError(401, 'biometric_cancelled');
   const publicKey = await generateDeviceKey();
   const signature = await signChallenge(payload.challenge);
   const label = name?.trim() || DEVICE_LABEL;
-  const device = await enrollDevice({ token: payload.token, publicKey, name: label, signature });
+  let device: { id: string; name: string };
+  try {
+    device = await enrollDevice({ token: payload.token, publicKey, name: label, signature });
+  } catch (caught) {
+    // The Keystore key was just replaced, so any earlier pair is unusable.
+    await forgetPairedDevice();
+    throw caught;
+  }
   const { challenge } = await beginDeviceLogin(device.id);
   const loginSig = await signChallenge(challenge);
   return finishDeviceLogin({ deviceId: device.id, signature: loginSig });

@@ -1747,9 +1747,12 @@ sessions) and M10-05 (spaces). Caddy routes `/api/auth/*` unauthenticated
 - `Passkey`: `{"id", "name": str|null, "transports": [str]|null, "created_at",
   "last_used_at": ts|null}`.
 - `DevicePair`: `{"id", "name", "created_at", "last_used_at": ts|null}` (no
-  public key in list/revoke). Pairing QR payload:
+  public key in list/revoke). Pair-begin response:
   `{"v": 1, "kind": "homeai-host-pair", "token": "hd_…", "challenge",
-  "user"}` (ECDSA P-256; challenge and signature are unpadded base64url).
+  "user", "expires_at"}` (ECDSA P-256; challenge and signature are unpadded
+  base64url). The Settings QR encodes it as the link
+  `homeai://pair?v=1&token=…&challenge=…&user=…`, which opens the host
+  app's pair screen; the app also accepts that JSON pasted.
 - `Session`: `{"id", "device_label": str|null, "created_at", "last_seen_at",
   "expires_at", "current": bool}` (`current` = the caller's own session).
 - `Invite`: `{"id", "label": str|null, "status":

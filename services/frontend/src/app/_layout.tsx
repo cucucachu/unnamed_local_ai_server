@@ -53,7 +53,7 @@ function AppStack() {
     <SettingsProvider reloadKey={user?.id ?? null}>
       {/* Guards: Expo Router sends any visit to an unavailable screen to
           the first available one — `(tabs)` when signed in, `login` when
-          not. `invite` is reachable either way. */}
+          not. `invite` and `pair` are reachable either way. */}
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Protected guard={user !== null}>
           <Stack.Screen name="(tabs)" />
@@ -67,6 +67,7 @@ function AppStack() {
           <Stack.Screen name="login" />
         </Stack.Protected>
         <Stack.Screen name="invite" />
+        <Stack.Screen name="pair" />
       </Stack>
     </SettingsProvider>
   );

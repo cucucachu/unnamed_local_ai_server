@@ -48,6 +48,14 @@
       "expo-secure-store",
       "expo-dev-client",
       "expo-local-authentication",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Home AI uses the camera to scan the pairing QR code from Settings.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
       "./plugins/withCleartextTraffic"
     ],
     "experiments": {
