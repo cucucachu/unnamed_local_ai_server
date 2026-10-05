@@ -17,13 +17,14 @@ no custom validation code needed for either case.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.identity import CurrentUser
 from app.db.settings import SettingsDocument, SettingsStore
+from app.routines import schedule as sched
 
 router = APIRouter()
 
@@ -50,6 +51,14 @@ class SettingsUpdateBody(BaseModel):
     hitl_enabled: bool | None = None
     thinking_enabled: bool | None = None
     edit_mode_default: Literal["truncate", "fork"] | None = None
+    timezone: Annotated[str, Field(max_length=64)] | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_zone(cls, value: str | None) -> str | None:
+        if value is not None:
+            sched.zone(value)
+        return value
 
 
 def _settings_store(request: Request) -> SettingsStore:

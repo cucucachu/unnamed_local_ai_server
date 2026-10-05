@@ -15,6 +15,9 @@ export interface SettingsDocument {
   hitl_enabled: boolean;
   thinking_enabled: boolean;
   edit_mode_default: EditModeDefault;
+  /** The user's IANA zone, the default for routines the agent makes (M17-07);
+   * `SettingsProvider` keeps it in step with the device. */
+  timezone: string | null;
 }
 
 /** Any subset of `SettingsDocument`'s fields — what `PUT /api/settings`

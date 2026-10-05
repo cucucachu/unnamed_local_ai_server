@@ -1,7 +1,9 @@
 """Routine grants: how a scheduled run acts as its user (docs/PLATFORM.md §4 "Routine grant").
 
 When a logged-in user saves or enables a routine, agent-server trades their
-identity token for a grant bound to (user, routine, space). The grant is a
+identity token - or, when the agent saves it from a chat (M17-07), that
+chat's delegation - for a grant bound to (user, routine, space). A routine
+run's own delegation can't get one. The grant is a
 `sessions` row with `routine_id`/`routine_space_id` set; agent-server keeps
 its `hr_` secret, only the SHA-256 is stored here. At each run agent-server
 exchanges the grant for an ordinary delegation (`act=agent`,
@@ -27,7 +29,7 @@ from psycopg import AsyncConnection
 
 from app.core import delegations, sessions
 from app.core.errors import Forbidden, InvalidInput, Unauthorized
-from app.core.tokens import TokenError, TokenService
+from app.core.tokens import TokenService
 
 GRANT_PREFIX = "hr_"
 # Lives until revoked; the expiry only bounds a grant agent-server lost track of.
@@ -39,21 +41,19 @@ _ROUTINE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 async def issue(
     conn: AsyncConnection,
     tokens: TokenService,
-    identity_token: str,
     routine_id: str,
     space_path: str,
     label: str | None,
+    *,
+    identity_token: str | None = None,
+    delegation_token: str | None = None,
 ) -> tuple[str, UUID, str]:
     """`(grant, grant id, canonical space)`; replaces any earlier grant for the routine."""
     if not _ROUTINE_ID.fullmatch(routine_id):
         raise InvalidInput("invalid_routine_id")
-    try:
-        claims = tokens.verify_token(identity_token, act="user")
-        user_id, session_id = UUID(str(claims["sub"])), UUID(str(claims.get("sid")))
-    except (TokenError, ValueError) as exc:
-        raise Unauthorized("unauthenticated") from exc
-    if await sessions.load_active(conn, session_id, user_id) is None:
-        raise Unauthorized("unauthenticated")
+    user_id = await delegations.acting_user(
+        conn, tokens, identity_token=identity_token, delegation_token=delegation_token
+    )
     space, role = await delegations.member_space(conn, user_id, space_path)
     if role not in EDIT_ROLES:
         raise Forbidden("insufficient_role")

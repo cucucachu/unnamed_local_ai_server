@@ -35,6 +35,7 @@ let mockSettingsValue: SettingsDocument | null = {
   hitl_enabled: true,
   thinking_enabled: false,
   edit_mode_default: 'truncate',
+  timezone: null,
 };
 let mockLoading = false;
 jest.mock('@/components/SettingsProvider', () => ({
@@ -77,7 +78,7 @@ beforeEach(() => {
   mockLogout.mockResolvedValue(undefined);
   mockUpdateSettings.mockReset();
   mockUpdateSettings.mockResolvedValue(undefined);
-  mockSettingsValue = { hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate' };
+  mockSettingsValue = { hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate', timezone: null };
   mockLoading = false;
 });
 
@@ -99,7 +100,7 @@ describe('SettingsScreen', () => {
   });
 
   it('renders the current values for each control', async () => {
-    mockSettingsValue = { hitl_enabled: false, thinking_enabled: true, edit_mode_default: 'fork' };
+    mockSettingsValue = { hitl_enabled: false, thinking_enabled: true, edit_mode_default: 'fork', timezone: null };
 
     const renderer = await renderScreen();
 

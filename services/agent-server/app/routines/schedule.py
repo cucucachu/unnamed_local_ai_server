@@ -95,6 +95,48 @@ def dump_schedule(schedule: Schedule) -> dict:
     return schedule_adapter.dump_python(schedule, mode="json")
 
 
+_DAY_NAMES = dict(zip(WEEKDAYS, ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"), strict=True))
+_DAY_PLURALS = dict(
+    zip(WEEKDAYS, ("Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays",
+                   "Sundays"), strict=True)
+)  # fmt: skip
+
+
+def _clock(value: time) -> str:
+    return f"{value.hour}:{value.minute:02d}"
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def describe(schedule: Schedule) -> str:
+    """The schedule in words, as the app's `scheduleSummary` puts it."""
+    match schedule:
+        case Once(at=at):
+            return f"Once on {at:%b} {at.day}, {at.year} at {_clock(at.time())}"
+        case Daily():
+            return f"Every day at {_clock(schedule.time)}"
+        case Weekdays():
+            return f"Weekdays at {_clock(schedule.time)}"
+        case Weekly(days=days):
+            at = _clock(schedule.time)
+            if len(days) == 7:
+                return f"Every day at {at}"
+            if days == list(WEEKDAYS[:5]):
+                return f"Weekdays at {at}"
+            if days == ["sat", "sun"]:
+                return f"Weekends at {at}"
+            if len(days) == 1:
+                return f"{_DAY_PLURALS[days[0]]} at {at}"
+            return f"{', '.join(_DAY_NAMES[d] for d in days)} at {at}"
+        case Monthly(day=day):
+            last = " (or the last day)" if day > 28 else ""
+            return f"Monthly on the {_ordinal(day)}{last} at {_clock(schedule.time)}"
+    raise AssertionError(schedule)
+
+
 def zone(name: str) -> ZoneInfo:
     """Raises `ValueError` for anything but a known IANA zone name."""
     try:

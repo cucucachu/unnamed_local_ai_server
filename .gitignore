@@ -14,3 +14,4 @@ scripts/eval/app_authoring/last-report.json
 scripts/eval/app_authoring/app-ids.txt
 scripts/eval/app_authoring/logs/
 scripts/e2e/g13-last-report.json
+scripts/eval/routines/last-report.json

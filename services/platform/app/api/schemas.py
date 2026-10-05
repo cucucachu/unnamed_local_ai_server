@@ -484,7 +484,9 @@ class HitlApprovalOut(BaseModel):
 
 
 class SpaceAccessRequest(BaseModel):
-    identity_token: Secret
+    # Exactly one: a person's identity token, or a chat's delegation (M17-07).
+    identity_token: Secret | None = None
+    delegation_token: Secret | None = None
     space: Short
 
 
@@ -494,7 +496,9 @@ class SpaceAccessOut(BaseModel):
 
 
 class RoutineGrantRequest(BaseModel):
-    identity_token: Secret
+    # Exactly one, as for `SpaceAccessRequest`.
+    identity_token: Secret | None = None
+    delegation_token: Secret | None = None
     routine_id: Short
     space: Short
     label: Short | None = None

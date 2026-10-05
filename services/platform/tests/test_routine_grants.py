@@ -269,3 +269,67 @@ async def test_settings_lists_routine_grants(world):
     assert by_kind[ROUTINE]["device_label"] == "Morning brief"
     assert by_kind[ROUTINE]["current"] is False
     assert by_kind[None]["current"] is True
+
+
+async def _chat_delegation(world: World, username: str) -> str:
+    headers = await identity(world.platform, world.tokens[username])
+    response = await world.client.post(
+        "/internal/delegations",
+        json={"identity_token": headers["X-HomeAI-Identity"], "thread_id": "chat-thread"},
+        headers=bearer(AGENT_TOKEN),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["token"]
+
+
+async def _issue_with(world: World, body: dict):
+    return await world.client.post(
+        "/internal/routine-grants",
+        json={"routine_id": ROUTINE, "space": "/spaces/family", "label": "From chat"} | body,
+        headers=bearer(AGENT_TOKEN),
+    )
+
+
+async def _access_with(world: World, body: dict):
+    return await world.client.post(
+        "/internal/space-access",
+        json={"space": "/spaces/family"} | body,
+        headers=bearer(AGENT_TOKEN),
+    )
+
+
+async def test_a_chat_delegation_can_save_a_routine(world):
+    token = await _chat_delegation(world, "bob")
+    access = await _access_with(world, {"delegation_token": token})
+    assert access.status_code == 200, access.text
+    assert access.json()["space"] == "/spaces/family"
+    issued = await _issue_with(world, {"delegation_token": token})
+    assert issued.status_code == 200, issued.text
+    agent = await _delegation(world, issued.json()["grant"])
+    assert (await _ls(world, agent, "/spaces/family")).status_code == 200
+
+
+async def test_a_routine_run_cannot_make_routines(world):
+    run = (await _delegation(world, await _grant(world)))["Authorization"].removeprefix("Bearer ")
+    for response in (
+        await _issue_with(world, {"delegation_token": run}),
+        await _access_with(world, {"delegation_token": run}),
+    ):
+        assert (response.status_code, response.json()["detail"]) == (403, "routine_run")
+
+
+async def test_exactly_one_token(world):
+    headers = await identity(world.platform, world.tokens["bob"])
+    both = {
+        "identity_token": headers["X-HomeAI-Identity"],
+        "delegation_token": await _chat_delegation(world, "bob"),
+    }
+    for body in (both, {}):
+        assert (await _issue_with(world, body)).status_code == 422
+        assert (await _access_with(world, body)).status_code == 422
+    # An identity token isn't a delegation, nor the other way round.
+    swapped = {"delegation_token": both["identity_token"]}
+    assert (await _issue_with(world, swapped)).status_code == 401
+    assert (
+        await _access_with(world, {"identity_token": both["delegation_token"]})
+    ).status_code == 401

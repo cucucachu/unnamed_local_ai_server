@@ -259,6 +259,10 @@ session cookie/bearer and returns `200` with `X-HomeAI-Identity: <JWT>`, or
   `/personal` or `/spaces/<slug>` (canonicalized), `404` if they aren't a
   member, `401` without an active session. agent-server asks before saving
   a routine that runs in that space; only `editor` and `owner` may.
+  - Instead of `identity_token` it takes a chat's `delegation_token`
+    (M17-07: the agent's routine tools), acting for the user behind it.
+    Exactly one of the two (`422 one_token`). A routine run's delegation
+    is `403 routine_run`, so an unattended run can't make more of them.
 
 ### Routine grant (unattended runs, M17-03)
 
@@ -271,7 +275,8 @@ enables the routine:
   space}`. The identity's session must be active, and its user `editor` or
   `owner` of the space (`403`/`404`/`422` otherwise, as for
   `space-access`). Any earlier grant for the same (user, routine) is
-  revoked.
+  revoked. A chat's `delegation_token` works in place of `identity_token`,
+  as for `space-access` (and a routine run's is `403 routine_run`).
 - The grant is a **`sessions` row** with `routine_id` and
   `routine_space_id` set. Its secret is `hr_` + 32 random bytes, stored
   only as a SHA-256; agent-server keeps the plaintext with the routine.

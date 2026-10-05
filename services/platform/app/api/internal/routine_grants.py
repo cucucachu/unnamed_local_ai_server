@@ -15,15 +15,16 @@ router = APIRouter(prefix="/routine-grants", dependencies=[Depends(require_servi
 
 @router.post("", response_model=RoutineGrantOut)
 async def issue(body: RoutineGrantRequest, request: Request) -> RoutineGrantOut:
-    """A logged-in user's identity token in, a grant for one routine in one space out."""
+    """An identity token or a chat's delegation in, a grant for one routine in one space out."""
     async with request.app.state.db_pool.connection() as conn:
         grant, grant_id, space = await routine_grants.issue(
             conn,
             request.app.state.tokens,
-            body.identity_token,
             body.routine_id,
             body.space,
             body.label,
+            identity_token=body.identity_token,
+            delegation_token=body.delegation_token,
         )
     return RoutineGrantOut(grant=grant, grant_id=grant_id, space=space)
 

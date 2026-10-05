@@ -52,20 +52,40 @@ class Grant:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class Caller:
+    """Who asks the platform about spaces and routine grants: a person through the
+    app (their identity token) or the agent in their chat (its delegation, M17-07)."""
+
+    identity_token: str | None = None
+    delegation_token: str | None = None
+
+    def body(self) -> dict[str, str]:
+        if self.delegation_token is not None:
+            return {"delegation_token": self.delegation_token}
+        return {"identity_token": self.identity_token or ""}
+
+    def __repr__(self) -> str:
+        return "Caller(delegation)" if self.delegation_token is not None else "Caller(identity)"
+
+
 class DelegationClient(Protocol):
     async def exchange(self, identity_token: str, thread_id: str) -> Grant: ...
 
     async def refresh(self, token: str) -> Grant: ...
 
-    async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
-        """`(canonical space path, role)` of the identity's user, or None if
+    async def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        """`(canonical space path, role)` of the caller's user, or None if
         `space` isn't one of theirs (M17-02)."""
         ...
 
     async def issue_routine_grant(
-        self, identity_token: str, routine_id: str, space: str, label: str
+        self, caller: Caller, routine_id: str, space: str, label: str
     ) -> str | None:
-        """A routine grant (M17-03) for a space the identity's user may edit, else None."""
+        """A routine grant (M17-03) for a space the caller's user may edit, else None.
+
+        A routine run's own delegation is refused (`DelegationDenied`).
+        """
         ...
 
     async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
@@ -112,9 +132,11 @@ class HttpDelegationClient:
     async def refresh(self, token: str) -> Grant:
         return await self._post("/internal/delegations/refresh", {"token": token})
 
-    async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
+    async def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
         path = "/internal/space-access"
-        response = await self._call(path, {"identity_token": identity_token, "space": space})
+        response = await self._call(path, caller.body() | {"space": space})
+        if response.status_code == 403:
+            raise DelegationDenied(response.text)
         if response.status_code in (404, 422):
             return None
         if response.status_code != 200:
@@ -123,16 +145,13 @@ class HttpDelegationClient:
         return payload["space"], payload["role"]
 
     async def issue_routine_grant(
-        self, identity_token: str, routine_id: str, space: str, label: str
+        self, caller: Caller, routine_id: str, space: str, label: str
     ) -> str | None:
         path = "/internal/routine-grants"
-        body = {
-            "identity_token": identity_token,
-            "routine_id": routine_id,
-            "space": space,
-            "label": label,
-        }
+        body = caller.body() | {"routine_id": routine_id, "space": space, "label": label}
         response = await self._call(path, body)
+        if response.status_code == 403 and "routine_run" in response.text:
+            raise DelegationDenied(response.text)
         if response.status_code in (403, 404, 422):
             return None
         if response.status_code != 200:

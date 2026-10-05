@@ -326,6 +326,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.app_tools import APP_TOOL_NAMES
 from app.agent.build import MUTATING_TOOL_NAMES
+from app.agent.routine_tools import ROUTINE_TOOL_NAMES
 from app.agent.turn_runner import END, ActiveTurn, TurnOutcome, TurnRequest, TurnRunner
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, IdentityError, KeysUnavailable
@@ -351,6 +352,7 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "web_search": "web",
     "web_fetch": "web",
     **dict.fromkeys(APP_TOOL_NAMES, "app"),
+    **dict.fromkeys(ROUTINE_TOOL_NAMES, "plan"),
 }
 
 _ARGS_VALUE_TRUNCATE_LEN = 500
@@ -564,8 +566,12 @@ def graph_config(
     thinking_enabled: bool | None = None,
     delegation: Delegation | None = None,
     approval_mode: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """RunnableConfig for this thread, optionally pinned to a checkpoint (M8-05).
+
+    `user_id` is the turn's user, for tools that act on their own records
+    (the routine tools, M17-07).
 
     `approval_mode` (a routine run's, M17-05) is a string, so LangGraph also
     writes it into each checkpoint's metadata - which is how a resume from a
@@ -582,6 +588,8 @@ def graph_config(
         configurable["delegation"] = delegation
     if approval_mode is not None:
         configurable["approval_mode"] = approval_mode
+    if user_id is not None:
+        configurable["user_id"] = user_id
     return {"configurable": configurable}
 
 

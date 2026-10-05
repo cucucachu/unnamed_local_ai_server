@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from app.core.delegation import DelegationDenied, DelegationUnavailable, Grant
+from app.core.delegation import Caller, DelegationDenied, DelegationUnavailable, Grant
 from tests.fake_identity import TEST_USER_ID
 
 AGENT_TOKEN = "fake-agent-service-token"
@@ -181,12 +181,25 @@ class FakePlatform:
             raise DelegationDenied("unauthenticated")
         return self._mint(minted.user_id, minted.session_id, minted.thread_id)
 
-    def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
-        if self.unavailable:
-            raise DelegationUnavailable("503")
-        user_id, session_id = self.identities.get(identity_token, (TEST_USER_ID, TEST_SESSION_ID))
+    def caller_user(self, caller: Caller) -> str:
+        """The user behind an identity token or a chat's delegation; a routine run's is refused."""
+        if caller.delegation_token is not None:
+            minted = self.principal(caller.delegation_token)
+            if minted is None:
+                raise DelegationDenied("unauthenticated")
+            if minted.session_id.startswith("routine-session-"):
+                raise DelegationDenied("routine_run")
+            return minted.user_id
+        token = caller.identity_token or ""
+        user_id, session_id = self.identities.get(token, (TEST_USER_ID, TEST_SESSION_ID))
         if session_id in self.revoked_sessions:
             raise DelegationDenied("unauthenticated")
+        return user_id
+
+    def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        if self.unavailable:
+            raise DelegationUnavailable("503")
+        user_id = self.caller_user(caller)
         parts = [p for p in space.split("/") if p]
         if parts == ["personal"]:
             return "/personal", "owner"
@@ -197,12 +210,12 @@ class FakePlatform:
         return None
 
     def issue_routine_grant(
-        self, identity_token: str, routine_id: str, space: str, label: str
+        self, caller: Caller, routine_id: str, space: str, label: str
     ) -> str | None:
-        access = self.space_role(identity_token, space)
+        access = self.space_role(caller, space)
         if access is None or access[1] not in ("owner", "editor"):
             return None
-        user_id, _ = self.identities.get(identity_token, (TEST_USER_ID, TEST_SESSION_ID))
+        user_id = self.caller_user(caller)
         for grant, held in list(self.routine_grants.items()):
             if (held.user_id, held.routine_id) == (user_id, routine_id):
                 self.revoke_routine_grant(grant)
@@ -342,13 +355,13 @@ class FakeDelegationClient:
     async def refresh(self, token: str) -> Grant:
         return self.platform.refresh(token)
 
-    async def space_role(self, identity_token: str, space: str) -> tuple[str, str] | None:
-        return self.platform.space_role(identity_token, space)
+    async def space_role(self, caller: Caller, space: str) -> tuple[str, str] | None:
+        return self.platform.space_role(caller, space)
 
     async def issue_routine_grant(
-        self, identity_token: str, routine_id: str, space: str, label: str
+        self, caller: Caller, routine_id: str, space: str, label: str
     ) -> str | None:
-        return self.platform.issue_routine_grant(identity_token, routine_id, space, label)
+        return self.platform.issue_routine_grant(caller, routine_id, space, label)
 
     async def exchange_routine_grant(self, grant: str, routine_id: str, thread_id: str) -> Grant:
         return self.platform.exchange_routine_grant(grant, routine_id, thread_id)
