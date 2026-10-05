@@ -3,7 +3,13 @@ import { useEffect, useState } from 'react';
 import { AuthField, AuthFormFrame, AuthLink, AuthSubmitButton } from '@/components/AuthForm';
 import { useAuth } from '@/components/AuthProvider';
 import { ApiError } from '@/lib/api';
-import { authErrorMessage, getAuthStatus, loadPairedDeviceId, passkeysAvailable } from '@/lib/auth';
+import {
+  authErrorMessage,
+  forgetPairedDevice,
+  getAuthStatus,
+  loadPairedDeviceId,
+  passkeysAvailable,
+} from '@/lib/auth';
 import { isHostApp } from '@/lib/client';
 import { passkeysSupported } from '@/lib/webauthn';
 import { theme } from '@/lib/theme';
@@ -100,6 +106,15 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
     try {
       await loginWithDevice(needsTotp ? totpCode.trim() : undefined);
     } catch (caught) {
+      if (caught instanceof ApiError && caught.detail === 'invalid_credentials') {
+        await forgetPairedDevice();
+        setPaired(false);
+        setError(
+          'The server no longer accepts this phone. Pair it again with a new code from Settings on the LAN.',
+        );
+        setBusy(false);
+        return;
+      }
       fail(caught);
     }
   }
@@ -115,6 +130,9 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
     try {
       await pairDevice(pairPayload.trim());
     } catch (caught) {
+      // Enroll can succeed and the follow-up sign-in still stop at TOTP;
+      // the phone is paired then, and pairing again would replace its key.
+      setPaired(Boolean(await loadPairedDeviceId()));
       fail(caught);
     }
   }

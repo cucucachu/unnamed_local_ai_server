@@ -2,12 +2,15 @@ import { Platform } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { createElement } from 'react';
 
+import { ApiError } from '@/lib/api';
+
 import { exists, flush, mockFetchRoutes, press, type } from '../../test-utils/screen';
 
 const mockLogin = jest.fn();
 const mockLoginWithPasskey = jest.fn();
 const mockLoginWithDevice = jest.fn();
 const mockPairDevice = jest.fn();
+const mockForgetPairedDevice = jest.fn();
 let mockIsHost = false;
 let mockPairedId: string | null = null;
 jest.mock('@/components/AuthProvider', () => ({
@@ -27,6 +30,7 @@ jest.mock('@/lib/auth', () => {
   return {
     ...actual,
     loadPairedDeviceId: () => Promise.resolve(mockPairedId),
+    forgetPairedDevice: () => mockForgetPairedDevice(),
   };
 });
 
@@ -42,6 +46,7 @@ afterEach(() => {
   mockLoginWithPasskey.mockReset();
   mockLoginWithDevice.mockReset();
   mockPairDevice.mockReset();
+  mockForgetPairedDevice.mockReset();
 });
 
 beforeEach(() => {
@@ -149,5 +154,36 @@ describe('LoginScreen host-app pairing', () => {
     await type(renderer!, 'host-pair-payload', '{"kind":"homeai-host-pair","token":"hd_x","challenge":"ab"}');
     await press(renderer!, 'host-pair-enroll');
     expect(mockPairDevice).toHaveBeenCalled();
+  });
+
+  it('switches to device sign-in with a TOTP field when pairing stops at totp_required', async () => {
+    mockPairedId = null;
+    mockPairDevice.mockImplementation(async () => {
+      mockPairedId = 'device-1';
+      throw new ApiError(401, 'totp_required');
+    });
+    mockLoginWithDevice.mockResolvedValue(undefined);
+    await renderLogin();
+    await type(renderer!, 'host-pair-payload', '{"kind":"homeai-host-pair","token":"hd_x","challenge":"ab"}');
+    await press(renderer!, 'host-pair-enroll');
+
+    expect(exists(renderer!, 'host-pair-enroll')).toBe(false);
+    expect(exists(renderer!, 'host-pair-sign-in')).toBe(true);
+    expect(exists(renderer!, 'auth-totp')).toBe(true);
+    await type(renderer!, 'auth-totp', '123456');
+    await press(renderer!, 'host-pair-sign-in');
+    expect(mockLoginWithDevice).toHaveBeenCalledWith('123456');
+  });
+
+  it('forgets the pair and offers pairing again when the server rejects this phone', async () => {
+    mockPairedId = 'device-1';
+    mockLoginWithDevice.mockRejectedValue(new ApiError(401, 'invalid_credentials'));
+    mockForgetPairedDevice.mockResolvedValue(undefined);
+    await renderLogin();
+    await press(renderer!, 'host-pair-sign-in');
+
+    expect(mockForgetPairedDevice).toHaveBeenCalled();
+    expect(exists(renderer!, 'host-pair-sign-in')).toBe(false);
+    expect(exists(renderer!, 'host-pair-enroll')).toBe(true);
   });
 });
