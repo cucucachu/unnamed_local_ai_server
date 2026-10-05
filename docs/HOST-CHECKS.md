@@ -224,7 +224,7 @@ install, and WAN public HTTPS remain the existing unchecked boxes below.
 Setup: stack up with Caddy from `main`, WireGuard kernel module loaded,
 signed in as yourself (G10).
 
-- [ ] (M15-01) On home Wi-Fi: Settings → Remote access → create a device
+- [x] (M15-01) On home Wi-Fi: Settings → Remote access → create a device
       named for this phone → scan the QR in a WireGuard app → the tunnel
       comes up and `http://homeai.local` (or `http://10.13.13.1`) loads
       the UI. Revoke the device; the tunnel no longer reaches the box.
