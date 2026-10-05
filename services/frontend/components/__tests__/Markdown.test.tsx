@@ -52,6 +52,23 @@ function textOf(renderer: ReactTestRenderer): string {
 }
 
 describe('Markdown', () => {
+  it('renders single newlines in a plain paragraph as line breaks (#270)', () => {
+    const renderer = renderMarkdown('1 one\n2 two\n3 three');
+    const breaks = renderer.root
+      .findAllByProps({ testID: 'markdown-line-break' })
+      .filter((node) => typeof node.type === 'string' || node.type === RNView);
+    expect(breaks.length).toBeGreaterThanOrEqual(2);
+    const text = textOf(renderer);
+    expect(text).toContain('1 one');
+    expect(text).toContain('3 three');
+  });
+
+  it('keeps newlines inside a code block as text, not line-break boxes', () => {
+    const renderer = renderMarkdown('```\na\nb\n```');
+    expect(renderer.root.findAllByProps({ testID: 'markdown-line-break' })).toHaveLength(0);
+    expect(textOf(renderer)).toContain('a\nb');
+  });
+
   it('renders headings, lists, tables, links, and a code block from a fixture document', () => {
     const renderer = renderMarkdown();
     const text = textOf(renderer);
