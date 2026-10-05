@@ -33,8 +33,8 @@ from tests.fake_model.scripting import FakeModel, TextTurn
 
 pytestmark = pytest.mark.integration
 
-USER_TABLES = ("threads", "routines", "user_settings", "checkpoints", "checkpoint_blobs",
-               "checkpoint_writes", "turn_stats")  # fmt: skip
+USER_TABLES = ("threads", "routines", "routine_runs", "user_settings", "checkpoints",
+               "checkpoint_blobs", "checkpoint_writes", "turn_stats")  # fmt: skip
 ALL_TABLES = (*USER_TABLES, "settings")
 THREAD_KEYED = ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "turn_stats")
 

@@ -3,6 +3,7 @@
 Variable names match `.env.example`, lower-cased and unprefixed.
 """
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +37,18 @@ class Settings(BaseSettings):
     # A chat turn keeps running when its client disconnects (M17-01); one
     # no client has watched for this long is cancelled. Unset: never.
     agent_detached_turn_timeout_s: float | None = 3600
+
+    # Routine scheduler (M17-04). One GPU: at most `routines_max_concurrent`
+    # turns of any kind may be running when a routine run starts (chats never
+    # wait on routines). A run more than `routines_missed_grace_s` late is
+    # recorded as missed instead; one still going after `routine_run_timeout_s`
+    # is cancelled. Off for an agent-server that shares the database but
+    # mustn't run routines (the M16 eval candidate).
+    routines_scheduler_enabled: bool = True
+    routines_poll_s: float = 30
+    routines_max_concurrent: int = Field(default=1, ge=1)
+    routines_missed_grace_s: float = 3600
+    routine_run_timeout_s: float = 1800
 
     # Identity JWKS, the files API the agent's file tools use, and the
     # service-auth `/internal/*` routes (bootstrap admin, delegations).

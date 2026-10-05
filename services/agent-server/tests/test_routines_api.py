@@ -43,7 +43,9 @@ def client(fake_model: FakeModel, fake_platform: FakePlatform):
     fake_platform.add_space("family", {ALICE: "editor", BOB: "viewer"})
     thread_store = InMemoryThreadStore()
     app = create_app(
-        fake_model.settings(platform_url=fake_platform.base_url),
+        fake_model.settings(
+            platform_url=fake_platform.base_url, routines_scheduler_enabled=False
+        ),
         checkpointer_override=MemorySaver(),
         thread_store_override=thread_store,
         settings_store_override=InMemorySettingsStore(),
@@ -171,6 +173,16 @@ def test_a_past_one_shot_may_be_saved_disabled(client) -> None:
     assert response.status_code == 422
 
 
+def _wait_for_runs(client: TestClient, routine_id: str) -> list[dict]:
+    deadline = time.monotonic() + 10
+    while True:
+        runs = client.get(f"/api/routines/{routine_id}/runs", headers=ALICE_H).json()
+        if all(r["status"] != "running" for r in runs):
+            return runs
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
 def _wait_for_reply(client: TestClient, thread_id: str) -> list[dict]:
     deadline = time.monotonic() + 10
     while client.get(f"/api/threads/{thread_id}/state", headers=ALICE_H).json()["running"]:
@@ -196,19 +208,20 @@ def test_run_now_starts_a_run_thread(client, fake_model: FakeModel, fake_platfor
     second = client.post(f"/api/routines/{routine['id']}/run", headers=ALICE_H).json()
     _wait_for_reply(client, second["thread_id"])
 
-    runs = client.get(f"/api/routines/{routine['id']}/runs", headers=ALICE_H).json()
-    assert [r["id"] for r in runs] == [second["thread_id"], first.json()["thread_id"]]
-    assert all(r["routine_id"] == routine["id"] for r in runs)
-    assert runs[0]["title"].startswith("Morning brief · ")
+    runs = _wait_for_runs(client, routine["id"])
+    assert [r["thread_id"] for r in runs] == [second["thread_id"], first.json()["thread_id"]]
+    assert [(r["trigger"], r["status"]) for r in runs] == [("manual", "succeeded")] * 2
+    assert all(r["started_at"] and r["finished_at"] for r in runs)
 
     filtered = client.get(f"/api/threads?routine_id={routine['id']}", headers=ALICE_H).json()
-    assert [t["id"] for t in filtered] == [r["id"] for r in runs]
+    assert [t["id"] for t in filtered] == [r["thread_id"] for r in runs]
+    assert filtered[0]["title"].startswith("Morning brief · ")
     assert client.get(f"/api/routines/{routine['id']}", headers=ALICE_H).json()["last_run_at"]
 
     # Deleting the routine keeps its runs as ordinary chats.
     client.delete(f"/api/routines/{routine['id']}", headers=ALICE_H)
     threads = client.get("/api/threads", headers=ALICE_H).json()
-    assert {t["id"] for t in threads} >= {r["id"] for r in runs}
+    assert {t["id"] for t in threads} >= {r["thread_id"] for r in runs}
     assert all(t["routine_id"] is None for t in threads)
 
 

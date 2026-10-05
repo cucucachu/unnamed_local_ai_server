@@ -1400,9 +1400,10 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
 
 **Routines** (M17-02) — a saved prompt the agent runs later, as its owner,
 in one of their spaces. Owned like threads (row-level security on
-`routines.owner_user_id`; another user's routine is a `404`). Each run is a
-thread with `routine_id` set; deleting the routine keeps its runs as plain
-chats (`ON DELETE SET NULL`).
+`routines.owner_user_id`; another user's routine is a `404`). Each run
+(M17-04) is a `routine_runs` record, and once started, a thread with
+`routine_id` set. Deleting the routine deletes its run records but keeps
+their threads as plain chats (`ON DELETE SET NULL`).
 - `{routine}` = `{"id", "name", "prompt", "space": "/personal"|"/spaces/<slug>",
   "schedule", "timezone": IANA name, "enabled": bool, "next_run_at":
   iso8601|null, "last_run_at": iso8601|null, "created_at", "updated_at"}`.
@@ -1423,12 +1424,21 @@ chats (`ON DELETE SET NULL`).
   create fields → `{routine}` (`next_run_at` recomputed when `schedule`,
   `timezone` or `enabled` change; a new `space` is checked again);
   `DELETE` → `204`.
-- `POST /api/routines/{id}/run` → `202 {"thread_id"}`: a run now, in the
-  background (detached turn runner), on a delegation from the caller's
+- `{run}` = `{"id", "trigger": "schedule"|"manual", "status", "detail":
+  str|null, "thread_id": uuid|null, "due_at", "started_at", "finished_at":
+  iso8601|null, "created_at"}`.
+  - `status` is one of `queued`, `running`, `succeeded`, `failed`,
+    `timed_out`, `missed` (never started: too late, or the routine was
+    turned off while queued), or `waiting_approval` (a HITL approval is
+    pending in its chat).
+  - `detail` says why, for anything but `succeeded`.
+  - A run that never started has no thread.
+- `POST /api/routines/{id}/run` → `202 {run}`: a run now, in the background
+  (detached turn runner, no queue), on a delegation from the caller's
   session. The space is checked again first. The run's first user message
   is `Routine "<name>" (space <space>):` and the prompt; its title is
   `<name> · <Mon D>`.
-- `GET /api/routines/{id}/runs` → `200 [{thread}, ...]`, newest first.
+- `GET /api/routines/{id}/runs` → `200 [{run}, ...]`, newest first.
 - An enabled routine holds a platform **routine grant** (M17-03,
   `docs/PLATFORM.md` §4 "Routine grant") in `routines.grant_token`, never
   returned by the API.
@@ -1440,6 +1450,29 @@ chats (`ON DELETE SET NULL`).
   - A refused exchange disables the routine (`enabled=false`, no
     `next_run_at`, grant cleared). That is how revoking it in Settings →
     Sessions, a password change, or lost edit rights turn it off.
+- **Scheduler** (M17-04, `app/routines/scheduler.py`). It is on unless
+  `ROUTINES_SCHEDULER_ENABLED=false`, which an agent-server sharing the
+  database must set: the M16 eval candidate.
+  - **Claiming.** Every 30 s (`ROUTINES_POLL_S`) it claims every user's due
+    routines as the RLS bypass role: `FOR UPDATE SKIP LOCKED`, with
+    `next_run_at` moved to the first time after now in the same
+    transaction. So a due time fires once, even across a restart or a
+    second process, and an outage never fires a backlog.
+  - **Missed runs.** A claim more than `ROUTINES_MISSED_GRACE_S` (1 h) late
+    is recorded `missed`; otherwise it's `queued`. A queued run that waits
+    past the grace for a free slot is `missed` too.
+  - **GPU cap.** A queued run starts only while fewer than
+    `ROUTINES_MAX_CONCURRENT` (1) turns of *any* kind run. Chats never wait
+    on routines.
+  - **Running.** A started run gets its thread and a delegation from the
+    routine's grant (a refused grant fails the run and disables the
+    routine). It then runs as a detached turn with the usual recursion
+    limit, and is cancelled (`timed_out`) after `ROUTINE_RUN_TIMEOUT_S`
+    (30 min). Run-now gets the same time limit.
+  - **One-shots.** A one-shot is disabled when claimed, and its grant is
+    revoked once its run is over.
+  - **Restarts.** At startup, runs a restart cut off are `failed`
+    ("interrupted by a server restart"), and queued ones are queued again.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every

@@ -1,4 +1,4 @@
-"""`PgRoutineStore` and `threads.routine_id` (M17-02) against a real Postgres.
+"""`PgRoutineStore`, `routine_runs` and `threads.routine_id` (M17-02, -04) on a real Postgres.
 
 Same throwaway server as `test_threads_pg.py`, connected to as `agent`, so
 row-level security applies. Skipped without the `docker` CLI.
@@ -6,14 +6,15 @@ row-level security applies. Skipped without the `docker` CLI.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.db import rls
 from app.db.checkpointer import build_postgres_checkpointer
-from app.db.routines import NewRoutine, PgRoutineStore
+from app.db.routines import INTERRUPTED, NewRoutine, PgRoutineStore
 from app.db.threads import PgThreadStore
 from tests.conftest import PgServer
 
@@ -109,4 +110,73 @@ async def test_runs_are_threads_that_outlive_their_routine(pg_server: PgServer) 
         async with pg.pool.connection() as conn:
             await conn.execute("DELETE FROM threads WHERE owner_user_id = %s", (owner,))
             await conn.execute("DELETE FROM routines WHERE owner_user_id = %s", (owner,))
+        await pg.close()
+
+
+def _advance(routine, now):
+    return None if routine.name == "once" else now + timedelta(days=1)
+
+
+async def test_claims_are_cross_user_exclusive_and_advance(pg_server: PgServer) -> None:
+    pg = await build_postgres_checkpointer(pg_server.agent_dsn)
+    store = PgRoutineStore(pg.pool)
+    alice, bob = str(uuid.uuid4()), str(uuid.uuid4())
+    now = datetime(2026, 10, 6, 7, 0, tzinfo=UTC)
+    try:
+        rls.bind_user(alice)
+        daily = await store.create(alice, _new("daily", next_run_at=now - timedelta(minutes=5)))
+        await store.create(alice, _new("later", next_run_at=now + timedelta(hours=1)))
+        rls.bind_user(bob)
+        once = await store.create(bob, _new("once", next_run_at=now - timedelta(hours=3)))
+
+        # Two schedulers claiming at once: each due routine goes to exactly one.
+        rls.bind_user(None)
+        first, second = await asyncio.gather(
+            store.claim_due(now, 10, _advance, timedelta(hours=1)),
+            store.claim_due(now, 10, _advance, timedelta(hours=1)),
+        )
+        claimed = [c for c in first + second if c[0].owner_user_id in (alice, bob)]
+        by_name = {routine.name: (routine, run) for routine, run in claimed}
+        assert sorted(by_name) == ["daily", "once"] and len(claimed) == 2
+        routine, run = by_name["daily"]
+        assert routine.next_run_at == now + timedelta(days=1) and routine.enabled
+        assert (run.status, run.due_at, run.trigger) == ("queued", daily.next_run_at, "schedule")
+        routine, run = by_name["once"]
+        assert (routine.enabled, routine.next_run_at) == (False, None)
+        assert (run.status, run.finished_at) == ("missed", now)
+        again = await store.claim_due(now, 10, _advance, timedelta(hours=1))
+        assert all(r.owner_user_id not in (alice, bob) for r, _ in again)
+
+        # Run records are the owner's alone.
+        rls.bind_user(alice)
+        (listed,) = await store.list_runs(daily.id, alice)
+        running = await store.update_run(listed.id, alice, {"status": "running"})
+        assert running.status == "running"
+        assert await store.list_runs(once.id, bob) == []
+        rls.bind_user(bob)
+        assert await store.update_run(listed.id, alice, {"status": "failed"}) is None
+        assert [r.status for r in await store.list_runs(once.id, bob)] == ["missed"]
+
+        # A restart fails what was running; nothing of these is left queued.
+        rls.bind_user(None)
+        requeue = await store.recover_interrupted()
+        assert all(r.owner_user_id not in (alice, bob) for r, _ in requeue)
+        rls.bind_user(alice)
+        (failed,) = await store.list_runs(daily.id, alice)
+        assert (failed.status, failed.detail) == ("failed", INTERRUPTED)
+        assert failed.finished_at is not None
+
+        # Deleting the routine deletes its run records.
+        manual = await store.create_run(daily, "manual", "queued")
+        rls.bind_user(None)
+        assert [r.id for _, r in await store.recover_interrupted()
+                if r.owner_user_id == alice] == [manual.id]  # fmt: skip
+        rls.bind_user(alice)
+        assert await store.delete(daily.id, alice)
+        assert await store.list_runs(daily.id, alice) == []
+    finally:
+        for owner in (alice, bob):
+            rls.bind_user(owner)
+            async with pg.pool.connection() as conn:
+                await conn.execute("DELETE FROM routines WHERE owner_user_id = %s", (owner,))
         await pg.close()

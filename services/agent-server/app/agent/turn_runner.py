@@ -161,12 +161,22 @@ class TurnRunner:
         self._state = app_state
         self._active: dict[str, ActiveTurn] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._finished = asyncio.Condition()
 
     def lock_for(self, thread_id: str) -> asyncio.Lock:
         return self._locks.setdefault(thread_id, asyncio.Lock())
 
     def active(self, thread_id: str) -> ActiveTurn | None:
         return self._active.get(thread_id)
+
+    @property
+    def running(self) -> int:
+        return len(self._active)
+
+    async def wait_below(self, limit: int) -> None:
+        """Until fewer than `limit` turns run (the routine queue's GPU cap)."""
+        async with self._finished:
+            await self._finished.wait_for(lambda: self.running < limit)
 
     async def start(
         self, request: TurnRequest, *, lock_held: bool = False
@@ -241,6 +251,8 @@ class TurnRunner:
             self._active.pop(request.thread_id, None)
             turn._finish()
             lock.release()
+            async with self._finished:
+                self._finished.notify_all()
 
     async def _stream(self, turn: ActiveTurn) -> TurnOutcome:
         ws = _ws()
