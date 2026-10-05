@@ -47,7 +47,8 @@
       ],
       "expo-secure-store",
       "expo-dev-client",
-      "expo-local-authentication"
+      "expo-local-authentication",
+      "./plugins/withCleartextTraffic"
     ],
     "experiments": {
       "typedRoutes": true,

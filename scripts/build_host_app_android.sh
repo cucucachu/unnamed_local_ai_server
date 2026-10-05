@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Build a debug APK of the Home AI host app (Expo prebuild + Gradle) without
-# a host Android SDK/JDK and without `eas login`.
+# Build a debug or release APK of the Home AI host app (Expo prebuild +
+# Gradle) without a host Android SDK/JDK and without `eas login`.
+#
+#   HOMEAI_APK_VARIANT=release EXPO_PUBLIC_API_HOST=http://10.13.13.1 \
+#     scripts/build_host_app_android.sh
 #
 # Maintainer signed/store builds use EAS (`services/frontend/eas.json`
 # development profile) and the maintainer's Expo account — this script is
@@ -15,7 +18,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FRONTEND="$ROOT/services/frontend"
 OUT_DIR="${HOMEAI_APK_OUT:-$FRONTEND/dist}"
-IMAGE="${HOMEAI_ANDROID_IMAGE:-reactnativecommunity/react-native-android:v15.0}"
+# debug: a dev client that loads JS from Metro (LAN only). release: the JS
+# bundle is embedded, signed with the prebuild's debug keystore, so it runs
+# with no Metro (e.g. off the LAN over WireGuard). Set EXPO_PUBLIC_API_HOST
+# for the server it talks to (it overrides services/frontend/.env).
+VARIANT="${HOMEAI_APK_VARIANT:-debug}"
+case "$VARIANT" in
+  debug) TASK=assembleDebug ;;
+  release) TASK=assembleRelease ;;
+  *) printf 'error: HOMEAI_APK_VARIANT must be debug or release\n' >&2; exit 1 ;;
+esac
+# Expo 57's config step needs Node >= 22 (util.parseEnv); v15.0 ships Node 18.
+IMAGE="${HOMEAI_ANDROID_IMAGE:-reactnativecommunity/react-native-android:v21.1}"
 # Fallback images if the primary cannot be pulled.
 FALLBACK_IMAGES=(
   "reactnativecommunity/react-native-android:latest"
@@ -48,18 +62,18 @@ if [[ ! -d android ]]; then
 fi
 
 assemble() {
-  log "gradlew assembleDebug"
-  ./gradlew assembleDebug --no-daemon
+  log "gradlew $TASK"
+  ./gradlew "$TASK" --no-daemon
 }
 
 copy_apk() {
   local apk
-  apk="$(find android/app/build/outputs/apk -name '*.apk' | head -n 1 || true)"
+  apk="$(find "android/app/build/outputs/apk/$VARIANT" -name '*.apk' | head -n 1 || true)"
   if [[ -z "$apk" ]]; then
-    die "gradle finished but no APK was under android/app/build/outputs/apk"
+    die "gradle finished but no APK was under android/app/build/outputs/apk/$VARIANT"
   fi
   mkdir -p "$OUT_DIR"
-  local dest="$OUT_DIR/homeai-host-debug.apk"
+  local dest="$OUT_DIR/homeai-host-$VARIANT.apk"
   cp "$apk" "$dest"
   log "APK: $dest"
   log "(gitignored; do not commit)"
@@ -102,10 +116,23 @@ fi
 log "gradle in $CHOSEN"
 # Mount the frontend so Gradle sees the prebuild tree. Network is required
 # for Maven/Google artifact download inside the image.
+ENV_ARGS=()
+if [[ -n "${EXPO_PUBLIC_API_HOST:-}" ]]; then
+  ENV_ARGS+=(-e "EXPO_PUBLIC_API_HOST=$EXPO_PUBLIC_API_HOST")
+fi
+# As the invoking user, so the prebuild tree stays deletable; caches live in
+# the gitignored android/ dir and persist across builds. The whole repo is
+# mounted: Metro resolves @homeai/sdk from packages/homeai-sdk.
+mkdir -p android/.home android/.gradle-home
+APP_ANDROID=/repo/services/frontend/android
 docker run --rm \
-  -v "$FRONTEND:/src" \
-  -w /src/android \
+  --user "$(id -u):$(id -g)" \
+  -e HOME="$APP_ANDROID/.home" \
+  -e GRADLE_USER_HOME="$APP_ANDROID/.gradle-home" \
+  "${ENV_ARGS[@]}" \
+  -v "$ROOT:/repo" \
+  -w "$APP_ANDROID" \
   "$CHOSEN" \
-  ./gradlew assembleDebug --no-daemon
+  ./gradlew "$TASK" --no-daemon
 
 copy_apk
