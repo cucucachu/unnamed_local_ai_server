@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 
+import { Badge } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
 import { relativeTime } from '@/lib/relativeTime';
@@ -223,7 +224,13 @@ function ThreadRow({ thread, onDelete }: { thread: Thread; onDelete: (thread: Th
         <Text style={styles.rowTitle} numberOfLines={1}>
           {thread.title}
         </Text>
-        <Text style={styles.rowTime}>{relativeTime(thread.updated_at)}</Text>
+        <View style={styles.rowMeta}>
+          <Text style={styles.rowTime}>{relativeTime(thread.updated_at)}</Text>
+          {/* M17-05: a routine run paused on an approval; its chat shows the card. */}
+          {thread.needs_approval ? (
+            <Badge label="Needs approval" tone="accent" testID={`thread-needs-approval-${thread.id}`} />
+          ) : null}
+        </View>
       </View>
     </Pressable>
   );
@@ -333,6 +340,11 @@ const styles = StyleSheet.create({
   rowTitle: {
     color: theme.text,
     fontSize: 16,
+  },
+  rowMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   rowTime: {
     color: theme.textMuted,

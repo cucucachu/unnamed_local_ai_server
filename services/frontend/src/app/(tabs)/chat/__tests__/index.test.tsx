@@ -133,6 +133,19 @@ describe('ThreadListScreen — list', () => {
     expect(rendered).toContain('Thread B');
   });
 
+  it('marks a routine run paused on an approval as needing approval', async () => {
+    const paused: Thread = { ...THREAD_B, routine_id: 'routine-1', needs_approval: true };
+    mockThreadsApi({ GET: () => ({ ok: true, status: 200, body: [THREAD_A, paused] }) });
+
+    const renderer = await renderScreen();
+    const badges = renderer.root.findAll(
+      (node) => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith('thread-needs-approval-'),
+    );
+
+    expect(badges.map((node) => node.props.testID)).toEqual(['thread-needs-approval-thread-b']);
+    expect(textOf(renderer)).toContain('Needs approval');
+  });
+
   it('shows an error state with a retry option when the initial fetch fails', async () => {
     mockThreadsApi({ GET: () => ({ ok: false, status: 500, body: { detail: 'db unavailable' } }) });
 

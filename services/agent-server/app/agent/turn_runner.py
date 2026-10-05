@@ -64,6 +64,8 @@ class TurnRequest:
     # The `user_message` behind a fresh turn, for clients attaching later.
     user_message: dict | None = None
     detached_timeout_s: float | None = None
+    # A routine run's approval mode (M17-05, `app.agent.approvals`); None in a chat.
+    approval_mode: str | None = None
 
 
 @dataclass(eq=False)
@@ -264,6 +266,7 @@ class TurnRunner:
             hitl_enabled=request.hitl_enabled,
             thinking_enabled=request.thinking_enabled,
             delegation=request.delegation,
+            approval_mode=request.approval_mode,
         )
         config["recursion_limit"] = self._state.settings.agent_recursion_limit
 

@@ -121,6 +121,7 @@ def create_app(
             max_concurrent=settings.routines_max_concurrent,
             grace=timedelta(seconds=settings.routines_missed_grace_s),
             run_timeout_s=settings.routine_run_timeout_s,
+            approval_ttl=timedelta(seconds=settings.routine_approval_ttl_s),
         )
         app.state.routine_scheduler = scheduler
         try:

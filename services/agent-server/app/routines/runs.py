@@ -82,6 +82,7 @@ async def launch_run(
             hitl_enabled=document.hitl_enabled,
             thinking_enabled=document.thinking_enabled,
             delegation=delegation,
+            approval_mode=routine.approval_mode,
         )
     )
     turn.detach(queue)

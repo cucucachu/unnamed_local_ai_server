@@ -13,6 +13,10 @@ export interface Thread {
   title: string;
   created_at: string;
   updated_at: string;
+  /** M17-02: the routine this thread is a run of. */
+  routine_id?: string | null;
+  /** M17-05: that run is paused on an approval. */
+  needs_approval?: boolean;
 }
 
 export interface ToolCall {

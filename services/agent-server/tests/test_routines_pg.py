@@ -180,3 +180,52 @@ async def test_claims_are_cross_user_exclusive_and_advance(pg_server: PgServer) 
             async with pg.pool.connection() as conn:
                 await conn.execute("DELETE FROM routines WHERE owner_user_id = %s", (owner,))
         await pg.close()
+
+
+async def test_paused_runs_and_the_inbox(pg_server: PgServer) -> None:
+    pg = await build_postgres_checkpointer(pg_server.agent_dsn)
+    routines, threads = PgRoutineStore(pg.pool), PgThreadStore(pg.pool)
+    alice, bob = str(uuid.uuid4()), str(uuid.uuid4())
+    paused_at = datetime(2026, 10, 6, 7, 0, tzinfo=UTC)
+    try:
+        rls.bind_user(alice)
+        routine = await routines.create(alice, _new(approval_mode="allow_writes"))
+        assert routine.approval_mode == "allow_writes"
+        thread = await threads.create(alice, "Brief · Oct 6", routine.id)
+        run = await routines.create_run(routine, "schedule", "running", thread_id=thread.id)
+        done = await routines.create_run(routine, "manual", "running")
+        await routines.update_run(done.id, alice, {"status": "succeeded", "finished_at": paused_at})
+        paused = await routines.update_run(
+            run.id, alice, {"status": "waiting_approval", "finished_at": paused_at}
+        )
+        assert await routines.run_for_thread(thread.id, alice) == paused
+        assert await routines.run_for_thread("not-a-uuid", alice) is None
+        assert await routines.waiting_thread_ids(alice) == {thread.id}
+
+        rls.bind_user(None)
+        stale = await routines.stale_waiting(paused_at + timedelta(seconds=1))
+        assert [r.id for _, r in stale if r.owner_user_id == alice] == [run.id]
+        assert all(r.owner_user_id != alice for _, r in await routines.stale_waiting(paused_at))
+
+        rls.bind_user(alice)
+        inbox = await routines.inbox(alice, 10)
+        assert {r.id for r, _ in inbox} == {run.id, done.id}
+        assert {name for _, name in inbox} == {"Brief"}
+        assert await routines.unread_count(alice) == 2
+        assert await routines.mark_seen(alice, [run.id, "junk"], paused_at) == 1
+        assert await routines.unread_count(alice) == 1
+        await routines.update_run(run.id, alice, {"status": "expired"})
+        assert await routines.unread_count(alice) == 2
+        assert await routines.mark_seen(alice, None, paused_at) == 2
+        assert await routines.unread_count(alice) == 0
+
+        rls.bind_user(bob)
+        assert await routines.inbox(bob, 10) == []
+        assert await routines.waiting_thread_ids(bob) == set()
+        assert await routines.mark_seen(alice, None, paused_at) == 0
+    finally:
+        rls.bind_user(alice)
+        async with pg.pool.connection() as conn:
+            await conn.execute("DELETE FROM threads WHERE owner_user_id = %s", (alice,))
+            await conn.execute("DELETE FROM routines WHERE owner_user_id = %s", (alice,))
+        await pg.close()
