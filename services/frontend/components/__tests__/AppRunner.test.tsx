@@ -1,3 +1,4 @@
+import { StyleSheet } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import type { Space } from '@/lib/platform';
@@ -7,7 +8,7 @@ import { exists, flush, press, textOf } from '../../test-utils/screen';
 const mockSandboxes: Record<string, any>[] = [];
 jest.mock('@/components/AppAgentPanel', () => {
   const React = jest.requireActual('react');
-  const { Text, View } = jest.requireActual('react-native');
+  const { Pressable, Text, View } = jest.requireActual('react-native');
   return {
     AppAgentPanel: (props: Record<string, any>) =>
       React.createElement(
@@ -16,6 +17,15 @@ jest.mock('@/components/AppAgentPanel', () => {
         React.createElement(Text, { testID: 'app-agent-prompt' }, props.initialPrompt ?? ''),
         React.createElement(Text, { testID: 'app-agent-seq' }, `promptSeq=${props.promptSeq ?? 0}`),
         React.createElement(Text, { testID: 'app-agent-app' }, `${props.appName} ${props.appId} ${props.instanceId}`),
+        React.createElement(Text, { testID: 'app-agent-variant' }, `variant=${props.variant}`),
+        props.onMinimize
+          ? React.createElement(Pressable, { testID: 'app-agent-minimize', onPress: props.onMinimize })
+          : null,
+        React.createElement(Pressable, {
+          testID: 'mock-agent-busy',
+          onPress: () => props.onActivity({ busy: true, needsApproval: false }),
+        }),
+        React.createElement(Pressable, { testID: 'mock-agent-focus', onPress: props.onComposerFocus }),
       ),
   };
 });
@@ -177,5 +187,54 @@ describe('AppRunner', () => {
     await act(async () => mockSandboxes[0].onAskAgent('Add milk'));
     expect(textOf(r)).toContain('Add milk');
     expect(textOf(r)).toContain('promptSeq=2');
+  });
+});
+
+describe('AppRunner agent layout', () => {
+  let widthSpy: jest.SpyInstance;
+  function setWidth(width: number) {
+    widthSpy = jest
+      .spyOn(jest.requireActual('react-native'), 'useWindowDimensions')
+      .mockReturnValue({ width, height: 800, scale: 2, fontScale: 1 });
+  }
+  afterEach(() => widthSpy?.mockRestore());
+
+  function sheetStyle(r: ReactTestRenderer) {
+    const node = r.root.find((n) => n.props.testID === 'app-agent-sheet' && n.props.style);
+    return StyleSheet.flatten(node.props.style);
+  }
+
+  it('is a side panel on wide screens', async () => {
+    setWidth(1024);
+    const r = await mount();
+    await press(r, 'app-ask-agent');
+    expect(textOf(r)).toContain('variant=side');
+    expect(exists(r, 'app-agent-sheet')).toBe(false);
+    expect(exists(r, 'app-agent-minimize')).toBe(false);
+  });
+
+  it('is a half-height sheet on phones that grows on composer focus', async () => {
+    setWidth(390);
+    const r = await mount();
+    await press(r, 'app-ask-agent');
+    expect(textOf(r)).toContain('variant=sheet');
+    expect(sheetStyle(r).height).toBe('55%');
+    await press(r, 'mock-agent-focus');
+    expect(sheetStyle(r).top).toBe(0);
+  });
+
+  it('minimizes to a pill that keeps the panel mounted and shows activity', async () => {
+    setWidth(390);
+    const r = await mount();
+    await press(r, 'app-ask-agent');
+    await press(r, 'mock-agent-busy');
+    await press(r, 'app-agent-minimize');
+    expect(exists(r, 'app-agent-panel')).toBe(true);
+    expect(sheetStyle(r).display).toBe('none');
+    expect(textOf(r)).toContain('Agent working…');
+
+    await press(r, 'app-agent-pill');
+    expect(exists(r, 'app-agent-pill')).toBe(false);
+    expect(sheetStyle(r).display).toBeUndefined();
   });
 });

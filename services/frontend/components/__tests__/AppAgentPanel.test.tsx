@@ -125,6 +125,27 @@ describe('AppAgentPanel', () => {
     expect(mockCreateThread).toHaveBeenCalledWith('Ask: Runtime check');
   });
 
+  it('collapses the context to one line in the phone sheet', async () => {
+    n += 1;
+    const instanceId = `${INSTANCE.slice(0, -1)}${n.toString(16)}`;
+    mockLoadContext.mockResolvedValue({ ...ctx, instanceId });
+    mockCreateThread.mockResolvedValue({ id: `thread-${n}`, title: 'Ask: Runtime check', created_at: '', updated_at: '' });
+    const onMinimize = jest.fn();
+    await act(async () => {
+      renderer = create(
+        <AppAgentPanel {...panelProps(instanceId, null, 0)} variant="sheet" onMinimize={onMinimize} />,
+      );
+    });
+    await flush();
+    await flush();
+    const r = renderer!;
+    expect(textOf(r)).not.toContain('CREATE TABLE items');
+    await press(r, 'app-agent-context-toggle');
+    expect(textOf(r)).toContain('CREATE TABLE items');
+    await press(r, 'app-agent-minimize');
+    expect(onMinimize).toHaveBeenCalled();
+  });
+
   it('sends the first prompt pre-seeded with app context', async () => {
     const { renderer: r, ctx: loaded } = await mount();
     await typeInto(r, 'app-agent-composer', 'Add Milk via app_sql');

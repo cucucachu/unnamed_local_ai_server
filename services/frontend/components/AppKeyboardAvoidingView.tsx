@@ -7,6 +7,11 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
  * shrinks the screen when the keyboard opens so a bottom-pinned chat list
  * (and a centered PromptModal card) stay above it. Web stays on RN's own
  * KAV — see `AppKeyboardAvoidingView.web.tsx`.
+ *
+ * `automaticOffset`: without it the library takes the view's top from
+ * `onLayout`, which is relative to the parent, so under a stack header
+ * (plus the edge-to-edge status bar) it under-pads by that height and the
+ * composer stays behind the keyboard.
  */
 export function AppKeyboardAvoidingView({
   children,
@@ -16,7 +21,7 @@ export function AppKeyboardAvoidingView({
   style?: StyleProp<ViewStyle>;
 }) {
   return (
-    <KeyboardAvoidingView style={style} behavior="padding">
+    <KeyboardAvoidingView style={style} behavior="padding" automaticOffset>
       {children}
     </KeyboardAvoidingView>
   );
