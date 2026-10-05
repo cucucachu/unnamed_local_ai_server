@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { AuthField, AuthFormFrame, AuthLink, AuthSubmitButton } from '@/components/AuthForm';
 import { useAuth } from '@/components/AuthProvider';
+import { PairingScanner } from '@/components/PairingScanner';
 import { ApiError } from '@/lib/api';
 import {
   authErrorMessage,
@@ -22,7 +23,14 @@ import { Pressable, Platform, StyleSheet, Text } from 'react-native';
  * public) hides the password field on web. The host app (not Expo Go)
  * offers paired-device sign-in. `onShowSetup` is offered while bootstrap
  * is still open. */
-export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
+export function LoginScreen({
+  onShowSetup,
+  pairPayload: linkedPairPayload,
+}: {
+  onShowSetup?: () => void;
+  /** From a `homeai://pair?…` link: show the pairing form pre-filled. */
+  pairPayload?: string;
+}) {
   const { login, loginWithPasskey, loginWithDevice, pairDevice } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -33,7 +41,8 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
   const [offerPasskey, setOfferPasskey] = useState(false);
   const [passkeyOnly, setPasskeyOnly] = useState(false);
   const [paired, setPaired] = useState(false);
-  const [pairPayload, setPairPayload] = useState('');
+  const [pairPayload, setPairPayload] = useState(linkedPairPayload ?? '');
+  const [scanning, setScanning] = useState(false);
   const host = isHostApp();
 
   useEffect(() => {
@@ -47,7 +56,7 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
         );
       })
       .catch(() => {});
-    if (host) {
+    if (host && !linkedPairPayload) {
       loadPairedDeviceId().then((id) => {
         if (!cancelled) setPaired(Boolean(id));
       });
@@ -55,7 +64,7 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, [host]);
+  }, [host, linkedPairPayload]);
 
   function fail(caught: unknown) {
     if (caught instanceof ApiError && (caught.detail === 'totp_required' || caught.detail === 'invalid_totp')) {
@@ -119,16 +128,17 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
     }
   }
 
-  async function handlePair() {
+  async function handlePair(scanned?: string) {
     if (busy) return;
-    if (!pairPayload.trim()) {
-      setError('Paste the pairing QR from Settings on the LAN.');
+    const payload = (scanned ?? pairPayload).trim();
+    if (!payload) {
+      setError('Scan or paste the pairing QR from Settings on the LAN.');
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await pairDevice(pairPayload.trim());
+      await pairDevice(payload);
     } catch (caught) {
       // Enroll can succeed and the follow-up sign-in still stop at TOTP;
       // the phone is paired then, and pairing again would replace its key.
@@ -166,8 +176,27 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
           <Text style={styles.deviceText}>Sign in with this device</Text>
         </Pressable>
       ) : null}
-      {host && !paired ? (
+      {host && !paired && scanning ? (
+        <PairingScanner
+          onScanned={(data) => {
+            setScanning(false);
+            setPairPayload(data);
+            handlePair(data);
+          }}
+          onCancel={() => setScanning(false)}
+        />
+      ) : null}
+      {host && !paired && !scanning ? (
         <>
+          <Pressable
+            onPress={() => setScanning(true)}
+            disabled={busy}
+            accessibilityRole="button"
+            testID="host-pair-scan"
+            style={styles.device}
+          >
+            <Text style={styles.deviceText}>Scan pairing QR</Text>
+          </Pressable>
           <AuthField
             label="Pairing code"
             value={pairPayload}
@@ -177,7 +206,7 @@ export function LoginScreen({ onShowSetup }: { onShowSetup?: () => void }) {
             testID="host-pair-payload"
           />
           <Pressable
-            onPress={handlePair}
+            onPress={() => handlePair()}
             disabled={busy}
             accessibilityRole="button"
             testID="host-pair-enroll"

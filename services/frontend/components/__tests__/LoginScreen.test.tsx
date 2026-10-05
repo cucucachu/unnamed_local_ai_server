@@ -34,6 +34,15 @@ jest.mock('@/lib/auth', () => {
   };
 });
 
+jest.mock('@/components/PairingScanner', () => {
+  const { Pressable } = jest.requireActual('react-native');
+  const { createElement: h } = jest.requireActual('react');
+  return {
+    PairingScanner: ({ onScanned }: { onScanned: (data: string) => void }) =>
+      h(Pressable, { testID: 'mock-scanner', onPress: () => onScanned('homeai://pair?token=hd_s&challenge=cs') }),
+  };
+});
+
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { LoginScreen } from '../LoginScreen';
 
@@ -154,6 +163,28 @@ describe('LoginScreen host-app pairing', () => {
     await type(renderer!, 'host-pair-payload', '{"kind":"homeai-host-pair","token":"hd_x","challenge":"ab"}');
     await press(renderer!, 'host-pair-enroll');
     expect(mockPairDevice).toHaveBeenCalled();
+  });
+
+  it('pairs from a scanned QR', async () => {
+    mockPairedId = null;
+    mockPairDevice.mockResolvedValue(undefined);
+    await renderLogin();
+    await press(renderer!, 'host-pair-scan');
+    expect(exists(renderer!, 'host-pair-enroll')).toBe(false);
+    await press(renderer!, 'mock-scanner');
+    expect(mockPairDevice).toHaveBeenCalledWith('homeai://pair?token=hd_s&challenge=cs');
+  });
+
+  it('shows the pairing form pre-filled from a pair link even when a pair is stored', async () => {
+    mockPairedId = 'device-1';
+    mockPairDevice.mockResolvedValue(undefined);
+    await act(async () => {
+      renderer = create(createElement(LoginScreen, { pairPayload: 'homeai://pair?token=hd_l&challenge=cl' }));
+    });
+    await flush();
+    expect(exists(renderer!, 'host-pair-sign-in')).toBe(false);
+    await press(renderer!, 'host-pair-enroll');
+    expect(mockPairDevice).toHaveBeenCalledWith('homeai://pair?token=hd_l&challenge=cl');
   });
 
   it('switches to device sign-in with a TOTP field when pairing stops at totp_required', async () => {

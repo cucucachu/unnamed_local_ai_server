@@ -195,8 +195,9 @@ export default function RemoteAccessScreen() {
 
         <SectionTitle>Pair a phone</SectionTitle>
         <Text style={settingsStyles.muted}>
-          Show a pairing QR on the LAN, then open the Home AI host app on the phone (not Expo Go)
-          and paste or scan it. Members can pair their own device. This is not a WireGuard config.
+          Show a pairing QR on the LAN, then scan it with the phone&apos;s camera (it opens the Home AI
+          host app, not Expo Go) or with Scan pairing QR in the app. Members can pair their own
+          device. This is not a WireGuard config.
         </Text>
         <Card>
           <View style={settingsStyles.cardBody}>
