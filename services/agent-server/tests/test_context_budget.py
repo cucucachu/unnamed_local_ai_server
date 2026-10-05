@@ -37,6 +37,11 @@ def test_profile_sizes_summarization_from_the_context_setting(fake_model: FakeMo
     assert compute_summarization_defaults(model)["trigger"] == ("fraction", 0.85)
 
 
+def test_a_slow_prompt_gets_the_whole_model_timeout(fake_model: FakeModel) -> None:
+    model = build_model(fake_model.settings(model_timeout_s=1800))
+    assert model.stream_chunk_timeout == 1800
+
+
 @pytest.mark.parametrize("streaming", [True, False])
 async def test_llama_overflow_is_a_context_overflow_error(
     fake_model: FakeModel, streaming: bool
