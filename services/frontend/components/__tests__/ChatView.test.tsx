@@ -1315,7 +1315,7 @@ describe('ChatView', () => {
         captured.onError?.('not-allowed');
       });
 
-      expect(JSON.stringify(renderer!.toJSON())).toContain('Allow microphone for homeai.local');
+      expect(renderer!.root.findAll((node) => node.props.children === 'Allow microphone for homeai.local').length).toBeGreaterThan(0);
     });
   });
 });
