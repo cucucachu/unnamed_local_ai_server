@@ -342,7 +342,7 @@ export default function FilesScreen() {
   const atRoot = dirPath === ROOT_PATH;
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="files-screen">
       <View style={styles.header}>
         <ScrollView
           horizontal
