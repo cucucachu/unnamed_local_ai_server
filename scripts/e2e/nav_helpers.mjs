@@ -1,6 +1,7 @@
 // M19-01: the tab bar is just Chat and Apps; Files, Routines and Settings
 // open from their tiles on Apps.
 // M19-02: the Chat tab is one chat; history is a drawer, + starts a new chat.
+// M19-04: Apps is an icon grid; long press on an app opens its action sheet.
 
 const TIMEOUT_MS = 30_000;
 
@@ -9,6 +10,13 @@ export async function openSystemApp(page, slug) {
   await page.getByRole('tab', { name: 'Apps' }).click();
   await page.getByTestId('home-launcher').waitFor({ timeout: TIMEOUT_MS });
   await page.getByTestId(`home-open-${slug}`).click();
+}
+
+/** Long press on an app tile: holds the mouse past the tile's 400 ms
+ * `delayLongPress`, then waits for the action sheet. */
+export async function openAppSheet(page, tile) {
+  await tile.click({ delay: 800 });
+  await page.getByTestId('app-sheet').waitFor({ timeout: TIMEOUT_MS });
 }
 
 /** Chat tab -> + : an empty new chat (it has no thread until its first send). */
