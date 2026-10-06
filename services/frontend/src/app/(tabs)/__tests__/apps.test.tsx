@@ -66,7 +66,7 @@ beforeEach(() => {
 const title = () => (mockScreenOptions.mock.calls.at(-1)?.[0] as { title: string }).title;
 const selectedDot = (target: ReactTestRenderer) =>
   target.root.find(
-    (node) => typeof node.props.testID === 'string' && node.props.testID.startsWith('home-space-') && node.props.accessibilityState?.selected && typeof node.props.onPress === 'function',
+    (node) => typeof node.props.testID === 'string' && node.props.testID.startsWith('home-space-') && node.props['aria-selected'] && typeof node.props.onPress === 'function',
   ).props.testID;
 
 async function swipeTo(target: ReactTestRenderer, page: number, width = 390): Promise<void> {
