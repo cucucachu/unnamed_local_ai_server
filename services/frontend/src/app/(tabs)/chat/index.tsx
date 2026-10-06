@@ -1,59 +1,30 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
-import { Swipeable } from 'react-native-gesture-handler';
+import { Stack, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Badge } from '@/components/SettingsUI';
+import { ChatHistoryDrawer, type ThreadListState } from '@/components/ChatHistoryDrawer';
+import { ChatView } from '@/components/ChatView';
+import { SwipeToOpen } from '@/components/SwipeToOpen';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
 import { publishThreads } from '@/lib/chatAttention';
-import { relativeTime } from '@/lib/relativeTime';
+import { adoptCreatedThread, openChat, useCurrentChat } from '@/lib/currentChat';
 import { theme } from '@/lib/theme';
-import { createThread, deleteThread, listThreads, type Thread } from '@/lib/threads';
+import { deleteThread, listThreads, renameThread, type Thread } from '@/lib/threads';
 
 /**
- * Thread-list screen (M3-04) — the new `index` route of the `chat` stack
- * (see `chat/_layout.tsx`); `[threadId].tsx` is the M2-06 chat screen this
- * navigates into.
+ * The Chat tab (M19-02) is a chat: the one last open this app session, or a
+ * new empty one on a cold launch (see `lib/currentChat.ts`). The menu button
+ * (or, on a phone, a swipe right) opens the history drawer; + starts a new
+ * chat. `/chat/<id>` deep links land here through `[threadId].tsx`.
  */
-
-type LoadState = 'loading' | 'error' | 'done';
-
-/**
- * RN's `Alert.alert` has NO real implementation on web — confirmed by
- * reading `react-native-web`'s own source
- * (`node_modules/react-native-web/src/exports/Alert/index.js`): the whole
- * class is `static alert() {}`, a no-op. Hence the ticket's explicit
- * "`Alert` + `window.confirm` fallback" — this isn't a defensive nicety,
- * it's the only way to get an actual confirm dialog on web at all.
- */
-function confirmDeleteThread(title: string): Promise<boolean> {
-  const message = `Delete "${title}"? This can't be undone.`;
-
-  if (Platform.OS === 'web') {
-    return Promise.resolve(window.confirm(message));
-  }
-
-  return new Promise((resolve) => {
-    Alert.alert('Delete conversation', message, [
-      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-      { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
-    ]);
-  });
-}
-
-export default function ThreadListScreen() {
-  const router = useRouter();
+export default function ChatTabScreen() {
+  const { threadId, key } = useCurrentChat();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [loadState, setLoadState] = useState<LoadState>('loading');
-  const [refreshing, setRefreshing] = useState(false);
-  const [creating, setCreating] = useState(false);
-  // M17-06: routine runs can be hidden from the list.
-  const [showRoutineRuns, setShowRoutineRuns] = useState(true);
+  const [loadState, setLoadState] = useState<ThreadListState>('loading');
   const { message: toast, showToast } = useToast();
-  const hasRoutineRuns = threads.some((t) => t.routine_id);
-  const shown = showRoutineRuns ? threads : threads.filter((t) => !t.routine_id);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -66,53 +37,49 @@ export default function ThreadListScreen() {
     }
   }, []);
 
-  // Spec: "auto-refresh on screen focus". `useFocusEffect` (from
-  // `expo-router` directly — confirmed real by reading
-  // `node_modules/expo-router/build/exports.d.ts`, which re-exports it from
-  // `./useFocusEffect`, and by this screen actually building/navigating —
-  // rather than assumed to come from `@react-navigation/native`, which
-  // isn't even installed as a direct or hoisted dependency in this repo's
-  // `node_modules`) also covers the initial mount fetch, so no separate
-  // `useEffect(() => { loadThreads() }, [])` is needed alongside it.
   useFocusEffect(
     useCallback(() => {
-      loadThreads();
+      void loadThreads();
     }, [loadThreads]),
   );
 
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    listThreads()
-      .then((fetched) => {
-        setThreads(fetched);
-        publishThreads(fetched);
-        setLoadState('done');
-      })
-      .catch(() => showToast('Failed to refresh conversations'))
-      .finally(() => setRefreshing(false));
-  }, [showToast]);
+  const openDrawer = useCallback(() => {
+    setDrawerOpen(true);
+    void loadThreads();
+  }, [loadThreads]);
 
-  const handleNewChat = useCallback(async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const thread = await createThread();
-      router.push({ pathname: '/chat/[threadId]', params: { threadId: thread.id } });
-    } catch (error) {
-      showToast(error instanceof ApiError ? error.detail : 'Failed to create a new chat');
-    } finally {
-      setCreating(false);
-    }
-  }, [creating, router, showToast]);
+  const handleSelect = useCallback((id: string) => {
+    setDrawerOpen(false);
+    openChat(id);
+  }, []);
+
+  const handleNewChat = useCallback(() => {
+    setDrawerOpen(false);
+    openChat(null);
+  }, []);
+
+  const handleRename = useCallback(
+    async (thread: Thread, title: string) => {
+      setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, title } : t)));
+      try {
+        const updated = await renameThread(thread.id, title);
+        setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, title: updated.title } : t)));
+      } catch (error) {
+        setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, title: thread.title } : t)));
+        showToast(error instanceof ApiError ? error.detail : 'Failed to rename conversation');
+      }
+    },
+    [showToast],
+  );
 
   const handleDelete = useCallback(
     async (thread: Thread) => {
       const indexBeforeRemoval = threads.findIndex((t) => t.id === thread.id);
       setThreads((prev) => prev.filter((t) => t.id !== thread.id));
+      if (thread.id === threadId) openChat(null);
       try {
         await deleteThread(thread.id);
       } catch (error) {
-        // Restore + toast on failure, per spec.
         setThreads((prev) => {
           if (prev.some((t) => t.id === thread.id)) return prev;
           const restored = [...prev];
@@ -122,179 +89,56 @@ export default function ThreadListScreen() {
         showToast(error instanceof ApiError ? error.detail : 'Failed to delete conversation');
       }
     },
-    [threads, showToast],
+    [threads, threadId, showToast],
   );
+
+  const title = threadId === null ? 'New chat' : (threads.find((t) => t.id === threadId)?.title ?? 'Chat');
 
   return (
     <View style={styles.container}>
       <Stack.Screen
         options={{
+          title,
+          headerLeft: () => (
+            <Pressable
+              onPress={openDrawer}
+              accessibilityRole="button"
+              accessibilityLabel="Chat history"
+              testID="chat-history-button"
+              style={styles.headerButton}
+            >
+              <Ionicons name="menu" size={24} color={theme.text} />
+            </Pressable>
+          ),
           headerRight: () => (
-            <View style={styles.headerButtons}>
-              {/* Opens the Settings tab (M8-02 hub; a tab since M14-02). */}
-              <Pressable
-                onPress={() => router.push('/settings')}
-                accessibilityRole="button"
-                accessibilityLabel="Settings"
-                testID="settings-header-button"
-                style={styles.headerButton}
-              >
-                <Ionicons name="settings-outline" size={24} color={theme.text} />
-              </Pressable>
-              <Pressable
-                onPress={handleNewChat}
-                disabled={creating}
-                accessibilityRole="button"
-                accessibilityLabel="New chat"
-                testID="new-chat-header-button"
-                style={styles.headerButton}
-              >
-                {creating ? (
-                  <ActivityIndicator size="small" color={theme.text} />
-                ) : (
-                  <Ionicons name="add" size={26} color={theme.text} />
-                )}
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={handleNewChat}
+              accessibilityRole="button"
+              accessibilityLabel="New chat"
+              testID="new-chat-header-button"
+              style={styles.headerButton}
+            >
+              <Ionicons name="add" size={26} color={theme.text} />
+            </Pressable>
           ),
         }}
       />
-
-      {loadState === 'loading' ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={theme.accent} />
-        </View>
-      ) : loadState === 'error' ? (
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>Couldn&apos;t load your conversations.</Text>
-          <Pressable style={styles.retryButton} onPress={loadThreads} accessibilityRole="button">
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </Pressable>
-        </View>
-      ) : threads.length === 0 ? (
-        <View style={styles.centered}>
-          <Text style={styles.emptyText}>No conversations yet</Text>
-          <Pressable
-            style={styles.newChatButton}
-            onPress={handleNewChat}
-            disabled={creating}
-            accessibilityRole="button"
-            accessibilityLabel="New chat"
-            testID="new-chat-empty-button"
-          >
-            <Text style={styles.newChatButtonText}>New chat</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <FlatList
-          data={shown}
-          ListHeaderComponent={
-            hasRoutineRuns ? (
-              <View style={styles.filters}>
-                <Pressable
-                  onPress={() => setShowRoutineRuns((prev) => !prev)}
-                  style={[styles.filterChip, showRoutineRuns && styles.filterChipOn]}
-                  accessibilityRole="switch"
-                  accessibilityState={{ checked: showRoutineRuns }}
-                  accessibilityLabel="Show routine runs"
-                  testID="thread-filter-routine-runs"
-                >
-                  <Ionicons name="alarm-outline" size={14} color={theme.text} />
-                  <Text style={styles.filterChipText}>Routine runs</Text>
-                </Pressable>
-              </View>
-            ) : null
-          }
-          keyExtractor={(thread) => thread.id}
-          renderItem={({ item }) => <ThreadRow thread={item} onDelete={handleDelete} />}
-          contentContainerStyle={styles.listContent}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accent} />}
-        />
-      )}
-
+      <SwipeToOpen onOpen={openDrawer}>
+        <ChatView key={key} threadId={threadId} onThreadCreated={adoptCreatedThread} onTurnEnd={loadThreads} />
+      </SwipeToOpen>
+      <ChatHistoryDrawer
+        open={drawerOpen}
+        threads={threads}
+        loadState={loadState}
+        currentThreadId={threadId}
+        onClose={() => setDrawerOpen(false)}
+        onRetry={() => void loadThreads()}
+        onSelect={handleSelect}
+        onRename={(thread, newTitle) => void handleRename(thread, newTitle)}
+        onDelete={(thread) => void handleDelete(thread)}
+      />
       <Toast message={toast} testID="thread-list-toast" />
     </View>
-  );
-}
-
-function ThreadRow({ thread, onDelete }: { thread: Thread; onDelete: (thread: Thread) => void }) {
-  const router = useRouter();
-  const swipeableRef = useRef<Swipeable>(null);
-
-  const handlePress = useCallback(() => {
-    router.push({ pathname: '/chat/[threadId]', params: { threadId: thread.id } });
-  }, [router, thread.id]);
-
-  const handleLongPress = useCallback(async () => {
-    const confirmed = await confirmDeleteThread(thread.title);
-    if (confirmed) onDelete(thread);
-  }, [onDelete, thread]);
-
-  const rowContent = (
-    <Pressable
-      style={styles.row}
-      onPress={handlePress}
-      // Long-press-to-delete is the WEB affordance (spec: "long-press ->
-      // confirm dialog on web"); native uses the swipe gesture below
-      // instead, so this handler is a no-op there (native still gets
-      // `onLongPress` wired up harmlessly if this branch weren't gated, but
-      // gating it avoids a redundant second delete path on native).
-      onLongPress={Platform.OS === 'web' ? handleLongPress : undefined}
-      testID="thread-row"
-      accessibilityRole="button"
-      accessibilityLabel={thread.title}
-    >
-      <View style={styles.rowTextContainer}>
-        <Text style={[styles.rowTitle, thread.unread && styles.rowTitleUnread]} numberOfLines={1}>
-          {thread.title}
-        </Text>
-        <View style={styles.rowMeta}>
-          <Text style={styles.rowTime}>{relativeTime(thread.updated_at)}</Text>
-          {thread.routine_id ? <Badge label="Routine" testID={`thread-routine-${thread.id}`} /> : null}
-          {/* M17-05, M17-10: a chat paused on an approval; it shows the card. */}
-          {thread.needs_approval ? (
-            <Badge label="Needs approval" tone="accent" testID={`thread-needs-approval-${thread.id}`} />
-          ) : thread.unread ? (
-            <Badge label="New" tone="accent" testID={`thread-unread-${thread.id}`} />
-          ) : null}
-        </View>
-      </View>
-    </Pressable>
-  );
-
-  // `Swipeable` (from `react-native-gesture-handler`, already a direct
-  // dependency — see `package.json`) rather than
-  // `ReanimatedSwipeable`/`react-native-reanimated`: confirmed by reading
-  // `node_modules/react-native-gesture-handler/src/index.ts` that the
-  // plain `Swipeable` export still exists (deprecated in favor of the
-  // Reanimated version, but functional) and is built on RN's own
-  // `Animated` API, not Reanimated — which isn't a direct dependency of
-  // this project (only present transitively via some other package) — so
-  // using it avoids adding a new direct dependency for this ticket.
-  // Native-only: swipe gestures don't apply on web, and `Swipeable` itself
-  // is unnecessary chrome there (long-press covers deletion on web).
-  if (Platform.OS === 'web') return rowContent;
-
-  return (
-    <Swipeable
-      ref={swipeableRef}
-      overshootRight={false}
-      renderRightActions={() => (
-        <Pressable
-          style={styles.deleteAction}
-          onPress={() => {
-            swipeableRef.current?.close();
-            onDelete(thread);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={`Delete ${thread.title}`}
-        >
-          <Ionicons name="trash-outline" size={20} color="#ffffff" />
-        </Pressable>
-      )}
-    >
-      {rowContent}
-    </Swipeable>
   );
 }
 
@@ -303,110 +147,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.bg,
   },
-  headerButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   headerButton: {
     padding: 6,
-    marginRight: 4,
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    paddingHorizontal: 24,
-  },
-  errorText: {
-    color: theme.danger,
-    fontSize: 15,
-    textAlign: 'center',
-  },
-  emptyText: {
-    color: theme.textMuted,
-    fontSize: 16,
-  },
-  retryButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: theme.surface,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  retryButtonText: {
-    color: theme.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  newChatButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: theme.accent,
-  },
-  newChatButtonText: {
-    color: theme.text,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  listContent: {
-    paddingVertical: 4,
-  },
-  filters: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  filterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  filterChipOn: {
-    borderColor: theme.accent,
-    backgroundColor: theme.accent,
-  },
-  filterChipText: {
-    color: theme.text,
-    fontSize: 13,
-  },
-  row: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
-    backgroundColor: theme.bg,
-  },
-  rowTextContainer: {
-    gap: 4,
-  },
-  rowTitle: {
-    color: theme.text,
-    fontSize: 16,
-  },
-  rowTitleUnread: {
-    fontWeight: '600',
-  },
-  rowMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  rowTime: {
-    color: theme.textMuted,
-    fontSize: 13,
-  },
-  deleteAction: {
-    width: 76,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.danger,
+    marginHorizontal: 4,
   },
 });

@@ -1,4 +1,4 @@
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import type { ThreadMessage } from '../threads';
@@ -1141,5 +1141,80 @@ describe('useChat — detached turns (M17-01)', () => {
     expect(findItem(items, 'user', 1)).toMatchObject({ id: userId, text: 'count to three' });
     expect(findItem(items, 'assistant').text).toBe('one two three');
     expect(turns[turns.length - 1].status).toBe('completed');
+  });
+});
+
+describe('useChat — new chat (M19-02)', () => {
+  function renderNewChat(createResponse: { ok: boolean; status: number; body: unknown }) {
+    const fetchMock = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+      const href = String(url);
+      if (href.endsWith('/api/threads') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: createResponse.ok,
+          status: createResponse.status,
+          statusText: '',
+          json: async () => createResponse.body,
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => [] });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    let latest: UseChatResult | undefined;
+    const created: string[] = [];
+    function Harness(): null {
+      const [threadId, setThreadId] = useState<string | null>(null);
+      latest = useChat(threadId, Ctor, (id) => {
+        created.push(id);
+        setThreadId(id);
+      });
+      return null;
+    }
+    act(() => {
+      create(createElement(Harness));
+    });
+    return { current: () => latest as UseChatResult, created, fetchMock };
+  }
+
+  it('is ready at once with no history fetch and no socket', () => {
+    const hook = renderNewChat({ ok: true, status: 201, body: { id: 'new-thread' } });
+    expect(hook.current().hydrationState).toBe('done');
+    expect(hook.current().items).toEqual([]);
+    expect(hook.fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it('the first message creates the thread, keeps the message on screen and sends it once the socket opens', async () => {
+    const hook = renderNewChat({ ok: true, status: 201, body: { id: 'new-thread' } });
+
+    act(() => {
+      hook.current().sendMessage('hello');
+    });
+    expect(findItem(hook.current().items, 'user').text).toBe('hello');
+    expect(hook.current().busy).toBe(true);
+
+    await flush();
+    expect(hook.created).toEqual(['new-thread']);
+    expect(hook.fetchMock.mock.calls.some(([url]) => String(url).includes('/messages'))).toBe(false);
+    expect(findItem(hook.current().items, 'user').text).toBe('hello');
+
+    const socket = latestSocket();
+    act(() => socket.onopen?.({}));
+    const user = findItem(hook.current().items, 'user');
+    expect(socket.sent.map((data) => JSON.parse(data))).toEqual([
+      { type: 'user_message', content: 'hello', id: user.id },
+    ]);
+  });
+
+  it('a failed create shows an error and frees the composer', async () => {
+    const hook = renderNewChat({ ok: false, status: 500, body: { detail: 'boom' } });
+    act(() => {
+      hook.current().sendMessage('hello');
+    });
+    await flush();
+    expect(hook.created).toEqual([]);
+    expect(hook.current().busy).toBe(false);
+    expect(findItem(hook.current().items, 'error').message).toBe("Couldn't start the chat");
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
