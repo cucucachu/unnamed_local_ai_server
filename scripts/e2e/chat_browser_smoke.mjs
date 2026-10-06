@@ -58,8 +58,9 @@
 //
 // M9-06: a fake `SpeechRecognition` is injected via `addInitScript`. Over
 // `https://homeai.local` the composer mic is visible and a transcript
-// lands in the draft (never auto-sent). Over `http://` the button is
-// absent (`isSecureContext` is false).
+// lands in the draft (never auto-sent); M19-03: it's started from the
+// empty chat's big mic, which also focuses the composer. Over `http://`
+// neither mic is shown (`isSecureContext` is false).
 //
 // Issue #123: right after the M9-01 markdown check, a long plain-prose
 // reply (no links/lists/formatting) is asserted to wrap within a narrow
@@ -510,11 +511,15 @@ async function assertVoiceInput(browser, httpsContextOptions) {
   const httpsPage = await httpsContext.newPage();
   try {
     await openNewChatOn(httpsPage, HTTPS_VOICE_URL);
-    const mic = httpsPage.locator('[data-testid="chat-mic"]');
-    await mic.waitFor({ state: 'visible', timeout: 10_000 });
+    await httpsPage.locator('[data-testid="chat-mic"]').waitFor({ state: 'visible', timeout: 10_000 });
     await httpsPage.getByPlaceholder('Message…').waitFor({ state: 'visible', timeout: 15_000 });
-    await mic.click();
+    // M19-03: the empty chat's big mic focuses the composer and starts voice input.
+    const voiceStart = httpsPage.getByTestId('chat-voice-start');
+    await voiceStart.waitFor({ state: 'visible', timeout: 10_000 });
+    await voiceStart.click();
     const input = httpsPage.getByPlaceholder('Message…');
+    const focused = await input.evaluate((el) => el === document.activeElement);
+    if (!focused) throw new Error('Step 18: the big mic did not focus the composer');
     const deadline = Date.now() + 10_000;
     let value = '';
     while (Date.now() < deadline) {
@@ -527,7 +532,7 @@ async function assertVoiceInput(browser, httpsContextOptions) {
         `Step 18: expected composer to contain "${VOICE_TRANSCRIPT}" over ${HTTPS_VOICE_URL}, got "${value}"`,
       );
     }
-    console.log(`Step 18 OK — https mic visible; transcript landed in composer ("${value}")`);
+    console.log(`Step 18 OK — https: the empty chat's big mic focused the composer; transcript landed in it ("${value}")`);
   } finally {
     await httpsContext.close();
   }
@@ -538,7 +543,7 @@ async function assertVoiceInput(browser, httpsContextOptions) {
   try {
     await openNewChatOn(httpPage, HTTP_VOICE_URL);
     await httpPage.getByPlaceholder('Message…').waitFor({ state: 'visible', timeout: 15_000 });
-    const httpMicCount = await httpPage.locator('[data-testid="chat-mic"]').count();
+    const httpMicCount = await httpPage.locator('[data-testid="chat-mic"], [data-testid="chat-voice-start"]').count();
     if (httpMicCount !== 0) {
       throw new Error(
         `Step 18: expected no mic button on ${HTTP_VOICE_URL} (insecure context), found ${httpMicCount}`,
