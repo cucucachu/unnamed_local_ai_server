@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { RoutineRunList } from '@/components/RoutineRunList';
 import { LoadState, SettingsFrame } from '@/components/SettingsUI';
+import { openChat } from '@/lib/currentChat';
 import { getRoutine, listRoutineRuns, type Routine, type RoutineRun } from '@/lib/routines';
 import { useLoad } from '@/lib/useAsync';
 
@@ -37,7 +38,10 @@ export default function RoutineRunsScreen() {
         ) : (
           <RoutineRunList
             runs={data.runs}
-            onOpen={(threadId) => router.push({ pathname: '/chat/[threadId]', params: { threadId } })}
+            onOpen={(threadId) => {
+              openChat(threadId);
+              router.navigate('/chat');
+            }}
           />
         )}
       </SettingsFrame>

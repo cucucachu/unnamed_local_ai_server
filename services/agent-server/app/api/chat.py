@@ -58,7 +58,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import StateSnapshot
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.chat_ws import (
     checkpoint_id_of,
@@ -76,6 +76,10 @@ router = APIRouter()
 
 class CreateThreadBody(BaseModel):
     title: str | None = None
+
+
+class RenameThreadBody(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
 
 
 class ThreadOut(BaseModel):
@@ -235,6 +239,20 @@ async def list_threads(
     if routine_id is None:
         threads.sort(key=lambda t: (not t.needs_approval, not t.unread))
     return threads
+
+
+@router.patch("/threads/{thread_id}", response_model=ThreadOut)
+async def rename_thread(
+    thread_id: str, request: Request, body: RenameThreadBody, user: CurrentUser
+) -> ThreadOut:
+    """`PATCH /api/threads/{id}` `{title}` (M19-02): the owner renames the chat."""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title must not be blank")
+    record = await _thread_store(request).rename(thread_id, user.user_id, title)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
+    return _to_thread_out(record)
 
 
 @router.post("/threads/{thread_id}/read", status_code=204)

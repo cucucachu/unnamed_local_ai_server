@@ -94,6 +94,12 @@ class ThreadStore(Protocol):
 
     async def set_title_if_new(self, thread_id: str, title: str) -> None: ...
 
+    async def rename(
+        self, thread_id: str, owner_user_id: str, title: str
+    ) -> ThreadRecord | None:
+        """The owner sets the title; `None` if it isn't theirs."""
+        ...
+
     async def touch(self, thread_id: str) -> None: ...
 
     async def set_active_checkpoint_id(
@@ -220,6 +226,20 @@ class PgThreadStore:
                 "UPDATE threads SET title = %s WHERE id = %s AND title = %s",
                 (title, thread_id, DEFAULT_TITLE),
             )
+
+    async def rename(
+        self, thread_id: str, owner_user_id: str, title: str
+    ) -> ThreadRecord | None:
+        if not _is_valid_uuid(thread_id):
+            return None
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"UPDATE threads SET title = %s WHERE id = %s AND owner_user_id = %s "
+                f"RETURNING {self._SELECT_COLUMNS}",
+                (title, thread_id, owner_user_id),
+            )
+            row = await cur.fetchone()
+        return _record_from_row(row) if row is not None else None
 
     async def touch(self, thread_id: str) -> None:
         if not _is_valid_uuid(thread_id):
@@ -375,6 +395,15 @@ class InMemoryThreadStore:
         record = self._rows.get(thread_id)
         if record is not None and record.title == DEFAULT_TITLE:
             self._rows[thread_id] = replace(record, title=title)
+
+    async def rename(
+        self, thread_id: str, owner_user_id: str, title: str
+    ) -> ThreadRecord | None:
+        record = await self.get(thread_id, owner_user_id)
+        if record is None:
+            return None
+        self._rows[thread_id] = replace(record, title=title)
+        return self._rows[thread_id]
 
     async def touch(self, thread_id: str) -> None:
         record = self._rows.get(thread_id)
