@@ -4,8 +4,7 @@ import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { ActionButton, Badge, Card, LoadState, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
-import { runStatusLabel } from '@/lib/inbox';
-import { listRoutines, nextRunLabel, scheduleSummary, updateRoutine, type Routine } from '@/lib/routines';
+import { listRoutines, nextRunLabel, runStatusLabel, scheduleSummary, updateRoutine, type Routine } from '@/lib/routines';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** The Routines app (M17-06, its own app since M17-09): each routine's

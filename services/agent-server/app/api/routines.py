@@ -13,9 +13,8 @@ routine tools), on the caller's identity token: the space check and the
 routine grant (M17-03) an enabled routine holds for its scheduled runs.
 
 Its `approval_mode` (M17-05, `app.agent.approvals`) says what its runs may
-do without asking. `GET /inbox` lists the caller's ended and paused runs,
-newest first, with an unread count; `POST /inbox/read` marks them read (a
-run is unread again whenever its status changes).
+do without asking. A run is a chat: the chats list puts runs that need the
+user first (M17-10, `GET /api/threads`).
 """
 
 from __future__ import annotations
@@ -224,49 +223,3 @@ async def run_routine(routine_id: str, request: Request, user: CurrentUser) -> R
 async def list_runs(routine_id: str, request: Request, user: CurrentUser) -> list[RunOut]:
     await _owned(request, routine_id, user.user_id)
     return [_run_out(r) for r in await _store(request).list_runs(routine_id, user.user_id)]
-
-
-INBOX_LIMIT = 50
-
-
-class InboxItem(RunOut):
-    routine_id: str
-    routine_name: str
-    unread: bool
-
-
-class Inbox(BaseModel):
-    unread: int
-    items: list[InboxItem]
-
-
-class InboxRead(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    # None: everything.
-    run_ids: list[Annotated[str, Field(max_length=64)]] | None = Field(default=None, max_length=500)
-
-
-async def _inbox(request: Request, user_id: str) -> Inbox:
-    store = _store(request)
-    items = [
-        InboxItem(
-            **_run_out(run).model_dump(),
-            routine_id=run.routine_id,
-            routine_name=name,
-            unread=run.seen_at is None,
-        )
-        for run, name in await store.inbox(user_id, INBOX_LIMIT)
-    ]
-    return Inbox(unread=await store.unread_count(user_id), items=items)
-
-
-@router.get("/inbox", response_model=Inbox)
-async def get_inbox(request: Request, user: CurrentUser) -> Inbox:
-    return await _inbox(request, user.user_id)
-
-
-@router.post("/inbox/read", response_model=Inbox)
-async def mark_inbox_read(body: InboxRead, request: Request, user: CurrentUser) -> Inbox:
-    await _store(request).mark_seen(user.user_id, body.run_ids, _now())
-    return await _inbox(request, user.user_id)

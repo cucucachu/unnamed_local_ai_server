@@ -18,6 +18,7 @@ from tests.test_routine_approvals import _run_once, _tool_results
 from tests.test_routine_scheduler import ALICE, HEADERS, NOW, _create
 
 client = scheduler_tests.client
+_fixed_now = scheduler_tests._fixed_now
 harness = scheduler_tests.harness
 
 DAILY = {
