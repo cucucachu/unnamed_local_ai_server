@@ -239,7 +239,7 @@ describe('HomeScreen grid (M19-04)', () => {
       'GET /api/platform/spaces': { body: { spaces: [personal, family] } },
       'GET /api/platform/spaces/s1/instances': { body: { instances: [] } },
       'GET /api/platform/spaces/s2/instances': { body: { instances: [withUpdate] } },
-      'GET /api/platform/apps/app-chores': appRoute('chores', null),
+      'GET /api/platform/apps/app-chores': appRoute('chores', '/family/apps/chores'),
     });
     renderer = await render(HomeScreen);
     expect(exists(renderer, 'apps-open-chores-badge')).toBe(false);
