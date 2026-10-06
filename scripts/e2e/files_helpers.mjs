@@ -80,7 +80,7 @@ export async function openSpace(page, label, timeout = 20_000) {
     if (Date.now() > deadline) throw new Error('the Files root never loaded');
     await page.waitForTimeout(100);
   }
-  await page.getByText(label, { exact: true }).first().click();
+  await page.getByTestId('files-screen').getByText(label, { exact: true }).first().click();
   await page
     .getByTestId('breadcrumb-segment')
     .filter({ hasText: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) })

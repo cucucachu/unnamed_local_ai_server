@@ -11,7 +11,7 @@
 //   4. Settings -> Log out -> Login screen; the session is revoked
 //      server-side and a reload stays signed out.
 //   5. An e2e admin creates an invite; `/invite?token=…` creates a member
-//      and lands on Home; reusing the token shows `invalid_invite`.
+//      and lands in Chat; reusing the token shows `invalid_invite`.
 // Every throwaway account and the invite are deleted on exit.
 
 import { execFileSync } from 'node:child_process';
@@ -128,10 +128,10 @@ async function stepInvite(browser, admin, invitee) {
     const first = await acceptInviteInBrowser(browser, invite.token, invitee);
     try {
       await expectAppLoaded(first.page);
-      assert(/\/(apps)?$/.test(new URL(first.page.url()).pathname), `landed on ${first.page.url()}`);
+      assert(/\/(chat)?$/.test(new URL(first.page.url()).pathname), `landed on ${first.page.url()}`);
       const status = await authStatus(first.context.request);
       assert(status.user?.username === invitee.username && status.user?.role === 'member', 'invitee not signed in as a member');
-      console.log('  OK /invite?token=… creates a member and lands on Home');
+      console.log('  OK /invite?token=… creates a member and lands in Chat');
     } finally {
       await first.context.close();
     }
