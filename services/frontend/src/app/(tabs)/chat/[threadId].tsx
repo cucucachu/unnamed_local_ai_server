@@ -23,6 +23,7 @@ import { Markdown } from '@/components/Markdown';
 import { TurnActivityPanel } from '@/components/TurnActivityPanel';
 import { useSettings } from '@/components/SettingsProvider';
 import { Toast, useToast } from '@/components/Toast';
+import { readThread } from '@/lib/chatAttention';
 import { copyToClipboard } from '@/lib/clipboard';
 import { formatDuration } from '@/lib/chatTurns';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
@@ -215,6 +216,11 @@ export default function ChatScreen() {
       stopListening();
     };
   }, []);
+
+  // M17-10: an open chat is read, including once a turn it shows has ended.
+  useEffect(() => {
+    if (hydrationState === 'done' && !busy) readThread(threadId).catch(() => undefined);
+  }, [threadId, hydrationState, busy]);
 
   // Web: Enter sends, Shift+Enter inserts a newline (standard chat-app
   // convention). Native: Enter/Return always inserts a newline — RN's

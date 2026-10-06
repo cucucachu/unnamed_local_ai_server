@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import type { ComponentProps, ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -12,12 +12,15 @@ import { theme } from '@/lib/theme';
 export function SettingsFrame({
   title,
   leading = 'back',
+  backTo = '/settings',
   testID,
   children,
   footer,
 }: {
   title: string;
   leading?: 'back' | 'close';
+  /** Where back goes with no history (a cold deep link). */
+  backTo?: Href;
   testID?: string;
   children: ReactNode;
   footer?: ReactNode;
@@ -25,7 +28,7 @@ export function SettingsFrame({
   const router = useRouter();
   const handleLeading = () => {
     if (leading === 'close' || router.canGoBack()) router.back();
-    else router.replace('/settings');
+    else router.replace(backTo);
   };
 
   return (

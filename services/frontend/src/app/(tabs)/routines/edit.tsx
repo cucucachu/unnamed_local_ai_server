@@ -17,7 +17,7 @@ function changes(routine: Routine, input: RoutineInput): Partial<RoutineInput> {
   return changed;
 }
 
-/** Settings → Routines → new or edit (`?routineId=`) (M17-06). */
+/** Routines → new or edit (`?routineId=`) (M17-06). */
 export default function RoutineEditScreen() {
   const { routineId } = useLocalSearchParams<{ routineId?: string }>();
   const router = useRouter();
@@ -40,7 +40,7 @@ export default function RoutineEditScreen() {
         router.back();
       } else {
         const created = await createRoutine(input);
-        router.replace({ pathname: '/settings/routines/[routineId]', params: { routineId: created.id } });
+        router.replace({ pathname: '/routines/[routineId]', params: { routineId: created.id } });
       }
     } catch (caught) {
       setError(platformErrorMessage(caught));
@@ -51,7 +51,7 @@ export default function RoutineEditScreen() {
 
   return (
     <View style={styles.container}>
-      <SettingsFrame title={routineId ? 'Edit routine' : 'New routine'} testID="settings-routine-edit-screen">
+      <SettingsFrame title={routineId ? 'Edit routine' : 'New routine'} backTo="/routines" testID="routine-edit-screen">
         {data === null ? (
           <LoadState error={loadError} onRetry={reload} />
         ) : (

@@ -85,8 +85,10 @@ class ThreadOut(BaseModel):
     updated_at: str
     # M17-02: the routine this thread is a run of.
     routine_id: str | None = None
-    # M17-05: that run is paused on an approval.
+    # M17-05: that run is paused on an approval; M17-10: any chat whose last turn is.
     needs_approval: bool = False
+    # M17-10: a turn ended while the owner wasn't watching and they haven't opened it since.
+    unread: bool = False
 
 
 class ToolCallOut(BaseModel):
@@ -156,6 +158,8 @@ def _to_thread_out(record: ThreadRecord) -> ThreadOut:
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
         routine_id=record.routine_id,
+        needs_approval=record.awaiting_approval,
+        unread=record.unread,
     )
 
 
@@ -212,14 +216,32 @@ async def create_thread(
 async def list_threads(
     request: Request, user: CurrentUser, routine_id: str | None = None
 ) -> list[ThreadOut]:
-    """Newest activity first; `?routine_id=` lists that routine's runs, newest first."""
+    """What needs the user first (M17-10), then newest activity.
+
+    Chats waiting on an approval, then unread ones, then the rest, each
+    newest activity first. `?routine_id=` lists that routine's runs, newest
+    first.
+    """
     await request.app.state.orphan_adopter.adopt()
     store = _thread_store(request)
     records = await store.list_for_owner(user.user_id, routine_id=routine_id)
     waiting = await request.app.state.routine_store.waiting_thread_ids(user.user_id)
-    return [
-        _to_thread_out(r).model_copy(update={"needs_approval": r.id in waiting}) for r in records
+    threads = [
+        _to_thread_out(r).model_copy(
+            update={"needs_approval": r.awaiting_approval or r.id in waiting}
+        )
+        for r in records
     ]
+    if routine_id is None:
+        threads.sort(key=lambda t: (not t.needs_approval, not t.unread))
+    return threads
+
+
+@router.post("/threads/{thread_id}/read", status_code=204)
+async def mark_thread_read(thread_id: str, request: Request, user: CurrentUser) -> None:
+    """The owner opened the chat (M17-10): it's no longer unread."""
+    if not await _thread_store(request).mark_read(thread_id, user.user_id):
+        raise HTTPException(status_code=404, detail=f"thread '{thread_id}' not found")
 
 
 async def _owned_thread(request: Request, thread_id: str, user_id: str) -> ThreadRecord:

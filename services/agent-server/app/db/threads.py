@@ -59,6 +59,10 @@ class ThreadRecord:
     owner_user_id: str | None = None
     # M17-02: set on a routine's run threads.
     routine_id: str | None = None
+    # M17-10: its last turn stopped on an approval.
+    awaiting_approval: bool = False
+    # M17-10: a turn ended while the owner wasn't watching, and they haven't opened it since.
+    unread: bool = False
 
 
 class ThreadStore(Protocol):
@@ -67,9 +71,9 @@ class ThreadStore(Protocol):
     The owner-scoped methods (`create`/`list_for_owner`/`get`/`delete`) map
     onto the Conventions & Contracts §5 endpoints; `get`/`delete` return
     `None`/`False` for another user's thread. The rest (`set_title_if_new`/
-    `touch`/`set_active_checkpoint_id`) take an id the caller has already
-    resolved through `get`. `adopt_orphans` gives every ownerless thread to
-    `owner_user_id` and returns how many it moved.
+    `touch`/`set_active_checkpoint_id`/`turn_started`/`turn_ended`) take an
+    id the caller has already resolved through `get`. `adopt_orphans` gives
+    every ownerless thread to `owner_user_id` and returns how many it moved.
     """
 
     async def create(
@@ -95,6 +99,18 @@ class ThreadStore(Protocol):
     async def set_active_checkpoint_id(
         self, thread_id: str, checkpoint_id: str | None
     ) -> None: ...
+
+    async def turn_started(self, thread_id: str) -> None:
+        """A turn began: any approval it stopped on is being answered."""
+        ...
+
+    async def turn_ended(self, thread_id: str, *, awaiting_approval: bool, unread: bool) -> None:
+        """A turn ended; `unread` only ever sets the flag, `mark_read` clears it."""
+        ...
+
+    async def mark_read(self, thread_id: str, owner_user_id: str) -> bool:
+        """The owner opened it; False if it isn't theirs."""
+        ...
 
 
 def _is_valid_uuid(value: str) -> bool:
@@ -124,7 +140,8 @@ class PgThreadStore:
     """
 
     _SELECT_COLUMNS = (
-        "id, title, created_at, updated_at, active_checkpoint_id, owner_user_id, routine_id"
+        "id, title, created_at, updated_at, active_checkpoint_id, owner_user_id, routine_id, "
+        "awaiting_approval, unread"
     )
 
     def __init__(self, pool: AsyncConnectionPool) -> None:
@@ -223,6 +240,33 @@ class PgThreadStore:
                 (checkpoint_id, thread_id),
             )
 
+    async def turn_started(self, thread_id: str) -> None:
+        if not _is_valid_uuid(thread_id):
+            return
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE threads SET awaiting_approval = false WHERE id = %s", (thread_id,)
+            )
+
+    async def turn_ended(self, thread_id: str, *, awaiting_approval: bool, unread: bool) -> None:
+        if not _is_valid_uuid(thread_id):
+            return
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE threads SET awaiting_approval = %s, unread = unread OR %s WHERE id = %s",
+                (awaiting_approval, unread, thread_id),
+            )
+
+    async def mark_read(self, thread_id: str, owner_user_id: str) -> bool:
+        if not _is_valid_uuid(thread_id):
+            return False
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "UPDATE threads SET unread = false WHERE id = %s AND owner_user_id = %s",
+                (thread_id, owner_user_id),
+            )
+        return cur.rowcount > 0
+
 
 def _record_from_row(row: dict) -> ThreadRecord:
     return ThreadRecord(
@@ -233,6 +277,8 @@ def _record_from_row(row: dict) -> ThreadRecord:
         active_checkpoint_id=row.get("active_checkpoint_id"),
         owner_user_id=str(row["owner_user_id"]) if row.get("owner_user_id") else None,
         routine_id=str(row["routine_id"]) if row.get("routine_id") else None,
+        awaiting_approval=bool(row.get("awaiting_approval")),
+        unread=bool(row.get("unread")),
     )
 
 
@@ -344,3 +390,22 @@ class InMemoryThreadStore:
         if record is None:
             return
         self._rows[thread_id] = replace(record, active_checkpoint_id=checkpoint_id)
+
+    async def turn_started(self, thread_id: str) -> None:
+        record = self._rows.get(thread_id)
+        if record is not None:
+            self._rows[thread_id] = replace(record, awaiting_approval=False)
+
+    async def turn_ended(self, thread_id: str, *, awaiting_approval: bool, unread: bool) -> None:
+        record = self._rows.get(thread_id)
+        if record is not None:
+            self._rows[thread_id] = replace(
+                record, awaiting_approval=awaiting_approval, unread=record.unread or unread
+            )
+
+    async def mark_read(self, thread_id: str, owner_user_id: str) -> bool:
+        record = await self.get(thread_id, owner_user_id)
+        if record is None:
+            return False
+        self._rows[thread_id] = replace(record, unread=False)
+        return True

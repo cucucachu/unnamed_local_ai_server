@@ -12,6 +12,9 @@ It needs no socket: routine runs (M17-04) start a turn with a thread id, a
 user message, the owner's delegation and settings, and read the outcome
 from `ActiveTurn.wait()`.
 
+When a turn ends, its thread records whether it stopped on an approval and,
+if no socket was attached, that it's unread (M17-10, the chats list order).
+
 While a turn runs, history readers use `base_checkpoint_id` (the tip the
 turn started from) so a client hydrating mid-turn doesn't see the turn's
 steps twice: once from the checkpoint, once from the replay.
@@ -225,6 +228,7 @@ class TurnRunner:
         request = turn.request
         state = self._state
         bind_user(request.user_id)
+        outcome = TurnOutcome("error")
         keep_alive = (
             asyncio.create_task(request.delegation.keep_alive())
             if request.delegation is not None
@@ -239,22 +243,35 @@ class TurnRunner:
                     "cancelled", await ws.get_pending_approval(state.agent, request.thread_id)
                 )
             except DelegationDenied as exc:
-                return TurnOutcome("error", error=exc)
+                outcome = TurnOutcome("error", error=exc)
+                return outcome
             except Exception as exc:
                 logger.exception("turn on thread %s failed", request.thread_id)
                 turn.emit({"type": "error", "message": str(exc)})
-                return TurnOutcome("error", error=exc)
+                outcome = TurnOutcome("error", error=exc)
+                return outcome
             await ws.persist_active_tip(state.thread_store, state.agent, request.thread_id)
             await state.thread_store.touch(request.thread_id)
             return outcome
         finally:
             if keep_alive is not None:
                 keep_alive.cancel()
+            await self._record_end(turn, outcome)
             self._active.pop(request.thread_id, None)
             turn._finish()
             lock.release()
             async with self._finished:
                 self._finished.notify_all()
+
+    async def _record_end(self, turn: ActiveTurn, outcome: TurnOutcome) -> None:
+        try:
+            await self._state.thread_store.turn_ended(
+                turn.thread_id,
+                awaiting_approval=outcome.pending_approval is not None,
+                unread=not turn.subscribers,
+            )
+        except Exception:
+            logger.exception("turn on thread %s: recording its end failed", turn.thread_id)
 
     async def _stream(self, turn: ActiveTurn) -> TurnOutcome:
         ws = _ws()
@@ -271,6 +288,7 @@ class TurnRunner:
         )
         config["recursion_limit"] = self._state.settings.agent_recursion_limit
 
+        await self._state.thread_store.turn_started(request.thread_id)
         turn.emit({"type": "turn_start"})
         async for event in agent.astream_events(request.run_input, config=config, version="v2"):
             for frame in ws._frames_for_event(event):

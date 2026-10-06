@@ -12,7 +12,7 @@ async def test_list_includes_the_four_native_system_apps(world: World) -> None:
     response = await world.client.get(API, headers=world.headers["alice"])
     assert response.status_code == 200, response.text
     slugs = [a["slug"] for a in response.json()["apps"]]
-    assert slugs == ["home", "chat", "files", "settings"]
+    assert slugs == ["home", "chat", "files", "routines", "settings"]
     files = next(a for a in response.json()["apps"] if a["slug"] == "files")
     assert files["native"] and files["read_only_source"]
     assert files["privileged"] == ["files"]

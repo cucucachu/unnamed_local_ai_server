@@ -1,0 +1,11 @@
+{
+  "name": "Routines",
+  "slug": "routines",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "alarm-outline",
+    "description": "The host Routines app: prompts the agent runs on a schedule, and each routine's runs.",
+    "permissions": {}
+  }
+}

@@ -507,7 +507,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
     async def list_apps(config: RunnableConfig) -> str:
         """List the apps installed in the user's spaces, plus image-shipped system apps.
 
-        System apps (Home, Chat, Files, Settings) ship in the platform image: native host
+        System apps (Home, Chat, Files, Routines, Settings) ship in the platform image: native host
         screens, read-only source. Files has privileged actions (moveToSpace, copyToSpace).
         For each installed instance: its id, app name/slug/version, the space it's in and
         the user's role there, the app's source folder (edit it with the file tools) and

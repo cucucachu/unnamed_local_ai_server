@@ -1101,8 +1101,8 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >
 > - `list_apps`: every live instance in the user's spaces (id, app, space
 >   and role, source folder, last built commit, the `/app-data/...` path),
->   plus registered apps that aren't installed, plus the four image-shipped
->   system apps (Home, Chat, Files, Settings): native, read-only source,
+>   plus registered apps that aren't installed, plus the five image-shipped
+>   system apps (Home, Chat, Files, Routines, Settings): native, read-only source,
 >   instance id = slug. Files lists `moveToSpace` / `copyToSpace`.
 > - `create_app(space, slug, name, template="grocery-list")`: copies a
 >   template (a folder with `app.json` under `APP_TEMPLATES_DIR`; the image

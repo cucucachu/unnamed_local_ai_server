@@ -2,9 +2,9 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef } from 'react';
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { RoutineRunList } from '@/components/RoutineRunList';
 import {
   ActionButton,
-  Badge,
   Card,
   LoadState,
   SectionTitle,
@@ -12,9 +12,7 @@ import {
   settingsStyles,
 } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
-import { runStatusLabel, type RunStatus } from '@/lib/inbox';
 import { listSpaces, type Space } from '@/lib/platform';
-import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 import {
   APPROVAL_MODE_LABELS,
@@ -45,18 +43,10 @@ function confirmDelete(routine: Routine): Promise<boolean> {
   });
 }
 
-function tone(status: RunStatus): 'accent' | 'danger' | 'muted' {
-  if (status === 'waiting_approval' || status === 'running' || status === 'queued') return 'accent';
-  return status === 'succeeded' ? 'muted' : 'danger';
-}
+const RECENT_RUNS = 5;
 
-function runTime(run: RoutineRun): string {
-  const at = run.finished_at ?? run.started_at ?? run.created_at;
-  return `${run.trigger === 'manual' ? 'Run now' : 'Scheduled'} · ${relativeTime(at)}`;
-}
-
-/** Settings → Routines → one routine (M17-06): what it does and when, Run
- * now, edit, delete, and every run - tapping one opens its chat. */
+/** Routines → one routine (M17-06, M17-09): what it does and when, Run now,
+ * edit, delete, and its last few runs (More… for all); a run opens its chat. */
 export default function RoutineDetailScreen() {
   const { routineId } = useLocalSearchParams<{ routineId: string }>();
   const router = useRouter();
@@ -102,7 +92,7 @@ export default function RoutineDetailScreen() {
   const routine = data?.routine ?? null;
   return (
     <View style={styles.container}>
-      <SettingsFrame title={routine?.name ?? 'Routine'} testID="settings-routine-screen">
+      <SettingsFrame title={routine?.name ?? 'Routine'} backTo="/routines" testID="routine-screen">
         {data === null || routine === null ? (
           <LoadState error={error} onRetry={reload} />
         ) : (
@@ -136,7 +126,7 @@ export default function RoutineDetailScreen() {
               />
               <ActionButton
                 label="Edit"
-                onPress={() => router.push({ pathname: '/settings/routines/edit', params: { routineId } })}
+                onPress={() => router.push({ pathname: '/routines/edit', params: { routineId } })}
                 disabled={busyKey !== null}
                 testID="routine-edit"
               />
@@ -150,35 +140,18 @@ export default function RoutineDetailScreen() {
               />
             </View>
 
-            <SectionTitle>Runs</SectionTitle>
-            {data.runs.length === 0 ? (
-              <Text style={settingsStyles.muted} testID="routine-runs-empty">
-                No runs yet.
-              </Text>
-            ) : (
-              <Card testID="routine-runs">
-                {data.runs.map((item, index) => (
-                  <Pressable
-                    key={item.id}
-                    onPress={item.thread_id ? () => openChat(item.thread_id as string) : undefined}
-                    disabled={!item.thread_id}
-                    style={[settingsStyles.row, index === 0 && settingsStyles.firstRow]}
-                    accessibilityRole="button"
-                    testID={`routine-run-${item.id}`}
-                  >
-                    <View style={settingsStyles.rowMain}>
-                      <Text style={settingsStyles.muted}>{runTime(item)}</Text>
-                      {item.detail ? (
-                        <Text style={settingsStyles.muted} numberOfLines={2}>
-                          {item.detail}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Badge label={runStatusLabel(item.status)} tone={tone(item.status)} testID={`routine-run-status-${item.id}`} />
-                  </Pressable>
-                ))}
-              </Card>
-            )}
+            <SectionTitle>Recent runs</SectionTitle>
+            <RoutineRunList runs={data.runs.slice(0, RECENT_RUNS)} onOpen={openChat} />
+            {data.runs.length > RECENT_RUNS ? (
+              <Pressable
+                onPress={() => router.push({ pathname: '/routines/[routineId]/runs', params: { routineId } })}
+                style={styles.more}
+                accessibilityRole="link"
+                testID="routine-runs-more"
+              >
+                <Text style={styles.moreText}>More…</Text>
+              </Pressable>
+            ) : null}
           </>
         )}
       </SettingsFrame>
@@ -194,5 +167,13 @@ const styles = StyleSheet.create({
   prompt: {
     color: theme.text,
     fontSize: 14,
+  },
+  more: {
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+  },
+  moreText: {
+    color: theme.accent,
+    fontSize: 15,
   },
 });

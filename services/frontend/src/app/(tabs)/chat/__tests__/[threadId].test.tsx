@@ -42,6 +42,11 @@ jest.mock('@/components/SettingsProvider', () => ({
   }),
 }));
 
+const mockReadThread = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/lib/chatAttention', () => ({
+  readThread: (...args: unknown[]) => mockReadThread(...args),
+}));
+
 const mockIsSpeechSupported = jest.fn(() => false);
 const mockStartListening = jest.fn((_options: StartListeningOptions) => () => {});
 const mockStopListening = jest.fn();
@@ -85,6 +90,7 @@ describe('ChatScreen ([threadId])', () => {
     mockStartListening.mockReset();
     mockStartListening.mockImplementation(() => () => {});
     mockStopListening.mockReset();
+    mockReadThread.mockClear();
   });
 
   it('passes the route threadId through to useChat', () => {
@@ -95,6 +101,21 @@ describe('ChatScreen ([threadId])', () => {
     });
 
     expect(mockUseChat).toHaveBeenCalledWith('thread-123');
+  });
+
+  it('reads the chat once it has loaded and no turn is running (M17-10)', () => {
+    setUseChatResult({ busy: true });
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(createElement(ChatScreen));
+    });
+    expect(mockReadThread).not.toHaveBeenCalled();
+
+    setUseChatResult({ busy: false });
+    act(() => {
+      renderer.update(createElement(ChatScreen));
+    });
+    expect(mockReadThread).toHaveBeenCalledWith('thread-123');
   });
 
   it('shows a loading spinner (no composer/list) while hydrationState is "loading"', () => {
