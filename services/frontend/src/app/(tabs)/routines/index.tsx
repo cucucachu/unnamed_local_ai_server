@@ -8,8 +8,9 @@ import { runStatusLabel } from '@/lib/inbox';
 import { listRoutines, nextRunLabel, scheduleSummary, updateRoutine, type Routine } from '@/lib/routines';
 import { useAction, useLoad } from '@/lib/useAsync';
 
-/** Settings → Routines (M17-06): each routine's schedule in words, next run,
- * last result and an on/off switch. Tapping one opens its detail. */
+/** The Routines app (M17-06, its own app since M17-09): each routine's
+ * schedule in words, next run, last result and an on/off switch. Tapping one
+ * opens its detail. */
 export default function RoutinesScreen() {
   const router = useRouter();
   const { message: toast, showToast } = useToast();
@@ -33,7 +34,7 @@ export default function RoutinesScreen() {
 
   return (
     <View style={styles.container}>
-      <SettingsFrame title="Routines" testID="settings-routines-screen">
+      <SettingsFrame title="Routines" backTo="/apps" testID="routines-screen">
         {data === null ? (
           <LoadState error={error} onRetry={reload} />
         ) : (
@@ -41,7 +42,7 @@ export default function RoutinesScreen() {
             <ActionButton
               label="New routine"
               variant="primary"
-              onPress={() => router.push('/settings/routines/edit')}
+              onPress={() => router.push('/routines/edit')}
               testID="routines-new"
             />
             {data.length === 0 ? (
@@ -55,7 +56,7 @@ export default function RoutinesScreen() {
                   <Pressable
                     key={routine.id}
                     onPress={() =>
-                      router.push({ pathname: '/settings/routines/[routineId]', params: { routineId: routine.id } })
+                      router.push({ pathname: '/routines/[routineId]', params: { routineId: routine.id } })
                     }
                     style={[settingsStyles.row, index === 0 && settingsStyles.firstRow]}
                     accessibilityRole="button"

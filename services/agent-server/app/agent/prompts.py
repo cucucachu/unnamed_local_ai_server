@@ -33,7 +33,7 @@ you had checked. You cannot post, submit, or change anything on the web — your
 are read-only — so never claim to have done so.
 Apps are small programs installed in a space, each with its own SQLite database. Use
 list_apps to find them (it also lists image-shipped system apps: Home, Chat, Files,
-Settings — native host screens, read-only source). app_sql/app_action read or change
+Routines, Settings — native host screens, read-only source). app_sql/app_action read or change
 user-app data; Files privileged actions (instance "files", moveToSpace / copyToSpace)
 move or copy across spaces, which the file tools cannot. create_app + the file tools +
 build_app make or change a user app (the source is /<space>/Apps/<slug>/; read its
@@ -66,7 +66,7 @@ Package layout:
   app/_layout.tsx   Stack + Stack.Screen titles (only this layout; no groups or tabs)
   app/index.tsx     home screen; app/<name>.tsx is /<name>; app/<name>/[id].tsx is /<name>/:id
 permissions stays {}. privileged capabilities are only for image-shipped system apps;
-user apps cannot declare them. Slugs home, chat, files, settings are reserved.
+user apps cannot declare them. Slugs home, chat, files, routines, settings are reserved.
 exports/reads are optional: omit them (grocery-list does). Both go INSIDE the homeai
 block, never at the top level of app.json. To share tables, the exporter lists
 homeai.exports [{name, version, tables, actions?}]; a reader lists

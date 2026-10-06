@@ -17,11 +17,13 @@ jest.mock('expo-router', () => ({
 }));
 
 // eslint-disable-next-line import/first -- must follow the jest.mock call above
-import RoutinesScreen from '../routines';
+import RoutinesScreen from '../index';
 // eslint-disable-next-line import/first -- must follow the jest.mock call above
-import RoutineDetailScreen from '../routines/[routineId]';
+import RoutineDetailScreen from '../[routineId]';
 // eslint-disable-next-line import/first -- must follow the jest.mock call above
-import RoutineEditScreen from '../routines/edit';
+import RoutineRunsScreen from '../[routineId]/runs';
+// eslint-disable-next-line import/first -- must follow the jest.mock call above
+import RoutineEditScreen from '../edit';
 
 function routine(overrides: Partial<Routine> = {}): Routine {
   return {
@@ -100,7 +102,7 @@ describe('RoutinesScreen', () => {
     expect(exists(renderer, 'routine-last-r2')).toBe(false);
 
     await press(renderer, 'routine-row-r2');
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/settings/routines/[routineId]', params: { routineId: 'r2' } });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/routines/[routineId]', params: { routineId: 'r2' } });
   });
 
   it('turns a routine on and off from the list', async () => {
@@ -124,7 +126,7 @@ describe('RoutinesScreen', () => {
 
     expect(exists(renderer, 'routines-empty')).toBe(true);
     await press(renderer, 'routines-new');
-    expect(mockPush).toHaveBeenCalledWith('/settings/routines/edit');
+    expect(mockPush).toHaveBeenCalledWith('/routines/edit');
   });
 });
 
@@ -164,7 +166,7 @@ describe('RoutineEditScreen', () => {
         approval_mode: 'allow_writes',
       },
     ]);
-    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/settings/routines/[routineId]', params: { routineId: 'new' } });
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/routines/[routineId]', params: { routineId: 'new' } });
   });
 
   it('shows what is wrong instead of saving', async () => {
@@ -267,7 +269,7 @@ describe('RoutineDetailScreen', () => {
     mockFetchRoutes(routes());
     renderer = await render(RoutineDetailScreen);
     await press(renderer, 'routine-edit');
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/settings/routines/edit', params: { routineId: 'r1' } });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/routines/edit', params: { routineId: 'r1' } });
   });
 
   it('deletes after confirming', async () => {
@@ -281,5 +283,44 @@ describe('RoutineDetailScreen', () => {
     await press(renderer, 'routine-delete');
     expect(requestsTo(fetchMock, 'DELETE', '/api/routines/r1')).toHaveLength(1);
     expect(mockBack).toHaveBeenCalled();
+  });
+});
+
+describe('recent runs and More…', () => {
+  const manyRuns = Array.from({ length: 7 }, (_, i) => runRecord({ id: `run-${i}`, thread_id: `thread-${i}` }));
+  const routes = {
+    'GET /api/routines/r1': { body: routine() },
+    'GET /api/routines/r1/runs': { body: manyRuns },
+    'GET /api/platform/spaces': { body: { spaces: SPACES } },
+  };
+
+  beforeEach(() => {
+    mockParams = { routineId: 'r1' };
+  });
+
+  it('shows the last 5 runs and links to the rest', async () => {
+    mockFetchRoutes(routes);
+    renderer = await render(RoutineDetailScreen);
+
+    expect(exists(renderer, 'routine-run-run-4')).toBe(true);
+    expect(exists(renderer, 'routine-run-run-5')).toBe(false);
+    await press(renderer, 'routine-runs-more');
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/routines/[routineId]/runs', params: { routineId: 'r1' } });
+  });
+
+  it('has no More… with 5 runs or fewer', async () => {
+    mockFetchRoutes({ ...routes, 'GET /api/routines/r1/runs': { body: manyRuns.slice(0, 5) } });
+    renderer = await render(RoutineDetailScreen);
+    expect(exists(renderer, 'routine-runs-more')).toBe(false);
+  });
+
+  it('lists every run on the runs page; a run opens its chat', async () => {
+    mockFetchRoutes(routes);
+    renderer = await render(RoutineRunsScreen);
+
+    expect(textOf(renderer)).toContain('Morning brief: runs');
+    expect(exists(renderer, 'routine-run-run-6')).toBe(true);
+    await press(renderer, 'routine-run-run-6');
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/chat/[threadId]', params: { threadId: 'thread-6' } });
   });
 });

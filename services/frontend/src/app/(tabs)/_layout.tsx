@@ -50,6 +50,8 @@ export default function TabsLayout() {
           ),
         }}
       />
+      {/* M17-09: the Routines app, opened from its Home tile (no tab button). */}
+      <Tabs.Screen name="routines" options={{ href: null, headerShown: false }} />
       {/* M14-02: Settings is a tab (Home, Chat, Files, Settings). The stack
           that used to be a sibling modal still lives at `/settings`. */}
       <Tabs.Screen

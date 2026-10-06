@@ -1500,10 +1500,13 @@ their threads as plain chats (`ON DELETE SET NULL`).
     run is recorded `expired`. If the grant is gone it's recorded
     `expired` without resuming. A one-shot keeps its grant until its paused
     run is answered or expires.
-- **Frontend** (M17-06): Settings → Routines lists them, with the schedule
-  in words, the next run, the last result and an on/off switch
-  (`src/app/(tabs)/settings/routines/`). A routine's page has Run now
-  (which opens the run's chat), edit, delete and its runs. The editor
+- **Frontend** (M17-06, M17-09): the Routines app (a Home tile; a hidden
+  tab with its own stack, `src/app/(tabs)/routines/`, also the `routines`
+  system app) lists them, with the schedule in words, the next run, the
+  last result and an on/off switch. A routine's page has Run now (which
+  opens the run's chat), edit, delete and its last 5 runs; More… opens
+  `/routines/<id>/runs` with all of them. A run opens in Chat like any
+  other thread. The editor
   (`components/RoutineForm.tsx`) covers the name, prompt, a space the user
   can edit, the schedule, the timezone (the device's by default) and the
   approval mode. The chats list badges routine runs and can hide them.
@@ -2266,10 +2269,10 @@ All routes: guard *user* — an agent delegation has its user's rights here
 |---|---|---|---|---|
 | `GET /api/platform/apps/schema` | — | — | `200` the `app.json` JSON Schema | — |
 | `GET /api/platform/apps` | — | — | `200 {"apps": [App]}` — visible apps, by name | — |
-| `GET /api/platform/system-apps` | — | — | `200 {"apps": [SystemApp]}` — image-shipped Home, Chat, Files, Settings (`native`, `read_only_source`, `privileged`, `actions`, `agent_md`) | — |
+| `GET /api/platform/system-apps` | — | — | `200 {"apps": [SystemApp]}` — image-shipped Home, Chat, Files, Routines, Settings (`native`, `read_only_source`, `privileged`, `actions`, `agent_md`) | — |
 | `GET /api/platform/system-apps/{slug}` | — | — | `200 SystemApp` | `404 not_found` |
 | `POST /api/platform/system-apps/{slug}/actions/{name}` | write on every space a path names | `{"params"}` (Files: `{src, dst}` virtual paths) | `200 {"ok": true, "result"}` — Files `moveToSpace` / `copyToSpace` reuse `/files/move` and `/files/copy` | `404 not_found` / `unknown_action`, files API errors (`403 insufficient_role`, `409 already_exists`, …) |
-| `POST /api/platform/apps` | write on the source space | `{"source_path"}` — exactly `/personal/Apps/<slug>` or `/spaces/<s>/Apps/<slug>` (trailing slash optional) | `201 {"app": App, "valid": true, "diagnostics": []}`; creates the app and its `working` version from `app.json`. The space's `Apps` folder is created first if missing (`<caller uid>:<gid>` `2770`). | `422 invalid_source_path` (any other shape, a slug that isn't a valid slug, or a symlinked `Apps`/app folder), space errors, `409 apps_folder_not_a_directory`, `422 invalid_app` + `diagnostics` (incl. a missing folder, `permissions.privileged`, or a reserved system-app slug `home`/`chat`/`files`/`settings`), `409 app_exists` (that slug is already registered in that space) |
+| `POST /api/platform/apps` | write on the source space | `{"source_path"}` — exactly `/personal/Apps/<slug>` or `/spaces/<s>/Apps/<slug>` (trailing slash optional) | `201 {"app": App, "valid": true, "diagnostics": []}`; creates the app and its `working` version from `app.json`. The space's `Apps` folder is created first if missing (`<caller uid>:<gid>` `2770`). | `422 invalid_source_path` (any other shape, a slug that isn't a valid slug, or a symlinked `Apps`/app folder), space errors, `409 apps_folder_not_a_directory`, `422 invalid_app` + `diagnostics` (incl. a missing folder, `permissions.privileged`, or a reserved system-app slug `home`/`chat`/`files`/`routines`/`settings`), `409 app_exists` (that slug is already registered in that space) |
 | `GET /api/platform/apps/{id}` | visible | — | `200 App` | `404 not_found` |
 | `POST /api/platform/apps/{id}/validate` | write on the source space | — | `200 {"app": App, "valid": bool, "diagnostics": [Diagnostic]}`. When valid, the working version takes the current `app.json` (and the app its `name`); when not, nothing changes. | `404 not_found` (not visible, or visible only through an install), space errors |
 | `POST /api/platform/apps/{id}/build` | write on the source space | — | `200 {"app": App, "ok": bool, "build": Build\|null, "diagnostics": [BuildDiagnostic]}` — see "App builds" below. On success the working version takes the built `app.json` and the new `bundle_path`; otherwise nothing changes. Once the app is published, a build whose `version` isn't above every published one and whose source differs from the latest published one builds as the next patch after the highest (e.g. `1.0.1`), and that version is written back into the source `app.json` unless the file changed meanwhile. | `404 not_found` (not visible, or visible only through an install), space errors, `503 builder_unavailable` (code-exec-manager unreachable or refusing, or the staging root unusable) |

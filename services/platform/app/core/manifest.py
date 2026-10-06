@@ -54,7 +54,7 @@ ACTION_JSON_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*\.json$")
 EXPORT_NAME_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 # Image-shipped system apps (D17). User packages may not use these slugs or
 # declare `homeai.permissions.privileged`.
-SYSTEM_APP_SLUGS = ("home", "chat", "files", "settings")
+SYSTEM_APP_SLUGS = ("home", "chat", "files", "routines", "settings")
 PRIVILEGED_CAPABILITIES = ("files",)
 NAME_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 PARAM_SEGMENT_RE = re.compile(r"^\[[A-Za-z_][A-Za-z0-9_]*\]$")

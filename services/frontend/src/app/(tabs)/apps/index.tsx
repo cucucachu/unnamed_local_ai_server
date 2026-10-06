@@ -27,7 +27,7 @@ function spaceLabel(space: Space): string {
  * Home launcher (M14-02): native host screen. M14-03 ships Chat/Files/
  * Settings/Home as image-shipped packages for the agent; this screen still
  * opens the existing native host routes. System tiles open
- * the existing Chat, Files, and Settings host screens; installed apps stay
+ * the existing Chat, Files, Routines (M17-09) and Settings host screens; installed apps stay
  * grouped by space with a switcher, catalog entry, and update badges.
  * Tapping an instance opens the runner (`[instanceId].tsx`). Routine runs
  * needing approval, or newly finished, are listed above (M17-05).
@@ -114,6 +114,12 @@ export default function HomeScreen() {
             testID="home-open-chat"
           />
           <SystemRow icon="folder-outline" title="Files" onPress={() => router.push('/files')} testID="home-open-files" />
+          <SystemRow
+            icon="alarm-outline"
+            title="Routines"
+            onPress={() => router.push('/routines')}
+            testID="home-open-routines"
+          />
           <SystemRow
             icon="settings-outline"
             title="Settings"
