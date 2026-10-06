@@ -81,6 +81,8 @@ async def run_case(case: dict) -> dict:
     ws_base = BASE.replace("http", "ws", 1)
     tools: list[str] = []
     card = None
+    reply: list[str] = []
+    end: dict = {}
     async with connect(
         f"{ws_base}/ws/chat/{thread['id']}", additional_headers={"Cookie": COOKIE}
     ) as ws:
@@ -90,6 +92,8 @@ async def run_case(case: dict) -> dict:
                 frame = json.loads(raw)
                 if frame["type"] == "tool_start":
                     tools.append(frame["name"])
+                if frame["type"] == "token":
+                    reply.append(frame.get("content") or "")
                 if frame["type"] == "approval_request":
                     card = card or next(
                         (a for a in frame["actions"] if a["name"] == "create_routine"), None
@@ -108,8 +112,15 @@ async def run_case(case: dict) -> dict:
                         )
                     )
                 if frame["type"] in ("turn_end", "error"):
+                    end = frame
                     break
-    result: dict[str, Any] = {"id": case["id"], "tools": tools, "expected": case["schedule"]}
+    result: dict[str, Any] = {
+        "id": case["id"],
+        "tools": tools,
+        "expected": case["schedule"],
+        "end": end.get("status") or end.get("message"),
+        "reply": "".join(reply)[-500:],
+    }
     if card is None:
         return result | {"ok": False, "why": "no create_routine approval card"}
     got = card["args"].get("schedule")
