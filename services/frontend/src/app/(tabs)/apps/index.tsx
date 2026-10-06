@@ -221,7 +221,7 @@ export default function HomeScreen() {
               hitSlop={8}
               accessibilityRole="tab"
               accessibilityLabel={spaceLabel(space)}
-              accessibilityState={{ selected: index === pageIndex }}
+              aria-selected={index === pageIndex}
               testID={`home-space-${space.slug}`}
             >
               <View style={[styles.dot, index === pageIndex && styles.dotSelected]} />
