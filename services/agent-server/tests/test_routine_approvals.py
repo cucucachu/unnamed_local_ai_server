@@ -1,4 +1,4 @@
-"""Routine approval modes, paused runs, their expiry and the inbox (M17-05)."""
+"""Routine approval modes, paused runs and their expiry (M17-05); runs in the chats list (M17-10)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ from app.routines.scheduler import EXPIRED_MESSAGE
 from tests import test_routine_scheduler as scheduler_tests
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallsTurn, ToolCallTurn
 from tests.test_chat_ws import _drain_turn
-from tests.test_routine_scheduler import ALICE, DUE, HEADERS, _create, _runs
+from tests.test_routine_scheduler import ALICE, HEADERS, _create, _runs
 
 client = scheduler_tests.client
 harness = scheduler_tests.harness
+_fixed_now = scheduler_tests._fixed_now
 
 WRITE = ("write_file", {"file_path": "/personal/brief.md", "content": "today"})
 DELETE = ("delete", {"file_path": "/personal/old.md"})
@@ -155,31 +156,20 @@ def test_an_unanswered_approval_expires_rejected(
     assert _pending(client, run["thread_id"]) is None
 
 
-def test_the_inbox_lists_ended_runs_and_tracks_what_was_read(client, harness, fake_model) -> None:
-    routine, run = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE))
-    inbox = client.get("/api/inbox", headers=HEADERS).json()
-    assert inbox["unread"] == 1
-    (item,) = inbox["items"]
-    assert (item["id"], item["status"], item["unread"]) == (run["id"], "waiting_approval", True)
-    assert (item["routine_id"], item["routine_name"]) == (routine["id"], "Morning brief")
+def test_a_routine_run_is_an_unread_chat_until_opened(client, harness, fake_model) -> None:
+    """M17-10: nobody watched it, so its chat is unread; a paused one comes first."""
+    _, done = _run_once(client, harness, fake_model, TextTurn("done"))
+    _, paused = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE), name="Writer")
+    listed = client.get("/api/threads", headers=HEADERS).json()
+    assert [(t["id"], t["needs_approval"], t["unread"]) for t in listed] == [
+        (paused["thread_id"], True, True),
+        (done["thread_id"], False, True),
+    ]
 
-    read = client.post("/api/inbox/read", json={"run_ids": [run["id"]]}, headers=HEADERS)
-    assert read.json()["unread"] == 0
-    assert read.json()["items"][0]["unread"] is False
-
-    # A status change makes it news again.
-    store = client.app.state.routine_store
-    client.portal.call(store.update_run, run["id"], ALICE, {"status": "expired"})
-    assert client.get("/api/inbox", headers=HEADERS).json()["unread"] == 1
-    assert client.post("/api/inbox/read", json={}, headers=HEADERS).json()["unread"] == 0
-
-
-def test_the_inbox_is_per_user(client, harness, fake_model) -> None:
-    _run_once(client, harness, fake_model, TextTurn("done"))
-    store = client.app.state.routine_store
-    other = "00000000-0000-4000-8000-0000000000b2"
-    assert client.portal.call(store.inbox, other, 50) == []
-    assert client.portal.call(store.mark_seen, other, None, DUE) == 0
+    read = client.post(f"/api/threads/{done['thread_id']}/read", headers=HEADERS)
+    assert read.status_code == 204
+    listed = client.get("/api/threads", headers=HEADERS).json()
+    assert [t["unread"] for t in listed] == [True, False]
 
 
 def test_a_routines_approval_mode_can_be_changed(client) -> None:

@@ -1,5 +1,4 @@
 import { apiFetch } from './api';
-import type { RunStatus } from './inbox';
 import type { Space } from './platform';
 
 /**
@@ -8,6 +7,16 @@ import type { Space } from './platform';
  * runs on a schedule, as their owner, in one of their spaces. Schedule
  * times are local to the routine's IANA `timezone`.
  */
+
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'missed'
+  | 'waiting_approval'
+  | 'expired';
 
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
 export const WEEKDAYS: Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -222,4 +231,19 @@ export function deviceTimezone(): string {
   } catch {
     return 'UTC';
   }
+}
+
+const STATUS_LABELS: Record<RunStatus, string> = {
+  queued: 'Queued',
+  running: 'Running',
+  succeeded: 'Finished',
+  failed: 'Failed',
+  timed_out: 'Timed out',
+  missed: 'Missed',
+  waiting_approval: 'Needs approval',
+  expired: 'Approval expired',
+};
+
+export function runStatusLabel(status: RunStatus): string {
+  return STATUS_LABELS[status] ?? status;
 }

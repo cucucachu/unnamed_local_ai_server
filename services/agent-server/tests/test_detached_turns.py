@@ -1,5 +1,7 @@
 """M17-01: a chat turn outlives its socket (`app/agent/turn_runner.py`).
 
+M17-10: how a turn ends (an approval, nobody watching) orders the chats list.
+
 Same synchronous `TestClient` setup as `test_chat_ws.py`; the turns here
 stream slowly (`chunk_delay_s`) so a socket can drop and reconnect mid-turn.
 """
@@ -212,3 +214,77 @@ async def test_approval_reached_while_detached_is_restored(
     assert frames[-1]["status"] == "completed"
     assert _tokens(frames) == "written"
     assert fake_platform.personal() == {"x.txt": b"y"}
+
+
+def _listed(client: TestClient) -> list[tuple[str, bool, bool]]:
+    return [
+        (t["id"], t["needs_approval"], t["unread"]) for t in client.get("/api/threads").json()
+    ]
+
+
+async def test_the_chats_list_puts_what_needs_you_first(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    """M17-10: approval first, then unread, then the rest, newest first."""
+    settings_store = InMemorySettingsStore()
+    await settings_store.update_document(TEST_USER_ID, {"hitl_enabled": True})
+    with _make_client(fake_model, fake_platform, settings_store) as client:
+        _start_slow_turn(client, fake_model, "away")
+        _wait_until_idle(client, "away")
+
+        fake_model.queue(
+            ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"})
+        )
+        with client.websocket_connect("/ws/chat/asks") as ws:
+            ws.send_json({"type": "user_message", "content": "write a file"})
+            _drain_turn(ws)
+
+        fake_model.queue(TextTurn("hi"))
+        with client.websocket_connect("/ws/chat/watched") as ws:
+            ws.send_json({"type": "user_message", "content": "hello"})
+            _drain_turn(ws)
+
+        # Watched to the end: the approval card was seen, so only "away" is unread.
+        assert _listed(client) == [
+            ("asks", True, False),
+            ("away", False, True),
+            ("watched", False, False),
+        ]
+
+        assert client.post("/api/threads/away/read").status_code == 204
+        assert [t[0] for t in _listed(client)] == ["asks", "watched", "away"]
+
+        pending = client.get("/api/threads/asks/state").json()["pending_approval"]
+        fake_model.queue(TextTurn("written"))
+        with client.websocket_connect("/ws/chat/asks") as ws:
+            ws.send_json(
+                {
+                    "type": "approval_response",
+                    "interrupt_id": pending["interrupt_id"],
+                    "decisions": [
+                        {"tool_call_id": pending["actions"][0]["tool_call_id"], "decision": "approve"}
+                    ],
+                }
+            )
+            _drain_turn(ws)
+        assert _listed(client)[0] == ("asks", False, False)
+
+
+async def test_an_approval_reached_while_away_is_unread_and_first(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    settings_store = InMemorySettingsStore()
+    await settings_store.update_document(TEST_USER_ID, {"hitl_enabled": True})
+    fake_model.queue(TextTurn("hi"))
+    with _make_client(fake_model, fake_platform, settings_store) as client:
+        with client.websocket_connect("/ws/chat/other") as ws:
+            ws.send_json({"type": "user_message", "content": "hello"})
+            _drain_turn(ws)
+        fake_model.queue(
+            ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"})
+        )
+        with client.websocket_connect("/ws/chat/paused") as ws:
+            ws.send_json({"type": "user_message", "content": "write a file"})
+            assert ws.receive_json() == {"type": "turn_start"}
+        _wait_until_idle(client, "paused")
+        assert _listed(client) == [("paused", True, True), ("other", False, False)]

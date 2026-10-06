@@ -182,7 +182,7 @@ async def test_claims_are_cross_user_exclusive_and_advance(pg_server: PgServer) 
         await pg.close()
 
 
-async def test_paused_runs_and_the_inbox(pg_server: PgServer) -> None:
+async def test_paused_runs(pg_server: PgServer) -> None:
     pg = await build_postgres_checkpointer(pg_server.agent_dsn)
     routines, threads = PgRoutineStore(pg.pool), PgThreadStore(pg.pool)
     alice, bob = str(uuid.uuid4()), str(uuid.uuid4())
@@ -209,22 +209,8 @@ async def test_paused_runs_and_the_inbox(pg_server: PgServer) -> None:
         assert [r.id for _, r in stale if r.owner_user_id == alice] == [run.id]
         assert all(r.owner_user_id != alice for _, r in await routines.stale_waiting(paused_at))
 
-        rls.bind_user(alice)
-        inbox = await routines.inbox(alice, 10)
-        assert {r.id for r, _ in inbox} == {run.id, done.id}
-        assert {name for _, name in inbox} == {"Brief"}
-        assert await routines.unread_count(alice) == 2
-        assert await routines.mark_seen(alice, [run.id, "junk"], paused_at) == 1
-        assert await routines.unread_count(alice) == 1
-        await routines.update_run(run.id, alice, {"status": "expired"})
-        assert await routines.unread_count(alice) == 2
-        assert await routines.mark_seen(alice, None, paused_at) == 2
-        assert await routines.unread_count(alice) == 0
-
         rls.bind_user(bob)
-        assert await routines.inbox(bob, 10) == []
         assert await routines.waiting_thread_ids(bob) == set()
-        assert await routines.mark_seen(alice, None, paused_at) == 0
     finally:
         rls.bind_user(alice)
         async with pg.pool.connection() as conn:

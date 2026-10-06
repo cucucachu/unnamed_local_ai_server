@@ -15,8 +15,10 @@ export interface Thread {
   updated_at: string;
   /** M17-02: the routine this thread is a run of. */
   routine_id?: string | null;
-  /** M17-05: that run is paused on an approval. */
+  /** M17-05: that run is paused on an approval; M17-10: any chat whose last turn is. */
   needs_approval?: boolean;
+  /** M17-10: a turn ended while the user wasn't watching, and they haven't opened it since. */
+  unread?: boolean;
 }
 
 export interface ToolCall {
@@ -86,9 +88,17 @@ export async function createThread(title?: string): Promise<Thread> {
   });
 }
 
-/** `GET /api/threads` — ordered by `updated_at` desc (server-side sort, not re-sorted here). */
+/**
+ * `GET /api/threads` — what needs the user first (M17-10: approval, then
+ * unread), then `updated_at` desc. Server-side sort, not re-sorted here.
+ */
 export async function listThreads(): Promise<Thread[]> {
   return apiFetch<Thread[]>('/api/threads');
+}
+
+/** `POST /api/threads/{id}/read` (M17-10): the user has seen this chat. */
+export async function markThreadRead(threadId: string): Promise<void> {
+  await apiFetch<void>(`/api/threads/${encodeURIComponent(threadId)}/read`, { method: 'POST' });
 }
 
 /** `GET /api/threads/{id}/messages` — full checkpointed history, oldest first. */
