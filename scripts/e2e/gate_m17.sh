@@ -11,10 +11,10 @@
 #      shared, bring it up from this tree yourself first if it's down.
 #      Never recreates model-runner or postgres.
 #   2. agent-server pytest (host `uv run pytest`): detached turns, the
-#      schedule, the routines API, the scheduler, approval modes and the
-#      inbox, and the agent's routine tools.
-#   3. Platform pytest: routine grants and space access (including a chat
-#      delegation saving a routine and a routine run refused).
+#      schedule, the routines API, the scheduler, approval modes, the
+#      chats list order and unread state, and the agent's routine tools.
+#   3. Platform pytest: routine grants, space access (including a chat
+#      delegation saving a routine and a routine run refused), system apps.
 #   4. `g17_routines_smoke.sh` - the G17 live scenario: a routine due in a
 #      minute runs headlessly and is listed under the routine and in the
 #      chats list; disabling stops the next run; revoking the grant stops
@@ -49,8 +49,9 @@ API_HEALTH_TIMEOUT_S=120
 STEPS=4
 AGENT_TESTS=(tests/test_detached_turns.py tests/test_routine_schedule.py
   tests/test_routines_api.py tests/test_routine_scheduler.py
-  tests/test_routine_approvals.py tests/test_routine_tools.py tests/test_routines_pg.py)
-PLATFORM_TESTS=(tests/test_routine_grants.py tests/test_space_access.py)
+  tests/test_routine_approvals.py tests/test_routine_tools.py tests/test_routines_pg.py
+  tests/test_threads_pg.py tests/test_chat.py)
+PLATFORM_TESTS=(tests/test_routine_grants.py tests/test_space_access.py tests/test_system_apps.py)
 
 STEP_NAMES=()
 STEP_RESULTS=()

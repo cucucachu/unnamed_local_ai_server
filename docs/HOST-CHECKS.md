@@ -274,8 +274,8 @@ signed in as yourself (G10).
 Web G17 is `scripts/e2e/gate_m17.sh` (stack health, the agent-server and
 platform routine pytest, then `g17_routines_smoke.sh`: a routine due in a
 minute runs with nobody connected and is listed under the routine and in
-the chats list; disabling stops the next run; revoking its grant stops
-it). Setup: stack up from `main` with the routines scheduler on (the
+the chats list, unread at the top until read; disabling stops the next
+run; revoking its grant stops it; the Routines system app is listed). Setup: stack up from `main` with the routines scheduler on (the
 default), the app updated, signed in as yourself.
 
 - [ ] (M17-01, #228) Start a long reply on the phone, lock it or switch
@@ -284,10 +284,15 @@ default), the app updated, signed in as yourself.
 - [ ] (M17-07) In a chat, ask for a daily routine, e.g. "every morning at
       7, give me a short briefing: the weather here and anything in my
       notes from yesterday". The approval card shows the schedule in
-      words and the prompt; approve it. Settings → Routines lists it.
-- [ ] (M17-04) The next morning the run is in the Inbox on Home (with a
-      badge) and in the chats list, with a sensible answer.
+      words and the prompt; approve it. The Routines app (its tile on
+      Home) lists it; its page shows the schedule, the prompt, Edit,
+      Delete and its runs.
+- [ ] (M17-04, M17-10) The next morning the run's chat is at the top of
+      the chats list marked **New**, the Chat tab has a badge, and the
+      answer is sensible. Opening it clears the marker and the badge.
 - [ ] (M17-05) A routine in **ask** mode that writes a file (e.g. "Run
       now" on one that saves a note to `/personal`) waits for approval:
-      the Inbox and the chats list say it needs approval; approving from
-      the phone finishes it and the file is there.
+      its chat is first in the list marked **Needs approval**; approving
+      from the phone finishes it and the file is there.
+- [ ] (M17-09) A routine with more than 5 runs shows the last 5 and
+      **More…**, which lists them all; tapping a run opens its chat.

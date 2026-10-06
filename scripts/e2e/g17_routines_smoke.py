@@ -4,11 +4,15 @@
 Three routines due at the same minute, one to two minutes out (UTC):
 
 - A, once, read-only: runs with nobody connected; its thread is listed
-  under the routine and in the chats list with the model's answer.
+  under the routine and in the chats list with the model's answer, unread
+  and ahead of every chat that doesn't need the user (M17-10), until it's
+  read.
 - B, daily, disabled right after it's made: its grant is revoked and it
   never runs.
 - C, daily, its grant revoked from Settings -> Sessions: it doesn't
   succeed and ends up disabled.
+
+Also: the Routines system app is listed (M17-09).
 
 Env: E2E_AUTH_COOKIE, E2E_BASE (default http://localhost).
 Deletes its routines and their run threads on the way out.
@@ -113,6 +117,11 @@ def runs_quiet(routine_id: str) -> list[dict]:
 
 
 def scenario(made: list[str]) -> None:
+    apps = expect(*api("GET", "/api/platform/system-apps"), 200, "system apps")
+    if "routines" not in [a["slug"] for a in apps["apps"]]:
+        fail(f"no routines system app: {[a['slug'] for a in apps['apps']]}")
+    log("OK: the Routines system app is listed")
+
     now = datetime.now(UTC)
     due = (now + timedelta(seconds=75)).replace(second=0, microsecond=0) + timedelta(minutes=1)
     at, hhmm = due.strftime("%Y-%m-%dT%H:%M"), due.strftime("%H:%M")
@@ -163,6 +172,16 @@ def scenario(made: list[str]) -> None:
     listed = [t for t in chats if t["id"] == thread_id]
     if not listed or listed[0].get("routine_id") != a["id"]:
         fail("A's run thread isn't in the chats list as a routine run")
+    if not listed[0].get("unread"):
+        fail(f"A's run thread isn't unread: {listed[0]}")
+    ahead = chats[: chats.index(listed[0])]
+    if any(not (t.get("needs_approval") or t.get("unread")) for t in ahead):
+        fail("A's unread run thread is listed after a chat that needs nothing")
+    expect(*api("POST", f"/api/threads/{thread_id}/read"), 204, "read A's thread")
+    reread = [t for t in expect(*api("GET", "/api/threads"), 200, "chats") if t["id"] == thread_id]
+    if not reread or reread[0].get("unread"):
+        fail(f"reading A's thread didn't clear unread: {reread}")
+    log("OK: A's run thread was unread at the top of the chats list until read")
     messages = expect(*api("GET", f"/api/threads/{thread_id}/messages"), 200, "messages")
     reply = (messages[-1].get("content") or "") if messages else ""
     if MARKER not in reply:
