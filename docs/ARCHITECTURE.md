@@ -1368,6 +1368,9 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
 
   Both are columns on `threads` (`awaiting_approval`, `unread`), set by
   `TurnRunner` when a turn ends; a new turn clears `awaiting_approval`.
+- `PATCH /api/threads/{id}` `{"title": str}` (M19-02) → `200` thread: the
+  owner renames it (trimmed, 1 to 200 characters; blank is `422`). `404`
+  for an unknown or another user's thread.
 - `POST /api/threads/{id}/read` (M17-10) → `204`: the owner opened it, so
   it isn't unread. `404` for an unknown or another user's thread. The chat
   screen calls it once history has loaded and again whenever a turn it
@@ -2641,6 +2644,19 @@ credential or an instance id.
   returns to Apps, and `backBehavior="history"` makes Android's back do the
   same. `/settings/routines` redirects to `/routines`. Browser smokes reach
   them through `scripts/e2e/nav_helpers.mjs` `openSystemApp`.
+- **Chat tab** (M19-02, `src/app/(tabs)/chat/index.tsx`): a chat, not a
+  list. It shows the chat last open this app session (`lib/currentChat.ts`;
+  on web the session is the browser tab, via `sessionStorage`), or a new
+  empty chat on a cold launch. A new chat has no thread until its first
+  send: `useChat(null)` creates it then, keeps the message on screen and
+  sends it once the socket opens. The menu button (or, on a phone, a swipe
+  right that doesn't start at the edge, so Android's back gesture keeps the
+  edge) opens `components/ChatHistoryDrawer.tsx`: chats in the server's
+  order with their markers, title search, the routine-runs filter, and
+  rename/delete on long press. **+** starts a new chat. `/chat/<id>` deep
+  links (`[threadId].tsx`) switch to that chat and return to the tab. The
+  chat itself is `components/ChatView.tsx`; on web its root carries
+  `data-thread-id` for the smokes (`nav_helpers.mjs` `currentThreadId`).
 - **Runner** (`/apps/<instance_id>`, `src/app/(tabs)/apps/[instanceId].tsx`
   → `components/AppRunner.tsx`): looks the instance up the same way (its
   space and the user's role come from the platform, `404 not_found`
