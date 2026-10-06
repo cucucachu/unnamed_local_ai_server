@@ -6,6 +6,11 @@ import { theme } from '@/lib/theme';
  * info (history). A stack like `chat/` (so the outer tab header is off in
  * `../_layout.tsx`). Routes stay under `/apps` so existing links and e2e
  * keep working. */
+
+/** A deep link or reload on `/apps/<id>` still has the grid underneath, so
+ * back and the Apps tab return to it. */
+export const unstable_settings = { initialRouteName: 'index' };
+
 export default function AppsStackLayout() {
   return (
     <Stack
