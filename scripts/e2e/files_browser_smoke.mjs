@@ -40,7 +40,7 @@
 import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eSpaces, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
-import { addMember, createSpace, deleteBestEffort, entryNames, listDir, openSpace } from './files_helpers.mjs';
+import { addMember, createSpace, deleteBestEffort, entryNames, listDir, goToFilesRoot, openSpace } from './files_helpers.mjs';
 import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.FILES_SMOKE_BASE_URL ?? 'http://localhost/';
@@ -174,6 +174,7 @@ async function checkViewerIsReadOnly(browser, viewer) {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, viewer);
     await openSystemApp(page, 'files');
+    await goToFilesRoot(page);
     await waitForVisibleText(page, SPACE_NAME);
     await openSpace(page, SPACE_NAME);
     await waitForVisibleText(page, ASCII_FLOW.renamedFileName);
@@ -222,6 +223,7 @@ async function main() {
     await addMember(cookie, space.id, viewer.username, 'viewer');
 
     await openSystemApp(page, 'files');
+    await goToFilesRoot(page);
     await waitForVisibleText(page, 'Personal');
     await waitForVisibleText(page, SPACE_NAME);
     for (const testId of ['files-upload-button', 'files-new-folder-button']) {

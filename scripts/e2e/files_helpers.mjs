@@ -72,7 +72,8 @@ export async function addMember(cookie, spaceId, username, role) {
 
 /** From anywhere in the Files tab: Home, then into the space shown as `label`
  * ("Personal", or a shared space's name); waits for its breadcrumb. */
-export async function openSpace(page, label, timeout = 20_000) {
+/** Files' Home breadcrumb: the root that lists every space. */
+export async function goToFilesRoot(page, timeout = 20_000) {
   const crumbs = page.getByTestId('breadcrumb-segment');
   await crumbs.filter({ hasText: /^Home$/ }).first().click();
   const deadline = Date.now() + timeout;
@@ -80,6 +81,10 @@ export async function openSpace(page, label, timeout = 20_000) {
     if (Date.now() > deadline) throw new Error('the Files root never loaded');
     await page.waitForTimeout(100);
   }
+}
+
+export async function openSpace(page, label, timeout = 20_000) {
+  await goToFilesRoot(page, timeout);
   await page.getByTestId('files-screen').getByText(label, { exact: true }).first().click();
   await page
     .getByTestId('breadcrumb-segment')
