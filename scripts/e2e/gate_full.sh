@@ -79,6 +79,9 @@
 #      webauthn/device-pairs pytest, passkey browser smoke with RP ID
 #      restore, and the G15 public-enrollment-refusal scenario — no extra
 #      GPU run)
+#   -> gate_m17.sh (M17-08: routine pytest in agent-server and platform,
+#      then the G17 scenario: a routine due in a minute runs headlessly;
+#      disabling or revoking its grant stops it — one short GPU turn)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -305,6 +308,9 @@ main() {
   # plus platform origin pytest and the G15 enrollment scenario; same
   # idempotent reasoning.
   run_step "gate_m15.sh"             bash "${SCRIPT_DIR}/gate_m15.sh"
+  # M17-08: gate_m17.sh runs the routine pytest and the G17 live scenario
+  # (one short GPU turn); same idempotent reasoning.
+  run_step "gate_m17.sh"             bash "${SCRIPT_DIR}/gate_m17.sh"
 
   print_summary
 
