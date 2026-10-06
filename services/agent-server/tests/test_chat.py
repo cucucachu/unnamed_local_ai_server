@@ -133,6 +133,32 @@ async def test_reading_another_users_or_an_unknown_thread_is_404(
     assert (await rest_client.get("/api/threads")).json() == []
 
 
+async def test_rename_thread(rest_app: FastAPI, rest_client: AsyncClient) -> None:
+    created = (await rest_client.post("/api/threads", json={})).json()
+
+    response = await rest_client.patch(f"/api/threads/{created['id']}", json={"title": "  Trip  "})
+    assert response.status_code == 200
+    assert response.json()["title"] == "Trip"
+    assert (await rest_client.get("/api/threads")).json()[0]["title"] == "Trip"
+
+    assert (
+        await rest_client.patch(f"/api/threads/{created['id']}", json={"title": "   "})
+    ).status_code == 422
+    assert (
+        await rest_client.patch(f"/api/threads/{created['id']}", json={"title": ""})
+    ).status_code == 422
+
+    store: InMemoryThreadStore = rest_app.state.thread_store
+    theirs = store.insert("their-thread", "00000000-0000-4000-8000-0000000000b2")
+    assert (
+        await rest_client.patch(f"/api/threads/{theirs.id}", json={"title": "Mine"})
+    ).status_code == 404
+    assert (await store.get(theirs.id, theirs.owner_user_id)).title != "Mine"
+    assert (
+        await rest_client.patch(f"/api/threads/{_UNKNOWN_THREAD_ID}", json={"title": "x"})
+    ).status_code == 404
+
+
 async def test_get_messages_unknown_thread_is_404(rest_client: AsyncClient) -> None:
     response = await rest_client.get(f"/api/threads/{_UNKNOWN_THREAD_ID}/messages")
 

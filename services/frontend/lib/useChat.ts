@@ -27,6 +27,7 @@ import {
   ORPHAN_TURN_KEY,
 } from './chatTurns';
 import {
+  createThread,
   getThreadBranches,
   getThreadMessages,
   getThreadState,
@@ -322,6 +323,14 @@ export interface UseChatResult {
  * `mapHistoryToItems` into the hook's `items` (see `hydrationState`,
  * `retryHydration` on `UseChatResult`, and the socket effect's leading
  * `hydrationState !== 'done'` guard below).
+ *
+ * M19-02: `threadId` is `null` for a new chat that doesn't exist on the
+ * server yet. It has nothing to hydrate and no socket; the first
+ * `sendMessage` creates the thread, hands its id to `onThreadCreated`, and
+ * the caller passes it back as `threadId`. That switch keeps the items on
+ * screen (no history fetch) and the queued message goes out once the socket
+ * opens. Any other `threadId` change re-hydrates, so callers remount the
+ * hook (a React `key`) to switch between existing chats.
  */
 /** M8-03: maps a wire `approval_request`/`GET .../state` action (snake_case)
  * to `useChat`'s own camelCase `PendingApprovalAction`. */
@@ -373,12 +382,16 @@ async function loadThread(threadId: string): Promise<ThreadSnapshot> {
   return { messages, pendingApproval, branches };
 }
 
-export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseChatResult {
+export function useChat(
+  threadId: string | null,
+  WebSocketImpl?: WebSocketCtor,
+  onThreadCreated?: (threadId: string) => void,
+): UseChatResult {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [turnMetas, setTurnMetas] = useState<Record<string, ChatTurnMeta>>({});
   const [busy, setBusy] = useState(false);
   const [connectionState, setConnectionState] = useState<ChatConnectionState>('connecting');
-  const [hydrationState, setHydrationState] = useState<HydrationState>('loading');
+  const [hydrationState, setHydrationState] = useState<HydrationState>(threadId === null ? 'done' : 'loading');
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [branches, setBranches] = useState<ThreadBranchPoint[]>([]);
   // Bumped by `retryHydration` to re-trigger the hydration effect below
@@ -397,6 +410,15 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   // (a plain state closure would risk acting on a stale value if called
   // twice in the same tick — the ref is always current).
   const pendingApprovalRef = useRef<PendingApproval | null>(null);
+  // M19-02: a new chat's first message, sent once its thread and socket exist.
+  const threadIdRef = useRef(threadId);
+  const createdThreadIdRef = useRef<string | null>(null);
+  const firstMessageRef = useRef<{ text: string; id: string } | null>(null);
+  const onThreadCreatedRef = useRef(onThreadCreated);
+  useEffect(() => {
+    threadIdRef.current = threadId;
+    onThreadCreatedRef.current = onThreadCreated;
+  });
 
   // History hydration — runs before the socket-opening effect below ever
   // fires (that effect's own `hydrationState !== 'done'` guard is what
@@ -404,6 +426,14 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   // `hydrationState` to `'loading'` (and clears any stale items) whenever
   // `threadId` changes or `retryHydration` bumps `hydrationAttempt`.
   useEffect(() => {
+    if (threadId !== null && threadId === createdThreadIdRef.current) {
+      createdThreadIdRef.current = null;
+      return;
+    }
+    if (threadId === null) {
+      setHydrationState('done');
+      return;
+    }
     let cancelled = false;
     setHydrationState('loading');
     setItems([]);
@@ -447,6 +477,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
 
   const switchBranch = useCallback(
     async (checkpointId: string) => {
+      if (threadId === null) return;
       await setActiveBranch(threadId, checkpointId);
       setHydrationAttempt((n) => n + 1);
     },
@@ -457,7 +488,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     // Spec: hydration failure -> error banner with retry, socket not
     // opened. Also gates the initial `'loading'` phase — the socket only
     // opens once history has been fetched and mapped into `items`.
-    if (hydrationState !== 'done') return;
+    if (hydrationState !== 'done' || threadId === null) return;
 
     currentAssistantIdRef.current = null;
     currentReasoningIdRef.current = null;
@@ -700,6 +731,11 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
     );
 
     socketRef.current = socket;
+    const first = firstMessageRef.current;
+    if (first !== null) {
+      firstMessageRef.current = null;
+      socket.send(first.text, { id: first.id });
+    }
     return () => {
       cancelled = true;
       socket.close();
@@ -718,6 +754,7 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
   }, []);
 
   const sendMessage = useCallback((text: string, options?: SendUserMessageOptions) => {
+    if (threadIdRef.current === null && firstMessageRef.current !== null) return;
     const id = newUserMessageId();
     currentTurnUserIdRef.current = id;
     setItems((prev) => {
@@ -744,7 +781,22 @@ export function useChat(threadId: string, WebSocketImpl?: WebSocketCtor): UseCha
       return [...next, { id, kind: 'user', text }];
     });
     setBusy(true);
-    socketRef.current?.send(text, { ...options, id });
+    if (threadIdRef.current !== null) {
+      socketRef.current?.send(text, { ...options, id });
+      return;
+    }
+    firstMessageRef.current = { text, id };
+    createThread()
+      .then((thread) => {
+        createdThreadIdRef.current = thread.id;
+        onThreadCreatedRef.current?.(thread.id);
+      })
+      .catch(() => {
+        firstMessageRef.current = null;
+        setBusy(false);
+        setTurnMetas((prev) => ({ ...prev, [id]: { status: 'error' } }));
+        setItems((prev) => [...prev, { id: makeId('error'), kind: 'error', message: "Couldn't start the chat" }]);
+      });
   }, []);
 
   const stopTurn = useCallback(() => {

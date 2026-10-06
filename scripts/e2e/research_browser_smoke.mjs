@@ -47,6 +47,7 @@ import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
+import { currentThreadId, startNewChat } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.RESEARCH_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE = process.env.RESEARCH_SMOKE_API_BASE ?? 'http://localhost/api';
@@ -136,9 +137,9 @@ let e2eUser;
 // `homeai_session=...` from the latest signed-in page (`createNewThread`).
 let smokeCookie = null;
 
-/** Creates a new thread from the UI ("New chat" header button) and returns
- * its id (captured from the URL, same technique as `chat_browser_smoke.mjs`'s
- * M6-03 cleanup addition) so the caller can clean it up afterward. */
+/** Signs in and starts a new chat from the UI (the + header button). Its
+ * thread exists once the first send creates it; callers read the id with
+ * `currentThreadId` to clean it up afterward. */
 async function createNewThread(page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   await loginThroughUi(page, e2eUser);
@@ -146,12 +147,7 @@ async function createNewThread(page) {
   // HITL is per user and on by default; the positive scenario's write_file
   // isn't wired to approve it.
   apiRequest('PUT', `${API_BASE}/settings`, { hitl_enabled: false });
-  await page.getByRole('tab', { name: 'Chat' }).click();
-  const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
-  await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
-  await newChatButton.click();
-  await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
-  return new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+  await startNewChat(page);
 }
 
 /** Classifies every NEW tool card (index `priorCount` .. count-1) into
@@ -260,7 +256,7 @@ async function attemptPositiveScenario(browser, attemptNumber) {
   let threadId;
   const page = await browser.newPage();
   try {
-    threadId = await createNewThread(page);
+    await createNewThread(page);
 
     const toolCardLocator = page.locator('[data-testid="chat-item-tool"]');
     const priorToolCardCount = await toolCardLocator.count();
@@ -318,6 +314,7 @@ async function attemptPositiveScenario(browser, attemptNumber) {
     }
     console.log(`[positive] OK — ${filePath} contains "${EXPECTED_URL_IN_FILE}"`);
   } finally {
+    threadId = await currentThreadId(page, 2_000).catch(() => null);
     await page.close();
     deleteThreadBestEffort(threadId);
   }
@@ -372,7 +369,7 @@ async function runNegativeScenario(browser) {
   let threadId;
   const page = await browser.newPage();
   try {
-    threadId = await createNewThread(page);
+    await createNewThread(page);
 
     const reply = await sendMessageAndAwaitReply(page, NEGATIVE_PROMPT, 0, TURN_TIMEOUT_MS);
     console.log(`[negative] turn completed — assistant replied: ${reply}`);
@@ -384,6 +381,7 @@ async function runNegativeScenario(browser) {
     }
     console.log('[negative] OK — final answer states it cannot take actions online');
   } finally {
+    threadId = await currentThreadId(page, 2_000).catch(() => null);
     await page.close();
     deleteThreadBestEffort(threadId);
   }

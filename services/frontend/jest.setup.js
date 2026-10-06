@@ -22,3 +22,6 @@ jest.mock('homeai-device-key', () => ({
   hasKey: jest.fn(),
   deleteKey: jest.fn(),
 }));
+
+// M19-02: the chat drawer pads by the safe-area insets; tests have no provider.
+jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);

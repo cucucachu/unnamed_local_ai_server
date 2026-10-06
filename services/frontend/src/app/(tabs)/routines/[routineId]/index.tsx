@@ -12,6 +12,7 @@ import {
   settingsStyles,
 } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
+import { openChat } from '@/lib/currentChat';
 import { listSpaces, type Space } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import {
@@ -71,7 +72,10 @@ export default function RoutineDetailScreen() {
     }, [reload]),
   );
 
-  const openChat = (threadId: string) => router.push({ pathname: '/chat/[threadId]', params: { threadId } });
+  const openRun = (threadId: string) => {
+    openChat(threadId);
+    router.navigate('/chat');
+  };
 
   async function handleRunNow() {
     const started: { run?: RoutineRun } = {};
@@ -80,7 +84,7 @@ export default function RoutineDetailScreen() {
     });
     if (!ok) return;
     reload();
-    if (started.run?.thread_id) openChat(started.run.thread_id);
+    if (started.run?.thread_id) openRun(started.run.thread_id);
   }
 
   async function handleDelete(routine: Routine) {
@@ -141,7 +145,7 @@ export default function RoutineDetailScreen() {
             </View>
 
             <SectionTitle>Recent runs</SectionTitle>
-            <RoutineRunList runs={data.runs.slice(0, RECENT_RUNS)} onOpen={openChat} />
+            <RoutineRunList runs={data.runs.slice(0, RECENT_RUNS)} onOpen={openRun} />
             {data.runs.length > RECENT_RUNS ? (
               <Pressable
                 onPress={() => router.push({ pathname: '/routines/[routineId]/runs', params: { routineId } })}

@@ -96,6 +96,15 @@ export async function listThreads(): Promise<Thread[]> {
   return apiFetch<Thread[]>('/api/threads');
 }
 
+/** `PATCH /api/threads/{id}` (M19-02): rename a chat. */
+export async function renameThread(threadId: string, title: string): Promise<Thread> {
+  return apiFetch<Thread>(`/api/threads/${encodeURIComponent(threadId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+}
+
 /** `POST /api/threads/{id}/read` (M17-10): the user has seen this chat. */
 export async function markThreadRead(threadId: string): Promise<void> {
   await apiFetch<void>(`/api/threads/${encodeURIComponent(threadId)}/read`, { method: 'POST' });

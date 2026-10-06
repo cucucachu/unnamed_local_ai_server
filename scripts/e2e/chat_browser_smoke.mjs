@@ -5,13 +5,14 @@
 // agent-server, real model), and asserts the full M3-04 thread-list +
 // history-hydration flow works end-to-end:
 //
-//   1. Create a new chat from the UI ("New chat" header button).
-//   2. Send a message.
-//   3. Go back to the thread list — the title now reflects the message
-//      (server-side `_derive_title`, M3-02: first 60 chars, single-line,
-//      "..."-truncated).
-//   4. Reopen the thread — prior messages render (history hydration, the
-//      actual point of M3-04's `GET /api/threads/{id}/messages` call).
+//   1. Start a new chat from the UI (the + header button; M19-02: the
+//      thread is created by the first send).
+//   2. Send a message. Apps and back returns to the same chat.
+//   3. Start another new chat; the history drawer lists the first one with
+//      a title from the message (server-side `_derive_title`, M3-02: first
+//      60 chars, single-line, "..."-truncated).
+//   4. Reopen it from the drawer — prior messages render (history
+//      hydration, the actual point of M3-04's `GET /api/threads/{id}/messages` call).
 //   5. Send a follow-up message and get a real response.
 //
 // Mirrors the spirit of `scripts/ws_smoke.py` (same "Say exactly: PONG"-style
@@ -23,8 +24,8 @@
 // a real code-exec-manager session for it — neither was ever cleaned up
 // before this change (confirmed live on this host: `GET /api/threads`
 // showed 7+ leftover "Say exactly: PONG..." threads from prior manual runs
-// of this exact script). `main()` now captures the thread id from the URL
-// right after creating it and deletes both the thread and its exec session
+// of this exact script). `main()` captures each thread's id once its
+// first send creates it (the chat view's `data-thread-id`) and deletes both the thread and its exec session
 // in a `finally` block, so re-running this script (standalone or inside
 // `gate_full.sh`) doesn't accumulate cruft.
 //
@@ -73,6 +74,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
+import { currentThreadId, findInChatHistory, startNewChat } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE =
@@ -495,24 +497,19 @@ function installFakeSpeechRecognition() {
 /** Set by `main()`; every fresh browser context signs in as it. */
 let e2eUser;
 
+/** Signs in on `origin` and opens an empty new chat (no thread until a send). */
 async function openNewChatOn(page, origin) {
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
   await loginThroughUi(page, e2eUser);
-  await page.getByRole('tab', { name: 'Chat' }).click();
-  const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
-  await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
-  await newChatButton.click();
-  await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
-  return new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+  await startNewChat(page);
 }
 
 async function assertVoiceInput(browser, httpsContextOptions) {
   const httpsContext = await browser.newContext(httpsContextOptions);
   await httpsContext.addInitScript(installFakeSpeechRecognition);
   const httpsPage = await httpsContext.newPage();
-  let httpsThreadId;
   try {
-    httpsThreadId = await openNewChatOn(httpsPage, HTTPS_VOICE_URL);
+    await openNewChatOn(httpsPage, HTTPS_VOICE_URL);
     const mic = httpsPage.locator('[data-testid="chat-mic"]');
     await mic.waitFor({ state: 'visible', timeout: 10_000 });
     await httpsPage.getByPlaceholder('Message…').waitFor({ state: 'visible', timeout: 15_000 });
@@ -533,15 +530,13 @@ async function assertVoiceInput(browser, httpsContextOptions) {
     console.log(`Step 18 OK — https mic visible; transcript landed in composer ("${value}")`);
   } finally {
     await httpsContext.close();
-    cleanupThreadBestEffort(httpsThreadId);
   }
 
   const httpContext = await browser.newContext();
   await httpContext.addInitScript(installFakeSpeechRecognition);
   const httpPage = await httpContext.newPage();
-  let httpThreadId;
   try {
-    httpThreadId = await openNewChatOn(httpPage, HTTP_VOICE_URL);
+    await openNewChatOn(httpPage, HTTP_VOICE_URL);
     await httpPage.getByPlaceholder('Message…').waitFor({ state: 'visible', timeout: 15_000 });
     const httpMicCount = await httpPage.locator('[data-testid="chat-mic"]').count();
     if (httpMicCount !== 0) {
@@ -552,7 +547,6 @@ async function assertVoiceInput(browser, httpsContextOptions) {
     console.log(`Step 18 OK — http (${HTTP_VOICE_URL}) has no mic button`);
   } finally {
     await httpContext.close();
-    cleanupThreadBestEffort(httpThreadId);
   }
 }
 
@@ -621,28 +615,34 @@ async function main() {
     // script keeps working if that default ever changes).
     await page.getByRole('tab', { name: 'Chat' }).click();
 
-    // --- Step 1: create a new chat from the UI -------------------------
-    const newChatButton = page.locator('[data-testid="new-chat-header-button"]');
-    await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
-    await newChatButton.click();
-    // M6-03: capture the real thread id expo-router pushes into the URL
-    // (`router.push('/chat/[threadId]', ...)` in `chat/index.tsx`) so it —
-    // and its exec-manager session — can be cleaned up in `finally`.
-    await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
-    threadId = new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+    // --- Step 1: + starts an empty new chat (M19-02: no thread yet) -----
+    await startNewChat(page);
 
     // --- Step 2: send the first message ---------------------------------
     const firstReply = await sendMessageAndAwaitReply(page, FIRST_MESSAGE, 0);
     console.log(`Step 2 OK — assistant replied: ${firstReply}`);
+    // M6-03: the thread the first send created, cleaned up in `finally`.
+    threadId = await currentThreadId(page);
 
-    // --- Step 3: back to the list — title reflects the message ---------
-    await page.goBack();
+    // --- Step 2b: Apps and back returns to the same chat (M19-02) -------
+    await page.getByRole('tab', { name: 'Apps' }).click();
+    await page.getByTestId('home-launcher').waitFor({ timeout: 15_000 });
+    await page.getByRole('tab', { name: 'Chat' }).click();
+    if ((await currentThreadId(page)) !== threadId) throw new Error('Step 2b: the Chat tab came back to a different chat');
+    await waitForText(page, FIRST_MESSAGE, 15_000);
+    console.log('Step 2b OK — Apps and back returns to the same chat');
+
+    // --- Step 3: history drawer — title reflects the message -----------
+    // + first, so reopening from history below is a real switch + hydration.
+    await startNewChat(page);
     const expectedTitle = deriveExpectedTitle(FIRST_MESSAGE);
-    const titleRow = await waitForText(page, expectedTitle, 20_000);
-    console.log(`Step 3 OK — thread list shows truncated title: "${expectedTitle}"`);
+    const titleRow = await findInChatHistory(page, expectedTitle, 20_000);
+    console.log(`Step 3 OK — chat history shows truncated title: "${expectedTitle}"`);
 
     // --- Step 4: reopen the thread — prior messages render (hydration) -
     await titleRow.click();
+    await page.getByTestId('chat-drawer').waitFor({ state: 'hidden', timeout: 10_000 });
+    if ((await currentThreadId(page)) !== threadId) throw new Error('Step 4: history opened a different chat');
     // The FIRST_MESSAGE user bubble and the assistant's `firstReply` both
     // being present again (without re-sending anything) is the actual
     // proof that `GET /api/threads/{id}/messages` hydration worked, rather
@@ -884,13 +884,10 @@ async function main() {
 
     // --- Step 12: edit turn 2 + regenerate (M8-04) ----------------------
     // Fresh thread so history is exactly three user/assistant turns.
-    await page.getByRole('tab', { name: 'Chat' }).click();
-    await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
-    await newChatButton.click();
-    await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
-    editThreadId = new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+    await startNewChat(page);
 
     await sendMessageAndAwaitReply(page, EDIT_TURN_1, 0);
+    editThreadId = await currentThreadId(page);
     const afterTurn1Assistants = await assistantBubbleLocator.count();
     await sendMessageAndAwaitReply(page, EDIT_TURN_2, afterTurn1Assistants);
     const afterTurn2Assistants = await assistantBubbleLocator.count();
@@ -981,9 +978,7 @@ async function main() {
     console.log('Step 12 OK — Regenerate produced a new answer; history length unchanged');
 
     // --- Step 13: finished assistant bubble renders markdown (M9-01) ----
-    // Stay on the edit thread — composer is already idle after Regenerate,
-    // and a second "New chat" hop from this screen is flaky (the list
-    // header button is not always mounted after a reload).
+    // Stay on the edit thread — composer is already idle after Regenerate.
     const markdownPrior = await page.locator('[data-testid="chat-item-assistant"]').count();
     const markdownReply = await sendMessageAndAwaitReply(page, MARKDOWN_MESSAGE, markdownPrior);
     const markdownBubble = page.locator('[data-testid="chat-item-assistant-bubble"]').last();
@@ -1145,13 +1140,10 @@ async function main() {
     // Go to the list via URL — clicking the Chat tab from a nested
     // `/chat/[id]` screen is a no-op (already on the Chat tab), so the
     // header "New chat" button never mounts (same flake step 13 avoided).
-    await page.goto(new URL('/chat', BASE_URL).href, { waitUntil: 'domcontentloaded' });
-    await newChatButton.waitFor({ state: 'visible', timeout: 15_000 });
-    await newChatButton.click();
-    await page.waitForURL(/\/chat\/[^/]+/, { timeout: 15_000 });
-    forkThreadId = new URL(page.url()).pathname.split('/').filter(Boolean).pop();
+    await startNewChat(page);
 
     await sendMessageAndAwaitReply(page, FORK_TURN_1, 0);
+    forkThreadId = await currentThreadId(page);
     const forkAfter1 = await page.locator('[data-testid="chat-item-assistant"]').count();
     await sendMessageAndAwaitReply(page, FORK_TURN_2, forkAfter1);
     const forkAfter2 = await page.locator('[data-testid="chat-item-assistant"]').count();

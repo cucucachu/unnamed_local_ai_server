@@ -15,13 +15,15 @@ jest.mock('@/lib/useChat', () => ({
   useChat: (...args: unknown[]) => mockUseChat(...args),
 }));
 
-// `useLocalSearchParams` needs a route param to hand back. `useRouter`
-// is mocked for M9-03's `file:` → Files-tab push.
+// `useRouter` is mocked for M9-03's `file:` → Files-tab push.
 const mockPush = jest.fn();
-const mockReplace = jest.fn();
 jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => ({ threadId: 'thread-123' }),
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRouter: () => ({ push: mockPush }),
+}));
+
+const mockOpenChat = jest.fn();
+jest.mock('@/lib/currentChat', () => ({
+  openChat: (...args: unknown[]) => mockOpenChat(...args),
 }));
 
 const mockCopyToClipboard = jest.fn().mockResolvedValue(undefined);
@@ -57,7 +59,11 @@ jest.mock('@/lib/speech', () => ({
 }));
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
-import ChatScreen from '../[threadId]';
+import { ChatView, type ChatViewProps } from '../ChatView';
+
+function ChatScreen(props: Partial<ChatViewProps>) {
+  return createElement(ChatView, { threadId: 'thread-123', ...props });
+}
 
 function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
   const items = overrides.items ?? [];
@@ -79,7 +85,7 @@ function setUseChatResult(overrides: Partial<UseChatResult> = {}): void {
   });
 }
 
-describe('ChatScreen ([threadId])', () => {
+describe('ChatView', () => {
   beforeEach(() => {
     mockUseChat.mockReset();
     mockCopyToClipboard.mockClear();
@@ -91,16 +97,45 @@ describe('ChatScreen ([threadId])', () => {
     mockStartListening.mockImplementation(() => () => {});
     mockStopListening.mockReset();
     mockReadThread.mockClear();
+    mockOpenChat.mockClear();
   });
 
-  it('passes the route threadId through to useChat', () => {
+  it('passes threadId and onThreadCreated through to useChat', () => {
     setUseChatResult();
+    const onThreadCreated = jest.fn();
 
     act(() => {
-      create(createElement(ChatScreen));
+      create(createElement(ChatScreen, { onThreadCreated }));
     });
 
-    expect(mockUseChat).toHaveBeenCalledWith('thread-123');
+    expect(mockUseChat).toHaveBeenCalledWith('thread-123', undefined, onThreadCreated);
+  });
+
+  it('a new chat (threadId null) has a composer, no connection pill and nothing to mark read (M19-02)', () => {
+    setUseChatResult({ connectionState: 'connecting' });
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(createElement(ChatScreen, { threadId: null }));
+    });
+    expect(mockUseChat.mock.calls[0]?.[0]).toBeNull();
+    expect(renderer.root.findByProps({ placeholder: 'Message…' })).toBeTruthy();
+    expect(renderer.root.findAll((node) => node.props.children === 'connecting…')).toHaveLength(0);
+    expect(mockReadThread).not.toHaveBeenCalled();
+  });
+
+  it('calls onTurnEnd when a running turn finishes (M19-02)', () => {
+    const onTurnEnd = jest.fn();
+    setUseChatResult({ busy: true });
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(createElement(ChatScreen, { onTurnEnd }));
+    });
+    expect(onTurnEnd).not.toHaveBeenCalled();
+    setUseChatResult({ busy: false });
+    act(() => {
+      renderer.update(createElement(ChatScreen, { onTurnEnd }));
+    });
+    expect(onTurnEnd).toHaveBeenCalledTimes(1);
   });
 
   it('reads the chat once it has loaded and no turn is running (M17-10)', () => {
@@ -165,7 +200,7 @@ describe('ChatScreen ([threadId])', () => {
     act(() => {
       renderer?.root.find((node) => node.props.testID === 'chat-not-found-back' && typeof node.props.onPress === 'function').props.onPress();
     });
-    expect(mockReplace).toHaveBeenCalledWith('/chat');
+    expect(mockOpenChat).toHaveBeenCalledWith(null);
   });
 
   it('renders without crashing with an empty item list once hydration is done', () => {

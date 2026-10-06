@@ -61,6 +61,13 @@ async def test_pg_thread_store_round_trip(pg_server: PgServer) -> None:
         still_unaffected = await store.get(record.id, owner)
         assert still_unaffected.title == "Should not apply"  # no-op: title is no longer default
 
+        # M19-02: rename() sets any title, owner only.
+        renamed = await store.rename(record.id, owner, "Renamed")
+        assert renamed is not None and renamed.title == "Renamed"
+        assert await store.rename(record.id, other, "Theirs") is None
+        assert (await store.get(record.id, owner)).title == "Renamed"
+        assert await store.rename("not-a-uuid", owner, "x") is None
+
         # Another user sees none of it and can't delete it.
         assert await store.list_for_owner(other) == []
         assert await store.get(record.id, other) is None
