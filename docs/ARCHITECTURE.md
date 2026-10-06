@@ -2657,6 +2657,10 @@ credential or an instance id.
   links (`[threadId].tsx`) switch to that chat and return to the tab. The
   chat itself is `components/ChatView.tsx`; on web its root carries
   `data-thread-id` for the smokes (`nav_helpers.mjs` `currentThreadId`).
+  M19-03: an empty chat with voice input available shows a large mic in
+  the middle; one tap focuses the composer and starts the M9-06 voice input.
+  It hides once the chat has a message, while listening, or while the
+  keyboard is up.
 - **Runner** (`/apps/<instance_id>`, `src/app/(tabs)/apps/[instanceId].tsx`
   → `components/AppRunner.tsx`): looks the instance up the same way (its
   space and the user's role come from the platform, `404 not_found`
