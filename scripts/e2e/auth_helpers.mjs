@@ -111,6 +111,18 @@ export function deleteE2eSpaces(...slugs) {
   }
 }
 
+/** Removes registered apps' bundles and git repos (their rows cascade from
+ * the space `deleteE2eSpaces` deletes). */
+export function deleteE2eAppFiles(...appIds) {
+  for (const id of appIds.filter((appId) => /^[0-9a-f-]{36}$/.test(appId ?? ''))) {
+    try {
+      compose(['exec', '-T', 'platform', 'rm', '-rf', `/data/platform/app-bundles/${id}`, `/data/platform/app-git/${id}.git`], '');
+    } catch (error) {
+      console.warn(`WARN: could not delete app files for ${id}: ${error.message}`);
+    }
+  }
+}
+
 /** Deletes invites carrying `label` (an `e2e-*` label from a UI smoke,
  * which never sees the invite id). */
 export function deleteInvitesLabeled(label) {

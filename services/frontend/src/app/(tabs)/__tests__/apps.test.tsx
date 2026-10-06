@@ -4,7 +4,14 @@ import { Alert } from 'react-native';
 import { exists, flush, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../test-utils/screen';
 
 const mockPush = jest.fn();
+const mockScreenOptions = jest.fn();
 jest.mock('expo-router', () => ({
+  Stack: {
+    Screen: ({ options }: { options: unknown }) => {
+      mockScreenOptions(options);
+      return null;
+    },
+  },
   useRouter: () => ({ push: mockPush }),
   useFocusEffect: (effect: () => void) => {
     const { useEffect } = jest.requireActual('react');
@@ -14,6 +21,8 @@ jest.mock('expo-router', () => ({
 
 // eslint-disable-next-line import/first -- must follow the jest.mock call above
 import { gridColumns } from '@/components/AppGrid';
+// eslint-disable-next-line import/first -- must follow the jest.mock call above
+import { getCurrentSpace, setCurrentSpace } from '@/lib/currentSpace';
 // eslint-disable-next-line import/first -- must follow the jest.mock call above
 import HomeScreen from '../apps/index';
 
@@ -48,14 +57,34 @@ async function longPress(target: ReactTestRenderer, testID: string): Promise<voi
   });
   await flush();
 }
-beforeEach(() => mockPush.mockReset());
+beforeEach(() => {
+  mockPush.mockReset();
+  mockScreenOptions.mockReset();
+  setCurrentSpace(null);
+});
+
+const title = () => (mockScreenOptions.mock.calls.at(-1)?.[0] as { title: string }).title;
+const selectedDot = (target: ReactTestRenderer) =>
+  target.root.find(
+    (node) => typeof node.props.testID === 'string' && node.props.testID.startsWith('home-space-') && node.props.accessibilityState?.selected && typeof node.props.onPress === 'function',
+  ).props.testID;
+
+async function swipeTo(target: ReactTestRenderer, page: number, width = 390): Promise<void> {
+  const pager = target.root.find((node) => node.props.testID === 'home-pages' && typeof node.props.onScroll === 'function');
+  await act(async () => {
+    pager.props.onLayout({ nativeEvent: { layout: { width, height: 700, x: 0, y: 0 } } });
+  });
+  await act(async () => {
+    pager.props.onScroll({ nativeEvent: { contentOffset: { x: page * width, y: 0 } } });
+  });
+}
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = null;
 });
 
 describe('HomeScreen', () => {
-  it('lists system apps and installed instances grouped by space, Personal first, and opens the runner', async () => {
+  it('has a page per live space, Personal first, a dock of system apps, and opens the runner', async () => {
     mockFetchRoutes({
       'GET /api/platform/spaces': {
         body: {
@@ -76,19 +105,22 @@ describe('HomeScreen', () => {
     const text = textOf(renderer);
     expect(exists(renderer, 'home-launcher')).toBe(true);
     expect(exists(renderer, 'home-system')).toBe(true);
-    expect(text.indexOf('Personal')).toBeLessThan(text.indexOf('Family'));
+    const pages = renderer.root
+      .findAll((node) => typeof node.props.testID === 'string' && node.props.testID.startsWith('apps-space-') && typeof node.type !== 'string')
+      .map((node) => node.props.testID);
+    expect([...new Set(pages)]).toEqual(['apps-space-personal-s1', 'apps-space-shared-s3', 'apps-space-shared-s2']);
+    expect(title()).toBe('Personal');
+    expect(selectedDot(renderer)).toBe('home-space-personal-s1');
+    expect(exists(renderer, 'home-space-shared-s4')).toBe(false);
     expect(text).toContain('Groceries');
     expect(text).toContain('Chores');
     expect(text).toContain('View only');
-    expect(exists(renderer, 'apps-space-shared-s2')).toBe(true);
-    expect(exists(renderer, 'apps-space-shared-s3')).toBe(false);
-    expect(exists(renderer, 'home-space-shared-s3')).toBe(true);
-    expect(exists(renderer, 'home-space-shared-s4')).toBe(false);
+    expect(text).toContain('No apps in Empty yet');
 
     // M19-01: Chat is a tab, not a tile.
     expect(exists(renderer, 'home-open-chat')).toBe(false);
     await press(renderer, 'home-open-files');
-    expect(mockPush).toHaveBeenCalledWith('/files');
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/files', params: { path: '/personal' } });
     await press(renderer, 'home-open-routines');
     expect(mockPush).toHaveBeenCalledWith('/routines');
     await press(renderer, 'home-open-settings');
@@ -98,7 +130,7 @@ describe('HomeScreen', () => {
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/apps/[instanceId]', params: { instanceId: 'i2' } });
   });
 
-  it('filters installed apps with the space switcher', async () => {
+  it('swipes between spaces; the title, dots and Files follow, and the page is kept for the session', async () => {
     mockFetchRoutes({
       'GET /api/platform/spaces': {
         body: { spaces: [space('s2', 'shared', 'Family', 'editor'), space('s1', 'personal', 'Alice', 'owner')] },
@@ -107,20 +139,32 @@ describe('HomeScreen', () => {
       'GET /api/platform/spaces/s2/instances': { body: { instances: [instance('i2', 's2', 'chores', 'Chores')] } },
     });
     renderer = await render(HomeScreen);
-    expect(exists(renderer, 'home-space-switcher')).toBe(true);
-    expect(exists(renderer, 'apps-space-personal-s1')).toBe(true);
-    expect(exists(renderer, 'apps-space-shared-s2')).toBe(true);
+    expect(exists(renderer, 'home-space-dots')).toBe(true);
 
-    await press(renderer, 'home-space-shared-s2');
-    expect(exists(renderer, 'apps-space-shared-s2')).toBe(true);
-    expect(exists(renderer, 'apps-space-personal-s1')).toBe(false);
-    expect(textOf(renderer)).toContain('Chores');
-    expect(textOf(renderer)).not.toContain('Groceries');
-    expect(exists(renderer, 'home-system')).toBe(true);
+    await swipeTo(renderer, 1);
+    expect(title()).toBe('Family');
+    expect(selectedDot(renderer)).toBe('home-space-shared-s2');
+    expect(getCurrentSpace()).toBe('s2');
+    await press(renderer, 'home-open-files');
+    expect(mockPush).toHaveBeenLastCalledWith({ pathname: '/files', params: { path: '/spaces/shared-s2' } });
 
-    await press(renderer, 'home-space-all');
-    expect(exists(renderer, 'apps-space-personal-s1')).toBe(true);
-    expect(exists(renderer, 'apps-space-shared-s2')).toBe(true);
+    act(() => renderer?.unmount());
+    renderer = await render(HomeScreen);
+    expect(title()).toBe('Family');
+
+    await press(renderer, 'home-space-personal-s1');
+    expect(title()).toBe('Personal');
+    expect(getCurrentSpace()).toBe('s1');
+  });
+
+  it('has no dots with only Personal', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/spaces': { body: { spaces: [space('s1', 'personal', 'Alice', 'owner')] } },
+      'GET /api/platform/spaces/s1/instances': { body: { instances: [] } },
+    });
+    renderer = await render(HomeScreen);
+    expect(exists(renderer, 'home-space-dots')).toBe(false);
+    expect(title()).toBe('Personal');
   });
 
   it('opens the catalog and an update sheet', async () => {

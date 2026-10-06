@@ -43,6 +43,11 @@ export interface Space {
   archived_at: string | null;
 }
 
+/** The space's root folder in the files API. */
+export function spacePath(space: Space): string {
+  return space.kind === 'personal' ? '/personal' : `/spaces/${space.slug}`;
+}
+
 /** Viewers, and anyone without a role in the space, cannot write. */
 export function isReadOnly(space: Space): boolean {
   return space.role !== 'owner' && space.role !== 'editor';
