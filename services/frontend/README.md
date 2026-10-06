@@ -24,7 +24,7 @@ M2-06, the files UI in M3-05.
 src/app/_layout.tsx          root layout (dark theme, no header)
 src/app/(tabs)/_layout.tsx   tab navigator (Chat, Apps; Files/Routines/Settings hidden, M19-01)
 src/app/(tabs)/apps/         Home launcher (M14-02): system tiles + installed instances by space; [instanceId] is the app runner
-src/app/(tabs)/chat/         Chat tab (thread list + [threadId])
+src/app/(tabs)/chat/         Chat tab: the current chat + history drawer (M19-02); [threadId] is a deep link
 src/app/(tabs)/files.tsx     Files tab
 src/app/(tabs)/settings/     Settings tab stack (M10-07 hub; a tab since M14-02): account, sessions, spaces, users + invites (admins)
 src/app/login.tsx            signed-out entry: Setup (bootstrap open) or Login
