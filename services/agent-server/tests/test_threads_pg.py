@@ -67,6 +67,22 @@ async def test_pg_thread_store_round_trip(pg_server: PgServer) -> None:
         assert await store.delete(record.id, other) is False
         assert await store.get(record.id, owner) is not None
 
+        # M17-10: a turn's end sets the flags; only the owner's read clears unread.
+        await store.turn_ended(record.id, awaiting_approval=True, unread=True)
+        flagged = await store.get(record.id, owner)
+        assert (flagged.awaiting_approval, flagged.unread) == (True, True)
+        await store.turn_started(record.id)
+        await store.turn_ended(record.id, awaiting_approval=False, unread=False)
+        flagged = await store.get(record.id, owner)
+        assert (flagged.awaiting_approval, flagged.unread) == (False, True)
+        rls.bind_user(other)
+        assert await store.mark_read(record.id, other) is False
+        rls.bind_user(owner)
+        assert await store.mark_read(record.id, other) is False
+        assert (await store.get(record.id, owner)).unread is True
+        assert await store.mark_read(record.id, owner) is True
+        assert (await store.get(record.id, owner)).unread is False
+
         # delete(): removes the row; a second call reports nothing deleted.
         assert await store.delete(record.id, owner) is True
         assert await store.get(record.id, owner) is None
@@ -80,6 +96,9 @@ async def test_pg_thread_store_round_trip(pg_server: PgServer) -> None:
         assert await store.delete(non_uuid, owner) is False
         await store.set_title_if_new(non_uuid, "x")
         await store.touch(non_uuid)
+        await store.turn_started(non_uuid)
+        await store.turn_ended(non_uuid, awaiting_approval=True, unread=True)
+        assert await store.mark_read(non_uuid, owner) is False
     finally:
         with psycopg.connect(pg_server.super_dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM threads WHERE owner_user_id IN (%s, %s)", (owner, other))

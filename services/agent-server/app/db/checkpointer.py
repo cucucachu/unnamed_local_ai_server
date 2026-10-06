@@ -71,6 +71,13 @@ _THREADS_OWNER_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS threads_owner_updated_idx ON threads (owner_user_id, updated_at DESC);
 """
 
+# M17-10: what the chats list puts first. Set when a turn ends (see
+# `ThreadStore.turn_ended`); `unread` is cleared when the owner opens the chat.
+_THREADS_ATTENTION_DDL = (
+    "ALTER TABLE threads ADD COLUMN IF NOT EXISTS awaiting_approval BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE threads ADD COLUMN IF NOT EXISTS unread BOOLEAN NOT NULL DEFAULT false",
+)
+
 
 @dataclass
 class PostgresCheckpointer:
@@ -119,6 +126,8 @@ async def build_postgres_checkpointer(dsn: str) -> PostgresCheckpointer:
         await conn.execute(_THREADS_ACTIVE_CHECKPOINT_DDL)
         await conn.execute(_THREADS_OWNER_DDL)
         await conn.execute(_THREADS_OWNER_INDEX_DDL)
+        for statement in _THREADS_ATTENTION_DDL:
+            await conn.execute(statement)
         await conn.execute(LEGACY_SETTINGS_TABLE_DDL)
         await conn.execute(USER_SETTINGS_TABLE_DDL)
         await conn.execute(TURN_STATS_TABLE_DDL)

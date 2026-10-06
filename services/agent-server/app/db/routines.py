@@ -84,6 +84,8 @@ ROUTINES_DDL = (
         "CREATE INDEX IF NOT EXISTS routine_runs_routine_idx "
         "ON routine_runs (routine_id, created_at DESC)"
     ),
+    # `seen_at` and `routine_runs_inbox_idx` are unused since M17-10 (the inbox
+    # became the chats list order); kept for older builds on the same database.
     "ALTER TABLE routine_runs ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ",
     "ALTER TABLE routine_runs DROP CONSTRAINT IF EXISTS routine_runs_status_check",
     (
@@ -176,12 +178,10 @@ class RunRecord:
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
-    # Unread in the inbox while null (M17-05); a run is listed once it has ended or paused.
-    seen_at: datetime | None = None
 
 
 # What `update_run` may change.
-RUN_EDITABLE = frozenset({"status", "detail", "thread_id", "started_at", "finished_at", "seen_at"})
+RUN_EDITABLE = frozenset({"status", "detail", "thread_id", "started_at", "finished_at"})
 
 # A claimed routine's next run after `now`; None retires it (a one-shot).
 Advance = Callable[[RoutineRecord, datetime], datetime | None]
@@ -225,9 +225,7 @@ class RoutineStore(Protocol):
 
     async def update_run(
         self, run_id: str, owner_user_id: str, changes: dict[str, Any]
-    ) -> RunRecord | None:
-        """A status change also marks the run unread in the inbox (M17-05)."""
-        ...
+    ) -> RunRecord | None: ...
 
     async def list_runs(self, routine_id: str, owner_user_id: str) -> list[RunRecord]:
         """Newest first."""
@@ -263,16 +261,6 @@ class RoutineStore(Protocol):
         """Every user's runs paused on an approval since before `paused_before`."""
         ...
 
-    async def inbox(self, owner_user_id: str, limit: int) -> list[tuple[RunRecord, str]]:
-        """`(run, routine name)` for the owner's ended or paused runs, newest first."""
-        ...
-
-    async def mark_seen(self, owner_user_id: str, run_ids: list[str] | None, now: datetime) -> int:
-        """Mark these runs (None: all) read in the inbox."""
-        ...
-
-    async def unread_count(self, owner_user_id: str) -> int: ...
-
 
 def _is_valid_uuid(value: str) -> bool:
     try:
@@ -301,13 +289,6 @@ def _record_from_row(row: dict) -> RoutineRecord:
 def _run_from_row(row: dict) -> RunRecord:
     ids = ("id", "routine_id", "owner_user_id", "thread_id")
     return RunRecord(**{**row, **{k: str(row[k]) if row[k] else None for k in ids}})
-
-
-def _with_unread(changes: dict[str, Any]) -> dict[str, Any]:
-    _check_run_changes(changes)
-    if "status" in changes and "seen_at" not in changes:
-        return {**changes, "seen_at": None}
-    return changes
 
 
 def _check_run_changes(changes: dict[str, Any]) -> None:
@@ -414,7 +395,7 @@ class PgRoutineStore:
     async def update_run(
         self, run_id: str, owner_user_id: str, changes: dict[str, Any]
     ) -> RunRecord | None:
-        changes = _with_unread(changes)
+        _check_run_changes(changes)
         if not changes or not _is_valid_uuid(run_id):
             return None
         assignments = ", ".join(f"{column} = %s" for column in changes)
@@ -539,45 +520,6 @@ class PgRoutineStore:
             routines = {r.id: r for r in map(_record_from_row, await cur.fetchall())}
         return [(routines[run.routine_id], run) for run in runs]
 
-    async def inbox(self, owner_user_id: str, limit: int) -> list[tuple[RunRecord, str]]:
-        columns = ", ".join(f"r.{f.name}" for f in fields(RunRecord))
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                f"SELECT {columns}, t.name AS routine_name FROM routine_runs r "
-                "JOIN routines t ON t.id = r.routine_id "
-                "WHERE r.owner_user_id = %s AND r.finished_at IS NOT NULL "
-                "ORDER BY r.finished_at DESC LIMIT %s",
-                (owner_user_id, limit),
-            )
-            rows = await cur.fetchall()
-        names = [row.pop("routine_name") for row in rows]
-        return [(_run_from_row(row), name) for row, name in zip(rows, names, strict=True)]
-
-    async def mark_seen(self, owner_user_id: str, run_ids: list[str] | None, now: datetime) -> int:
-        ids = [i for i in run_ids or [] if _is_valid_uuid(i)]
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                "UPDATE routine_runs SET seen_at = %s WHERE owner_user_id = %s "
-                "AND seen_at IS NULL AND finished_at IS NOT NULL "
-                "AND (%s::uuid[] IS NULL OR id = ANY(%s::uuid[]))",
-                (
-                    now,
-                    owner_user_id,
-                    None if run_ids is None else ids,
-                    None if run_ids is None else ids,
-                ),
-            )
-        return cur.rowcount
-
-    async def unread_count(self, owner_user_id: str) -> int:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                "SELECT count(*) AS n FROM routine_runs WHERE owner_user_id = %s "
-                "AND finished_at IS NOT NULL AND seen_at IS NULL",
-                (owner_user_id,),
-            )
-            row = await cur.fetchone()
-        return row["n"]
 
 
 class InMemoryRoutineStore:
@@ -673,7 +615,7 @@ class InMemoryRoutineStore:
     async def update_run(
         self, run_id: str, owner_user_id: str, changes: dict[str, Any]
     ) -> RunRecord | None:
-        changes = _with_unread(changes)
+        _check_run_changes(changes)
         run = self._runs.get(run_id)
         if run is None or run.owner_user_id != owner_user_id or not changes:
             return None
@@ -762,27 +704,3 @@ class InMemoryRoutineStore:
             key=lambda r: r.finished_at,
         )
         return [(self._rows[run.routine_id], run) for run in stale]
-
-    async def inbox(self, owner_user_id: str, limit: int) -> list[tuple[RunRecord, str]]:
-        ended = sorted(
-            (r for r in self._owned_runs(owner_user_id) if r.finished_at is not None),
-            key=lambda r: r.finished_at,
-            reverse=True,
-        )[:limit]
-        return [(run, self._rows[run.routine_id].name) for run in ended]
-
-    async def mark_seen(self, owner_user_id: str, run_ids: list[str] | None, now: datetime) -> int:
-        marked = 0
-        for run in self._owned_runs(owner_user_id):
-            unread = run.seen_at is None and run.finished_at is not None
-            if unread and (run_ids is None or run.id in run_ids):
-                self._runs[run.id] = replace(run, seen_at=now)
-                marked += 1
-        return marked
-
-    async def unread_count(self, owner_user_id: str) -> int:
-        return sum(
-            1
-            for r in self._owned_runs(owner_user_id)
-            if r.finished_at is not None and r.seen_at is None
-        )

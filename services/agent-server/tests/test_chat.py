@@ -120,6 +120,19 @@ async def test_delete_unknown_thread_is_204(rest_client: AsyncClient) -> None:
     assert response.status_code == 204
 
 
+async def test_reading_another_users_or_an_unknown_thread_is_404(
+    rest_app: FastAPI, rest_client: AsyncClient
+) -> None:
+    store: InMemoryThreadStore = rest_app.state.thread_store
+    theirs = store.insert("their-thread", "00000000-0000-4000-8000-0000000000b2")
+    await store.turn_ended(theirs.id, awaiting_approval=False, unread=True)
+
+    assert (await rest_client.post(f"/api/threads/{theirs.id}/read")).status_code == 404
+    assert (await rest_client.post(f"/api/threads/{_UNKNOWN_THREAD_ID}/read")).status_code == 404
+    assert (await store.get(theirs.id, theirs.owner_user_id)).unread is True
+    assert (await rest_client.get("/api/threads")).json() == []
+
+
 async def test_get_messages_unknown_thread_is_404(rest_client: AsyncClient) -> None:
     response = await rest_client.get(f"/api/threads/{_UNKNOWN_THREAD_ID}/messages")
 

@@ -146,6 +146,26 @@ describe('ThreadListScreen — list', () => {
     expect(textOf(renderer)).toContain('Needs approval');
   });
 
+  it('keeps the server order and marks unread chats (M17-10)', async () => {
+    const asks: Thread = { ...THREAD_B, id: 'thread-asks', title: 'Asks', needs_approval: true, unread: true };
+    const unread: Thread = { ...THREAD_B, unread: true };
+    mockThreadsApi({ GET: () => ({ ok: true, status: 200, body: [asks, unread, THREAD_A] }) });
+
+    const renderer = await renderScreen();
+    const hostIds = (prefix: string) =>
+      renderer.root
+        .findAll((node) => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith(prefix))
+        .map((node) => node.props.testID);
+
+    const titles = renderer.root
+      .findAll((node) => typeof node.type === 'string' && node.props.testID === 'thread-row')
+      .map((row) => row.props.accessibilityLabel);
+    expect(titles).toEqual(['Asks', 'Thread B', 'Thread A']);
+    // Needs approval wins over the unread marker.
+    expect(hostIds('thread-needs-approval-')).toEqual(['thread-needs-approval-thread-asks']);
+    expect(hostIds('thread-unread-')).toEqual(['thread-unread-thread-b']);
+  });
+
   it('badges routine runs and can hide them', async () => {
     const run: Thread = { ...THREAD_B, title: 'Morning brief · Oct 5', routine_id: 'routine-1' };
     mockThreadsApi({ GET: () => ({ ok: true, status: 200, body: [THREAD_A, run] }) });

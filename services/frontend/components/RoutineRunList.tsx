@@ -1,9 +1,8 @@
 import { Pressable, Text, View } from 'react-native';
 
 import { Badge, Card, settingsStyles } from '@/components/SettingsUI';
-import { runStatusLabel, type RunStatus } from '@/lib/inbox';
 import { relativeTime } from '@/lib/relativeTime';
-import type { RoutineRun } from '@/lib/routines';
+import { runStatusLabel, type RoutineRun, type RunStatus } from '@/lib/routines';
 
 function tone(status: RunStatus): 'accent' | 'danger' | 'muted' {
   if (status === 'waiting_approval' || status === 'running' || status === 'queued') return 'accent';

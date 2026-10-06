@@ -7,6 +7,7 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { Badge } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
+import { publishThreads } from '@/lib/chatAttention';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 import { createThread, deleteThread, listThreads, type Thread } from '@/lib/threads';
@@ -58,6 +59,7 @@ export default function ThreadListScreen() {
     try {
       const fetched = await listThreads();
       setThreads(fetched);
+      publishThreads(fetched);
       setLoadState('done');
     } catch {
       setLoadState('error');
@@ -83,6 +85,7 @@ export default function ThreadListScreen() {
     listThreads()
       .then((fetched) => {
         setThreads(fetched);
+        publishThreads(fetched);
         setLoadState('done');
       })
       .catch(() => showToast('Failed to refresh conversations'))
@@ -242,15 +245,17 @@ function ThreadRow({ thread, onDelete }: { thread: Thread; onDelete: (thread: Th
       accessibilityLabel={thread.title}
     >
       <View style={styles.rowTextContainer}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
+        <Text style={[styles.rowTitle, thread.unread && styles.rowTitleUnread]} numberOfLines={1}>
           {thread.title}
         </Text>
         <View style={styles.rowMeta}>
           <Text style={styles.rowTime}>{relativeTime(thread.updated_at)}</Text>
           {thread.routine_id ? <Badge label="Routine" testID={`thread-routine-${thread.id}`} /> : null}
-          {/* M17-05: a routine run paused on an approval; its chat shows the card. */}
+          {/* M17-05, M17-10: a chat paused on an approval; it shows the card. */}
           {thread.needs_approval ? (
             <Badge label="Needs approval" tone="accent" testID={`thread-needs-approval-${thread.id}`} />
+          ) : thread.unread ? (
+            <Badge label="New" tone="accent" testID={`thread-unread-${thread.id}`} />
           ) : null}
         </View>
       </View>
@@ -385,6 +390,9 @@ const styles = StyleSheet.create({
   rowTitle: {
     color: theme.text,
     fontSize: 16,
+  },
+  rowTitleUnread: {
+    fontWeight: '600',
   },
   rowMeta: {
     flexDirection: 'row',

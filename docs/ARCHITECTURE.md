@@ -1355,10 +1355,23 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
   {"id": "<uuid>", "title": "New chat", "created_at": iso8601,
   "updated_at": iso8601, "routine_id": "<uuid>"|null}` (`routine_id`,
   M17-02: set on a routine's runs)
-- `GET /api/threads` → `200 [{thread}, ...]`, the caller's own, ordered
-  by `updated_at` desc. `?routine_id=<uuid>`: only that routine's runs,
-  newest first. Each also has `"needs_approval": bool` (M17-05): it's a
-  routine run paused on an approval
+- `GET /api/threads` → `200 [{thread}, ...]`, the caller's own, with
+  what needs them first (M17-10): chats waiting on an approval, then
+  unread ones, then the rest, each group by `updated_at` desc.
+  `?routine_id=<uuid>`: only that routine's runs, newest first. Each also
+  has:
+  - `"needs_approval": bool`: its last turn stopped on an approval (M17-10;
+    M17-05 for a paused routine run).
+  - `"unread": bool` (M17-10): a turn ended with no socket attached (a
+    routine run, or a detached turn that finished while the user was
+    away), and the owner hasn't opened the chat since.
+
+  Both are columns on `threads` (`awaiting_approval`, `unread`), set by
+  `TurnRunner` when a turn ends; a new turn clears `awaiting_approval`.
+- `POST /api/threads/{id}/read` (M17-10) → `204`: the owner opened it, so
+  it isn't unread. `404` for an unknown or another user's thread. The chat
+  screen calls it once history has loaded and again whenever a turn it
+  shows ends.
 - `GET /api/threads/{id}/messages` → `200 [{"id": str, "role":
   "user"|"assistant"|"tool", "content": str, "tool_name": str|null,
   "tool_calls": [{"id", "name", "args"}]|null, "tool_call_id": str|null,
@@ -1509,7 +1522,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   other thread. The editor
   (`components/RoutineForm.tsx`) covers the name, prompt, a space the user
   can edit, the schedule, the timezone (the device's by default) and the
-  approval mode. The chats list badges routine runs and can hide them.
+  approval mode. The chats list badges routine runs and can hide them;
+  it also marks chats "Needs approval" or "New" (unread, M17-10).
 - **Agent tools** (M17-07, `app/agent/routine_tools.py`): `current_time`,
   `list_routines`, `create_routine`, `update_routine`, `delete_routine`,
   so "every weekday at 7, summarize my notes" in a chat becomes a routine.
@@ -1527,15 +1541,11 @@ their threads as plain chats (`ON DELETE SET NULL`).
     platform refuses a routine run's delegation anyway).
   - The model learns the date from `current_time`, not the system prompt,
     so the prompt stays byte-identical for llama.cpp's prefix cache.
-- **Inbox** (M17-05): the caller's ended and paused runs, for in-app
-  notifications (the Home tab badge and Home's Routines list).
-  - `GET /api/inbox` → `200 {"unread": int, "items": [{run} + {"routine_id",
-    "routine_name", "unread": bool}, ...]}`, newest 50 by `finished_at` (a
-    paused run's is when it paused).
-  - `POST /api/inbox/read` body `{"run_ids"?: [uuid]}` (absent: all) →
-    the same.
-  - `routine_runs.seen_at` records reads. Any status change clears it, so
-    a paused run that later finishes is unread again.
+- **Runs are chats** (M17-10, replacing M17-05's inbox and `/api/inbox`):
+  nobody watches a run, so its chat is unread when it ends, and a paused
+  one needs approval. The chats list puts both first (`GET /api/threads`
+  above); the Chat tab badge counts them (`lib/chatAttention.ts`, polled
+  every minute). `routine_runs.seen_at` is no longer used.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every
@@ -1748,7 +1758,8 @@ then the live frames, and may `cancel` it. Meanwhile `GET
 own steps come from the replay), and `GET /api/threads/{id}/state` returns
 `{"pending_approval": null, "running": true}`. The frontend reconnects
 after a drop mid-turn instead of failing the turn, and again when the app
-returns to the foreground.
+returns to the foreground. A turn that ends with no socket attached marks
+its chat unread (M17-10).
 
 Category mapping by tool name: `ls|read_file|write_file|edit_file|glob|
 grep|delete` → `file`; `execute_code` → `exec`; `write_todos|task` →

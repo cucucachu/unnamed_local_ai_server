@@ -45,42 +45,6 @@ afterEach(() => {
 });
 
 describe('HomeScreen', () => {
-  it('shows routine runs that need approval above the system apps', async () => {
-    mockFetchRoutes({
-      'GET /api/platform/spaces': { body: { spaces: [space('s1', 'personal', 'Alice', 'owner')] } },
-      'GET /api/platform/spaces/s1/instances': { body: { instances: [] } },
-      'GET /api/inbox': {
-        body: {
-          unread: 1,
-          items: [
-            {
-              id: 'run-1',
-              routine_id: 'r1',
-              routine_name: 'Morning brief',
-              trigger: 'schedule',
-              status: 'waiting_approval',
-              detail: 'waiting for an approval in its chat',
-              thread_id: 't1',
-              due_at: null,
-              started_at: null,
-              finished_at: '2026-10-05T15:30:00Z',
-              created_at: '2026-10-05T15:30:00Z',
-              unread: true,
-            },
-          ],
-        },
-      },
-    });
-    renderer = await render(HomeScreen);
-
-    const text = textOf(renderer);
-    expect(exists(renderer, 'home-inbox')).toBe(true);
-    expect(text.indexOf('Morning brief')).toBeLessThan(text.indexOf('System'));
-    expect(text).toContain('Needs approval');
-    await press(renderer, 'home-inbox-run-1');
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/chat/[threadId]', params: { threadId: 't1' } });
-  });
-
   it('lists system apps and installed instances grouped by space, Personal first, and opens the runner', async () => {
     mockFetchRoutes({
       'GET /api/platform/spaces': {

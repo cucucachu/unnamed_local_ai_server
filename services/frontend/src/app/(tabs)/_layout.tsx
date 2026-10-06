@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
 
-import { useInboxUnread } from '@/lib/inbox';
+import { useChatAttention } from '@/lib/chatAttention';
 
 export default function TabsLayout() {
-  const unread = useInboxUnread();
+  const attention = useChatAttention();
   return (
     <Tabs>
       {/* Hidden redirect-only route so `/` resolves to Home (`/apps`) —
@@ -17,8 +17,6 @@ export default function TabsLayout() {
         options={{
           title: 'Home',
           headerShown: false,
-          // M17-05: unread routine runs (finished, failed, needing approval).
-          tabBarBadge: unread ? unread : undefined,
           tabBarIcon: ({ color, focused, size }) => (
             <Ionicons name={focused ? 'home' : 'home-outline'} color={color} size={size} />
           ),
@@ -36,6 +34,8 @@ export default function TabsLayout() {
           // bar's own "Chat" header rendered ABOVE the stack's own header,
           // stacking two headers — confirmed via a live dev-server render.
           headerShown: false,
+          // M17-10: chats waiting on an approval or unread.
+          tabBarBadge: attention ? attention : undefined,
           tabBarIcon: ({ color, focused, size }) => (
             <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} color={color} size={size} />
           ),
