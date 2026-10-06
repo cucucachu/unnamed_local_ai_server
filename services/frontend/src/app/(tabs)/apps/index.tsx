@@ -23,11 +23,11 @@ function spaceLabel(space: Space): string {
 }
 
 /**
- * Home launcher (M14-02): native host screen. M14-03 ships Chat/Files/
- * Settings/Home as image-shipped packages for the agent; this screen still
- * opens the existing native host routes. System tiles open
- * the existing Chat, Files, Routines (M17-09) and Settings host screens; installed apps stay
- * grouped by space with a switcher, catalog entry, and update badges.
+ * The Apps tab (M14-02's Home launcher, renamed in M19-01): native host
+ * screen. M14-03 ships the system apps as image-shipped packages for the
+ * agent; this screen still opens the native host routes. System tiles open
+ * Files, Routines (M17-09) and Settings (Chat is the other tab); installed
+ * apps are grouped by space with a switcher, catalog entry, and update badges.
  * Tapping an instance opens the runner (`[instanceId].tsx`).
  * Reloads whenever the tab regains focus, so a newly installed app shows up.
  */
@@ -99,13 +99,12 @@ export default function HomeScreen() {
         <SectionTitle>System</SectionTitle>
         <Card>
           <SystemRow
-            icon="chatbubbles-outline"
-            title="Chat"
+            icon="folder-outline"
+            title="Files"
             first
-            onPress={() => router.push('/chat')}
-            testID="home-open-chat"
+            onPress={() => router.push('/files')}
+            testID="home-open-files"
           />
-          <SystemRow icon="folder-outline" title="Files" onPress={() => router.push('/files')} testID="home-open-files" />
           <SystemRow
             icon="alarm-outline"
             title="Routines"

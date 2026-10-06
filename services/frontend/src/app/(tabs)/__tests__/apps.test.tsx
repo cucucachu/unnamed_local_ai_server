@@ -75,8 +75,8 @@ describe('HomeScreen', () => {
     expect(exists(renderer, 'home-space-shared-s3')).toBe(true);
     expect(exists(renderer, 'home-space-shared-s4')).toBe(false);
 
-    await press(renderer, 'home-open-chat');
-    expect(mockPush).toHaveBeenCalledWith('/chat');
+    // M19-01: Chat is a tab, not a tile.
+    expect(exists(renderer, 'home-open-chat')).toBe(false);
     await press(renderer, 'home-open-files');
     expect(mockPush).toHaveBeenCalledWith('/files');
     await press(renderer, 'home-open-routines');

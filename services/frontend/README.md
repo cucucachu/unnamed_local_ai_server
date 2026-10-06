@@ -22,7 +22,7 @@ M2-06, the files UI in M3-05.
 
 ```
 src/app/_layout.tsx          root layout (dark theme, no header)
-src/app/(tabs)/_layout.tsx   tab navigator (Home, Chat, Files, Settings)
+src/app/(tabs)/_layout.tsx   tab navigator (Chat, Apps; Files/Routines/Settings hidden, M19-01)
 src/app/(tabs)/apps/         Home launcher (M14-02): system tiles + installed instances by space; [instanceId] is the app runner
 src/app/(tabs)/chat/         Chat tab (thread list + [threadId])
 src/app/(tabs)/files.tsx     Files tab
@@ -51,7 +51,7 @@ lib/__tests__/               Jest (jest-expo) unit tests for the above
 
 The app asks the platform (`GET /api/auth/status`) who's signed in before
 showing anything. `src/app/_layout.tsx` guards routes with
-`Stack.Protected`: the tabs (Home, Chat, Files, Settings) and media exist
+`Stack.Protected`: the tabs (Chat, Apps and the hidden system apps) and media exist
 only while signed in, `/login` only while signed out, and `/invite` always. While the server still
 wants its first admin, `/login` shows Setup (setup code from `docker compose
 logs platform` or `docker compose exec platform cat /data/platform/setup-code`),

@@ -1219,7 +1219,8 @@ with that app's context.
 > tab title Home; `/` redirects here). Chat, Files, and Settings stay native
 > host screens too: Settings moved from a sibling modal into the tab bar
 > (Home, Chat, Files, Settings). Home shows system tiles that open those
-> screens, installed apps grouped by space, a space switcher (All + each
+> screens (M19-01: the tab bar is now Chat and Apps, Home is titled Apps,
+> `/` opens Chat, and Files, Routines and Settings open from its tiles), installed apps grouped by space, a space switcher (All + each
 > live space), catalog, and update badges. Runner/catalog/install/update/info
 > stay under `/apps`.
 >

@@ -41,6 +41,7 @@ import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eSpaces, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 import { addMember, createSpace, deleteBestEffort, entryNames, listDir, openSpace } from './files_helpers.mjs';
+import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.FILES_SMOKE_BASE_URL ?? 'http://localhost/';
 const UI_TIMEOUT_MS = 20_000;
@@ -82,7 +83,7 @@ async function waitForGone(page, text, timeoutMs = UI_TIMEOUT_MS) {
 }
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
-  const locator = page.getByText(text, { exact: true }).first();
+  const locator = page.getByTestId('files-screen').getByText(text, { exact: true }).first();
   await locator.waitFor({ state: 'visible', timeout: timeoutMs });
   return locator;
 }
@@ -141,7 +142,7 @@ async function runFullFlow(page, cookie, { folderName, fileName, renamedFileName
     // The picker opens in the current folder; up twice reaches the root.
     await page.getByTestId('destination-picker-up').click();
     await page.getByTestId('destination-picker-up').click();
-    await page.getByText(SPACE_NAME, { exact: true }).last().click();
+    await page.getByTestId('destination-picker').getByText(SPACE_NAME, { exact: true }).click();
     await page.getByTestId('destination-picker-select').click();
     await waitForGone(page, renamedFileName);
     const inSpace = entryNames(await listDir(cookie, `/spaces/${SPACE_SLUG}`));
@@ -172,7 +173,7 @@ async function checkViewerIsReadOnly(browser, viewer) {
     const page = await context.newPage();
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, viewer);
-    await page.getByRole('tab', { name: 'Files' }).click();
+    await openSystemApp(page, 'files');
     await waitForVisibleText(page, SPACE_NAME);
     await openSpace(page, SPACE_NAME);
     await waitForVisibleText(page, ASCII_FLOW.renamedFileName);
@@ -220,7 +221,7 @@ async function main() {
     const space = await createSpace(cookie, SPACE_SLUG, SPACE_NAME);
     await addMember(cookie, space.id, viewer.username, 'viewer');
 
-    await page.getByRole('tab', { name: 'Files' }).click();
+    await openSystemApp(page, 'files');
     await waitForVisibleText(page, 'Personal');
     await waitForVisibleText(page, SPACE_NAME);
     for (const testId of ['files-upload-button', 'files-new-folder-button']) {

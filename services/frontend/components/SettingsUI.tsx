@@ -6,28 +6,31 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { theme } from '@/lib/theme';
 
-/** Shared chrome for the Settings stack (`src/app/(tabs)/settings/`): a header
- * with a back (sub-screens) or close (the hub) button, and a scrolling,
- * keyboard-aware body capped to a phone-ish width on wide screens. */
+/** Shared chrome for the Settings and Routines stacks: a header with a back
+ * button, and a scrolling, keyboard-aware body capped to a phone-ish width on
+ * wide screens. An app's first screen sets `exitTo` (M19-01: back always
+ * returns to Apps); others go back, or to `backTo` with no history. */
 export function SettingsFrame({
   title,
-  leading = 'back',
   backTo = '/settings',
+  exitTo,
   testID,
   children,
   footer,
 }: {
   title: string;
-  leading?: 'back' | 'close';
   /** Where back goes with no history (a cold deep link). */
   backTo?: Href;
+  /** Where back always goes. */
+  exitTo?: Href;
   testID?: string;
   children: ReactNode;
   footer?: ReactNode;
 }) {
   const router = useRouter();
   const handleLeading = () => {
-    if (leading === 'close' || router.canGoBack()) router.back();
+    if (exitTo !== undefined) router.navigate(exitTo);
+    else if (router.canGoBack()) router.back();
     else router.replace(backTo);
   };
 
@@ -39,10 +42,10 @@ export function SettingsFrame({
             onPress={handleLeading}
             style={styles.headerButton}
             accessibilityRole="button"
-            accessibilityLabel={leading === 'close' ? 'Close' : 'Back'}
-            testID={leading === 'close' ? 'settings-close-button' : 'settings-back-button'}
+            accessibilityLabel="Back"
+            testID="settings-back-button"
           >
-            <Ionicons name={leading === 'close' ? 'close' : 'chevron-back'} size={26} color={theme.text} />
+            <Ionicons name="chevron-back" size={26} color={theme.text} />
           </Pressable>
           <Text style={styles.title} accessibilityRole="header">
             {title}

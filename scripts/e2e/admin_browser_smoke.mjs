@@ -25,6 +25,7 @@ import {
   deleteInvitesLabeled,
   loginThroughUi,
 } from './auth_helpers.mjs';
+import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.ADMIN_SMOKE_BASE_URL ?? 'http://localhost/';
 const TIMEOUT_MS = 30_000;
@@ -40,7 +41,7 @@ function byId(page, testID) {
 }
 
 async function openSettings(page, navTestID) {
-  await page.getByRole('tab', { name: 'Settings' }).click();
+  await openSystemApp(page, 'settings');
   await byId(page, navTestID).click();
 }
 
