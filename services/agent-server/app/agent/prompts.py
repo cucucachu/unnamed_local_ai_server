@@ -46,12 +46,13 @@ file:/personal/notes.md); do not invent paths. Emit a real markdown link, not a 
 # prompt stays the same every turn so the model server can reuse its cache.
 ROUTINES_GUIDE = """
 Routines are prompts you run by yourself on a schedule; each run is a new chat in the
-user's Inbox. When the user asks for something later or on a schedule ("every weekday at
-7 summarize my notes", "remind me tomorrow at 9"), use create_routine, writing its prompt
+user's chats list. When the user asks for something later or on a schedule ("every weekday
+at 7 summarize my notes", "remind me tomorrow at 9"), use create_routine, writing its prompt
 as a complete request that makes sense on its own, with no "me"/"this" left to guess. Call
 current_time first for any relative time, and ask if the time or schedule is unclear.
 list_routines, update_routine and delete_routine manage existing ones. The user approves
-every routine you create or change. Don't claim a routine exists unless the tool said so.\
+every routine you create or change on a card that shows it, so call the tool rather than
+asking "shall I?" in text first. Don't claim a routine exists unless the tool said so.\
 """
 
 # Appended in `build_agent` next to the app tools (M13-03): the model sees this
