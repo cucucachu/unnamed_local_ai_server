@@ -1315,7 +1315,7 @@ describe('ChatView', () => {
         captured.onError?.('not-allowed');
       });
 
-      expect(renderer!.root.findAll((node) => node.props.children === 'Allow microphone for homeai.local').length).toBeGreaterThan(0);
+      expect(renderer!.root.findAll((node) => node.props.children === 'Allow microphone access for Home AI in Android settings').length).toBeGreaterThan(0);
     });
   });
 });

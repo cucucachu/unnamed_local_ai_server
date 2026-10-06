@@ -10,14 +10,19 @@ const mockPush = jest.fn();
 const mockBack = jest.fn();
 const mockReplace = jest.fn();
 const mockNavigate = jest.fn();
+const mockDismissTo = jest.fn();
+const mockShowPage = jest.fn();
 let mockParams: Record<string, string> = {};
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ back: mockBack, push: mockPush, replace: mockReplace, navigate: mockNavigate, canGoBack: () => true }),
+  useRouter: () => ({ back: mockBack, push: mockPush, replace: mockReplace, navigate: mockNavigate, dismissTo: mockDismissTo, canGoBack: () => true }),
   useLocalSearchParams: () => mockParams,
   useFocusEffect: jest.fn(),
 }));
 
 const mockOpenChat = jest.fn();
+jest.mock('@/lib/currentPage', () => ({
+  showPage: (...args: unknown[]) => mockShowPage(...args),
+}));
 jest.mock('@/lib/currentChat', () => ({
   openChat: (...args: unknown[]) => mockOpenChat(...args),
 }));
@@ -257,7 +262,8 @@ describe('RoutineDetailScreen', () => {
 
     await press(renderer, 'routine-run-run-2');
     expect(mockOpenChat).toHaveBeenCalledWith('thread-2');
-    expect(mockNavigate).toHaveBeenCalledWith('/chat');
+    expect(mockShowPage).toHaveBeenCalledWith('chat');
+    expect(mockDismissTo).toHaveBeenCalledWith('/');
   });
 
   it('runs it now and opens the new run’s chat', async () => {
@@ -270,7 +276,8 @@ describe('RoutineDetailScreen', () => {
 
     expect(requestsTo(fetchMock, 'POST', '/api/routines/r1/run')).toHaveLength(1);
     expect(mockOpenChat).toHaveBeenCalledWith('thread-3');
-    expect(mockNavigate).toHaveBeenCalledWith('/chat');
+    expect(mockShowPage).toHaveBeenCalledWith('chat');
+    expect(mockDismissTo).toHaveBeenCalledWith('/');
   });
 
   it('opens the editor', async () => {
@@ -330,6 +337,7 @@ describe('recent runs and More…', () => {
     expect(exists(renderer, 'routine-run-run-6')).toBe(true);
     await press(renderer, 'routine-run-run-6');
     expect(mockOpenChat).toHaveBeenCalledWith('thread-6');
-    expect(mockNavigate).toHaveBeenCalledWith('/chat');
+    expect(mockShowPage).toHaveBeenCalledWith('chat');
+    expect(mockDismissTo).toHaveBeenCalledWith('/');
   });
 });

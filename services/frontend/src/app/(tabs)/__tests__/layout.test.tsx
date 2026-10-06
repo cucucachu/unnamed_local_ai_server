@@ -1,20 +1,16 @@
 import { createElement, type ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
-type ScreenProps = { name: string; options?: { href?: null; title?: string; headerLeft?: () => ReactNode } };
-type TabsProps = { backBehavior?: string; children: ReactNode };
+type ScreenProps = { name: string; options?: { headerShown?: boolean; title?: string; headerLeft?: () => ReactNode } };
 
 const mockNavigate = jest.fn();
+const mockDismissTo = jest.fn();
 const mockScreens: ScreenProps[] = [];
-let mockTabsProps: TabsProps | null = null;
 const mockRedirects: string[] = [];
 
 jest.mock('expo-router', () => {
-  const Tabs = (props: TabsProps) => {
-    mockTabsProps = props;
-    return props.children;
-  };
-  Tabs.Screen = function Screen(props: ScreenProps) {
+  const Stack = (props: { children: ReactNode }) => props.children;
+  Stack.Screen = function Screen(props: ScreenProps) {
     mockScreens.push(props);
     return null;
   };
@@ -22,15 +18,18 @@ jest.mock('expo-router', () => {
     mockRedirects.push(href);
     return null;
   };
-  return { Tabs, Redirect, useRouter: () => ({ navigate: mockNavigate }) };
+  return { Stack, Redirect, useRouter: () => ({ navigate: mockNavigate, dismissTo: mockDismissTo }) };
 });
 
-jest.mock('@/lib/chatAttention', () => ({ useChatAttention: () => 0 }));
+const mockShowPage = jest.fn();
+jest.mock('@/lib/currentPage', () => ({ showPage: (...args: unknown[]) => mockShowPage(...args) }));
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
-import TabsLayout from '../_layout';
+import ShellLayout, { unstable_settings } from '../_layout';
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
-import TabsIndex from '../index';
+import AppsLink from '../apps/index';
+// eslint-disable-next-line import/first -- must follow the jest.mock calls above
+import ChatLink from '../chat/index';
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import SettingsRoutinesRedirect from '../settings/routines';
 
@@ -39,23 +38,21 @@ afterEach(() => {
   act(() => renderer?.unmount());
   renderer = null;
   mockScreens.length = 0;
+  jest.clearAllMocks();
 });
 
-describe('TabsLayout (M19-01)', () => {
-  it('shows only Chat and Apps; Files, Routines and Settings are hidden; back follows history', () => {
+describe('ShellLayout (M19-07)', () => {
+  it('is a stack over the home pager; deep links keep the pager underneath', () => {
     act(() => {
-      renderer = create(createElement(TabsLayout));
+      renderer = create(createElement(ShellLayout));
     });
-    const visible = mockScreens.filter((s) => s.options?.href !== null).map((s) => s.name);
-    expect(visible).toEqual(['chat', 'apps']);
-    const hidden = mockScreens.filter((s) => s.options?.href === null).map((s) => s.name);
-    expect(hidden).toEqual(expect.arrayContaining(['index', 'files', 'routines', 'settings']));
-    expect(mockTabsProps?.backBehavior).toBe('history');
+    expect(mockScreens.map((s) => s.name)).toEqual(['index', 'chat', 'apps', 'files', 'routines', 'settings']);
+    expect(unstable_settings.initialRouteName).toBe('index');
   });
 
-  it("Files' back button returns to Apps", () => {
+  it("Files' back button returns to the home pager", () => {
     act(() => {
-      renderer = create(createElement(TabsLayout));
+      renderer = create(createElement(ShellLayout));
     });
     const files = mockScreens.find((s) => s.name === 'files');
     let back!: ReactTestRenderer;
@@ -63,15 +60,19 @@ describe('TabsLayout (M19-01)', () => {
       back = create(files?.options?.headerLeft?.() as React.ReactElement);
     });
     act(() => back.root.findByProps({ testID: 'back-to-apps' }).props.onPress());
-    expect(mockNavigate).toHaveBeenCalledWith('/apps');
+    expect(mockNavigate).toHaveBeenCalledWith('/');
     act(() => back.unmount());
   });
 
-  it('/ opens Chat and the old Settings → Routines link opens Routines', () => {
+  it('/chat and /apps show their page of the pager; the old Settings → Routines link opens Routines', () => {
     act(() => {
-      renderer = create(createElement(TabsIndex));
+      renderer = create(createElement(ChatLink));
     });
+    expect(mockShowPage).toHaveBeenLastCalledWith('chat');
+    expect(mockDismissTo).toHaveBeenLastCalledWith('/');
+    act(() => renderer?.update(createElement(AppsLink)));
+    expect(mockShowPage).toHaveBeenLastCalledWith('apps');
     act(() => renderer?.update(createElement(SettingsRoutinesRedirect)));
-    expect(mockRedirects).toEqual(['/chat', '/routines']);
+    expect(mockRedirects).toEqual(['/routines']);
   });
 });

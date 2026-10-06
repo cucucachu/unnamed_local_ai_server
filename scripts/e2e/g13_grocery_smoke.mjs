@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { chromium } from 'playwright';
 
 import { loginThroughUi } from './auth_helpers.mjs';
+import { openSpacePage } from './nav_helpers.mjs';
 
 const BASE = (process.env.G13_BASE_URL ?? process.env.E2E_BASE ?? 'http://localhost/').replace(/\/$/, '');
 const USER = { username: process.env.G13_USER, password: process.env.G13_PASSWORD };
@@ -50,9 +51,7 @@ function api(context) {
 const ui = (page) => page.frameLocator(APP_FRAME);
 
 async function openFromAppsTab(page, spaceSlug, slug) {
-  await page.getByRole('tab', { name: 'Apps' }).click();
-  const section = page.getByTestId(`apps-space-${spaceSlug}`);
-  await section.waitFor({ timeout: UI_TIMEOUT });
+  const section = await openSpacePage(page, spaceSlug);
   await section.getByTestId(`apps-open-${slug}`).click();
   await page.getByTestId('app-runner').waitFor({ timeout: UI_TIMEOUT });
   await page.locator(APP_FRAME).waitFor({ timeout: UI_TIMEOUT });

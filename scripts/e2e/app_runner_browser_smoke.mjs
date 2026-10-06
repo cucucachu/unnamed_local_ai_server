@@ -12,7 +12,7 @@ import { chromium } from 'playwright';
 
 import { FIXTURE, fixtureFiles, fixtureV2 } from './app_fixture.mjs';
 import { loginThroughUi } from './auth_helpers.mjs';
-import { openAppSheet } from './nav_helpers.mjs';
+import { openAppSheet, openSpacePage } from './nav_helpers.mjs';
 
 const BASE = (process.env.RUNNER_SMOKE_BASE_URL ?? 'http://localhost/').replace(/\/$/, '');
 const OWNER = { username: process.env.RUNNER_SMOKE_USER, password: process.env.RUNNER_SMOKE_PASSWORD };
@@ -58,9 +58,7 @@ const APP_FRAME = 'iframe[title="app"]';
 
 /** Apps tab -> the space's section -> the app -> its runner, rendered. */
 async function openFromAppsTab(page) {
-  await page.getByRole('tab', { name: 'Apps' }).click();
-  const section = page.getByTestId(`apps-space-${SLUG}`);
-  await section.waitFor({ timeout: UI_TIMEOUT });
+  const section = await openSpacePage(page, SLUG);
   await section.getByTestId('apps-open-runtime-check').click();
   await page.getByTestId('app-runner').waitFor({ timeout: UI_TIMEOUT });
   await page.frameLocator(APP_FRAME).getByTestId('build').waitFor({ timeout: UI_TIMEOUT });
@@ -191,8 +189,7 @@ try {
     after,
   );
 
-  await viewer.page.getByRole('tab', { name: 'Apps' }).click();
-  await openAppSheet(viewer.page, viewer.page.getByTestId(`apps-space-${SLUG}`).getByTestId('apps-open-runtime-check'));
+  await openAppSheet(viewer.page, (await openSpacePage(viewer.page, SLUG)).getByTestId('apps-open-runtime-check'));
   check(
     (await viewer.page.getByTestId('app-sheet-uninstall').count()) === 0 && (await viewer.page.getByTestId('app-sheet-rebuild').count()) === 0,
     "the viewer's long-press sheet has no rebuild or uninstall",
@@ -202,8 +199,7 @@ try {
   await viewer.context.close();
 
   // --- 6. M19-04: the grid tile and its long-press sheet --------------------
-  await page.getByRole('tab', { name: 'Apps' }).click();
-  const tile = page.getByTestId(`apps-space-${SLUG}`).getByTestId('apps-open-runtime-check');
+  const tile = (await openSpacePage(page, SLUG)).getByTestId('apps-open-runtime-check');
   await tile.waitFor({ timeout: UI_TIMEOUT });
   check((await tile.getByTestId('app-icon-glyph-runtime-check').count()) + (await tile.getByTestId('app-icon-letter-runtime-check').count()) === 1, 'the tile has an icon');
   await openAppSheet(page, tile);
@@ -214,7 +210,7 @@ try {
   await page.getByTestId('app-sheet-info').click();
   await page.getByTestId('app-info').waitFor({ timeout: UI_TIMEOUT });
   check(new URL(page.url()).pathname === `/apps/info/${app.id}`, 'long press -> History and publishing opens App info', page.url());
-  await page.getByRole('tab', { name: 'Apps' }).click();
+  await openSpacePage(page, SLUG);
   await openAppSheet(page, tile);
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByTestId('app-sheet-uninstall').click();

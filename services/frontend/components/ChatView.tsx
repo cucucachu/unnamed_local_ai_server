@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   Dimensions,
   FlatList,
-  Keyboard,
   Linking,
   Modal,
   Platform,
@@ -30,6 +29,7 @@ import { copyToClipboard } from '@/lib/clipboard';
 import { formatDuration } from '@/lib/chatTurns';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { isSpeechSupported, startListening, stopListening } from '@/lib/speech';
+import { useKeyboardVisible } from '@/lib/useKeyboardVisible';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision, EditMode } from '@/lib/chatSocket';
 import type { ThreadBranchPoint } from '@/lib/threads';
@@ -200,7 +200,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
         setListening(false);
         setInterim('');
         if (error === 'not-allowed' || error === 'audio-capture') {
-          showToast('Allow microphone for homeai.local');
+          showToast(Platform.OS === 'web' ? 'Allow microphone for homeai.local' : 'Allow microphone access for Home AI in Android settings');
         }
       },
       onEnd: () => {
@@ -494,20 +494,6 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
       </View>
     </AppKeyboardAvoidingView>
   );
-}
-
-/** The on-screen keyboard is up (never on web, where there's no such event). */
-function useKeyboardVisible(): boolean {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const shown = Keyboard.addListener('keyboardDidShow', () => setVisible(true));
-    const hidden = Keyboard.addListener('keyboardDidHide', () => setVisible(false));
-    return () => {
-      shown.remove();
-      hidden.remove();
-    };
-  }, []);
-  return visible;
 }
 
 const CONNECTION_LABEL: Record<ReturnType<typeof useChat>['connectionState'], string | null> = {

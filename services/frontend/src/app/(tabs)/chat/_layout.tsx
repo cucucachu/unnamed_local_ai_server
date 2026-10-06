@@ -3,10 +3,9 @@ import { Stack } from 'expo-router';
 import { theme } from '@/lib/theme';
 
 /**
- * The Chat tab's stack (M3-04). Since M19-02 `index` is the only real
- * screen: it shows the current chat, and `[threadId]` is a deep link that
- * switches to a chat and returns here. The outer `chat` `Tabs.Screen` has
- * `headerShown: false` so this stack's header is the only one.
+ * `/chat` links (M3-04). Since M19-07 the chat is a page of the home pager
+ * (`../index.tsx`): `index` shows that page and `[threadId]` switches to a
+ * chat first; neither draws anything.
  */
 export default function ChatStackLayout() {
   return (
@@ -17,7 +16,7 @@ export default function ChatStackLayout() {
         headerShadowVisible: false,
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Chat' }} />
+      <Stack.Screen name="index" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="[threadId]" options={{ headerShown: false, animation: 'none' }} />
     </Stack>
   );
