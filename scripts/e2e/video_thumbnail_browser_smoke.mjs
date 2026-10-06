@@ -109,6 +109,7 @@ async function main() {
     // still works on a second real page load, not the cache internals.)
     await page.getByRole('tab', { name: 'Chat' }).click();
     await openSystemApp(page, 'files');
+    await openSpace(page, 'Personal');
     await waitForVisibleText(page, VIDEO_FILE_NAME);
 
     const thumbnailImgAgain = page.locator('[data-testid="video-thumbnail"] img').first();
