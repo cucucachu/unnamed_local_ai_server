@@ -34,6 +34,7 @@ import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi } from './auth_helpers.mjs';
 import { openSpace } from './files_helpers.mjs';
+import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.IMAGE_SMOKE_BASE_URL ?? 'http://localhost/';
 const UI_TIMEOUT_MS = 20_000;
@@ -81,7 +82,7 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     await loginThroughUi(page, e2eUser);
-    await page.getByRole('tab', { name: 'Files' }).click();
+    await openSystemApp(page, 'files');
     await waitForVisibleText(page, 'Personal'); // confirms the screen mounted + the root loaded
     await openSpace(page, 'Personal');
 

@@ -31,6 +31,7 @@ import { basename } from 'node:path';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
 import { openSpace, uploadFile } from './files_helpers.mjs';
+import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.MEDIA_SMOKE_BASE_URL ?? 'http://localhost/';
 const VIDEO_FILE_PATH = process.env.MEDIA_SMOKE_FILE_PATH;
@@ -90,7 +91,7 @@ async function main() {
     const cookie = await sessionCookie(page.context());
     await uploadFile(cookie, '/personal', VIDEO_FILE_NAME, readFileSync(VIDEO_FILE_PATH), 'video/mp4');
 
-    await page.getByRole('tab', { name: 'Files' }).click();
+    await openSystemApp(page, 'files');
     await waitForVisibleText(page, 'Personal'); // confirms the screen mounted + the root loaded
     await openSpace(page, 'Personal');
 

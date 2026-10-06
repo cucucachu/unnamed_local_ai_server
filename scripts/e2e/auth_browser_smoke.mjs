@@ -6,7 +6,7 @@
 //      NEVER submitted — the maintainer must become the first admin.
 //      Once bootstrap is done, the Login screen shows instead.
 //   2. A wrong password shows the `invalid_credentials` message.
-//   3. A CLI-created member signs in -> the Home tab loads; a reload keeps
+//   3. A CLI-created member signs in -> the app loads; a reload keeps
 //      the session (the `homeai_session` cookie).
 //   4. Settings -> Log out -> Login screen; the session is revoked
 //      server-side and a reload stays signed out.
@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 import { createE2eUser, createInvite, deleteE2eUsers, deleteInvite, loginThroughUi } from './auth_helpers.mjs';
+import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.AUTH_SMOKE_BASE_URL ?? 'http://localhost/';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -35,9 +36,9 @@ async function authStatus(request) {
   return response.json();
 }
 
-async function expectHomeLoaded(page) {
+async function expectAppLoaded(page) {
   await page.getByTestId('auth-authenticated').waitFor({ timeout: TIMEOUT_MS });
-  await page.getByTestId('home-launcher').waitFor({ timeout: TIMEOUT_MS });
+  await page.getByRole('tab', { name: 'Chat' }).waitFor({ timeout: TIMEOUT_MS });
 }
 
 async function stepSetupOrLogin(browser, setupRequired) {
@@ -81,16 +82,16 @@ async function stepLoginLogout(browser, member) {
     console.log('  OK wrong password -> "Incorrect username or password."');
 
     await loginThroughUi(page, member);
-    await expectHomeLoaded(page);
+    await expectAppLoaded(page);
     const cookies = await context.cookies();
     assert(cookies.some((c) => c.name === 'homeai_session' && c.httpOnly), 'no HttpOnly homeai_session cookie');
-    console.log('  OK CLI user signs in -> Home tab loads (HttpOnly session cookie set)');
+    console.log('  OK CLI user signs in -> the app loads (HttpOnly session cookie set)');
 
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await expectHomeLoaded(page);
+    await expectAppLoaded(page);
     console.log('  OK reload keeps the session');
 
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    await openSystemApp(page, 'settings');
     const account = await page.getByTestId('settings-account').innerText({ timeout: TIMEOUT_MS });
     assert(account.includes(member.username), `settings shows "${account}"`);
     await page.getByTestId('settings-logout').click();
@@ -126,7 +127,7 @@ async function stepInvite(browser, admin, invitee) {
   try {
     const first = await acceptInviteInBrowser(browser, invite.token, invitee);
     try {
-      await expectHomeLoaded(first.page);
+      await expectAppLoaded(first.page);
       assert(/\/(apps)?$/.test(new URL(first.page.url()).pathname), `landed on ${first.page.url()}`);
       const status = await authStatus(first.context.request);
       assert(status.user?.username === invitee.username && status.user?.role === 'member', 'invitee not signed in as a member');
