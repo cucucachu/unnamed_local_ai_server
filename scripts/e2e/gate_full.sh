@@ -35,8 +35,9 @@
 #   -> app_publish_smoke.sh (M14-01: author publishes from app info into a
 #      family catalog; a family editor installs from Catalog, then
 #      approves an update)
-#   -> home_launcher_smoke.sh (M14-02: Home is the default tab; system
-#      tiles, space switcher, catalog, Chat/Files/Settings tabs)
+#   -> home_launcher_smoke.sh (M14-02, M19-01/05: the tab bar is Chat and
+#      Apps; Apps is a page per space with the Files/Routines/Settings/
+#      Catalog dock; each opens and back returns to Apps)
 #   -> files_browser_smoke.sh -> media_browser_smoke.sh -> image_browser_smoke.sh
 #   -> video_thumbnail_browser_smoke.sh -> chat_browser_smoke.sh
 #   -> gate_m7.sh (M7-07, added here per that ticket's own spec: "Add
@@ -82,6 +83,11 @@
 #   -> gate_m17.sh (M17-08: routine pytest in agent-server and platform,
 #      then the G17 scenario: a routine due in a minute runs headlessly;
 #      disabling or revoking its grant stops it — one short GPU turn)
+#   -> gate_m19.sh (M19-06: frontend jest, chats-list pytest, then the G19
+#      app-shell scenario — empty chat on a cold launch, the history
+#      drawer's "needs you" order, + for a new chat, the Apps grid, a swipe
+#      to a shared space, Files/Routines/Settings from their tiles — plus
+#      the launcher, runner and chat smokes again)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
@@ -311,6 +317,10 @@ main() {
   # M17-08: gate_m17.sh runs the routine pytest and the G17 live scenario
   # (one short GPU turn); same idempotent reasoning.
   run_step "gate_m17.sh"             bash "${SCRIPT_DIR}/gate_m17.sh"
+  # M19-06: gate_m19.sh re-runs home_launcher, app_runner and chat browser
+  # smokes above, plus frontend jest and the G19 shell scenario; same
+  # idempotent reasoning.
+  run_step "gate_m19.sh"             bash "${SCRIPT_DIR}/gate_m19.sh"
 
   print_summary
 

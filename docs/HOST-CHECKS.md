@@ -296,3 +296,34 @@ default), the app updated, signed in as yourself.
       from the phone finishes it and the file is there.
 - [ ] (M17-09) A routine with more than 5 runs shows the last 5 and
       **More…**, which lists them all; tapping a run opens its chat.
+
+## M19
+
+Web G19 is `scripts/e2e/gate_m19.sh` (stack health, frontend jest, the
+chats-list pytest, then `g19_shell_smoke.sh`: a cold launch lands in an
+empty chat; the history drawer lists chats waiting on you, then unread,
+then the rest; + makes a new chat; Apps shows the grid and the dock; a
+swipe reaches a shared space and its app; Files, Routines and Settings open
+from their tiles; then the launcher, runner and chat smokes). Setup: stack
+up from `main`, the release APK rebuilt from `main` and installed, signed
+in as yourself, a member of at least one shared space with an app in it.
+
+- [ ] (M19-01) The tab bar is just Chat and Apps. Files, Routines and
+      Settings open from the dock on Apps, and Android's back from each
+      returns to Apps.
+- [ ] (M19-02) A cold launch opens an empty chat. A swipe right from
+      inside the chat (not the screen edge) or the menu button opens the
+      history; search, the routine-runs filter, and rename and delete on
+      long press work; + starts a new chat; the edge swipe is still
+      Android's back.
+- [ ] (M19-03) In an empty chat the big mic starts voice input in one
+      tap; it goes away once you've sent something or the keyboard is up.
+- [ ] (M19-04) Apps is an icon grid; an app with an update has a dot.
+      Long press: Update, Rebuild (an app you made), History and
+      publishing, and Uninstall all work.
+- [ ] (M19-05) Swiping between Personal and a shared space feels natural,
+      the dots and title follow, and it doesn't fight Android's back
+      gesture. Files from a shared page opens in that space. Switching to
+      Chat and back keeps the page; a cold launch opens Personal.
+- [ ] (M19-06) A day of normal use: nothing from the old Home, Files tab
+      or Settings tab is missing.
