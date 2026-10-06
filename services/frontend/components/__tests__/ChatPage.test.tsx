@@ -48,9 +48,15 @@ jest.mock('@/components/SwipeToOpen', () => ({
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { openChat, resetCurrentChat } from '@/lib/currentChat';
 // eslint-disable-next-line import/first
-import ChatDeepLink from '../[threadId]';
+import { getCurrentPage } from '@/lib/currentPage';
 // eslint-disable-next-line import/first
-import ChatTabScreen from '../index';
+import ChatDeepLink from '../../src/app/(tabs)/chat/[threadId]';
+// eslint-disable-next-line import/first
+import { ChatPage } from '../ChatPage';
+
+function ChatTabScreen() {
+  return createElement(ChatPage, { active: true });
+}
 
 const APPROVAL: Thread = {
   id: 'thread-approval',
@@ -148,8 +154,9 @@ async function openDrawer(): Promise<void> {
   await flush();
 }
 
-function pressNewChat(): void {
-  act(() => headerButton(mockHeaderOptions.headerRight, 'new-chat-header-button').onPress());
+async function pressNewChat(): Promise<void> {
+  await openDrawer();
+  press(activeRenderer!, 'chat-drawer-new-chat');
 }
 
 beforeEach(() => {
@@ -167,7 +174,11 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe('Chat tab (M19-02)', () => {
+function textOfNode(node: ReactTestInstance | undefined): string {
+  return (node?.findAllByType(RNText) ?? []).map((t) => [t.props.children].flat().join('')).join(' ');
+}
+
+describe('Chat page (M19-02, M19-07)', () => {
   it('a cold launch shows a new empty chat', async () => {
     mockThreadsApi(listOk());
     await renderTab();
@@ -203,15 +214,55 @@ describe('Chat tab (M19-02)', () => {
     expect(mockChatViewProps?.threadId).toBe('thread-recent');
   });
 
-  it('+ gives a new chat', async () => {
+  it("the drawer's New chat button gives a new chat; the header has no +", async () => {
     mockThreadsApi(listOk());
     await renderTab();
     act(() => openChat('thread-recent'));
     const mountsBefore = mockChatViewMounts.mock.calls.length;
 
-    pressNewChat();
+    await pressNewChat();
     expect(mockChatViewProps?.threadId).toBeNull();
     expect(mockChatViewMounts.mock.calls.length).toBe(mountsBefore + 1);
+    expect(hostByTestId(activeRenderer!, 'chat-drawer')).toHaveLength(0);
+    expect(mockHeaderOptions.headerRight).toBeUndefined();
+  });
+
+  it('the drawer shows five chats and More for the rest; a search looks through them all (M19-07)', async () => {
+    const many: Thread[] = Array.from({ length: 8 }, (_, i) => ({
+      id: `thread-${i}`,
+      title: `Chat ${i}`,
+      created_at: '2026-08-30T08:00:00.000Z',
+      updated_at: '2026-08-30T08:00:00.000Z',
+    }));
+    mockThreadsApi(listOk(many));
+    const renderer = await renderTab();
+    await openDrawer();
+    expect(rowTitles(renderer)).toEqual(['Chat 0', 'Chat 1', 'Chat 2', 'Chat 3', 'Chat 4']);
+    expect(textOfNode(hostByTestId(renderer, 'chat-drawer-more')[0])).toContain('More (3)');
+
+    act(() => hostByTestId(renderer, 'chat-drawer-search')[0].props.onChangeText('Chat 7'));
+    expect(rowTitles(renderer)).toEqual(['Chat 7']);
+    act(() => hostByTestId(renderer, 'chat-drawer-search')[0].props.onChangeText(''));
+
+    press(renderer, 'chat-drawer-more');
+    expect(rowTitles(renderer)).toHaveLength(8);
+    expect(hostByTestId(renderer, 'chat-drawer-more')).toHaveLength(0);
+
+    press(renderer, 'chat-drawer-close');
+    await openDrawer();
+    expect(rowTitles(renderer)).toHaveLength(5);
+  });
+
+  it('sets the header only while it is the page on screen (M19-07)', async () => {
+    mockThreadsApi(listOk());
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(createElement(ChatPage, { active: false }));
+    });
+    activeRenderer = renderer;
+    expect(mockHeaderOptions).toEqual({});
+    await act(async () => renderer.update(createElement(ChatPage, { active: true })));
+    expect(mockHeaderOptions.title).toBe('New chat');
   });
 
   it('a new chat that gets its thread on the first send stays mounted', async () => {
@@ -287,13 +338,14 @@ describe('Chat tab (M19-02)', () => {
     expect(rowTitles(renderer)).toEqual(['Needs you', 'Morning brief', 'Trip planning']);
   });
 
-  it('a /chat/<id> deep link opens that chat in the Chat tab', async () => {
+  it('a /chat/<id> deep link opens that chat on the Chat page', async () => {
     mockThreadsApi(listOk());
     mockSearchParams = { threadId: 'thread-unread' };
     act(() => {
       create(createElement(ChatDeepLink));
     });
-    expect(mockDismissTo).toHaveBeenCalledWith('/chat');
+    expect(mockDismissTo).toHaveBeenCalledWith('/');
+    expect(getCurrentPage().page).toBe('chat');
 
     await renderTab();
     expect(mockChatViewProps?.threadId).toBe('thread-unread');

@@ -161,7 +161,7 @@ describe('SettingsScreen', () => {
     expect(textOf(renderer)).toContain('update failed');
   });
 
-  it('back returns to Apps (M19-01)', async () => {
+  it('back returns to the home pager (M19-01, M19-07)', async () => {
     const renderer = await renderScreen();
 
     const backButton = renderer.root.findByProps({ testID: 'settings-back-button' });
@@ -169,7 +169,7 @@ describe('SettingsScreen', () => {
       backButton.props.onPress();
     });
 
-    expect(mockNavigate).toHaveBeenCalledWith('/apps');
+    expect(mockNavigate).toHaveBeenCalledWith('/');
     expect(mockBack).not.toHaveBeenCalled();
   });
 

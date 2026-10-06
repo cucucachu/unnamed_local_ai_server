@@ -33,7 +33,7 @@ export default function RoutinesScreen() {
 
   return (
     <View style={styles.container}>
-      <SettingsFrame title="Routines" exitTo="/apps" testID="routines-screen">
+      <SettingsFrame title="Routines" exitTo="/" testID="routines-screen">
         {data === null ? (
           <LoadState error={error} onRetry={reload} />
         ) : (

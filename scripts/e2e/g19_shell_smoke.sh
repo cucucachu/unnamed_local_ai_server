@@ -2,15 +2,18 @@
 # M19-06 GATE G19: the redesigned app shell, through Caddy in headless
 # Chromium, as a throwaway `e2e-g19-*` user.
 #
-# Seeds three chats over REST and marks one as waiting on an approval and
+# Seeds six chats over REST and marks one as waiting on an approval and
 # one unread straight in the agent database (the real approval and unread
 # flows are G17's; this checks how the shell shows them), plus a throwaway
 # `e2e-g19-*` shared space with the SDK's runtime-check app. Then
-# g19_shell_smoke.mjs checks: a cold launch lands in an empty chat; the
-# history drawer lists the chats in "needs you" order with their markers;
-# + makes a new chat; Apps shows the grid and the dock; swiping reaches the
-# shared space and its app; Files, Routines and Settings open from their
-# tiles and back returns to Apps. No GPU turns.
+# g19_shell_smoke.mjs checks (M19-07 shell): a cold launch lands on the
+# Chat page in an empty chat with the big mic; the history drawer lists
+# five chats in "needs you" order with their markers and More for the
+# rest, and its bottom New chat button makes a new chat; swiping goes
+# Chat -> Personal (Files, Routines, Settings, Add app) -> the shared
+# space (Files, its app, Add app); Add app opens that space's catalog;
+# Files, Routines and Settings open from their tiles and back returns to
+# the same page; the Chat dot returns to Chat. No GPU turns.
 #
 # Deletes the user (threads, personal space), the shared space and the
 # app's bundle and git repo on exit. Takes `/tmp/homeai-stack.lock` itself
@@ -73,6 +76,14 @@ with urllib.request.urlopen(req, timeout=15) as resp:
 PY
 }
 
+# Three older plain chats first: six in all, so the drawer's first five
+# leave the oldest behind More.
+G19_OLDEST_TITLE="G19 older $$ 1"
+for n in 1 2 3; do
+  id="$(new_thread "G19 older $$ $n")"
+  [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || { log "FAIL: couldn't create a chat (got '$id')"; exit 1; }
+  sleep 1
+done
 # Oldest first, so by recency alone the plain chat would come first.
 G19_NEEDS_TITLE="G19 needs you $$"
 G19_UNREAD_TITLE="G19 unread $$"
@@ -88,7 +99,7 @@ done
 _e2e_psql "$(_e2e_env_value POSTGRES_DB homeai)" "
   UPDATE threads SET awaiting_approval = true WHERE id = '$G19_NEEDS_ID';
   UPDATE threads SET unread = true WHERE id = '$G19_UNREAD_ID';" >/dev/null
-export G19_NEEDS_TITLE G19_UNREAD_TITLE G19_PLAIN_TITLE G19_NEEDS_ID G19_UNREAD_ID G19_PLAIN_ID
+export G19_OLDEST_TITLE G19_NEEDS_TITLE G19_UNREAD_TITLE G19_PLAIN_TITLE G19_NEEDS_ID G19_UNREAD_ID G19_PLAIN_ID
 log "seeded ${G19_USER}'s chats: needs you ${G19_NEEDS_ID}, unread ${G19_UNREAD_ID}, plain ${G19_PLAIN_ID}"
 
 cd "$SCRIPT_DIR"

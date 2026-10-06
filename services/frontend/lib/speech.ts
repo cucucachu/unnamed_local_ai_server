@@ -1,9 +1,10 @@
+import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+
 /**
- * Native no-op half of the M9-06 speech split. Expo Go has no bundled
- * speech-recognition module and this project has no custom native builds,
- * so in-app dictation is unsupported here — the phone keyboard's own mic
- * (Gboard / iOS dictation) is the supported path. Web implements the
- * Web Speech API in `speech.web.ts`.
+ * Native half of the M9-06 speech split: the platform recognizer (Android's
+ * SpeechRecognizer, usually Google's) through `expo-speech-recognition`,
+ * which needs the custom build (`scripts/build_host_app_android.sh`), not
+ * Expo Go. Same contract as the Web Speech API half in `speech.web.ts`.
  */
 
 export interface StartListeningOptions {
@@ -14,12 +15,72 @@ export interface StartListeningOptions {
   onEnd?: () => void;
 }
 
+let subscriptions: ReturnType<typeof ExpoSpeechRecognitionModule.addListener>[] = [];
+let session = 0;
+let active = false;
+
+function unsubscribe(): void {
+  for (const subscription of subscriptions) subscription.remove();
+  subscriptions = [];
+}
+
 export function isSpeechSupported(): boolean {
-  return false;
+  try {
+    return ExpoSpeechRecognitionModule.isRecognitionAvailable();
+  } catch {
+    return false;
+  }
 }
 
-export function startListening(_options: StartListeningOptions): () => void {
-  return () => {};
+export function stopListening(): void {
+  session += 1;
+  if (!active) return;
+  active = false;
+  try {
+    ExpoSpeechRecognitionModule.stop();
+  } catch {
+    // already stopped
+  }
 }
 
-export function stopListening(): void {}
+export function startListening(options: StartListeningOptions): () => void {
+  stopListening();
+  unsubscribe();
+  const mine = ++session;
+  const finish = () => {
+    if (mine !== session) return;
+    active = false;
+    unsubscribe();
+    options.onEnd?.();
+  };
+
+  subscriptions = [
+    ExpoSpeechRecognitionModule.addListener('result', (event) => {
+      const text = event.results[0]?.transcript ?? '';
+      if (!text) return;
+      if (event.isFinal) options.onFinal?.(text);
+      else options.onInterim?.(text);
+    }),
+    ExpoSpeechRecognitionModule.addListener('error', (event) => options.onError?.(event.error)),
+    ExpoSpeechRecognitionModule.addListener('end', finish),
+  ];
+
+  ExpoSpeechRecognitionModule.requestPermissionsAsync()
+    .then((permission) => {
+      if (mine !== session) return;
+      if (!permission.granted) {
+        options.onError?.('not-allowed');
+        finish();
+        return;
+      }
+      active = true;
+      ExpoSpeechRecognitionModule.start({ lang: options.lang ?? 'en-US', interimResults: true, continuous: false });
+    })
+    .catch(() => {
+      if (mine !== session) return;
+      options.onError?.('audio-capture');
+      finish();
+    });
+
+  return () => stopListening();
+}

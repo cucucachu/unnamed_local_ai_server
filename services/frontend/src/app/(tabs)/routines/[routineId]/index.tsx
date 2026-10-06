@@ -13,6 +13,7 @@ import {
 } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { openChat } from '@/lib/currentChat';
+import { showPage } from '@/lib/currentPage';
 import { listSpaces, type Space } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import {
@@ -74,7 +75,8 @@ export default function RoutineDetailScreen() {
 
   const openRun = (threadId: string) => {
     openChat(threadId);
-    router.navigate('/chat');
+    showPage('chat');
+    router.dismissTo('/');
   };
 
   async function handleRunNow() {

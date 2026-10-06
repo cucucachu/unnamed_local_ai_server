@@ -25,3 +25,14 @@ jest.mock('homeai-device-key', () => ({
 
 // M19-02: the chat drawer pads by the safe-area insets; tests have no provider.
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
+
+// Native speech recognition (lib/speech.ts); unavailable unless a test says so.
+jest.mock('expo-speech-recognition', () => ({
+  ExpoSpeechRecognitionModule: {
+    isRecognitionAvailable: jest.fn(() => false),
+    requestPermissionsAsync: jest.fn(async () => ({ granted: true })),
+    start: jest.fn(),
+    stop: jest.fn(),
+    addListener: jest.fn(() => ({ remove: jest.fn() })),
+  },
+}));

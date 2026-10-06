@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,20 +14,23 @@ interface SpaceCatalog {
   entries: CatalogEntry[];
 }
 
-async function loadCatalogs(): Promise<SpaceCatalog[]> {
+async function loadCatalogs(onlySpaceId?: string): Promise<SpaceCatalog[]> {
   const spaces = (await listSpaces())
-    .filter((space) => space.archived_at === null)
+    .filter((space) => space.archived_at === null && (!onlySpaceId || space.id === onlySpaceId))
     .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'personal' ? -1 : 1));
   return Promise.all(spaces.map(async (space) => ({ space, entries: (await listCatalog(space.id)).entries })));
 }
 
 /**
  * Published apps listed in the catalogs of the user's spaces (M14-01).
- * Tapping an entry that isn't installed opens the install sheet.
+ * Tapping an entry that isn't installed opens the install sheet. A space
+ * page's Add app tile opens just that space's catalog (`?spaceId=`, M19-07).
  */
 export default function CatalogScreen() {
   const router = useRouter();
-  const { data, error, reload } = useLoad(loadCatalogs);
+  const { spaceId } = useLocalSearchParams<{ spaceId?: string }>();
+  const load = useCallback(() => loadCatalogs(spaceId), [spaceId]);
+  const { data, error, reload } = useLoad(load);
 
   const open = useCallback(
     (space: Space, entry: CatalogEntry) => {
@@ -54,6 +57,8 @@ export default function CatalogScreen() {
   }
 
   const groups = data.filter((group) => group.entries.length > 0);
+  const only = spaceId ? data[0]?.space : undefined;
+  const onlyLabel = only ? (only.kind === 'personal' ? 'Personal' : only.name) : null;
 
   return (
     <ScrollView
@@ -62,9 +67,10 @@ export default function CatalogScreen() {
       refreshControl={<RefreshControl refreshing={false} onRefresh={reload} tintColor={theme.textMuted} />}
       testID="apps-catalog"
     >
+      {onlyLabel ? <Stack.Screen options={{ title: `Add to ${onlyLabel}` }} /> : null}
       {groups.length === 0 ? (
         <View style={styles.empty} testID="catalog-empty">
-          <Text style={styles.emptyTitle}>Nothing in the catalog yet</Text>
+          <Text style={styles.emptyTitle}>{onlyLabel ? `Nothing to add to ${onlyLabel} yet` : 'Nothing in the catalog yet'}</Text>
           <Text style={settingsStyles.muted}>
             Publish an app from its info screen to list it in a space other people can install from.
           </Text>
