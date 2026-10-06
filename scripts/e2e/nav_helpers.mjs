@@ -2,6 +2,7 @@
 // open from their tiles on Apps.
 // M19-02: the Chat tab is one chat; history is a drawer, + starts a new chat.
 // M19-04: Apps is an icon grid; long press on an app opens its action sheet.
+// M19-05: Files opens at the Apps page's space (Personal unless swiped).
 
 const TIMEOUT_MS = 30_000;
 
