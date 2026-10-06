@@ -115,6 +115,8 @@ describe('HomeScreen', () => {
     expect(mockPush).toHaveBeenCalledWith('/chat');
     await press(renderer, 'home-open-files');
     expect(mockPush).toHaveBeenCalledWith('/files');
+    await press(renderer, 'home-open-routines');
+    expect(mockPush).toHaveBeenCalledWith('/routines');
     await press(renderer, 'home-open-settings');
     expect(mockPush).toHaveBeenCalledWith('/settings');
 

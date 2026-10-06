@@ -202,6 +202,8 @@ describe('SettingsScreen', () => {
     }
     expect(renderer.root.findAllByProps({ testID: 'settings-nav-users' })).toHaveLength(0);
     expect(renderer.root.findAllByProps({ testID: 'settings-nav-invites' })).toHaveLength(0);
+    // M17-09: routines are their own app now.
+    expect(renderer.root.findAllByProps({ testID: 'settings-nav-routines' })).toHaveLength(0);
   });
 
   it('admins also get Users and Invites', async () => {
