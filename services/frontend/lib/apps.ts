@@ -101,6 +101,24 @@ export function revertApp(appId: string, commit: string): Promise<RevertResult> 
   });
 }
 
+export interface BuildResult {
+  ok: boolean;
+  diagnostics: { message: string }[];
+}
+
+/** Rebuilds the working version (`POST /apps/{id}/build`); `ok` is the build's. */
+export function buildApp(appId: string): Promise<BuildResult> {
+  return apiFetch<BuildResult>(`/api/platform/apps/${encodeURIComponent(appId)}/build`, { method: 'POST' });
+}
+
+/** Removes the instance and its data from the space. */
+export async function uninstallInstance(spaceId: string, instanceId: string): Promise<void> {
+  await apiFetch<void>(
+    `/api/platform/spaces/${encodeURIComponent(spaceId)}/instances/${encodeURIComponent(instanceId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 /** The instance and the space it's installed in (for the user's role there);
  * `ApiError 404 not_found` when the user can't see it. */
 export async function findInstance(instanceId: string): Promise<{ space: Space; instance: Instance }> {

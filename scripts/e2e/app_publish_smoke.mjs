@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 
 import { fixtureFiles } from './app_fixture.mjs';
 import { loginThroughUi } from './auth_helpers.mjs';
+import { openAppSheet } from './nav_helpers.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/apps/hello');
 const APP_SLUG = 'hello';
@@ -127,7 +128,8 @@ try {
   ok('published 1.1.0');
 
   await editor.page.goto(`${BASE}/apps`);
-  await editor.page.getByTestId(`apps-update-badge-${APP_SLUG}`).waitFor({ timeout: UI_TIMEOUT });
+  await editor.page.getByTestId(`apps-open-${APP_SLUG}-badge`).waitFor({ timeout: UI_TIMEOUT });
+  await openAppSheet(editor.page, editor.page.getByTestId(`apps-open-${APP_SLUG}`).first());
   await editor.page.getByTestId(`apps-update-${APP_SLUG}`).click();
   await editor.page.getByTestId('apps-update').waitFor({ timeout: UI_TIMEOUT });
   await editor.page.getByTestId('update-confirm').click();

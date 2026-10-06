@@ -12,6 +12,7 @@ import { chromium } from 'playwright';
 
 import { FIXTURE, fixtureFiles, fixtureV2 } from './app_fixture.mjs';
 import { loginThroughUi } from './auth_helpers.mjs';
+import { openAppSheet } from './nav_helpers.mjs';
 
 const BASE = (process.env.RUNNER_SMOKE_BASE_URL ?? 'http://localhost/').replace(/\/$/, '');
 const OWNER = { username: process.env.RUNNER_SMOKE_USER, password: process.env.RUNNER_SMOKE_PASSWORD };
@@ -190,8 +191,37 @@ try {
     after,
   );
 
+  await viewer.page.getByRole('tab', { name: 'Apps' }).click();
+  await openAppSheet(viewer.page, viewer.page.getByTestId(`apps-space-${SLUG}`).getByTestId('apps-open-runtime-check'));
+  check(
+    (await viewer.page.getByTestId('app-sheet-uninstall').count()) === 0 && (await viewer.page.getByTestId('app-sheet-rebuild').count()) === 0,
+    "the viewer's long-press sheet has no rebuild or uninstall",
+  );
+
   check(fromSandbox.length === 0, 'no request from a sandbox frame reached anything', fromSandbox);
   await viewer.context.close();
+
+  // --- 6. M19-04: the grid tile and its long-press sheet --------------------
+  await page.getByRole('tab', { name: 'Apps' }).click();
+  const tile = page.getByTestId(`apps-space-${SLUG}`).getByTestId('apps-open-runtime-check');
+  await tile.waitFor({ timeout: UI_TIMEOUT });
+  check((await tile.getByTestId('app-icon-glyph-runtime-check').count()) + (await tile.getByTestId('app-icon-letter-runtime-check').count()) === 1, 'the tile has an icon');
+  await openAppSheet(page, tile);
+  await page.getByTestId('app-sheet-rebuild').click();
+  await page.getByTestId('apps-toast').getByText('Rebuilt Runtime check').waitFor({ timeout: 180_000 });
+  ok('long press -> Rebuild rebuilt the app');
+  await openAppSheet(page, tile);
+  await page.getByTestId('app-sheet-info').click();
+  await page.getByTestId('app-info').waitFor({ timeout: UI_TIMEOUT });
+  check(new URL(page.url()).pathname === `/apps/info/${app.id}`, 'long press -> History and publishing opens App info', page.url());
+  await page.getByRole('tab', { name: 'Apps' }).click();
+  await openAppSheet(page, tile);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByTestId('app-sheet-uninstall').click();
+  await page.getByTestId('apps-toast').getByText('Uninstalled Runtime check').waitFor({ timeout: UI_TIMEOUT });
+  const remaining = await owner.call('GET', `/api/platform/spaces/${space.id}/instances`);
+  check(remaining.instances.length === 0, 'long press -> Uninstall removed the instance', remaining);
+
   await owner.context.close();
   console.log('PASS: app runner browser smoke');
 } finally {
