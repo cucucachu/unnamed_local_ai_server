@@ -3,7 +3,6 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 type ScreenProps = { name: string; options?: { headerShown?: boolean; title?: string; headerLeft?: () => ReactNode } };
 
-const mockNavigate = jest.fn();
 const mockDismissTo = jest.fn();
 const mockScreens: ScreenProps[] = [];
 const mockRedirects: string[] = [];
@@ -18,7 +17,7 @@ jest.mock('expo-router', () => {
     mockRedirects.push(href);
     return null;
   };
-  return { Stack, Redirect, useRouter: () => ({ navigate: mockNavigate, dismissTo: mockDismissTo }) };
+  return { Stack, Redirect, useRouter: () => ({ dismissTo: mockDismissTo }) };
 });
 
 const mockShowPage = jest.fn();
@@ -60,7 +59,7 @@ describe('ShellLayout (M19-07)', () => {
       back = create(files?.options?.headerLeft?.() as React.ReactElement);
     });
     act(() => back.root.findByProps({ testID: 'back-to-apps' }).props.onPress());
-    expect(mockNavigate).toHaveBeenCalledWith('/');
+    expect(mockDismissTo).toHaveBeenCalledWith('/');
     act(() => back.unmount());
   });
 

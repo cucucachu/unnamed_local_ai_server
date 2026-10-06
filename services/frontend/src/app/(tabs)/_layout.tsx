@@ -9,7 +9,7 @@ function BackHome() {
   const router = useRouter();
   return (
     <Pressable
-      onPress={() => router.navigate('/')}
+      onPress={() => router.dismissTo('/')}
       style={styles.back}
       accessibilityRole="button"
       accessibilityLabel="Back"

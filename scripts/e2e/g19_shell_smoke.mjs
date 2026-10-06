@@ -52,10 +52,17 @@ try {
   const selected = (testId) =>
     page.waitForFunction((id) => document.querySelector(`[data-testid="${id}"]`)?.getAttribute('aria-selected') === 'true', testId, { timeout: TIMEOUT });
   const settled = () =>
-    page.waitForFunction(() => {
-      const pager = document.querySelector('[data-testid="home-pages"]');
-      return pager && pager.scrollLeft % pager.clientWidth < 2;
-    }, null, { timeout: TIMEOUT });
+    page
+      .waitForFunction(() => {
+        const pager = document.querySelector('[data-testid="home-pages"]');
+        if (!pager) return false;
+        const pages = pager.scrollLeft / pager.clientWidth;
+        return Math.abs(pages - Math.round(pages)) * pager.clientWidth < 2;
+      }, null, { timeout: TIMEOUT })
+      .catch(async (err) => {
+        const at = await page.getByTestId('home-pages').evaluate((el) => ({ left: el.scrollLeft, width: el.clientWidth }));
+        throw new Error(`the pager never settled on a page: ${JSON.stringify(at)} (${err.message})`);
+      });
   const swipe = async (dx) => {
     await page.getByTestId('home-pages').hover();
     await page.mouse.wheel(dx, 0);
@@ -185,8 +192,9 @@ try {
   const sharedPage = page.getByTestId(`apps-space-${SLUG}`);
   await sharedPage.getByTestId('apps-add').click();
   await page.waitForURL((url) => url.pathname === '/apps/catalog', { timeout: TIMEOUT });
-  await page.getByTestId(`catalog-space-${SLUG}`).waitFor({ timeout: TIMEOUT });
-  check((await page.locator('[data-testid^="catalog-space-"]').count()) === 1, "Add app lists only that space's catalog");
+  check(new URL(page.url()).searchParams.get('spaceId') === shared.id, "Add app opens that space's catalog", page.url());
+  await page.getByTestId('catalog-empty').getByText(`Nothing to add to ${SPACE_NAME} yet`).waitFor({ timeout: TIMEOUT });
+  ok('with nothing published there, it says so for that space');
   check(await page.getByRole('heading', { name: `Add to ${SPACE_NAME}` }).first().isVisible(), 'the catalog is titled for the space');
   await page.goBack();
   await page.waitForURL((url) => url.pathname === '/', { timeout: TIMEOUT });

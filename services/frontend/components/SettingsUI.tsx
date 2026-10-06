@@ -9,7 +9,7 @@ import { theme } from '@/lib/theme';
 /** Shared chrome for the Settings and Routines stacks: a header with a back
  * button, and a scrolling, keyboard-aware body capped to a phone-ish width on
  * wide screens. An app's first screen sets `exitTo` (M19-01: back always
- * returns to Apps); others go back, or to `backTo` with no history. */
+ * returns home); others go back, or to `backTo` with no history. */
 export function SettingsFrame({
   title,
   backTo = '/settings',
@@ -29,7 +29,7 @@ export function SettingsFrame({
 }) {
   const router = useRouter();
   const handleLeading = () => {
-    if (exitTo !== undefined) router.navigate(exitTo);
+    if (exitTo !== undefined) router.dismissTo(exitTo);
     else if (router.canGoBack()) router.back();
     else router.replace(backTo);
   };
