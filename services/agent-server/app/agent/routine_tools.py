@@ -208,7 +208,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
     ) -> str:
         """Schedule a prompt for the assistant to run by itself later (a routine).
 
-        Each run is a new chat in the user's Inbox. name: short title. prompt:
+        Each run is a new chat in the user's chats list. name: short title. prompt:
         what to do, written as the user's own request, complete on its own.
         repeat: "once" (with date YYYY-MM-DD), "daily", "weekdays", "weekly"
         (with days, e.g. ["mon", "thu"]) or "monthly" (with day_of_month 1-31;
@@ -263,7 +263,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
             record = await service.create(state, caller, user_id, draft, _now())
         except service.RoutineError as exc:
             return _error(exc)
-        return f"Created. Runs appear in the user's Inbox.\n{_summary(record)}"
+        return f"Created. Runs appear in the user's chats list.\n{_summary(record)}"
 
     @tool
     async def update_routine(
@@ -348,7 +348,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         config: RunnableConfig,
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> str:
-        """Delete one of the user's routines for good (its past runs stay in the Inbox).
+        """Delete one of the user's routines for good (its past runs stay in the chats list).
 
         routine: its id (or exact name) from list_routines. The user approves it
         first; to stop it for now, update_routine with enabled false instead.
