@@ -1,5 +1,5 @@
 import { apiFetch } from './api';
-import type { Space } from './platform';
+import { spacePath, type Space } from './platform';
 
 /**
  * Routines (M17-02..06, `/api/routines` in
@@ -209,9 +209,7 @@ export const APPROVAL_MODE_HELP: Record<ApprovalMode, string> = {
 
 // --- spaces --------------------------------------------------------------------
 
-export function spacePath(space: Space): string {
-  return space.kind === 'personal' ? '/personal' : `/spaces/${space.slug}`;
-}
+export { spacePath };
 
 /** Spaces a routine may run in: the caller edits them and they're not archived. */
 export function routineSpaces(spaces: Space[]): Space[] {

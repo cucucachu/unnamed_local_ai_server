@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 import { loginThroughUi } from './auth_helpers.mjs';
-import { openSpace } from './files_helpers.mjs';
+import { goToFilesRoot, openSpace } from './files_helpers.mjs';
 import { openSystemApp } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.FILES_SMOKE_BASE_URL ?? 'http://localhost/';
@@ -51,6 +51,7 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, { username: G11_VIEWER, password: G11_VIEWER_PASSWORD });
     await openSystemApp(page, 'files');
+    await goToFilesRoot(page);
     await visible(page, 'Personal');
     await visible(page, G11_SPACE_NAME);
     console.log(`OK B's Files root lists Personal and "${G11_SPACE_NAME}"`);
