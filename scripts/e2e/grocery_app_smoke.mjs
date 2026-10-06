@@ -82,7 +82,7 @@ const ui = (page) => page.frameLocator(APP_FRAME);
 
 /** Apps tab -> the space's section -> Grocery list -> its runner, rendered. */
 async function openFromAppsTab(page, spaceSlug) {
-  await page.getByRole('tab', { name: 'Home' }).click();
+  await page.getByRole('tab', { name: 'Apps' }).click();
   const section = page.getByTestId(`apps-space-${spaceSlug}`);
   await section.waitFor({ timeout: UI_TIMEOUT });
   await section.getByTestId(`apps-open-${APP_SLUG}`).click();

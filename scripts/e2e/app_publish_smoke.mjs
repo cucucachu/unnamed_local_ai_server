@@ -69,7 +69,7 @@ async function uploadAndBuild(call, space) {
 }
 
 async function publishFromInfo(page, spaceSlug) {
-  await page.getByRole('tab', { name: 'Home' }).click();
+  await page.getByRole('tab', { name: 'Apps' }).click();
   await page.getByTestId(`apps-open-${APP_SLUG}`).first().click();
   await page.getByTestId('app-info-button').click();
   await page.getByTestId('app-publish').waitFor({ timeout: UI_TIMEOUT });
@@ -99,7 +99,7 @@ try {
 
   const editor = await signIn(browser, EDITOR);
   ok(`signed in as ${EDITOR.username}`);
-  await editor.page.getByRole('tab', { name: 'Home' }).click();
+  await editor.page.getByRole('tab', { name: 'Apps' }).click();
   await editor.page.getByTestId('apps-catalog').click();
   await editor.page.getByTestId(`catalog-app-${APP_SLUG}`).waitFor({ timeout: UI_TIMEOUT });
   await editor.page.getByTestId(`catalog-app-${APP_SLUG}`).click();

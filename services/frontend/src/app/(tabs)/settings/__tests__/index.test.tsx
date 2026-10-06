@@ -7,9 +7,10 @@ import type { SettingsDocument } from '@/lib/settings';
 import { theme } from '@/lib/theme';
 
 const mockBack = jest.fn();
+const mockNavigate = jest.fn();
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ back: mockBack, push: mockPush }),
+  useRouter: () => ({ back: mockBack, push: mockPush, navigate: mockNavigate }),
 }));
 
 const mockLogout = jest.fn();
@@ -72,6 +73,7 @@ async function renderScreen(): Promise<ReactTestRenderer> {
 
 beforeEach(() => {
   mockBack.mockReset();
+  mockNavigate.mockReset();
   mockPush.mockReset();
   mockRole = 'member';
   mockLogout.mockReset();
@@ -159,15 +161,16 @@ describe('SettingsScreen', () => {
     expect(textOf(renderer)).toContain('update failed');
   });
 
-  it('the close button navigates back', async () => {
+  it('back returns to Apps (M19-01)', async () => {
     const renderer = await renderScreen();
 
-    const closeButton = renderer.root.findByProps({ testID: 'settings-close-button' });
+    const backButton = renderer.root.findByProps({ testID: 'settings-back-button' });
     await act(async () => {
-      closeButton.props.onPress();
+      backButton.props.onPress();
     });
 
-    expect(mockBack).toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith('/apps');
+    expect(mockBack).not.toHaveBeenCalled();
   });
 
   it('shows the signed-in account', async () => {

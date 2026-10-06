@@ -64,7 +64,7 @@ export default function SettingsScreen() {
     <View style={styles.container}>
       <SettingsFrame
         title="Settings"
-        leading="close"
+        exitTo="/apps"
         footer={
           <View style={styles.account}>
             {user ? (

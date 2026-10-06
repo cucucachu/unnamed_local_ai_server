@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# M14-02: Home launcher navigation smoke through Caddy in headless Chromium.
+# M14-02, M19-01: app shell navigation smoke through Caddy in headless Chromium.
 #
-# A throwaway `e2e-home-*` member signs in: `/` is Home (system tiles, catalog,
-# space switcher); Chat / Files / Settings tabs work; a throwaway shared space
-# appears in the switcher. Deletes the user, personal space, and shared space
+# A throwaway `e2e-home-*` member signs in and lands in Chat; the tab bar is
+# Chat and Apps; Apps has the Files / Routines / Settings tiles (each opens,
+# and back returns to Apps), the catalog and the space switcher (a throwaway
+# shared space appears in it); `/settings/routines` opens Routines. Deletes the user, personal space, and shared space
 # on exit.
 #
 # Prerequisites: stack up with a `caddy` built from this tree. Node, docker.
