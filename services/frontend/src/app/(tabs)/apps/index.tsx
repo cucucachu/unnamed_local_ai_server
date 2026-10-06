@@ -1,19 +1,30 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Alert,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 
 import { AppActionSheet } from '@/components/AppActionSheet';
 import { AppGrid, AppTile } from '@/components/AppGrid';
-import { LoadState, SectionTitle, settingsStyles } from '@/components/SettingsUI';
+import { LoadState, settingsStyles } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
 import { buildApp, getApp, listInstalledApps, uninstallInstance, type Instance } from '@/lib/apps';
-import { isReadOnly, type Space } from '@/lib/platform';
+import { getCurrentSpace, setCurrentSpace } from '@/lib/currentSpace';
+import { isReadOnly, spacePath, type Space } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
-
-const ALL_SPACES = 'all';
 
 function spaceLabel(space: Space): string {
   return space.kind === 'personal' ? 'Personal' : space.name;
@@ -38,18 +49,22 @@ interface Menu {
 }
 
 /**
- * The Apps tab (M14-02's Home launcher, renamed in M19-01; a home-screen
- * grid since M19-04). System tiles open Files, Routines (M17-09), Settings
- * and the Catalog; installed apps are grouped by space with a switcher, and
- * a dot marks one with an update. Tap opens the runner (`[instanceId].tsx`);
- * long press offers update, rebuild, App info (history, publish) and
- * uninstall. Reloads whenever the tab regains focus, so a newly installed
- * app shows up.
+ * The Apps tab (M14-02's Home launcher, renamed in M19-01): a phone-style
+ * home screen. Each space is a page of app icons (M19-04), Personal first,
+ * swiped between like rooms (M19-05), with its name as the title and dots
+ * for the pages; the last page viewed is kept for the session. The system
+ * apps (Files, Routines, Settings, Catalog) are a dock under every page;
+ * Files opens at the page's space. A dot on an icon marks an update. Tap
+ * opens the runner (`[instanceId].tsx`); long press offers update, rebuild,
+ * App info (history, publish) and uninstall. Reloads whenever the tab
+ * regains focus, so a newly installed app shows up.
  */
 export default function HomeScreen() {
   const router = useRouter();
   const { data, error, reload } = useLoad(listInstalledApps);
-  const [spaceId, setSpaceId] = useState(ALL_SPACES);
+  const [spaceId, setSpaceId] = useState<string | null>(getCurrentSpace);
+  const [pageWidth, setPageWidth] = useState(0);
+  const pager = useRef<ScrollView>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [busy, setBusy] = useState<'rebuild' | 'uninstall' | null>(null);
   const { message: toast, showToast } = useToast();
@@ -73,6 +88,16 @@ export default function HomeScreen() {
       .catch(() => undefined);
   }, []);
 
+  const pageIndex = Math.max(0, data?.findIndex((group) => group.space.id === spaceId) ?? 0);
+
+  // Keeps the pager on the current space when it first lays out, resizes,
+  // or the page list changes under it.
+  const pageCount = data?.length ?? 0;
+  useEffect(() => {
+    if (pageWidth > 0 && pageCount > 0) pager.current?.scrollTo({ x: pageIndex * pageWidth, animated: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pageIndex changes from scrolling must not scroll back
+  }, [pageWidth, pageCount]);
+
   if (data === null) {
     return (
       <View style={styles.container}>
@@ -81,14 +106,23 @@ export default function HomeScreen() {
     );
   }
 
-  const spaces = data.map((group) => group.space);
-  const selected = spaceId === ALL_SPACES || spaces.some((space) => space.id === spaceId) ? spaceId : ALL_SPACES;
-  const groups =
-    selected === ALL_SPACES
-      ? data.filter((group) => group.instances.length > 0)
-      : data.filter((group) => group.space.id === selected);
+  const current = data[pageIndex]?.space ?? null;
   const updates = data.reduce((n, group) => n + group.instances.filter((i) => i.update).length, 0);
-  const installedEmpty = groups.every((group) => group.instances.length === 0);
+
+  const showSpace = (index: number) => {
+    const space = data[index]?.space;
+    if (!space || space.id === current?.id) return;
+    setSpaceId(space.id);
+    setCurrentSpace(space.id);
+  };
+  const onPagerLayout = (event: LayoutChangeEvent) => setPageWidth(event.nativeEvent.layout.width);
+  const onPagerScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (pageWidth > 0) showSpace(Math.round(event.nativeEvent.contentOffset.x / pageWidth));
+  };
+  const goToPage = (index: number) => {
+    pager.current?.scrollTo({ x: index * pageWidth, animated: true });
+    showSpace(index);
+  };
 
   const openInstance = (instance: Instance) =>
     router.push({ pathname: '/apps/[instanceId]', params: { instanceId: instance.id } });
@@ -130,81 +164,34 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="home-launcher">
+      <Stack.Screen options={{ title: current ? spaceLabel(current) : 'Apps' }} />
       <ScrollView
+        ref={pager}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onLayout={onPagerLayout}
+        onScroll={onPagerScroll}
+        scrollEventThrottle={32}
         style={styles.container}
-        contentContainerStyle={styles.body}
-        refreshControl={<RefreshControl refreshing={false} onRefresh={reload} tintColor={theme.textMuted} />}
-        testID="home-launcher"
+        testID="home-pages"
       >
-        {spaces.length > 1 ? (
+        {data.map(({ space, instances }) => (
           <ScrollView
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.switcher}
-            testID="home-space-switcher"
+            key={space.id}
+            style={{ width: pageWidth || undefined }}
+            contentContainerStyle={styles.page}
+            refreshControl={<RefreshControl refreshing={false} onRefresh={reload} tintColor={theme.textMuted} />}
+            testID={`apps-space-${space.slug}`}
           >
-            <SpaceChip label="All" selected={selected === ALL_SPACES} onPress={() => setSpaceId(ALL_SPACES)} testID="home-space-all" />
-            {spaces.map((space) => (
-              <SpaceChip
-                key={space.id}
-                label={spaceLabel(space)}
-                selected={selected === space.id}
-                onPress={() => setSpaceId(space.id)}
-                testID={`home-space-${space.slug}`}
-              />
-            ))}
-          </ScrollView>
-        ) : null}
-
-        <AppGrid testID="home-system">
-          <AppTile
-            slug="files"
-            name="Files"
-            icon="folder"
-            color={SYSTEM_COLOR}
-            onPress={() => router.push('/files')}
-            testID="home-open-files"
-          />
-          <AppTile
-            slug="routines"
-            name="Routines"
-            icon="alarm"
-            color={SYSTEM_COLOR}
-            onPress={() => router.push('/routines')}
-            testID="home-open-routines"
-          />
-          <AppTile
-            slug="settings"
-            name="Settings"
-            icon="settings"
-            color={SYSTEM_COLOR}
-            onPress={() => router.push('/settings')}
-            testID="home-open-settings"
-          />
-          <AppTile
-            slug="catalog"
-            name="Catalog"
-            icon="storefront"
-            color={SYSTEM_COLOR}
-            badge={updates > 0}
-            note={updates ? `${updates} update${updates === 1 ? '' : 's'}` : undefined}
-            onPress={() => router.push('/apps/catalog')}
-            testID="apps-catalog"
-          />
-        </AppGrid>
-
-        {installedEmpty ? (
-          <View style={styles.empty} testID="apps-empty">
-            <Ionicons name="apps-outline" size={40} color={theme.textMuted} />
-            <Text style={styles.emptyTitle}>No apps yet</Text>
-            <Text style={settingsStyles.muted}>Install an app from the catalog, or ask the agent to make one.</Text>
-          </View>
-        ) : (
-          groups.map(({ space, instances }) => (
-            <View key={space.id} style={styles.group} testID={`apps-space-${space.slug}`}>
-              <SectionTitle>{spaceLabel(space)}</SectionTitle>
+            {instances.length === 0 ? (
+              <View style={styles.empty} testID="apps-empty">
+                <Ionicons name="apps-outline" size={40} color={theme.textMuted} />
+                <Text style={styles.emptyTitle}>No apps in {spaceLabel(space)} yet</Text>
+                <Text style={settingsStyles.muted}>Install an app from the catalog, or ask the agent to make one.</Text>
+              </View>
+            ) : (
               <AppGrid>
                 {instances.map((instance) => (
                   <AppTile
@@ -220,10 +207,43 @@ export default function HomeScreen() {
                   />
                 ))}
               </AppGrid>
-            </View>
-          ))
-        )}
+            )}
+          </ScrollView>
+        ))}
       </ScrollView>
+
+      {data.length > 1 ? (
+        <View style={styles.dots} accessibilityRole="tablist" testID="home-space-dots">
+          {data.map(({ space }, index) => (
+            <Pressable
+              key={space.id}
+              onPress={() => goToPage(index)}
+              hitSlop={8}
+              accessibilityRole="tab"
+              accessibilityLabel={spaceLabel(space)}
+              accessibilityState={{ selected: index === pageIndex }}
+              testID={`home-space-${space.slug}`}
+            >
+              <View style={[styles.dot, index === pageIndex && styles.dotSelected]} />
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.dock} testID="home-system">
+        <DockTile slug="files" name="Files" icon="folder" onPress={() => router.push({ pathname: '/files', params: current ? { path: spacePath(current) } : {} })} />
+        <DockTile slug="routines" name="Routines" icon="alarm" onPress={() => router.push('/routines')} />
+        <DockTile slug="settings" name="Settings" icon="settings" onPress={() => router.push('/settings')} />
+        <DockTile
+          slug="catalog"
+          name="Catalog"
+          icon="storefront"
+          badge={updates > 0}
+          note={updates ? `${updates} update${updates === 1 ? '' : 's'}` : undefined}
+          onPress={() => router.push('/apps/catalog')}
+          testID="apps-catalog"
+        />
+      </View>
 
       {menu !== null ? (
         <AppActionSheet
@@ -256,27 +276,23 @@ export default function HomeScreen() {
 
 const SYSTEM_COLOR = '#3f4756';
 
-function SpaceChip({
-  label,
-  selected,
-  onPress,
+function DockTile({
+  slug,
   testID,
+  ...tile
 }: {
-  label: string;
-  selected: boolean;
+  slug: string;
+  name: string;
+  icon: string;
+  badge?: boolean;
+  note?: string;
   onPress: () => void;
-  testID: string;
+  testID?: string;
 }) {
   return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.chip, selected && styles.chipSelected]}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      testID={testID}
-    >
-      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
-    </Pressable>
+    <View style={styles.dockCell}>
+      <AppTile slug={slug} color={SYSTEM_COLOR} testID={testID ?? `home-open-${slug}`} {...tile} />
+    </View>
   );
 }
 
@@ -285,40 +301,38 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.bg,
   },
-  body: {
+  page: {
     width: '100%',
     maxWidth: 1100,
     alignSelf: 'center',
     padding: 16,
-    gap: 20,
   },
-  switcher: {
+  dots: {
     flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 2,
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 10,
   },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: theme.border,
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.border,
+  },
+  dotSelected: {
+    backgroundColor: theme.text,
+  },
+  dock: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    paddingTop: 12,
+    paddingBottom: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
     backgroundColor: theme.surface,
   },
-  chipSelected: {
-    backgroundColor: theme.accent,
-    borderColor: theme.accent,
-  },
-  chipText: {
-    color: theme.textMuted,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  chipTextSelected: {
-    color: theme.text,
-  },
-  group: {
-    gap: 12,
+  dockCell: {
+    width: 84,
   },
   empty: {
     alignItems: 'center',

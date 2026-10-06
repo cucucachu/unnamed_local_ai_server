@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# M14-02, M19-01: app shell navigation smoke through Caddy in headless Chromium.
+# M14-02, M19-01, M19-05: app shell navigation smoke through Caddy in headless
+# Chromium.
 #
 # A throwaway `e2e-home-*` member signs in and lands in Chat; the tab bar is
-# Chat and Apps; Apps has the Files / Routines / Settings tiles (each opens,
-# and back returns to Apps), the catalog and the space switcher (a throwaway
-# shared space appears in it); `/settings/routines` opens Routines. Deletes the user, personal space, and shared space
-# on exit.
+# Chat and Apps; Apps has the Files / Routines / Settings / Catalog dock
+# (each opens, and back returns to Apps). A throwaway shared space with the
+# SDK's runtime-check app installed is a second page: Personal comes first
+# without the app, a horizontal swipe moves to the shared page with its app,
+# Files opens at that space, and the page survives back and a reload.
+# `/settings/routines` opens Routines. Deletes the user, personal space,
+# shared space and the app's bundle and git repo on exit.
 #
 # Prerequisites: stack up with a `caddy` built from this tree. Node, docker.
 # Takes `/tmp/homeai-stack.lock` itself if the caller hasn't. Never completes

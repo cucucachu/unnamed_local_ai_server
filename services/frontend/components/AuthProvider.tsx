@@ -22,6 +22,7 @@ import { AppState } from 'react-native';
 
 import { resolveApiHost } from '@/lib/api';
 import { resetCurrentChat } from '@/lib/currentChat';
+import { setCurrentSpace } from '@/lib/currentSpace';
 import { getCredential } from '@/lib/webauthn';
 import { onUnauthorized, sessionToken } from '@/lib/session';
 
@@ -148,6 +149,7 @@ export function AuthProvider({ children }: { children?: ReactNode }) {
   const logout = useCallback(async () => {
     await logoutRequest();
     resetCurrentChat();
+    setCurrentSpace(null);
     await refresh();
   }, [refresh]);
 
