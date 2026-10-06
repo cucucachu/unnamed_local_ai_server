@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Dimensions,
   FlatList,
+  Keyboard,
   Linking,
   Modal,
   Platform,
@@ -101,6 +102,8 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
   const listRef = useRef<FlatList<ChatTurn>>(null);
+  const inputRef = useRef<TextInput>(null);
+  const keyboardUp = useKeyboardVisible();
   const ignoreBlurStopRef = useRef(false);
   const speechSupported = isSpeechSupported();
 
@@ -206,6 +209,13 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
       },
     });
   }, [listening, haltListening, showToast]);
+
+  // M19-03: an empty chat's big mic focuses the composer and starts voice input.
+  const showVoiceStart = speechSupported && turns.length === 0 && !listening && !keyboardUp && pendingApproval === null;
+  const handleVoiceStart = useCallback(() => {
+    inputRef.current?.focus();
+    handleMic();
+  }, [handleMic]);
 
   const handleComposerBlur = useCallback(() => {
     if (ignoreBlurStopRef.current) {
@@ -332,7 +342,22 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
               onFileLink={handleFileLink}
             />
           )}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, turns.length === 0 && styles.listContentEmpty]}
+          ListEmptyComponent={
+            showVoiceStart ? (
+              <View style={styles.voiceStartWrap}>
+                <Pressable
+                  style={styles.voiceStart}
+                  onPress={handleVoiceStart}
+                  accessibilityRole="button"
+                  accessibilityLabel="Talk"
+                  testID="chat-voice-start"
+                >
+                  <Ionicons name="mic" size={44} color={theme.text} />
+                </Pressable>
+              </View>
+            ) : null
+          }
           style={styles.list}
           // Collapsed-by-default activity means token growth does not
           // change list height, so this is no longer per-token. While a
@@ -399,6 +424,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
         <View style={styles.composer}>
           <View style={styles.input}>
             <TextInput
+              ref={inputRef}
               style={styles.inputField}
               value={draft}
               onChangeText={setDraft}
@@ -468,6 +494,20 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
       </View>
     </AppKeyboardAvoidingView>
   );
+}
+
+/** The on-screen keyboard is up (never on web, where there's no such event). */
+function useKeyboardVisible(): boolean {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const shown = Keyboard.addListener('keyboardDidShow', () => setVisible(true));
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setVisible(false));
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, []);
+  return visible;
 }
 
 const CONNECTION_LABEL: Record<ReturnType<typeof useChat>['connectionState'], string | null> = {
@@ -1323,6 +1363,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
     gap: 8,
+  },
+  listContentEmpty: {
+    flexGrow: 1,
+  },
+  voiceStartWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceStart: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.accent,
   },
   turnBlock: {
     gap: 8,

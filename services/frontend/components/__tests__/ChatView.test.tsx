@@ -1319,3 +1319,69 @@ describe('ChatView', () => {
     });
   });
 });
+
+describe('ChatView — voice button on an empty chat (M19-03)', () => {
+  beforeEach(() => {
+    mockUseChat.mockReset();
+    mockIsSpeechSupported.mockReset();
+    mockStartListening.mockReset();
+    mockStartListening.mockImplementation(() => () => {});
+  });
+
+  function render(): ReturnType<typeof create> {
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(createElement(ChatScreen, { threadId: null }));
+    });
+    return renderer;
+  }
+
+  const voiceStart = (renderer: ReturnType<typeof create>) =>
+    renderer.root.findAll((node) => node.props.testID === 'chat-voice-start' && typeof node.props.onPress === 'function');
+
+  it('a tap focuses the composer and starts voice input', () => {
+    mockIsSpeechSupported.mockReturnValue(true);
+    setUseChatResult();
+    const focus = jest.spyOn(jest.requireActual('react-native').TextInput.prototype, 'focus').mockImplementation(() => {});
+    const renderer = render();
+
+    expect(voiceStart(renderer)).toHaveLength(1);
+    act(() => voiceStart(renderer)[0]!.props.onPress());
+
+    expect(focus).toHaveBeenCalled();
+    expect(mockStartListening).toHaveBeenCalledTimes(1);
+    expect(voiceStart(renderer)).toHaveLength(0);
+    focus.mockRestore();
+  });
+
+  it('is not shown once the chat has a message', () => {
+    mockIsSpeechSupported.mockReturnValue(true);
+    setUseChatResult({ items: [{ id: 'u1', kind: 'user', text: 'hi' }] });
+    expect(voiceStart(render())).toHaveLength(0);
+  });
+
+  it('is not shown without voice input (e.g. plain http)', () => {
+    mockIsSpeechSupported.mockReturnValue(false);
+    setUseChatResult();
+    expect(voiceStart(render())).toHaveLength(0);
+  });
+
+  it('hides while the keyboard is up', () => {
+    mockIsSpeechSupported.mockReturnValue(true);
+    setUseChatResult();
+    const { Keyboard } = jest.requireActual('react-native');
+    const listeners: Record<string, () => void> = {};
+    const addListener = jest.spyOn(Keyboard, 'addListener').mockImplementation(((event: string, handler: () => void) => {
+      listeners[event] = handler;
+      return { remove: () => undefined };
+    }) as never);
+    const renderer = render();
+    expect(voiceStart(renderer)).toHaveLength(1);
+
+    act(() => listeners.keyboardDidShow?.());
+    expect(voiceStart(renderer)).toHaveLength(0);
+    act(() => listeners.keyboardDidHide?.());
+    expect(voiceStart(renderer)).toHaveLength(1);
+    addListener.mockRestore();
+  });
+});
