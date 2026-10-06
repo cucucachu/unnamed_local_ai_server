@@ -13,7 +13,7 @@ export interface AppActionSheetProps {
   spaceName: string;
   /** Rebuild needs the app's source (it was made or forked in a space the user can see). */
   canRebuild: boolean;
-  /** Update and uninstall need write access to the space. */
+  /** Update, rebuild and uninstall need write access to the space. */
   canChange: boolean;
   busy: 'rebuild' | 'uninstall' | null;
   onOpen: () => void;
@@ -63,7 +63,7 @@ export function AppActionSheet({
             testID={`apps-update-${app.slug}`}
           />
         ) : null}
-        {canRebuild ? (
+        {canRebuild && canChange ? (
           <SheetItem
             icon="hammer-outline"
             label="Rebuild"
