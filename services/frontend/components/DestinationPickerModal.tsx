@@ -79,7 +79,7 @@ export function DestinationPickerModal({ initialPath, onSelect, onCancel }: Dest
 
   return (
     <Modal visible animationType="slide" onRequestClose={onCancel} testID="destination-picker-modal">
-      <View style={styles.container}>
+      <View style={styles.container} testID="destination-picker">
         <View style={styles.header}>
           <Pressable onPress={onCancel} accessibilityRole="button" testID="destination-picker-cancel">
             <Text style={styles.headerButton}>Cancel</Text>

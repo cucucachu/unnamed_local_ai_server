@@ -142,7 +142,7 @@ async function runFullFlow(page, cookie, { folderName, fileName, renamedFileName
     // The picker opens in the current folder; up twice reaches the root.
     await page.getByTestId('destination-picker-up').click();
     await page.getByTestId('destination-picker-up').click();
-    await page.getByText(SPACE_NAME, { exact: true }).last().click();
+    await page.getByTestId('destination-picker').getByText(SPACE_NAME, { exact: true }).click();
     await page.getByTestId('destination-picker-select').click();
     await waitForGone(page, renamedFileName);
     const inSpace = entryNames(await listDir(cookie, `/spaces/${SPACE_SLUG}`));
