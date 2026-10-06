@@ -63,25 +63,26 @@ try {
   await page.getByTestId('home-launcher').waitFor({ timeout: TIMEOUT_MS });
 
   const backToApps = async (button) => {
-    await page.getByTestId(button).click();
+    await button.click();
+    await page.waitForURL((url) => url.pathname === '/apps', { timeout: TIMEOUT_MS });
     await page.getByTestId('home-launcher').waitFor({ timeout: TIMEOUT_MS });
   };
 
   await openSystemApp(page, 'files');
   await page.getByTestId('files-refresh-button').waitFor({ timeout: TIMEOUT_MS });
   check(new URL(page.url()).pathname === '/files', 'the Files tile opens /files', page.url());
-  await backToApps('back-to-apps');
+  await backToApps(page.getByTestId('back-to-apps'));
   ok('back from Files returns to Apps');
 
   await openSystemApp(page, 'routines');
   await page.getByTestId('routines-screen').waitFor({ timeout: TIMEOUT_MS });
-  await backToApps('settings-back-button');
+  await backToApps(page.getByTestId('routines-screen').getByTestId('settings-back-button'));
   ok('the Routines tile opens Routines; back returns to Apps');
 
   await openSystemApp(page, 'settings');
   await page.getByTestId('settings-account').waitFor({ timeout: TIMEOUT_MS });
   check((await page.getByTestId('settings-account').innerText()).includes(member.username), 'Settings shows the account');
-  await backToApps('settings-back-button');
+  await backToApps(page.getByTestId('settings-screen').getByTestId('settings-back-button'));
   ok('back from Settings returns to Apps');
 
   await page.goto(`${BASE}/settings/routines`, { waitUntil: 'domcontentloaded' });
