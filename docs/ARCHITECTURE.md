@@ -2657,15 +2657,21 @@ credential or an instance id.
   on web the session is the browser tab, via `sessionStorage`), or a new
   empty chat on a cold launch. A new chat has no thread until its first
   send: `useChat(null)` creates it then, keeps the message on screen and
-  sends it once the socket opens. The menu button (or, on a phone, a swipe
-  right that doesn't start at the edge, so Android's back gesture keeps the
-  edge) opens `components/ChatHistoryDrawer.tsx`: chats in the server's
-  order with their markers, title search, the routine-runs filter, and
-  rename/delete on long press. It lists the first five, with **More** for
-  the rest (a search always lists every match), and a full-width
-  **New chat** button fixed at its foot. On native the drawer swipe runs
-  first, and the pager takes the gesture only if it fails
-  (`SwipeToOpen`'s `blocks`). Swiping left from Chat goes to Personal.
+  sends it once the socket opens. The menu button opens the history
+  (`components/ChatHistoryDrawer.tsx`): chats in the server's order with
+  their markers, title search, the routine-runs filter, and rename/delete
+  on long press. It lists the first five, with **More** for the rest (a
+  search always lists every match), and a full-width **New chat** button
+  fixed at its foot. M19-08: on a phone the history is the pager's first
+  page, left of Chat and 85% wide (at most 360 px), so a swipe right
+  anywhere on the chat opens it with the same native paging as between
+  the other pages, pushing the chat aside under a shade that closes it on
+  tap; Android's back closes it too. The pager snaps to offsets rather
+  than paging, since that page is narrower. On web it's a drawer over the
+  chat. A first try had a pan gesture inside the chat racing the pager,
+  and the pager almost always won. Each page draws its own title bar
+  (`components/PageHeader.tsx`), so it slides with its page. Swiping left
+  from Chat goes to Personal.
   `/chat/<id>` deep links (`[threadId].tsx`) switch to that chat and return
   to the Chat page. The chat itself is `components/ChatView.tsx`; on web
   its root carries `data-thread-id` for the smokes (`nav_helpers.mjs`
