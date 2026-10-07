@@ -19,6 +19,7 @@ import respx
 from deepagents.backends import FilesystemBackend
 from langchain_core.runnables.config import var_child_runnable_config
 
+from app.agent import tool_notes
 from app.agent.platform_files import PlatformFilesBackend
 from app.core.delegation import Delegation, Grant
 
@@ -366,6 +367,39 @@ async def test_edit_platform_message_is_passed_through(call, platform) -> None:
     )
 
     result = await call("edit", "/personal/a.md", "zzz", "b")
+
+    assert result.error == message
+
+
+async def test_edit_note_goes_to_the_tool_result(call, platform) -> None:
+    platform.post("/api/platform/files/edit").respond(
+        json={
+            "path": "/personal/a.md",
+            "occurrences": 1,
+            "note": "Matched ignoring whitespace at lines 2-4.",
+        }
+    )
+    notes: list[str] = []
+    token = tool_notes._notes.set(notes)
+    try:
+        result = await call("edit", "/personal/a.md", "  a", "b")
+    finally:
+        tool_notes._notes.reset(token)
+
+    assert (result.error, result.occurrences) == (None, 1)
+    assert notes == ["Matched ignoring whitespace at lines 2-4."]
+
+
+async def test_edit_too_large_is_passed_through(call, platform) -> None:
+    message = (
+        "Error: old_string covers most of the file (45 of 50 lines); use write_file with the "
+        "full new contents, or a smaller edit."
+    )
+    platform.post("/api/platform/files/edit").mock(
+        return_value=_err(422, "edit_too_large", message)
+    )
+
+    result = await call("edit", "/personal/a.md", "big", "b")
 
     assert result.error == message
 
