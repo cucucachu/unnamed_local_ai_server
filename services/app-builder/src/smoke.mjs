@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { TraceMap, originalPositionFor } from '@jridgewell/trace-mapping';
 import { diagnostic, relative, sourceLine } from './diagnostics.mjs';
+import { checkSql } from './sqlcheck.mjs';
 import { samplePath } from './routes.mjs';
 
 const builderRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,7 +71,7 @@ function findSql(appRoot, sql) {
   return null;
 }
 
-async function renderRoute({ runtime, app, appRoot, schema, readsSql, route, settleMs, timeoutMs }) {
+async function renderRoute({ runtime, app, appRoot, schema, readsSql, reported, route, settleMs, timeoutMs }) {
   const routePath = samplePath(route);
   const diagnostics = [];
   const mapStack = mapper(app.map, appRoot);
@@ -126,7 +127,7 @@ async function renderRoute({ runtime, app, appRoot, schema, readsSql, route, set
         } catch (err) {
           const sql = String(env.params?.sql ?? '');
           const at = caller ?? findSql(appRoot, sql);
-          diagnostics.push(
+          if (!reported.has(sql.trim())) diagnostics.push(
             diagnostic({
               step: 'sql',
               ...(at ?? {}),
@@ -209,8 +210,13 @@ export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeout
       return { ok: false, diagnostics: [diagnostic({ step: 'sql', file: 'app.json', message: `the stand-ins for homeai.reads don't fit schema.sql: ${err.message}` })], routes: [] };
     }
   }
+  const lintDb = new DatabaseSync(':memory:');
+  lintDb.exec(schema);
+  if (readsSql) lintDb.exec(readsSql);
+  const lint = checkSql(appRoot, lintDb);
+  lintDb.close();
   const results = [];
-  for (const route of routes) results.push(await renderRoute({ runtime, app, appRoot, schema, readsSql, route, settleMs, timeoutMs }));
-  const diagnostics = results.flatMap((r) => r.diagnostics);
+  for (const route of routes) results.push(await renderRoute({ runtime, app, appRoot, schema, readsSql, reported: lint.bad, route, settleMs, timeoutMs }));
+  const diagnostics = [...lint.diagnostics, ...results.flatMap((r) => r.diagnostics)];
   return { ok: diagnostics.length === 0, diagnostics, routes: results.map(({ diagnostics: _d, ...r }) => r) };
 }

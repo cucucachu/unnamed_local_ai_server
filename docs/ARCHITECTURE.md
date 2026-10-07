@@ -2348,8 +2348,14 @@ in `docs/PLATFORM.md` §7 "Build and verify").
    `result.json` and, when ok, `app.js` / `app.js.map` (the production
    bundle) and `app.dev.js` / `.map` (for the smoke render).
 4. **`smoke`** (`/src` ro, `/bundle` = `bundle/` ro, `/out` = `smoke/`):
-   `schema.sql` into node:sqlite (`sql`), then every route in a fresh jsdom
-   window with the dev runtime and bundle (`render`, `sql`). Writes
+   `schema.sql` into node:sqlite (`sql`), then the SQL lint (`sql`, against
+   `schema.sql` plus any reads stand-ins, prepared, never run): every
+   statement of every `actions/*.sql`, every string literal passed to
+   `useQuery` / `getAllAsync` / `getFirstAsync` / `runAsync`, and every
+   `runAction('<name>', {…})` (the action file exists; an object literal of
+   params supplies each `:param` the action uses). Then every route in a
+   fresh jsdom window with the dev runtime and bundle (`render`, `sql`;
+   SQL the lint already reported isn't reported again). Writes
    `result.json`. Before this phase the platform writes `smoke/reads.sql`
    when the app has `homeai.reads`: an empty `CREATE TABLE <app>_<export>`
    (per table if the export has several) with the columns of the export's
