@@ -316,6 +316,28 @@ class MemberList(BaseModel):
     members: list[MemberOut]
 
 
+class AuditEventOut(BaseModel):
+    id: int
+    at: datetime
+    kind: str
+    actor_kind: Literal["user", "agent", "system"]
+    actor_user_id: UUID | None
+    actor_name: str | None
+    session_id: UUID | None
+    thread_id: str | None
+    space_id: UUID | None
+    target_type: str | None
+    target_id: str | None
+    summary: str
+    detail: dict[str, Any]
+
+
+class AuditEventList(BaseModel):
+    events: list[AuditEventOut]
+    # Pass as `before` for the next (older) page; null when there's no more.
+    next_before: int | None
+
+
 class MemberAddRequest(BaseModel):
     user_id: UUID
     role: SpaceRole

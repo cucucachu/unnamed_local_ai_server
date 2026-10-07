@@ -33,7 +33,7 @@ import os
 import sqlite3
 import stat
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -436,15 +436,24 @@ class Session:
         return out
 
     @contextmanager
-    def transaction(self) -> Iterator[None]:
+    def transaction(self, before_commit: BeforeCommit | None = None) -> Iterator[dict]:
+        """Yields a dict for the result; `before_commit(result)` runs last, inside the
+        transaction, so if it raises nothing is committed."""
         self.con.execute("BEGIN IMMEDIATE")
+        result: dict = {}
         try:
-            yield
+            yield result
+            if before_commit is not None:
+                before_commit(result)
         except BaseException:
             if self.con.in_transaction:
                 self.con.execute("ROLLBACK")
             raise
         self.con.execute("COMMIT")
+
+
+# Called with a write's result just before it commits (the audit log, M19).
+BeforeCommit = Callable[[dict], None]
 
 
 def run_result(result: Result) -> dict[str, int]:
@@ -460,22 +469,30 @@ def get_first(con: sqlite3.Connection, sql: str, params: Params) -> dict[str, An
     return rows[0] if rows else None
 
 
-def run(con: sqlite3.Connection, sql: str, params: Params) -> dict[str, int]:
+def run(
+    con: sqlite3.Connection, sql: str, params: Params, before_commit: BeforeCommit | None = None
+) -> dict[str, int]:
     session = Session(con, write=True)
-    with session.transaction():
-        return run_result(session.execute(sql, params))
+    with session.transaction(before_commit) as out:
+        out.update(run_result(session.execute(sql, params)))
+    return out
 
 
-def transaction(con: sqlite3.Connection, statements: Sequence[tuple[str, Params]]) -> list[dict]:
+def transaction(
+    con: sqlite3.Connection,
+    statements: Sequence[tuple[str, Params]],
+    before_commit: BeforeCommit | None = None,
+) -> list[dict]:
     """Every statement or none; a failure names its `index`."""
     if len(statements) > MAX_STATEMENTS:
         raise SqlError("sql_error", f"more than {MAX_STATEMENTS} statements")
     session = Session(con, write=True)
-    with session.transaction():
-        return [
+    with session.transaction(before_commit) as out:
+        out["results"] = [
             run_result(session.execute(sql, params, index=i))
             for i, (sql, params) in enumerate(statements)
         ]
+    return out["results"]
 
 
 def split_statements(sql: str) -> list[str]:
@@ -494,7 +511,12 @@ def _has_code(stmt: str) -> bool:
     return any(not appschema._is_noise(t) and t != ";" for t in appschema._TOKEN.findall(stmt))
 
 
-def action(con: sqlite3.Connection, sql: str, params: Mapping[str, Any]) -> dict[str, Any]:
+def action(
+    con: sqlite3.Connection,
+    sql: str,
+    params: Mapping[str, Any],
+    before_commit: BeforeCommit | None = None,
+) -> dict[str, Any]:
     """An `actions/<name>.sql` file: its statements in one transaction, `:named` params shared.
 
     Returns the rows of the last statement that produced any (e.g. `RETURNING`).
@@ -506,14 +528,15 @@ def action(con: sqlite3.Connection, sql: str, params: Mapping[str, Any]) -> dict
         raise SqlError("sql_error", f"the action has more than {MAX_STATEMENTS} statements")
     session = Session(con, write=True)
     changes, last_id, rows = 0, 0, []
-    with session.transaction():
+    with session.transaction(before_commit) as out:
         for i, stmt in enumerate(statements):
             result = session.execute(stmt, dict(params), index=i)
             changes += result.changes
             last_id = result.last_insert_row_id
             if result.rows:
                 rows = result.rows
-    return {"changes": changes, "lastInsertRowId": last_id, "rows": rows}
+        out.update({"changes": changes, "lastInsertRowId": last_id, "rows": rows})
+    return out
 
 
 # --- migrations -------------------------------------------------------------------------
