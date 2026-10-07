@@ -35,7 +35,10 @@ set -euo pipefail
 # fetches its speculative-decoding head). Those files are sha256-pinned
 # below and verified after download.
 #
-#   fetch-model.sh [--model gemma|qwen3.8-27b] [quant|mtp] [--force]
+# --model ornith-35b (M16-07) fetches Ornith-1.5-35B-A3B (Qwen3.5 MoE,
+# ~3B active, MIT) from ornith-ai/Ornith-1.5-35B-A3B-GGUF, default Q4_K_M.
+#
+#   fetch-model.sh [--model gemma|qwen3.8-27b|ornith-35b] [quant|mtp] [--force]
 
 MODEL="gemma"
 QUANT=""
@@ -92,8 +95,24 @@ case "${MODEL}" in
       exit 1
     fi
     ;;
+  ornith-35b)
+    REPO="ornith-ai/Ornith-1.5-35B-A3B-GGUF"
+    DEFAULT_QUANT="Q4_K_M"
+    QUANT="${QUANT:-${DEFAULT_QUANT}}"
+    SHA256=(
+      [Ornith-1.5-35B-Q4_K_M.gguf]=42739874cc2ccfdb8523b23fbe52e29b2a7555c8176737ca9ca0b5d59859d41f
+      [Ornith-1.5-35B-Q5_K_M.gguf]=91df97de5845100e850b4b5ec5ff35695382020b880fad6f7f51787b3a953bd0
+      [Ornith-1.5-35B-Q6_K.gguf]=15d4658bbfc9c6034621729c15bbb50662c82b32a7ddd9624a1e545a74bdbb4b
+      [Ornith-1.5-35B-Q8_0.gguf]=de46c4baf4b4dd85ea438bb0f757f21c38841a353506579979bba114311658c3
+    )
+    FILENAME="Ornith-1.5-35B-${QUANT}.gguf"
+    if [[ -z "${SHA256[${FILENAME}]:-}" ]]; then
+      echo "No pinned checksum for ${FILENAME}; known: ${!SHA256[*]}" >&2
+      exit 1
+    fi
+    ;;
   *)
-    echo "Unknown --model: ${MODEL} (gemma, qwen3.8-27b)" >&2
+    echo "Unknown --model: ${MODEL} (gemma, qwen3.8-27b, ornith-35b)" >&2
     exit 1
     ;;
 esac
