@@ -86,6 +86,7 @@ from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
 from app.agent.prompts import APP_AUTHORING_GUIDE, ROUTINES_GUIDE, SYSTEM_PROMPT
 from app.agent.routine_tools import make_routine_tools
+from app.agent.symbol_tools import make_symbol_tools
 from app.agent.syntax_check import SyntaxCheckMiddleware
 from app.agent.tool_errors import CompactToolErrorsMiddleware
 from app.agent.tool_notes import ToolNotesMiddleware
@@ -93,13 +94,19 @@ from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
 from app.core.config import Settings
 
 # Kept in sync with `app/api/chat_ws.py`'s `_TOOL_CATEGORY_BY_NAME` mapping —
-# these are the four tool names the ticket calls "mutating" (category
-# `"file"` for the three filesystem ones, `"exec"` for `execute_code`).
-MUTATING_TOOL_NAMES: tuple[str, ...] = ("write_file", "edit_file", "delete", "execute_code")
+# the tools that need approval (category `"file"` for the filesystem ones,
+# `"exec"` for `execute_code`).
+MUTATING_TOOL_NAMES: tuple[str, ...] = (
+    "write_file",
+    "edit_file",
+    "replace_symbol",
+    "delete",
+    "execute_code",
+)
 
 
 def _hitl_enabled(request: ToolCallRequest) -> bool:
-    """`InterruptOnConfig.when` predicate shared by all four mutating tools.
+    """`InterruptOnConfig.when` predicate shared by all the mutating tools.
 
     In a chat, the per-turn flag `chat_ws.py` sets in `config["configurable"]
     ["hitl_enabled"]`; in a routine run, its approval mode (M17-05,
@@ -133,6 +140,8 @@ def _describe(tool_call: ToolCall, _state: Any, _runtime: Any) -> str:
         return f"Write file `{_virtual_path(args.get('file_path'))}`"
     if name == "edit_file":
         return f"Edit file `{_virtual_path(args.get('file_path'))}`"
+    if name == "replace_symbol":
+        return f"Replace `{args.get('name', '?')}` in `{_virtual_path(args.get('file_path'))}`"
     if name == "delete":
         return f"Delete `{_virtual_path(args.get('file_path', args.get('path')))}`"
     if name == "execute_code":
@@ -182,6 +191,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
             make_execute_code_tool(settings),
             make_web_search_tool(settings),
             make_web_fetch_tool(settings),
+            *make_symbol_tools(backend),
             *make_app_tools(settings),
             *routine_tools,
         ],

@@ -343,6 +343,8 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "read_file": "file",
     "write_file": "file",
     "edit_file": "file",
+    "outline": "file",
+    "replace_symbol": "file",
     "glob": "file",
     "grep": "file",
     "delete": "file",
