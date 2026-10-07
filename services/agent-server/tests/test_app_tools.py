@@ -654,6 +654,59 @@ async def test_an_edit_that_breaks_syntax_is_reported_on_its_result(fake_model, 
     assert noted == "Updated file /personal/Apps/todo/notes.md"
 
 
+async def test_outline_and_replace_symbol_edit_a_screen(fake_model, fake_platform):
+    path = "/personal/Apps/todo/app/index.tsx"
+    new_code = "function GroceryListScreen() {\n  return null;\n}"
+    fake_model.queue(
+        ToolCallTurn("create_app", {"space": "personal", "slug": "todo", "name": "To-do"}),
+        ToolCallTurn("outline", {"file_path": path}),
+        ToolCallTurn(
+            "replace_symbol",
+            {"file_path": path, "name": "GroceryListScreen", "new_code": new_code},
+        ),
+        TextTurn("done"),
+    )
+    with (
+        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        client.websocket_connect("/ws/chat/symbols") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "simplify the screen"})
+        frames = _drain_turn(ws)
+    _assert_turn_end(frames[-1], "completed")
+    starts = {f["name"]: f["category"] for f in frames if f["type"] == "tool_start"}
+    assert (starts["outline"], starts["replace_symbol"]) == ("file", "file")
+    _, outlined, replaced = _tool_results(fake_model)
+    assert "export default component GroceryListScreen" in outlined
+    assert replaced.startswith(
+        f"Replaced component GroceryListScreen (kept `export default`) in {path}: lines 8-"
+    )
+    screen = fake_platform.personal()["Apps/todo/app/index.tsx"].decode()
+    assert "export default function GroceryListScreen() {\n  return null;\n}" in screen
+    assert screen.startswith("import")
+
+
+async def test_replace_symbol_asks_for_approval(fake_model, fake_platform):
+    path = "/personal/Apps/todo/app/index.tsx"
+    fake_model.queue(
+        ToolCallTurn("create_app", {"space": "personal", "slug": "todo", "name": "To-do"}),
+        ToolCallTurn(
+            "replace_symbol",
+            {"file_path": path, "name": "styles", "new_code": "const styles = {};"},
+        ),
+    )
+    with (
+        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        client.websocket_connect("/ws/chat/symbols-hitl") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "drop the styles"})
+        request = next(f for f in _drain_turn(ws) if f["type"] == "approval_request")
+        [action] = request["actions"]
+        assert (action["name"], action["description"]) == (
+            "replace_symbol",
+            f"Replace `styles` in `{path}`",
+        )
+
+
 async def test_a_file_write_and_an_app_write_ask_one_after_the_other(fake_model, fake_platform):
     _family(fake_platform)
     _, inst = fake_platform.seed_app("family", "groceries")

@@ -33,6 +33,7 @@ WRITE_TOOLS = frozenset(
     {
         "write_file",
         "edit_file",
+        "replace_symbol",
         "delete",
         "execute_code",
         "create_app",
