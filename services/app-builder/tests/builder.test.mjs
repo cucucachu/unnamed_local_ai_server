@@ -308,13 +308,67 @@ test('a render-time throw is source-mapped, with the component stack', async () 
 test('a SQL error names the query and where it is in the source', async () => {
   const smoke = await build({ 'app/index.tsx': (old) => old.replace('SELECT id, name, done', 'SELECT id, nam, done') });
   assert.deepEqual(smoke.diagnostics.map(pick), [{ step: 'sql', file: 'app/index.tsx', line: 10, column: 52 }]);
-  assert.match(smoke.diagnostics[0].message, /^no such column: nam in SQL: SELECT id, nam, done FROM items ORDER BY id \(on screen \/\)/);
+  assert.equal(smoke.diagnostics[0].message, 'no such column: nam in SQL: SELECT id, nam, done FROM items ORDER BY id');
 });
 
 test('a schema.sql that does not run is a sql diagnostic on schema.sql', async () => {
   const smoke = await build({ 'schema.sql': 'CREATE TABLE items (id INTEGER PRIMARY KEY,, name TEXT);' });
   assert.deepEqual(smoke.diagnostics.map(pick), [{ step: 'sql', file: 'schema.sql', line: null, column: null }]);
   assert.match(smoke.diagnostics[0].message, /^schema\.sql doesn't run: near ","/);
+});
+
+const insertTitle = (sql) => (old) => old.replace("db.runAsync('INSERT INTO items (name) VALUES (?)'", `db.runAsync('${sql}'`);
+
+test('a bad query in an event handler is a sql diagnostic, though the smoke render never runs it', async () => {
+  const smoke = await build({ 'app/index.tsx': insertTitle('INSERT INTO items (title) VALUES (?)') });
+  assert.deepEqual(smoke.diagnostics.map(pick), [{ step: 'sql', file: 'app/index.tsx', line: 15, column: 24 }]);
+  assert.equal(smoke.diagnostics[0].message, 'table items has no column named title in SQL: INSERT INTO items (title) VALUES (?)');
+});
+
+test('a SQL error the lint finds is not reported again by the render', async () => {
+  const smoke = await build({ 'app/index.tsx': (old) => old.replace('ORDER BY id', 'ORDER BY idd') });
+  assert.equal(smoke.diagnostics.length, 1);
+  assert.doesNotMatch(smoke.diagnostics[0].message, /on screen/);
+});
+
+const ADD_ITEM = "-- Adds an item.\nINSERT INTO items (name)\nVALUES (trim(:name));\n\nUPDATE items SET done = 0 WHERE name = ';' ;\n";
+
+test('valid actions, and runAction calls that pass their params, build clean', async () => {
+  const smoke = await build({
+    'actions/addItem.sql': ADD_ITEM,
+    'app/index.tsx': (old) => old.replace("await db.runAsync('INSERT INTO items (name) VALUES (?)', [name.trim()]);", "await runAction('addItem', { name });").replace("import { useDatabase, useQuery } from '@homeai/sdk';", "import { runAction, useDatabase, useQuery } from '@homeai/sdk';"),
+  });
+  assert.deepEqual(smoke.diagnostics, []);
+});
+
+test('an action that does not compile is a sql diagnostic at its statement', async () => {
+  const smoke = await build({
+    'actions/addItem.sql': '-- Adds an item.\nINSERT INTO items (name)\nVALUES (trim(:name))\nWHERE length(trim(:name)) > 0;\n',
+    'actions/rename.sql': 'UPDATE items SET name = :name WHERE id = :id;\nUPDATE items SET title = :name WHERE id = :id;\n',
+  });
+  assert.deepEqual(smoke.diagnostics.map(pick), [
+    { step: 'sql', file: 'actions/addItem.sql', line: 2, column: null },
+    { step: 'sql', file: 'actions/rename.sql', line: 2, column: null },
+  ]);
+  assert.match(smoke.diagnostics[0].message, /^near "WHERE": syntax error in action addItem: INSERT INTO items \(name\)\nVALUES/);
+  assert.equal(smoke.diagnostics[0].source, 'INSERT INTO items (name)');
+  assert.match(smoke.diagnostics[1].message, /^no such column: title in action rename: /);
+});
+
+test('runAction needs the action file and its params', async () => {
+  const smoke = await build({
+    'actions/addItem.sql': ADD_ITEM,
+    'app/index.tsx': (old) =>
+      old
+        .replace("await db.runAsync('INSERT INTO items (name) VALUES (?)', [name.trim()]);", "await runAction('addItem', { title: name });\n    await runAction('additem', {});")
+        .replace("import { useDatabase, useQuery } from '@homeai/sdk';", "import { runAction, useDatabase, useQuery } from '@homeai/sdk';"),
+  });
+  assert.deepEqual(smoke.diagnostics.map(pick), [
+    { step: 'sql', file: 'app/index.tsx', line: 15, column: 22 },
+    { step: 'sql', file: 'app/index.tsx', line: 16, column: 22 },
+  ]);
+  assert.equal(smoke.diagnostics[0].message, "runAction('addItem') doesn't pass :name, which actions/addItem.sql uses");
+  assert.equal(smoke.diagnostics[1].message, "runAction('additem') has no actions/additem.sql (the app's actions: addItem)");
 });
 
 test('result.json caps the diagnostics', () => {

@@ -914,7 +914,10 @@ in jsdom with `react-dom/client` — not `react-dom/server`, so effects and
 against an in-memory SQLite created from `schema.sql` (plus empty stand-ins
 for the merged views of `homeai.reads`), over the same bridge
 transport the WebView uses; render errors are source-mapped and SQL errors
-reported. Errors come back as structured, model-readable diagnostics
+reported. SQL the render doesn't reach is linted too: each statement of each
+`actions/*.sql` and each SQL string literal in the code (queries in event
+handlers, say) is compiled against `schema.sql`, and `runAction` calls are
+checked against the action files and their `:params`. Errors come back as structured, model-readable diagnostics
 (`kind` = import/route/type/render/sql, file, line, column, message,
 component stack or SQL). A successful build is committed to the app's git
 repo, stored as a version artifact, and pushed as a hot-reload event.
