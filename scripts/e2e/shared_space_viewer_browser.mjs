@@ -20,7 +20,7 @@ const UI_TIMEOUT_MS = 20_000;
 const { G11_VIEWER, G11_VIEWER_PASSWORD, G11_SPACE_NAME, NOTE_NAME, MARKER, PRIVATE_NAME } = process.env;
 
 async function visible(page, text) {
-  await page.getByText(text, { exact: true }).first().waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS });
+  await page.getByTestId('files-screen').getByText(text, { exact: true }).first().waitFor({ state: 'visible', timeout: UI_TIMEOUT_MS });
 }
 
 async function absent(page, testIds, what) {

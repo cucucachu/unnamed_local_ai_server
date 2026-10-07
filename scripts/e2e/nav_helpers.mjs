@@ -31,6 +31,12 @@ export async function openSpacePage(page, slug = null) {
   const dot = slug
     ? page.getByTestId(`home-space-${slug}`)
     : page.getByTestId('home-page-indicator').getByRole('tab').nth(1);
+  // Callers naming a space have just made or changed it over REST; reload
+  // so the pager has it.
+  if (slug) {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByTestId('home-page-indicator').waitFor({ timeout: TIMEOUT_MS });
+  }
   await dot.waitFor({ timeout: TIMEOUT_MS });
   await dot.click();
   const id = await dot.getAttribute('data-testid');

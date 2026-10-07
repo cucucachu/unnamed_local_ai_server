@@ -11,18 +11,20 @@
 #      `docker compose up -d --build` (like gate_m17.sh): the stack is
 #      shared, bring it up from this tree yourself first if it's down.
 #      Never recreates model-runner or postgres.
-#   2. Frontend jest (whole suite): the Chat tab and its history drawer,
-#      the new-chat flow, the voice start, the Apps grid and its long-press
-#      sheet, the space pages.
+#   2. Frontend jest (whole suite): the home pager, the Chat page and its
+#      history drawer, the new-chat flow, the voice start (web and native),
+#      the space pages and the long-press sheet.
 #   3. agent-server pytest: the chats list order, rename, the thread store.
-#   4. `g19_shell_smoke.sh` - the G19 scenario: a cold launch lands in an
-#      empty chat; the drawer lists chats in "needs you" order; + makes a
-#      new chat; Apps shows the grid; swiping reaches a shared space; Files,
-#      Settings and Routines open from their tiles. No GPU turns.
-#   5. `home_launcher_smoke.sh` - the tab bar, the dock, the space pages.
+#   4. `g19_shell_smoke.sh` - the G19 scenario: a cold launch lands on the
+#      Chat page in an empty chat; the drawer lists five chats in "needs
+#      you" order with More, and its New chat makes a new chat; swiping
+#      goes Chat, Personal, a shared space; Add app opens that space's
+#      catalog; Files, Settings and Routines open from their tiles. No GPU
+#      turns.
+#   5. `home_launcher_smoke.sh` - the pager, the space pages, old links.
 #   6. `app_runner_browser_smoke.sh` - the runner from a tile, and the
 #      long-press sheet's rebuild, App info and uninstall.
-#   7. `chat_browser_smoke.sh` - chat end to end in the new Chat tab
+#   7. `chat_browser_smoke.sh` - chat end to end on the Chat page
 #      (real GPU turns).
 #
 # Throwaway `e2e-*` users only, deleted with what they made; never
