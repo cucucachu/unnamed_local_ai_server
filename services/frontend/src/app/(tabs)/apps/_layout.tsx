@@ -2,15 +2,10 @@ import { Stack } from 'expo-router';
 
 import { theme } from '@/lib/theme';
 
-/** Apps (M14-02's Home, renamed in M19-01): launcher, catalog/install/update, the runner, and app
- * info (history). A stack like `chat/` (so the outer tab header is off in
- * `../_layout.tsx`). Routes stay under `/apps` so existing links and e2e
- * keep working. */
-
-/** A deep link or reload on `/apps/<id>` still has the grid underneath, so
- * back and the Apps tab return to it. */
-export const unstable_settings = { initialRouteName: 'index' };
-
+/** Apps screens pushed over the home pager (M14-02; M19-07): the catalog,
+ * install/update, the runner and App info. `index` (`/apps`) is a link to
+ * the pager's first space page. Routes stay under `/apps` so existing links
+ * and e2e keep working. */
 export default function AppsStackLayout() {
   return (
     <Stack
@@ -20,7 +15,7 @@ export default function AppsStackLayout() {
         headerShadowVisible: false,
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Apps' }} />
+      <Stack.Screen name="index" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="catalog" options={{ title: 'Catalog' }} />
       <Stack.Screen name="install" options={{ title: 'Install' }} />
       <Stack.Screen name="update" options={{ title: 'Update' }} />

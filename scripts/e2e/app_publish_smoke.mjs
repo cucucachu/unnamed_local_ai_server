@@ -7,7 +7,7 @@ import { chromium } from 'playwright';
 
 import { fixtureFiles } from './app_fixture.mjs';
 import { loginThroughUi } from './auth_helpers.mjs';
-import { openAppSheet } from './nav_helpers.mjs';
+import { openAppSheet, openSpacePage } from './nav_helpers.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/apps/hello');
 const APP_SLUG = 'hello';
@@ -70,8 +70,8 @@ async function uploadAndBuild(call, space) {
 }
 
 async function publishFromInfo(page, spaceSlug) {
-  await page.getByRole('tab', { name: 'Apps' }).click();
-  await page.getByTestId(`apps-open-${APP_SLUG}`).first().click();
+  const personal = await openSpacePage(page);
+  await personal.getByTestId(`apps-open-${APP_SLUG}`).click();
   await page.getByTestId('app-info-button').click();
   await page.getByTestId('app-publish').waitFor({ timeout: UI_TIMEOUT });
   const toggle = page.getByTestId(`app-publish-space-${spaceSlug}`);
@@ -94,14 +94,14 @@ try {
   const app = await uploadAndBuild(author.call, personal);
   // Home was already open (empty) during the REST install; reload so the
   // new instance is on the launcher (same pattern as home_launcher_smoke).
-  await author.page.goto(`${BASE}/apps`);
+  await author.page.goto(`${BASE}/`);
 
   await publishFromInfo(author.page, shared.slug);
 
   const editor = await signIn(browser, EDITOR);
   ok(`signed in as ${EDITOR.username}`);
-  await editor.page.getByRole('tab', { name: 'Apps' }).click();
-  await editor.page.getByTestId('apps-catalog').click();
+  const sharedPage = await openSpacePage(editor.page, shared.slug);
+  await sharedPage.getByTestId('apps-add').click();
   await editor.page.getByTestId(`catalog-app-${APP_SLUG}`).waitFor({ timeout: UI_TIMEOUT });
   await editor.page.getByTestId(`catalog-app-${APP_SLUG}`).click();
   await editor.page.getByTestId('apps-install').waitFor({ timeout: UI_TIMEOUT });
@@ -127,9 +127,10 @@ try {
   await author.page.getByTestId('app-info-notice').waitFor({ timeout: UI_TIMEOUT });
   ok('published 1.1.0');
 
-  await editor.page.goto(`${BASE}/apps`);
-  await editor.page.getByTestId(`apps-open-${APP_SLUG}-badge`).waitFor({ timeout: UI_TIMEOUT });
-  await openAppSheet(editor.page, editor.page.getByTestId(`apps-open-${APP_SLUG}`).first());
+  await editor.page.goto(`${BASE}/`);
+  const editorShared = await openSpacePage(editor.page, shared.slug);
+  await editorShared.getByTestId(`apps-open-${APP_SLUG}-badge`).waitFor({ timeout: UI_TIMEOUT });
+  await openAppSheet(editor.page, editorShared.getByTestId(`apps-open-${APP_SLUG}`));
   await editor.page.getByTestId(`apps-update-${APP_SLUG}`).click();
   await editor.page.getByTestId('apps-update').waitFor({ timeout: UI_TIMEOUT });
   await editor.page.getByTestId('update-confirm').click();

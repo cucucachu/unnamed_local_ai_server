@@ -40,7 +40,7 @@ const VIDEO_FILE_NAME = basename(VIDEO_FILE_PATH);
 const UI_TIMEOUT_MS = 20_000;
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
-  const locator = page.getByText(text, { exact: true }).first();
+  const locator = page.getByTestId('files-screen').getByText(text, { exact: true }).first();
   await locator.waitFor({ state: 'visible', timeout: timeoutMs });
   return locator;
 }

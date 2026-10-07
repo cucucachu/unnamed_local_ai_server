@@ -19,6 +19,7 @@ export interface ChatHistoryDrawerProps {
   onClose: () => void;
   onRetry: () => void;
   onSelect: (threadId: string) => void;
+  onNewChat: () => void;
   onRename: (thread: Thread, title: string) => void;
   onDelete: (thread: Thread) => void;
 }
@@ -38,10 +39,15 @@ function confirmDeleteThread(title: string): Promise<boolean> {
   });
 }
 
+/** Chats listed before "More" (unless searching). */
+export const DRAWER_PREVIEW = 5;
+
 /**
  * Chat history (M19-02): slides over the chat from the left. Chats come in
- * the server's order (needs approval, then unread, then recent; M17-10).
- * Long press a chat to rename or delete it.
+ * the server's order (needs approval, then unread, then recent; M17-10);
+ * the first five show until "More", and a search looks through them all.
+ * Long press a chat to rename or delete it. New chat is a wide button
+ * pinned to the bottom, in thumb reach.
  */
 export function ChatHistoryDrawer({
   open,
@@ -51,6 +57,7 @@ export function ChatHistoryDrawer({
   onClose,
   onRetry,
   onSelect,
+  onNewChat,
   onRename,
   onDelete,
 }: ChatHistoryDrawerProps) {
@@ -59,6 +66,12 @@ export function ChatHistoryDrawer({
   const [showRoutineRuns, setShowRoutineRuns] = useState(true);
   const [menuThread, setMenuThread] = useState<Thread | null>(null);
   const [renaming, setRenaming] = useState<Thread | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (!open) setExpanded(false);
+  }
 
   const hasRoutineRuns = threads.some((t) => t.routine_id);
   const shown = useMemo(() => {
@@ -67,6 +80,8 @@ export function ChatHistoryDrawer({
       (t) => (showRoutineRuns || !t.routine_id) && (!needle || t.title.toLowerCase().includes(needle)),
     );
   }, [threads, query, showRoutineRuns]);
+  const limited = !expanded && !query.trim() && shown.length > DRAWER_PREVIEW;
+  const listed = limited ? shown.slice(0, DRAWER_PREVIEW) : shown;
 
   const handleDelete = async (thread: Thread) => {
     setMenuThread(null);
@@ -112,37 +127,57 @@ export function ChatHistoryDrawer({
               </Pressable>
             </View>
           ) : null}
-          {loadState === 'loading' && threads.length === 0 ? (
-            <View style={styles.centered}>
-              <ActivityIndicator color={theme.accent} />
-            </View>
-          ) : loadState === 'error' && threads.length === 0 ? (
-            <View style={styles.centered}>
-              <Text style={styles.errorText}>Couldn&apos;t load your conversations.</Text>
-              <Pressable style={styles.retryButton} onPress={onRetry} accessibilityRole="button" testID="chat-drawer-retry">
-                <Text style={styles.retryButtonText}>Retry</Text>
-              </Pressable>
-            </View>
-          ) : shown.length === 0 ? (
-            <View style={styles.centered}>
-              <Text style={styles.emptyText} testID="chat-drawer-empty">
-                {threads.length === 0 ? 'No conversations yet' : 'No matching chats'}
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              data={shown}
-              keyExtractor={(thread) => thread.id}
-              renderItem={({ item }) => (
-                <ThreadRow
-                  thread={item}
-                  current={item.id === currentThreadId}
-                  onPress={() => onSelect(item.id)}
-                  onLongPress={() => setMenuThread(item)}
-                />
-              )}
-            />
-          )}
+          <View style={styles.list}>
+            {loadState === 'loading' && threads.length === 0 ? (
+              <View style={styles.centered}>
+                <ActivityIndicator color={theme.accent} />
+              </View>
+            ) : loadState === 'error' && threads.length === 0 ? (
+              <View style={styles.centered}>
+                <Text style={styles.errorText}>Couldn&apos;t load your conversations.</Text>
+                <Pressable style={styles.retryButton} onPress={onRetry} accessibilityRole="button" testID="chat-drawer-retry">
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </Pressable>
+              </View>
+            ) : shown.length === 0 ? (
+              <View style={styles.centered}>
+                <Text style={styles.emptyText} testID="chat-drawer-empty">
+                  {threads.length === 0 ? 'No conversations yet' : 'No matching chats'}
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={listed}
+                keyExtractor={(thread) => thread.id}
+                renderItem={({ item }) => (
+                  <ThreadRow
+                    thread={item}
+                    current={item.id === currentThreadId}
+                    onPress={() => onSelect(item.id)}
+                    onLongPress={() => setMenuThread(item)}
+                  />
+                )}
+                ListFooterComponent={
+                  limited ? (
+                    <Pressable style={styles.more} onPress={() => setExpanded(true)} accessibilityRole="button" testID="chat-drawer-more">
+                      <Text style={styles.moreText}>More ({shown.length - DRAWER_PREVIEW})</Text>
+                      <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
+                    </Pressable>
+                  ) : null
+                }
+              />
+            )}
+          </View>
+          <Pressable
+            style={styles.newChat}
+            onPress={onNewChat}
+            accessibilityRole="button"
+            accessibilityLabel="New chat"
+            testID="chat-drawer-new-chat"
+          >
+            <Ionicons name="add" size={22} color={theme.text} />
+            <Text style={styles.newChatText}>New chat</Text>
+          </Pressable>
           {menuThread !== null ? (
             <View style={styles.menu} testID="thread-action-sheet">
               <Text style={styles.menuTitle} numberOfLines={1}>
@@ -306,6 +341,38 @@ const styles = StyleSheet.create({
   filterChipText: {
     color: theme.text,
     fontSize: 13,
+  },
+  list: {
+    flex: 1,
+  },
+  more: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  moreText: {
+    color: theme.textMuted,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  newChat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 12,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: theme.accent,
+  },
+  newChatText: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '600',
   },
   centered: {
     flex: 1,

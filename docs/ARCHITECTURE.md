@@ -1547,7 +1547,7 @@ their threads as plain chats (`ON DELETE SET NULL`).
 - **Runs are chats** (M17-10, replacing M17-05's inbox and `/api/inbox`):
   nobody watches a run, so its chat is unread when it ends, and a paused
   one needs approval. The chats list puts both first (`GET /api/threads`
-  above); the Chat tab badge counts them (`lib/chatAttention.ts`, polled
+  above); the Chat icon's badge counts them (`lib/chatAttention.ts`, polled
   every minute). `routine_runs.seen_at` is no longer used.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
@@ -2637,14 +2637,22 @@ credential or an instance id.
   `tracks` = the published version id; an update badge on a pinned instance
   opens `/apps/update` (`POST …/update`). App info can `POST /apps/{id}/publish`
   into selected writable spaces.
-- **App shell** (M19-01, `src/app/(tabs)/_layout.tsx`): the tab bar is
-  Chat (with the M17-10 badge) and Apps (this launcher, titled Apps). `/`
-  opens Chat. Files, Routines and Settings are hidden tabs (each keeps its
-  stack), opened from their tiles on Apps; their back button always
-  returns to Apps, and `backBehavior="history"` makes Android's back do the
-  same. `/settings/routines` redirects to `/routines`. Browser smokes reach
-  them through `scripts/e2e/nav_helpers.mjs` `openSystemApp`.
-- **Chat tab** (M19-02, `src/app/(tabs)/chat/index.tsx`): a chat, not a
+- **App shell** (M19-01, M19-07, `src/app/(tabs)/_layout.tsx`,
+  `src/app/(tabs)/index.tsx`): no tab bar. `/` is a pager you swipe
+  through: Chat, then Personal, then shared spaces by name (a paging
+  horizontal `ScrollView`; on web a trackpad swipe). A bar at the bottom
+  marks the page: a chat icon carrying the M17-10 attention badge, then a
+  dot per space; tapping one jumps there. It hides while the keyboard is
+  up. The page on screen is kept for the session (`lib/currentPage.ts`,
+  `sessionStorage` on web); a cold launch or sign-in opens Chat. The shell
+  is a Stack over the pager: Files, Routines, Settings and the apps routes
+  push on top. Their back button pops back to the pager (`dismissTo('/')`,
+  never a second copy), and so does Android's back. `/chat` and `/apps`
+  still work as links, landing on the Chat page and Personal
+  (`components/PageRedirect.tsx`). `/settings/routines` redirects to
+  `/routines`. Browser smokes move around with `scripts/e2e/nav_helpers.mjs`
+  (`goHome`, `openChatPage`, `openSpacePage`, `openSystemApp`).
+- **Chat page** (M19-02, M19-07, `components/ChatPage.tsx`): a chat, not a
   list. It shows the chat last open this app session (`lib/currentChat.ts`;
   on web the session is the browser tab, via `sessionStorage`), or a new
   empty chat on a cold launch. A new chat has no thread until its first
@@ -2653,26 +2661,30 @@ credential or an instance id.
   right that doesn't start at the edge, so Android's back gesture keeps the
   edge) opens `components/ChatHistoryDrawer.tsx`: chats in the server's
   order with their markers, title search, the routine-runs filter, and
-  rename/delete on long press. **+** starts a new chat. `/chat/<id>` deep
-  links (`[threadId].tsx`) switch to that chat and return to the tab. The
-  chat itself is `components/ChatView.tsx`; on web its root carries
-  `data-thread-id` for the smokes (`nav_helpers.mjs` `currentThreadId`).
-  M19-03: an empty chat with voice input available shows a large mic in
-  the middle; one tap focuses the composer and starts the M9-06 voice input.
-  It hides once the chat has a message, while listening, or while the
-  keyboard is up.
-- **Apps grid** (M19-04, `src/app/(tabs)/apps/index.tsx`,
-  `components/AppGrid.tsx`): a phone-style home screen. M19-05: each space
-  is a page, Personal first and then shared spaces by name, swiped between
-  (a paging horizontal `ScrollView`; on web a trackpad swipe or the page
-  dots). The title is the page's space and the dots mark the page. The last
-  page viewed is kept for the session (`lib/currentSpace.ts`, in
-  `sessionStorage` on web), and a cold launch or sign-in opens Personal. The
-  system apps (Files, Routines, Settings, Catalog with the update count) are
-  a dock under every page rather than tiles on one, so they're always
-  reachable without swiping. Files opens at the page's space (`?path=`);
-  smokes that need the all-spaces root tap Home (`files_helpers.mjs`
-  `goToFilesRoot`). A tile is the app's `homeai.icon` (an Ionicons
+  rename/delete on long press. It lists the first five, with **More** for
+  the rest (a search always lists every match), and a full-width
+  **New chat** button fixed at its foot. On native the drawer swipe runs
+  first, and the pager takes the gesture only if it fails
+  (`SwipeToOpen`'s `blocks`). Swiping left from Chat goes to Personal.
+  `/chat/<id>` deep links (`[threadId].tsx`) switch to that chat and return
+  to the Chat page. The chat itself is `components/ChatView.tsx`; on web
+  its root carries `data-thread-id` for the smokes (`nav_helpers.mjs`
+  `currentThreadId`). M19-03: an empty chat with voice input available
+  shows a large mic in the middle; one tap focuses the composer and starts
+  voice input. It hides once the chat has a message, while listening, or
+  while the keyboard is up. Voice input is the browser's Web Speech API on
+  web (`lib/speech.web.ts`, https or localhost only) and, from M19-07,
+  Android's recognizer in the app (`lib/speech.ts`, `expo-speech-recognition`).
+- **Space pages** (M19-04, M19-05, M19-07, `components/SpacePage.tsx`,
+  `components/AppGrid.tsx`): a phone-style home screen per space. The title
+  is the page's space. The grid starts with Files, which opens at the
+  page's space (`?path=`), since files belong to a space; smokes that need
+  the all-spaces root tap Home (`files_helpers.mjs` `goToFilesRoot`).
+  Routines and Settings come next on Personal only, since they belong to
+  the user. Then the space's apps, then **Add app** (a +) last, which opens
+  the catalog for just that space (`/apps/catalog?spaceId=`, titled "Add to
+  <space>"). Add app shows only where you can install, not on a space you
+  only view. A tile is the app's `homeai.icon` (an Ionicons
   name) on a rounded square whose colour is derived from the slug, or the
   first letter of its name when there's no usable icon. The grid has 4
   columns on a phone, 6 from 700 px and 8 from 1024 px. A dot marks an
@@ -3850,14 +3862,14 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/gate_m15.sh` | M15-07 GATE G15: milestone gate for M15 — stack healthy (no rebuild; never recreates model-runner or postgres; no GPU; no builder image), `wireguard_smoke.sh`, `origin_policy_smoke.sh`, `verify_caddy_domain.sh`, platform pytest (`test_origin.py`, `test_public_https.py`, `test_webauthn.py`, `test_device_pairs.py`), `passkey_browser_smoke.sh` (RP ID restore trapped), then `g15_enrollment_smoke.sh`. Throwaway `e2e-*` users only; never completes bootstrap. Takes `/tmp/homeai-stack.lock`. Also in `gate_full.sh` | After touching WireGuard, origin policy, domain/Caddy ACME, passkeys, public HTTPS, or device pairing; before the M15 milestone gate |
 | `scripts/e2e/g17_routines_smoke.sh` | M17-08 GATE G17: live scenario as a throwaway `e2e-g17-*` user. Three routines due at the same minute, one to two minutes out (UTC): a read-only one-shot runs headlessly (one short GPU turn replying with a marker), its thread is listed under the routine (`?routine_id=`) and in the chats list, and it retires; one disabled at once loses its grant and never runs; one whose grant is revoked from Settings → Sessions doesn't run and is disabled. About four minutes; needs the scheduler on. Deletes its routines, run threads and user on exit. Also in `gate_m17.sh` / `gate_full.sh`. Takes `/tmp/homeai-stack.lock`. | Before the M17 milestone gate; after changing the scheduler, routine grants or routine runs |
 | `scripts/e2e/gate_m17.sh` | M17-08 GATE G17: milestone gate for M17 — stack healthy (no rebuild; never recreates model-runner or postgres), agent-server pytest (detached turns, schedule, routines API, scheduler, approval modes/inbox, routine tools, routines on Postgres), platform pytest (`test_routine_grants.py`, `test_space_access.py`), then `g17_routines_smoke.sh`. Throwaway `e2e-*` users only; never completes bootstrap. Takes `/tmp/homeai-stack.lock`. Also in `gate_full.sh` | After touching routines, the scheduler, detached turns or routine grants; before the M17 milestone gate |
-| `scripts/e2e/g19_shell_smoke.sh` | M19-06 GATE G19: the redesigned app shell through Caddy in headless Chromium at phone size, as a throwaway `e2e-g19-*` user. Seeds three chats over REST and flags one `awaiting_approval` and one `unread` in the agent database (the real flows are G17's). A cold launch lands in an empty chat (`data-thread-id=""`); the history drawer lists the waiting chat, then the unread one, then the newest plain one, with their markers; a chat opens from the drawer; + makes a new chat; Apps shows the dock (Files, Routines, Settings, Catalog) and Personal first; with a throwaway `e2e-g19-*` shared space holding the runtime-check app, a horizontal swipe brings that page and its icon tile on screen with the space's name as the title; Files opens at that space and back returns to the same page; Routines and Settings open from their tiles. No GPU turns. Deletes the user, threads, spaces and the app's bundle and git repo on exit. Also in `gate_m19.sh` / `gate_full.sh`. Takes `/tmp/homeai-stack.lock`. | Before the M19 milestone gate; after changing the Chat tab, the history drawer, the Apps grid or its pages |
-| `scripts/e2e/gate_m19.sh` | M19-06 GATE G19: milestone gate for M19 — stack healthy (no rebuild; never recreates model-runner or postgres), frontend jest (whole suite), agent-server pytest (`test_chat.py`, `test_threads_pg.py`: chats-list order, rename), then `g19_shell_smoke.sh`, `home_launcher_smoke.sh`, `app_runner_browser_smoke.sh` and `chat_browser_smoke.sh` (real GPU turns). Throwaway `e2e-*` users only; never completes bootstrap. Takes `/tmp/homeai-stack.lock`. Also in `gate_full.sh` | After touching the app shell (tabs, Chat tab, drawer, Apps grid, space pages); before the M19 milestone gate |
+| `scripts/e2e/g19_shell_smoke.sh` | M19-06 GATE G19: the redesigned app shell through Caddy in headless Chromium at phone size, as a throwaway `e2e-g19-*` user. Seeds six chats over REST and flags one `awaiting_approval` and one `unread` in the agent database (the real flows are G17's). A cold launch lands on the Chat page of the `/` pager in an empty chat (`data-thread-id=""`), with no tab bar or header +, the Chat icon's badge at 2 and the big mic; the history drawer lists five chats (the waiting one, then the unread one, then the newest plain ones, with their markers) and More for the sixth, its New chat button spans the foot and doesn't move when the list scrolls; a chat opens from the drawer and New chat makes a new one (M19-07). With a throwaway `e2e-g19-*` shared space holding the runtime-check app, a swipe goes from Chat to Personal (Files, Routines, Settings, Add app) and another to the shared space (Files, its icon tile, Add app), titled with the space's name; Add app opens that space's catalog; Files opens at that space and back returns to the same page; Routines and Settings open from Personal; swiping back or the Chat icon returns to Chat. No GPU turns. Deletes the user, threads, spaces and the app's bundle and git repo on exit. Also in `gate_m19.sh` / `gate_full.sh`. Takes `/tmp/homeai-stack.lock`. | Before the M19 milestone gate; after changing the home pager, the Chat page, the history drawer or the space pages |
+| `scripts/e2e/gate_m19.sh` | M19-06 GATE G19: milestone gate for M19 — stack healthy (no rebuild; never recreates model-runner or postgres), frontend jest (whole suite), agent-server pytest (`test_chat.py`, `test_threads_pg.py`: chats-list order, rename), then `g19_shell_smoke.sh`, `home_launcher_smoke.sh`, `app_runner_browser_smoke.sh` and `chat_browser_smoke.sh` (real GPU turns). Throwaway `e2e-*` users only; never completes bootstrap. Takes `/tmp/homeai-stack.lock`. Also in `gate_full.sh` | After touching the app shell (the home pager, Chat page, drawer, space pages); before the M19 milestone gate |
 | `scripts/e2e/app_build_smoke.sh` | M12-04: (re)builds `homeai-app-builder:latest`, then with the same transport a CLI-created owner uploads and registers the fixture `hello` and builds it: `ok`, `bundle_path` = `app-bundles/<app>/<build>/app.js` in the API and an `__homeai_define(` bundle + map on disk, staging dir and builder containers gone. A missing import, a disallowed import (`fs`), a type error and a render throw in `app/index.tsx` each give exactly one diagnostic with the expected step, file, line and column and leave the bundle as it was; a bad `app.json` gives one `manifest` diagnostic and never reaches the builder; an outsider's build is `404`; a rebuild replaces the bundle and deletes the old one; deletes its rows, dirs and bundles on exit. Also in `gate_full.sh` | After touching `services/app-builder/`, `app/builds.py` or the platform's `appbuild.py` |
 | `scripts/e2e/app_history_smoke.sh` | M13-01: same transport as `app_build_smoke.sh` — a CLI-created owner uploads the fixture `hello` to `/personal/Apps/hello` plus a planted git repo (`.git/config` with an fsmonitor, hooks path and `evil` filter, `.git/hooks/*`, `.gitattributes`) whose every trigger would `touch` a marker; control: plain `git add` over a copy of the folder in a throwaway `--network none` platform-image container does fire it. Register, build, change `app/index.tsx`, build: two commits, newest current, repo under `/data/platform/app-git`; the outsider's history is `404`. Revert to the first: a third commit (`revert`, reverting the first, parent the second) is the head and current, `app/index.tsx` reads back as the original, a new bundle; the revert's tree equals the first's. The marker never appears in the platform container, `.git/config` is unchanged, no commit has a dotfile. Deletes rows, dirs, bundles and the repo on exit. Also in `gate_full.sh` | After touching app builds or history (`app/core/appbuild.py`, `apphistory.py`, `fsops.py`) or the platform image |
 | `scripts/e2e/platform_app_data_smoke.sh` | M12-03: same transport — CLI-created owner/viewer/outsider and a shared space; the fixture app is uploaded, registered and installed there; `migrate` applies `schema.sql` then is `up_to_date`; `run`, the `addGreeting` action and the viewer's `getAll`/`getFirst`; a `db_changed` event on the viewer's `/ws/platform/events` (and `4401` without a credential); adding a column applies with a snapshot, dropping it stays `pending` until the owner approves (viewer `403`); viewer writes `403`/`422 sql_not_allowed`, outsider `404`, ATTACH / VACUUM INTO `422`; on disk the instance dir is `0:<gid> 2750`, `data.sqlite` `0600`, `ro/data.sqlite` `0444` and an exec-shaped container (member uid, space gid, `--network none`, only `ro/` mounted) reads it; then (builder image rebuilt first) a column added in the source's `schema.sql` → `POST /apps/{id}/build` → the build's `migrations` show it applied, the column exists and the viewer's socket gets `app_built`; dropping it → build → `pending` in the build response and the migration list, column kept; deletes its rows, bundles and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app data code |
 | `scripts/e2e/platform_apps_smoke.sh` | M12-02: same transport — a CLI-created owner uploads the fixture app `scripts/e2e/fixtures/apps/hello/` to `/personal/Apps/hello` via the files API; register without `AGENT.md` is `422 invalid_app` with that diagnostic, then `201`, `409 app_exists`, validate; install → `apps/<instance_id>` is `0:<gid> 2750` on disk, `409 already_installed`; an outsider gets `404` for the app, the instances and installing; `/personal/Apps` delete/rename/move `403 reserved`; CLI `register-app`/`install-app`/`list-apps`; uninstall moves the dir to `apps/.trash/`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` app registry code |
 | `scripts/e2e/app_publish_smoke.sh` | M14-01: through Caddy in headless Chromium — CLI-created author and family editor of a throwaway `e2e-pub-*` shared space; the author uploads, registers, installs and builds `hello` in Personal, publishes it into the family catalog from the app info screen; the editor opens Catalog, confirms permissions on the install sheet, and installs; the author bumps the version, rebuilds, publishes again; the editor's Home launcher shows an update badge, approves it. Deletes users, personal spaces, the shared space, bundles, git repos and `app-releases/` on exit. Takes `/tmp/homeai-stack.lock`. | After touching publish/catalog/install/update |
-| `scripts/e2e/home_launcher_smoke.sh` | M14-02, M19-01, M19-05: through Caddy in headless Chromium — CLI-created `e2e-home-*` member signs in and lands in Chat; the tab bar is Chat and Apps; Apps has the Files / Routines / Settings / Catalog dock (each opens, back returns to Apps) and an empty installed list; (M19-05) a throwaway shared space with the runtime-check app is a second page: Personal first without the app, a horizontal swipe moves to the shared page with its app and title, Files opens at that space, and the page survives back and a reload; `/settings/routines` opens Routines. Deletes the user, personal space, and shared space on exit. Takes `/tmp/homeai-stack.lock`. | After touching the Home launcher or tab bar |
+| `scripts/e2e/home_launcher_smoke.sh` | M14-02, M19-01, M19-05, M19-07: through Caddy in headless Chromium — CLI-created `e2e-home-*` member signs in and lands on the Chat page of the `/` pager; with only Personal the indicator is Chat and Personal; Personal has Files, Routines, Settings and Add app tiles (each opens, back returns to Personal) and an empty installed list; a throwaway shared space with the runtime-check app is a further page: Personal without the app, a horizontal swipe moves to the shared page with its app and title (no Routines or Settings), Files opens at that space, and the page survives back and a reload; Add app on Personal opens its catalog; `/settings/routines` opens Routines; the old `/apps` and `/chat` links land on Personal and Chat. Deletes the user, personal space, and shared space on exit. Takes `/tmp/homeai-stack.lock`. | After touching the home pager or the space pages |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Home (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
 | `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with HITL off — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |

@@ -56,7 +56,14 @@
           "recordAudioAndroid": false
         }
       ],
-      "./plugins/withCleartextTraffic"
+      "./plugins/withCleartextTraffic",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Home AI uses the microphone for voice input in chat.",
+          "speechRecognitionPermission": "Home AI turns your speech into text for chat."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

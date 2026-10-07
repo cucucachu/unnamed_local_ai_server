@@ -13,6 +13,7 @@ import { chromium } from 'playwright';
 
 import { fixtureFiles } from './app_fixture.mjs';
 import { loginThroughUi } from './auth_helpers.mjs';
+import { openSpacePage } from './nav_helpers.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../examples/apps/grocery-list');
 const APP_SLUG = 'grocery-list';
@@ -82,9 +83,7 @@ const ui = (page) => page.frameLocator(APP_FRAME);
 
 /** Apps tab -> the space's section -> Grocery list -> its runner, rendered. */
 async function openFromAppsTab(page, spaceSlug) {
-  await page.getByRole('tab', { name: 'Apps' }).click();
-  const section = page.getByTestId(`apps-space-${spaceSlug}`);
-  await section.waitFor({ timeout: UI_TIMEOUT });
+  const section = await openSpacePage(page, spaceSlug);
   await section.getByTestId(`apps-open-${APP_SLUG}`).click();
   await page.getByTestId('app-runner').waitFor({ timeout: UI_TIMEOUT });
   await ui(page).getByTestId('summary').waitFor({ timeout: UI_TIMEOUT });

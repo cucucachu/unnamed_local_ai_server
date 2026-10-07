@@ -75,7 +75,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 import { createE2eUser, deleteE2eUsers, loginThroughUi, sessionCookie } from './auth_helpers.mjs';
-import { currentThreadId, findInChatHistory, startNewChat } from './nav_helpers.mjs';
+import { currentThreadId, findInChatHistory, openChatPage, openSpacePage, startNewChat } from './nav_helpers.mjs';
 
 const BASE_URL = process.env.CHAT_SMOKE_BASE_URL ?? 'http://localhost/';
 const API_BASE =
@@ -615,12 +615,11 @@ async function main() {
     savedSettings = settingsRequest('GET');
     settingsRequest('PUT', { hitl_enabled: false });
 
-    // Explicit navigation to the Chat tab (even though it's also the `/`
-    // redirect target today — see `src/app/(tabs)/index.tsx` — so this
-    // script keeps working if that default ever changes).
-    await page.getByRole('tab', { name: 'Chat' }).click();
+    // Explicit navigation to the Chat page (even though `/` lands there
+    // today, so this script keeps working if that default ever changes).
+    await openChatPage(page);
 
-    // --- Step 1: + starts an empty new chat (M19-02: no thread yet) -----
+    // --- Step 1: New chat starts an empty new chat (M19-02: no thread yet) -----
     await startNewChat(page);
 
     // --- Step 2: send the first message ---------------------------------
@@ -630,15 +629,14 @@ async function main() {
     threadId = await currentThreadId(page);
 
     // --- Step 2b: Apps and back returns to the same chat (M19-02) -------
-    await page.getByRole('tab', { name: 'Apps' }).click();
-    await page.getByTestId('home-launcher').waitFor({ timeout: 15_000 });
-    await page.getByRole('tab', { name: 'Chat' }).click();
-    if ((await currentThreadId(page)) !== threadId) throw new Error('Step 2b: the Chat tab came back to a different chat');
+    await openSpacePage(page);
+    await openChatPage(page);
+    if ((await currentThreadId(page)) !== threadId) throw new Error('Step 2b: the Chat page came back to a different chat');
     await waitForText(page, FIRST_MESSAGE, 15_000);
     console.log('Step 2b OK — Apps and back returns to the same chat');
 
     // --- Step 3: history drawer — title reflects the message -----------
-    // + first, so reopening from history below is a real switch + hydration.
+    // New chat first, so reopening from history below is a real switch + hydration.
     await startNewChat(page);
     const expectedTitle = deriveExpectedTitle(FIRST_MESSAGE);
     const titleRow = await findInChatHistory(page, expectedTitle, 20_000);
@@ -1142,9 +1140,6 @@ async function main() {
     // --- Step 16: fork edit + branch switch (M8-05) ---------------------
     // Fresh thread so history is exactly three user/assistant turns.
     // HITL stays off; "Say exactly:" avoids mutating tools.
-    // Go to the list via URL — clicking the Chat tab from a nested
-    // `/chat/[id]` screen is a no-op (already on the Chat tab), so the
-    // header "New chat" button never mounts (same flake step 13 avoided).
     await startNewChat(page);
 
     await sendMessageAndAwaitReply(page, FORK_TURN_1, 0);

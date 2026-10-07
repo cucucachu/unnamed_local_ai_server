@@ -5,6 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import { RoutineRunList } from '@/components/RoutineRunList';
 import { LoadState, SettingsFrame } from '@/components/SettingsUI';
 import { openChat } from '@/lib/currentChat';
+import { showPage } from '@/lib/currentPage';
 import { getRoutine, listRoutineRuns, type Routine, type RoutineRun } from '@/lib/routines';
 import { useLoad } from '@/lib/useAsync';
 
@@ -40,7 +41,8 @@ export default function RoutineRunsScreen() {
             runs={data.runs}
             onOpen={(threadId) => {
               openChat(threadId);
-              router.navigate('/chat');
+              showPage('chat');
+              router.dismissTo('/');
             }}
           />
         )}

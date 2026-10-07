@@ -153,7 +153,7 @@ async function stepSharedSpace({ admin, invitee }, inviteeAccount, space) {
     await byId(other, 'chat-not-found').waitFor({ timeout: TIMEOUT_MS });
   }
   await byId(other, 'chat-not-found-back').click();
-  await byId(other, 'new-chat-header-button').waitFor({ timeout: TIMEOUT_MS });
+  await byId(other, 'home-page-chat').waitFor({ timeout: TIMEOUT_MS });
   console.log("  OK another user's thread and a missing one show \"Chat not found\" (no reconnect loop)");
 }
 

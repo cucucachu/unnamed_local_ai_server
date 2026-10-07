@@ -5,7 +5,14 @@ import { exists, mockFetchRoutes, press, render, requestsTo, textOf } from '../.
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
 const mockParams: { current: Record<string, string> } = { current: {} };
+const mockScreenOptions = jest.fn();
 jest.mock('expo-router', () => ({
+  Stack: {
+    Screen: ({ options }: { options: unknown }) => {
+      mockScreenOptions(options);
+      return null;
+    },
+  },
   useRouter: () => ({ push: mockPush, replace: mockReplace }),
   useLocalSearchParams: () => mockParams.current,
 }));
@@ -72,6 +79,19 @@ describe('CatalogScreen', () => {
 });
 
 describe('InstallScreen', () => {
+  it("a space's Add app opens just that space's catalog (M19-07)", async () => {
+    const personal = { ...family, id: 's1', slug: 'alice', name: 'Alice', kind: 'personal' as const, role: 'owner' };
+    const fetchMock = mockFetchRoutes({
+      'GET /api/platform/spaces': { body: { spaces: [personal, family] } },
+      'GET /api/platform/spaces/s2/catalog': { body: { entries: [entry] } },
+    });
+    mockParams.current = { spaceId: 's2' };
+    renderer = await render(CatalogScreen);
+    expect(exists(renderer, 'catalog-space-family')).toBe(true);
+    expect(requestsTo(fetchMock, 'GET', '/api/platform/spaces/s1/catalog')).toHaveLength(0);
+    expect(mockScreenOptions).toHaveBeenLastCalledWith({ title: 'Add to Family' });
+  });
+
   it('shows permissions and installs the pinned version', async () => {
     mockParams.current = { spaceId: 's2', appId: 'a1', versionId: 'v1' };
     const fetchMock = mockFetchRoutes({

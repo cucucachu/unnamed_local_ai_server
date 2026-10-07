@@ -54,7 +54,7 @@ const VIDEO_FILE_NAME = basename(VIDEO_FILE_PATH);
 const UI_TIMEOUT_MS = 20_000;
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
-  const locator = page.getByText(text, { exact: true }).first();
+  const locator = page.getByTestId('files-screen').getByText(text, { exact: true }).first();
   await locator.waitFor({ state: 'visible', timeout: timeoutMs });
   return locator;
 }
@@ -107,7 +107,6 @@ async function main() {
     // (same URL, server-side cache hit per app/core/thumbnails.py's
     // get_cached_thumbnail - this just proves the end-to-end contract
     // still works on a second real page load, not the cache internals.)
-    await page.getByRole('tab', { name: 'Chat' }).click();
     await openSystemApp(page, 'files');
     await openSpace(page, 'Personal');
     await waitForVisibleText(page, VIDEO_FILE_NAME);
