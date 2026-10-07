@@ -24,6 +24,7 @@ and the filesystem middleware formats it.
 from __future__ import annotations
 
 import base64
+import difflib
 import functools
 import io
 import logging
@@ -162,6 +163,28 @@ def _line_matches(file_line: str, old_line: str, i: int, last: int) -> bool:
     return file_line == old_line
 
 
+# A model quoting a line it changed earlier (or misremembers) usually gets most
+# of it right; showing the current line saves a read_file round trip.
+_CLOSEST_MIN_RATIO = 0.6
+
+
+def _closest_line(file_lines: list[str], old_lines: list[str]) -> tuple[int, str] | None:
+    want = next((line.strip() for line in old_lines if line.strip()), "")
+    if len(want) < 8:
+        return None
+    best_ratio, best_i = _CLOSEST_MIN_RATIO, -1
+    for i, line in enumerate(file_lines):
+        candidate = line.strip()
+        if not candidate:
+            continue
+        matcher = difflib.SequenceMatcher(None, want, candidate, autojunk=False)
+        if matcher.real_quick_ratio() <= best_ratio or matcher.quick_ratio() <= best_ratio:
+            continue
+        if (ratio := matcher.ratio()) > best_ratio:
+            best_ratio, best_i = ratio, i
+    return (best_i + 1, file_lines[best_i]) if best_i >= 0 else None
+
+
 def _not_found_message(content: str, old: str) -> str:
     """Where the longest run of `old`'s leading lines matches, and the first line that differs."""
     message = f"Error: String not found in file: {_shown(old)}"
@@ -180,7 +203,12 @@ def _not_found_message(content: str, old: str) -> str:
         if n > best_len:
             best_start, best_len = start, n
     if best_len == 0:
-        return f"{message}. Its first line is not in the file; read the file and copy the text exactly."
+        message += ". Its first line is not in the file; read the file and copy the text exactly."
+        closest = _closest_line(file_lines, old_lines)
+        if closest is not None:
+            n, line = closest
+            message += f"\nThe closest file line is {n}: {_clip(line.strip())}"
+        return message
     at = best_start + best_len
     differs = old_lines[best_len]
     found = file_lines[at] if at < len(file_lines) else "<end of file>"

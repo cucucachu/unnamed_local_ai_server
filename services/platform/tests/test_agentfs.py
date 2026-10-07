@@ -120,6 +120,24 @@ def test_edit_errors_match_deepagents(content, old, code, message) -> None:
     assert (exc.value.code, exc.value.message) == (code, message)
 
 
+def test_a_misremembered_first_line_shows_the_closest_file_line() -> None:
+    content = "const a = 1;\n    'SELECT id, name, done, assignee FROM items ORDER BY done, id',\n"
+    with pytest.raises(AgentFsError) as exc:
+        agentfs.edit_text(
+            content, "  'SELECT id, name, done FROM items ORDER BY done, id',", "x", False
+        )
+    assert exc.value.message.endswith(
+        "Its first line is not in the file; read the file and copy the text exactly.\n"
+        "The closest file line is 2: 'SELECT id, name, done, assignee FROM items ORDER BY done, id',"
+    )
+
+
+def test_no_closest_line_when_nothing_is_similar() -> None:
+    with pytest.raises(AgentFsError) as exc:
+        agentfs.edit_text("alpha beta\n", "completely different text", "x", False)
+    assert exc.value.message.endswith("read the file and copy the text exactly.")
+
+
 def test_apply_edit_keeps_exact_semantics() -> None:
     text = "alpha beta\nbeta gamma\n"
     assert agentfs.apply_edit(text, "alpha", "ALPHA", False) == agentfs.Edit(
