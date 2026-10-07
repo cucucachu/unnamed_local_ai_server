@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.core import appdata, appdb, events
+from app.core import appdata, appdb, appschema, events
 from tests.app_packages import FILES as PACKAGE_FILES
 from tests.app_packages import write_package
 from tests.files_world import API, World
@@ -121,7 +121,12 @@ async def test_destructive_change_waits_for_approval(world, inst) -> None:
     assert (m["status"], m["needs_approval"], m["summary"]["destructive"]) == ("pending", True, 1)
     assert m["steps"][0]["reason"] == "drops column done and its data"
     columns = await _rpc(world, inst, "carol", {"op": "getAll", "sql": "PRAGMA table_info(items)"})
-    assert [c["name"] for c in columns.json()["rows"]] == ["id", "name", "done"]
+    assert [c["name"] for c in columns.json()["rows"]] == [
+        "id",
+        "name",
+        "done",
+        *appschema.STAMP_COLUMNS,
+    ]
 
     approve = f"{_base(inst)}/migrations/{m['id']}/approve"
     assert (await world.client.post(approve, headers=world.headers["carol"])).status_code == 403
@@ -133,7 +138,7 @@ async def test_destructive_change_waits_for_approval(world, inst) -> None:
         m["id"], "applied", str(world.users["alice"]["id"]),
     )  # fmt: skip
     assert (_dir(world, inst) / "snapshots" / done["snapshot"]).is_file()
-    rows = await _rpc(world, inst, "carol", {"op": "getAll", "sql": "SELECT * FROM items"})
+    rows = await _rpc(world, inst, "carol", {"op": "getAll", "sql": "SELECT id, name FROM items"})
     assert rows.json()["rows"] == [{"id": 1, "name": "Milk"}]
     r = await world.client.post(approve, headers=world.headers["alice"])
     assert (r.status_code, r.json()) == (409, {"detail": "migration_not_pending"})
@@ -203,7 +208,9 @@ async def test_failed_apply_rolls_back_and_keeps_the_snapshot(world, inst) -> No
     failed = body["migration"]
     assert failed["status"] == "failed" and "NOT NULL" in failed["error"]
     assert (_dir(world, inst) / "snapshots" / failed["snapshot"]).is_file()
-    rows = await _rpc(world, inst, "carol", {"op": "getAll", "sql": "SELECT * FROM items"})
+    rows = await _rpc(
+        world, inst, "carol", {"op": "getAll", "sql": "SELECT id, name, done FROM items"}
+    )
     assert rows.json()["rows"] == [{"id": 1, "name": "Milk", "done": 0}]
 
 

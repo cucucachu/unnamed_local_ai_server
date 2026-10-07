@@ -13,6 +13,30 @@ import path from 'node:path';
 import ts from 'typescript';
 import { diagnostic, relative, sourceLine } from './diagnostics.mjs';
 
+// The platform's attribution columns on every app table (platform appschema.STAMP_COLUMNS):
+// added right after each CREATE TABLE, set by the platform on every write.
+export const STAMP_COLUMNS = ['_created_by', '_created_at', '_updated_by', '_updated_at'];
+
+/** schema.sql into `db` as the platform migrates it: each statement, then the stamp
+ * columns on any table it made. Throws if schema.sql declares them itself. */
+export function applySchema(db, schema) {
+  const stamped = new Set();
+  for (const st of splitStatements(schema)) {
+    db.exec(st.sql);
+    for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").all()) {
+      if (stamped.has(name)) continue;
+      const quoted = `"${name.replaceAll('"', '""')}"`;
+      const cols = new Set(db.prepare(`PRAGMA table_xinfo(${quoted})`).all().map((c) => c.name.toLowerCase()));
+      const declared = STAMP_COLUMNS.filter((c) => cols.has(c));
+      if (declared.length) {
+        throw new Error(`table ${name} declares ${declared.join(', ')}; the platform adds ${STAMP_COLUMNS.join(', ')} to every table itself`);
+      }
+      for (const c of STAMP_COLUMNS) db.exec(`ALTER TABLE ${quoted} ADD COLUMN ${c} TEXT`);
+      stamped.add(name);
+    }
+  }
+}
+
 const QUERY_CALLS = new Set(['useQuery', 'getAllAsync', 'getFirstAsync', 'runAsync']);
 const ACTION_RE = /^[a-z][a-zA-Z0-9_]*\.sql$/;
 

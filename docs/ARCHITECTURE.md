@@ -2349,7 +2349,10 @@ in `docs/PLATFORM.md` §7 "Build and verify").
    `result.json` and, when ok, `app.js` / `app.js.map` (the production
    bundle) and `app.dev.js` / `.map` (for the smoke render).
 4. **`smoke`** (`/src` ro, `/bundle` = `bundle/` ro, `/out` = `smoke/`):
-   `schema.sql` into node:sqlite (`sql`), then the SQL lint (`sql`, against
+   `schema.sql` into node:sqlite (`sql`; each CREATE TABLE gets the
+   platform's `_created_by` / `_created_at` / `_updated_by` / `_updated_at`
+   columns, as migrations add them, and declaring one is a `sql`
+   diagnostic), then the SQL lint (`sql`, against
    `schema.sql` plus any reads stand-ins, prepared, never run): every
    statement of every `actions/*.sql`, every string literal passed to
    `useQuery` / `getAllAsync` / `getFirstAsync` / `runAsync`, and every

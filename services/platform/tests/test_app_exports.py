@@ -261,7 +261,14 @@ async def test_a_readers_smoke_render_gets_stand_ins_for_the_views_it_reads(worl
     await build(ids["personal_cal"]["app_id"])
     await build(ids["planner_app"]["id"])
 
-    assert seen == [None, None, 'CREATE TABLE "calendar_events" ("id", "title", "_space");\n']
+    assert seen == [
+        None,
+        None,
+        (
+            'CREATE TABLE "calendar_events" ("id", "title", "_created_by", "_created_at", '
+            '"_updated_by", "_updated_at", "_space");\n'
+        ),
+    ]
 
 
 async def test_viewer_reads_merged_view_but_cannot_export_action(world: World) -> None:

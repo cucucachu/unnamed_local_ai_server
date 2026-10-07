@@ -3,7 +3,7 @@
 // types/homeai.d.ts.
 import { createElement, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { on, rpc } from './bridge';
-import type { ActionResult, RunResult, SqlParams, Space } from './protocol';
+import type { ActionResult, Member, RunResult, SqlParams, Space, User } from './protocol';
 
 export type Database = {
   getAllAsync<T = any>(sql: string, ...params: unknown[]): Promise<T[]>;
@@ -110,6 +110,37 @@ export function useSpace(): Space | null {
     () => space,
     () => space,
   );
+}
+
+let user: User | null = null;
+let members: Member[] = [];
+const peopleListeners = new Set<() => void>();
+const subscribePeople = (fn: () => void) => (peopleListeners.add(fn), () => void peopleListeners.delete(fn));
+export function setUser(next: User | null) {
+  user = next;
+  peopleListeners.forEach((fn) => fn());
+}
+export function setMembers(next: Member[]) {
+  members = next;
+  peopleListeners.forEach((fn) => fn());
+}
+on('user', (u: User) => setUser(u));
+on('members', (m: Member[]) => setMembers(Array.isArray(m) ? m : []));
+
+/** Who is using the app; null until the host has said. */
+export function useUser(): User | null {
+  return useSyncExternalStore(subscribePeople, () => user, () => user);
+}
+
+/** The space's members (for showing names next to `_created_by` / `_updated_by`). */
+export function useMembers(): Member[] {
+  return useSyncExternalStore(subscribePeople, () => members, () => members);
+}
+
+/** The member with this user id, e.g. `useMember(row._created_by)`; undefined if unknown. */
+export function useMember(id: string | null | undefined): Member | undefined {
+  const all = useMembers();
+  return id ? all.find((m) => m.id === id) : undefined;
 }
 
 export const expoSqlite = {

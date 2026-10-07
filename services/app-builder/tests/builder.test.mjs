@@ -371,6 +371,24 @@ test('runAction needs the action file and its params', async () => {
   assert.equal(smoke.diagnostics[1].message, "runAction('additem') has no actions/additem.sql (the app's actions: addItem)");
 });
 
+test('every table has the platform attribution columns, and screens can show who wrote a row', async () => {
+  const smoke = await build({
+    'app/index.tsx': (old) =>
+      old
+        .replace("import { useDatabase, useQuery } from '@homeai/sdk';", "import { useDatabase, useMember, useQuery, useUser } from '@homeai/sdk';")
+        .replace("useQuery<Item>('SELECT id, name, done FROM items ORDER BY id')", "useQuery<Item>('SELECT id, name, done, _created_by, _updated_at FROM items ORDER BY _created_at')")
+        .replace("  const [name, setName] = useState('');", "  const [name, setName] = useState('');\n  const me = useUser();\n  const owner = useMember(me?.id);\n  if (!owner || owner.name !== 'Smoke tester') throw new Error('no members');"),
+    'schema.sql': (old) => `${old}\nCREATE INDEX items_by ON items (_created_by);\n`,
+  });
+  assert.deepEqual(smoke.diagnostics, []);
+});
+
+test('a schema.sql that declares an attribution column is a sql diagnostic', async () => {
+  const smoke = await build({ 'schema.sql': 'CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, _created_by TEXT);' });
+  assert.deepEqual(smoke.diagnostics.map(pick), [{ step: 'sql', file: 'schema.sql', line: null, column: null }]);
+  assert.match(smoke.diagnostics[0].message, /table items declares _created_by; the platform adds _created_by, _created_at, _updated_by, _updated_at/);
+});
+
 test('result.json caps the diagnostics', () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'homeai-builder-cap-'));
   const many = Array.from({ length: 80 }, (_, i) => ({ step: 'type', file: 'a.ts', path: '', line: i, column: 1, message: 'x' }));

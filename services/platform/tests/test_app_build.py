@@ -605,7 +605,11 @@ async def _install(world: World, app: dict) -> dict:
 async def _columns(world: World, inst: dict) -> list[str]:
     response = await world.client.post(
         f"{API}/apps/instances/{inst['id']}/rpc",
-        json={"op": "getAll", "sql": "SELECT name FROM pragma_table_info('items')"},
+        # The app's own columns, without the platform's attribution ones.
+        json={
+            "op": "getAll",
+            "sql": "SELECT name FROM pragma_table_info('items') WHERE name NOT LIKE '\\_%' ESCAPE '\\'",
+        },
         headers=world.headers["carol"],
     )
     assert response.status_code == 200, response.text
