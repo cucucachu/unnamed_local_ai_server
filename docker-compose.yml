@@ -231,7 +231,7 @@ services:
       --n-gpu-layers 999
       --jinja
       --ctx-size ${MODEL_CTX_SIZE}
-      --temp 1.0 --top-p 0.95 --top-k 64
+      ${MODEL_SAMPLING:---temp 1.0 --top-p 0.95 --top-k 20}
       ${MODEL_EXTRA_ARGS}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]

@@ -3019,6 +3019,28 @@ to guard.
 
 ### Model
 
+**Live model (M16-03): Ornith-1.5-35B-A3B, Q8_0.**
+
+- **What it is:** a Qwen3.5 mixture-of-experts model (`qwen35moe`) with ~3B
+  active parameters per token and a hybrid attention / gated-DeltaNet
+  layout. MIT licence, text only.
+- **Where it comes from:**
+  [`ornith-ai/Ornith-1.5-35B-A3B-GGUF`](https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF),
+  file `Ornith-1.5-35B-Q8_0.gguf` (35.2 GiB), sha256-pinned in
+  `fetch-model.sh`.
+- **Sampling:** `MODEL_SAMPLING=--temp 1.0 --top-p 0.95 --top-k 20`, from the
+  model's `generation_config.json`.
+- **Speed on this host:** pp512 332 t/s, tg128 19.1 t/s (Gemma Q8_0: 263 /
+  12.6). The full comparison is in docs/TOOL_CALLING.md, "M16 — candidate
+  models vs Gemma 4".
+- **Memory:** it doesn't fit beside another large model under the 64 GiB GTT
+  cap, so run a comparison model on `model-candidate` only with a smaller
+  quant.
+
+The Gemma 4 details below (M1-04) still describe the fallback,
+`fetch-model.sh --model gemma`, with the `.env` values listed in
+`.env.example`.
+
 - **HF repo**: [`ggml-org/gemma-4-26B-A4B-it-GGUF`](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF)
 - **File / quant used**: `gemma-4-26B-A4B-it-Q8_0.gguf` — see "Chosen
   default" below for the benchmark behind that choice.
@@ -3055,8 +3077,8 @@ to guard.
   `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`). This is why `model-runner` passes
   through `/dev/dri` (the Vulkan/RADV render node) rather than `/dev/kfd`
   (the ROCm compute-queue node) — see the system overview diagram above.
-- **Sampling defaults**: `--temp 1.0 --top-p 0.95 --top-k 64` (per the
-  model card, in `docker-compose.yml`'s `command:`).
+- **Sampling (Gemma)**: `--temp 1.0 --top-p 0.95 --top-k 64` (per the
+  model card), set via `MODEL_SAMPLING`.
 - **`MODEL_EXTRA_ARGS` additions**: `--verbose --reasoning-format deepseek`.
   `--verbose` is required to see the Vulkan offload lines above (default
   verbosity threshold hides them). `--reasoning-format deepseek` streams
@@ -3069,8 +3091,8 @@ to guard.
 
 ### Swapping quant/model in practice
 
-1. `./services/model-runner/fetch-model.sh <QUANT>` (e.g. `Q4_0`, `Q8_0`,
-   `BF16`) — downloads the corresponding GGUF into
+1. `./services/model-runner/fetch-model.sh [--model ornith-35b|gemma|qwen3.8-27b] <QUANT>`
+   (e.g. `Q4_K_M`, `Q8_0`) — downloads the corresponding GGUF into
    `services/model-runner/models/` (skips the download if the target file
    already exists and is non-empty; pass `--force` to re-download).
 2. Update `MODEL_FILE` in `.env` to the new filename (e.g.

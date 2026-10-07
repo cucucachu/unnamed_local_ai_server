@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fetches the pinned Gemma 4 GGUF quant into services/model-runner/models/
-# using the huggingface_hub CLI via `uvx` (no global install required).
+# Fetches a pinned GGUF into services/model-runner/models/ using the
+# huggingface_hub CLI via `uvx` (no global install required). The default is
+# the live model, Ornith-1.5-35B-A3B Q8_0 (M16-03); `--model gemma` fetches
+# the previous default, Gemma 4 26B-A4B (notes below).
 #
 # --- Deviation from the original ticket assumption (read before editing) ---
 # The Conventions & Contracts reference issue (and this ticket) assumed the
@@ -35,12 +37,14 @@ set -euo pipefail
 # fetches its speculative-decoding head). Those files are sha256-pinned
 # below and verified after download.
 #
-# --model ornith-35b (M16-07) fetches Ornith-1.5-35B-A3B (Qwen3.5 MoE,
-# ~3B active, MIT) from ornith-ai/Ornith-1.5-35B-A3B-GGUF, default Q4_K_M.
+# --model ornith-35b (M16-07, the default) fetches Ornith-1.5-35B-A3B
+# (Qwen3.5 MoE, ~3B active, MIT) from ornith-ai/Ornith-1.5-35B-A3B-GGUF,
+# default Q8_0 (~37.8 GB). Q4_K_M lost tool-calling and app-authoring cases
+# that Q8_0 passed (docs/TOOL_CALLING.md, M16 section).
 #
-#   fetch-model.sh [--model gemma|qwen3.8-27b|ornith-35b] [quant|mtp] [--force]
+#   fetch-model.sh [--model ornith-35b|gemma|qwen3.8-27b] [quant|mtp] [--force]
 
-MODEL="gemma"
+MODEL="ornith-35b"
 QUANT=""
 FORCE=0
 for arg in "$@"; do
@@ -97,7 +101,7 @@ case "${MODEL}" in
     ;;
   ornith-35b)
     REPO="ornith-ai/Ornith-1.5-35B-A3B-GGUF"
-    DEFAULT_QUANT="Q4_K_M"
+    DEFAULT_QUANT="Q8_0"
     QUANT="${QUANT:-${DEFAULT_QUANT}}"
     SHA256=(
       [Ornith-1.5-35B-Q4_K_M.gguf]=42739874cc2ccfdb8523b23fbe52e29b2a7555c8176737ca9ca0b5d59859d41f
@@ -141,10 +145,8 @@ fi
 SIZE="$(du -h "${TARGET}" | cut -f1)"
 echo "Done: ${TARGET} (${SIZE})"
 
-if [[ "${MODEL}" == "gemma" && "${QUANT}" != "${DEFAULT_QUANT}" ]]; then
-  echo "NOTE: fetched a non-default quant (${QUANT})."
-  echo "Set MODEL_FILE=${FILENAME} in .env before running 'docker compose up -d model-runner'."
-elif [[ "${MODEL}" != "gemma" ]]; then
-  echo "Candidate model: set CANDIDATE_MODEL_FILE=${FILENAME} (if not the default) and run"
+if [[ "${FILENAME}" != "Ornith-1.5-35B-Q8_0.gguf" ]]; then
+  echo "Not the default model: set MODEL_FILE=${FILENAME} (and MODEL_NAME, MODEL_SAMPLING; see .env.example)"
+  echo "before 'docker compose up -d model-runner', or CANDIDATE_MODEL_FILE=${FILENAME} for"
   echo "'docker compose --profile candidate up -d model-candidate'."
 fi
