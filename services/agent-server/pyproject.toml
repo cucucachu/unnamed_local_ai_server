@@ -13,6 +13,8 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.15.0",
     "pyjwt[crypto]>=2.15.0",
+    "tree-sitter>=0.24",
+    "tree-sitter-typescript>=0.23",
     "uvicorn[standard]>=0.52.4",
 ]
 

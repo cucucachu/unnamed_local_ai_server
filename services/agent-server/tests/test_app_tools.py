@@ -630,6 +630,30 @@ async def test_create_build_fail_fix_build_ok(fake_model, fake_platform):
     assert fake_platform.apps[0]["working_version"]["commit"].startswith("0000002")
 
 
+async def test_an_edit_that_breaks_syntax_is_reported_on_its_result(fake_model, fake_platform):
+    path = "/personal/Apps/todo/app/index.tsx"
+    fake_model.queue(
+        ToolCallTurn("create_app", {"space": "personal", "slug": "todo", "name": "To-do"}),
+        ToolCallTurn(
+            "edit_file",
+            {"file_path": path, "old_string": "export default", "new_string": "}\nexport default"},
+        ),
+        ToolCallTurn("write_file", {"file_path": "/personal/Apps/todo/notes.md", "content": "}"}),
+        TextTurn("done"),
+    )
+    with (
+        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        client.websocket_connect("/ws/chat/syntax") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "make me a to-do app"})
+        _assert_turn_end(_drain_turn(ws)[-1], "completed")
+    _, edited, noted = _tool_results(fake_model)
+    assert edited.startswith(f"Successfully replaced 1 instance(s) of the string in '{path}'\n")
+    assert "\nSyntax error after this edit:\n  line " in edited
+    assert 'unexpected "}"' in edited
+    assert noted == "Updated file /personal/Apps/todo/notes.md"
+
+
 async def test_a_file_write_and_an_app_write_ask_one_after_the_other(fake_model, fake_platform):
     _family(fake_platform)
     _, inst = fake_platform.seed_app("family", "groceries")
