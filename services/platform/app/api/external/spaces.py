@@ -21,7 +21,7 @@ from app.api.schemas import (
     SpaceOut,
     SpacePatchRequest,
 )
-from app.core import appbuild, spaces
+from app.core import appbuild, audit, spaces
 from app.core.principal import CurrentUser, HumanUser
 
 router = APIRouter(prefix="/spaces")
@@ -79,6 +79,16 @@ async def archive_space(space_id: UUID, request: Request, principal: CurrentUser
     )
 
 
+async def _record_member(conn, principal, space_id: UUID, event: str, member) -> None:
+    name = member.get("display_name") or member.get("username") or str(member["user_id"])
+    what = "added" if event == "added" else "changed the role of"
+    await audit.record(
+        conn, principal, f"space.member_{event}", f"{what} {name} ({member['role']})",
+        space_id=space_id, target_type="user", target_id=member["user_id"],
+        detail={"role": member["role"]},
+    )  # fmt: skip
+
+
 @router.get("/{space_id}/members", response_model=MemberList)
 async def list_members(space_id: UUID, request: Request, principal: CurrentUser):
     async with request.app.state.db_pool.connection() as conn:
@@ -92,7 +102,10 @@ async def add_member(
 ):
     async with request.app.state.db_pool.connection() as conn:
         access = await spaces.authorize_membership(conn, principal, space_id, "manage")
-        return await spaces.add_member(conn, access.space, body.user_id, body.role)
+        async with conn.transaction():
+            member = await spaces.add_member(conn, access.space, body.user_id, body.role)
+            await _record_member(conn, principal, space_id, "added", member)
+        return member
 
 
 @router.patch("/{space_id}/members/{user_id}", response_model=MemberOut)
@@ -105,7 +118,10 @@ async def patch_member(
 ):
     async with request.app.state.db_pool.connection() as conn:
         access = await spaces.authorize_membership(conn, principal, space_id, "manage")
-        return await spaces.set_member_role(conn, access.space, user_id, body.role)
+        async with conn.transaction():
+            member = await spaces.set_member_role(conn, access.space, user_id, body.role)
+            await _record_member(conn, principal, space_id, "role_changed", member)
+        return member
 
 
 @router.delete("/{space_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -114,4 +130,9 @@ async def remove_member(
 ) -> None:
     async with request.app.state.db_pool.connection() as conn:
         access = await spaces.authorize_membership(conn, principal, space_id, "manage")
-        await spaces.remove_member(conn, access.space, user_id)
+        async with conn.transaction():
+            await spaces.remove_member(conn, access.space, user_id)
+            await audit.record(
+                conn, principal, "space.member_removed", "removed a member",
+                space_id=space_id, target_type="user", target_id=user_id,
+            )  # fmt: skip

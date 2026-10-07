@@ -21,6 +21,11 @@ applied only by `approve`, which re-plans and refuses (`409 plan_changed`)
 if the live database or the stored schema no longer give the same steps.
 Every apply is preceded by a snapshot when the database has any table, and
 rolls back as a whole on failure.
+
+Every write that changed rows is recorded in the audit log (`app_data.write`)
+from inside its SQLite transaction, just before the commit: if the event
+can't be recorded the write rolls back. Migration decisions are recorded as
+`app_data.migration`.
 """
 
 from __future__ import annotations
@@ -37,12 +42,13 @@ from pathlib import Path
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
+import anyio.from_thread
 import anyio.to_thread
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import appdb, apps, appschema, beneath, fsops, manifest, spaces, vfs
+from app.core import appdb, apps, appschema, audit, beneath, fsops, manifest, spaces, vfs
 from app.core.errors import (
     Conflict,
     InvalidApp,
@@ -390,6 +396,71 @@ class AppData:
                 )
         return out
 
+    # --- audit ------------------------------------------------------------------------
+
+    def _audited(
+        self, principal: Principal, target: Target, what: dict[str, Any], via: Target | None = None
+    ) -> appdb.BeforeCommit:
+        """A `before_commit` for a write on `target`: records it (from the worker thread)."""
+
+        def before_commit(result: dict) -> None:
+            changes = (
+                sum(r["changes"] for r in result["results"])
+                if "results" in result
+                else result.get("changes", 0)
+            )
+            if changes:
+                anyio.from_thread.run(
+                    self._record_write, principal, target, what, result, changes, via
+                )
+
+        return before_commit
+
+    async def _record_write(
+        self,
+        principal: Principal,
+        target: Target,
+        what: dict[str, Any],
+        result: dict,
+        changes: int,
+        via: Target | None,
+    ) -> None:
+        slug = target.instance["slug"]
+        label = f"action {what['action']}" if "action" in what else what["op"]
+        detail = {"instance_id": str(target.id), "app": slug, **what, "changes": changes}
+        if "lastInsertRowId" in result:
+            detail["last_insert_row_id"] = result["lastInsertRowId"]
+        if via is not None:
+            detail["via_instance_id"], detail["via_app"] = str(via.id), via.instance["slug"]
+        rows = "row" if changes == 1 else "rows"
+        async with self.pool.connection() as conn:
+            await audit.record(
+                conn, principal, "app_data.write", f"{label} in {slug}: {changes} {rows} changed",
+                space_id=target.space_id, target_type="app_instance", target_id=target.id,
+                detail=detail,
+            )  # fmt: skip
+
+    async def _record_migration(
+        self, principal: Principal, target: Target, row: Row, event: str
+    ) -> None:
+        summary = row.get("summary") or {}
+        counts = ", ".join(f"{summary[k]} {k}" for k in appschema.KINDS if summary.get(k))
+        async with self.pool.connection() as conn:
+            await audit.record(
+                conn, principal, "app_data.migration",
+                f"migration {event} in {target.instance['slug']}" + (f" ({counts})" if counts else ""),
+                space_id=target.space_id, target_type="app_instance", target_id=target.id,
+                detail={
+                    "instance_id": str(target.id), "app": target.instance["slug"],
+                    "migration_id": str(row["id"]), "status": row["status"],
+                    "snapshot": row.get("snapshot"), "error": row.get("error"),
+                    "steps": [
+                        {"kind": st.get("kind"), "op": st.get("op"), "table": st.get("table")}
+                        for st in row.get("steps") or []
+                    ],
+                },
+            )  # fmt: skip
+
     async def _export_action(self, principal: Principal, reader_id: UUID, req: dict) -> dict:
         async with self.pool.connection() as conn:
             reader = await self._target(conn, principal, reader_id, "read")
@@ -410,8 +481,14 @@ class AppData:
             if req["name"] not in actions:
                 raise NotFound("unknown_action")
             action_sql = await self._read_action(conn, principal, owner, req["name"])
+        audited = self._audited(
+            principal, owner, {"op": "exportAction", "action": req["name"], "export": req["export"],
+                               "params": req["params"]}, via=reader,
+        )  # fmt: skip
         async with self._lock(owner.id):
-            result = await self._run(owner, lambda c, _: appdb.action(c, action_sql, req["params"]))
+            result = await self._run(
+                owner, lambda c, _: appdb.action(c, action_sql, req["params"], audited)
+            )
         if result["changes"]:
             self._changed(owner)
         return result
@@ -442,12 +519,21 @@ class AppData:
             return {"row": row}
 
         if op == "run":
-            fn = lambda c, _: appdb.run(c, req["sql"], req["params"])
+            audited = self._audited(
+                principal, target, {"op": "run", "sql": req["sql"], "params": req["params"]}
+            )
+            fn = lambda c, _: appdb.run(c, req["sql"], req["params"], audited)
         elif op == "transaction":
             statements = [(s["sql"], s["params"]) for s in req["statements"]]
-            fn = lambda c, _: {"results": appdb.transaction(c, statements)}
+            audited = self._audited(
+                principal, target, {"op": "transaction", "statements": req["statements"]}
+            )
+            fn = lambda c, _: {"results": appdb.transaction(c, statements, audited)}
         else:
-            fn = lambda c, _: appdb.action(c, action_sql, req["params"])
+            audited = self._audited(
+                principal, target, {"op": "action", "action": req["name"], "params": req["params"]}
+            )
+            fn = lambda c, _: appdb.action(c, action_sql, req["params"], audited)
         async with self._lock(target.id):
             result = await self._run(target, fn, sources)
         changes = (
@@ -511,7 +597,9 @@ class AppData:
                     (target.id, schema_sql, Jsonb(plan.as_dicts()), Jsonb(plan.summary),
                      principal.user_id),
                 )  # fmt: skip
-                return await cur.fetchone()
+                row = await cur.fetchone()
+                await self._record_migration(principal, target, row, "held for approval")
+                return row
 
     async def built(
         self, principal: Principal, app: Row, version: str, schema_sql: str | None
@@ -572,7 +660,8 @@ class AppData:
             schema_sql = row["schema_sql"]
             plan = await self._run(target, lambda c, _: appschema.plan(c, schema_sql))
             if plan.as_dicts() != row["steps"]:
-                await self._decide(migration_id, principal, "superseded")
+                superseded = await self._decide(migration_id, principal, "superseded")
+                await self._record_migration(principal, target, superseded, "superseded")
                 raise Conflict("plan_changed")
             return await self._apply(target, principal, migration_id, plan, schema_sql, row)
 
@@ -584,7 +673,9 @@ class AppData:
                 row = await self._get_migration(conn, target.id, migration_id)
             if row["status"] != "pending":
                 raise Conflict("migration_not_pending")
-            return await self._decide(migration_id, principal, "rejected")
+            rejected = await self._decide(migration_id, principal, "rejected")
+            await self._record_migration(principal, target, rejected, "rejected")
+            return rejected
 
     async def _decide(
         self, migration_id: UUID, principal: Principal, status: str, **fields: Any
@@ -627,6 +718,8 @@ class AppData:
                      Jsonb(plan.summary), snapshot, error, principal.user_id, principal.user_id),
                 )  # fmt: skip
                 row = await cur.fetchone()
+        approved = " (approved)" if pending is not None else ""
+        await self._record_migration(principal, target, row, f"{status}{approved}")
         if error:
             raise MigrationFailed(row)
         self._changed(target)

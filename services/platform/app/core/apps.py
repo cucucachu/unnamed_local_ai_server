@@ -41,7 +41,7 @@ from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
-from app.core import appschema, beneath, fsops, manifest, spaces, vfs
+from app.core import appschema, audit, beneath, fsops, manifest, spaces, vfs
 from app.core.errors import Conflict, InvalidApp, InvalidInput, NotFound, ServerError
 from app.core.principal import Principal
 from app.core.storage import SpaceStorage
@@ -606,6 +606,12 @@ async def install_app(
                 ),
             )  # fmt: skip
             instance_id = (await cur.fetchone())["id"]
+            await audit.record(
+                conn, principal, "app.installed", f"installed {app['slug']} ({tracks})",
+                space_id=space_id, target_type="app_instance", target_id=instance_id,
+                detail={"app_id": str(app_id), "app": app["slug"], "tracks": tracks,
+                        "granted_permissions": granted, "granted_reads": reads},
+            )  # fmt: skip
             storage.ensure_instance(space_id, access.space["gid"], instance_id)
     except UniqueViolation as exc:
         if exc.diag.constraint_name == "app_instances_app_space_key":
@@ -625,13 +631,19 @@ async def uninstall_app(
     access = await spaces.authorize_space(conn, principal, space_id, "write")
     async with conn.transaction():
         cur = await conn.execute(
-            "UPDATE app_instances SET uninstalled_at = now() "
-            "WHERE id = %s AND space_id = %s AND uninstalled_at IS NULL RETURNING uninstalled_at",
+            "UPDATE app_instances i SET uninstalled_at = now() FROM apps a "
+            "WHERE i.id = %s AND i.space_id = %s AND i.uninstalled_at IS NULL AND a.id = i.app_id "
+            "RETURNING i.uninstalled_at, a.slug",
             (instance_id, space_id),
         )
         row = await cur.fetchone()
         if row is None:
             raise NotFound("not_found")
+        await audit.record(
+            conn, principal, "app.uninstalled", f"uninstalled {row['slug']} (data moved to trash)",
+            space_id=space_id, target_type="app_instance", target_id=instance_id,
+            detail={"app": row["slug"]},
+        )  # fmt: skip
         stamp = row["uninstalled_at"].astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         return storage.trash_instance(space_id, access.space["gid"], instance_id, stamp)
 
