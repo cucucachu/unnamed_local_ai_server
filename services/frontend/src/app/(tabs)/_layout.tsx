@@ -39,7 +39,8 @@ export default function ShellLayout() {
         headerShadowVisible: false,
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Chat' }} />
+      {/* Each pager page draws its own title bar (M19-08). */}
+      <Stack.Screen name="index" options={{ title: 'Home', headerShown: false }} />
       <Stack.Screen name="chat" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="apps" options={{ headerShown: false }} />
       <Stack.Screen name="files" options={{ title: 'Files', headerLeft: () => <BackHome /> }} />

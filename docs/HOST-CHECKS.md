@@ -314,13 +314,15 @@ space with an app in it.
       chat icon (with the badge) and a dot per space. Files, Routines and
       Settings open from their tiles on Personal, and Android's back from
       each returns to the same page.
-- [ ] (M19-02, M19-07) A cold launch opens an empty chat. Dragging right
-      from inside the chat (not the screen edge) or the menu button opens
-      the history; it shows five chats and **More** for the rest; search,
+- [ ] (M19-02, M19-07, M19-08) A cold launch opens an empty chat.
+      Dragging right anywhere on the chat (the very edge is still
+      Android's back gesture) opens the history every time, as easily as
+      swiping between pages; so does the menu button. Tapping the dimmed
+      chat beside it, swiping back, or Android's back closes it. It shows
+      five chats and **More** for the rest; search,
       the routine-runs filter, and rename and delete on long press work;
       **New chat** at the bottom of the drawer (easy to reach with a thumb,
-      stays put while the list scrolls) starts a new chat; the edge swipe
-      is still Android's back.
+      stays put while the list scrolls) starts a new chat.
 - [ ] (M19-03, M19-07) In an empty chat the big mic in the middle starts
       voice input in one tap (the first time, Android asks for the
       microphone); your words land in the message box; it goes away once

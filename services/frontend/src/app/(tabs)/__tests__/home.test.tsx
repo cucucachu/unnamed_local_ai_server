@@ -4,14 +4,7 @@ import { act, type ReactTestInstance, type ReactTestRenderer } from 'react-test-
 import { exists, flush, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../test-utils/screen';
 
 const mockPush = jest.fn();
-const mockScreenOptions = jest.fn();
 jest.mock('expo-router', () => ({
-  Stack: {
-    Screen: ({ options }: { options: unknown }) => {
-      mockScreenOptions(options);
-      return null;
-    },
-  },
   useRouter: () => ({ push: mockPush }),
   useFocusEffect: (effect: () => void) => {
     const { useEffect } = jest.requireActual('react');
@@ -19,10 +12,10 @@ jest.mock('expo-router', () => ({
   },
 }));
 
-const mockChatPageActive = jest.fn();
+const mockChatPage = jest.fn();
 jest.mock('@/components/ChatPage', () => ({
-  ChatPage: ({ active }: { active: boolean }) => {
-    mockChatPageActive(active);
+  ChatPage: (props: unknown) => {
+    mockChatPage(props);
     return null;
   },
 }));
@@ -32,6 +25,10 @@ jest.mock('@/lib/chatAttention', () => ({ useChatAttention: () => mockAttention 
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { gridColumns } from '@/components/AppGrid';
+// eslint-disable-next-line import/first -- must follow the jest.mock calls above
+import { drawerWidth } from '@/components/ChatHistoryDrawer';
+// eslint-disable-next-line import/first -- must follow the jest.mock calls above
+import type { PagedHistory } from '@/components/ChatPage';
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { getCurrentPage, resetCurrentPage, showPage } from '@/lib/currentPage';
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
@@ -79,8 +76,7 @@ let renderer: ReactTestRenderer | null = null;
 
 beforeEach(() => {
   mockPush.mockReset();
-  mockScreenOptions.mockReset();
-  mockChatPageActive.mockReset();
+  mockChatPage.mockReset();
   mockAttention = 0;
   resetCurrentPage();
 });
@@ -89,26 +85,38 @@ afterEach(() => {
   renderer = null;
 });
 
-const title = () => (mockScreenOptions.mock.calls.at(-1)?.[0] as { title?: string } | undefined)?.title;
-const chatActive = () => mockChatPageActive.mock.calls.at(-1)?.[0];
 const selectedTab = (target: ReactTestRenderer) =>
   target.root.find((node) => node.props.accessibilityRole === 'tab' && node.props['aria-selected'] && typeof node.props.onPress === 'function').props
     .testID;
 const page = (target: ReactTestRenderer, slug: string) =>
   target.root.find((node) => node.props.testID === `apps-space-${slug}` && typeof node.type !== 'string');
+const chatActive = () => selectedTab(renderer!) === 'home-page-chat';
+/** The page on screen's own title bar. */
+const title = () => {
+  const header = page(renderer!, selectedTab(renderer!).replace(/^home-space-/, '')).find(
+    (node) => node.props.accessibilityRole === 'header' && typeof node.type !== 'string',
+  );
+  return [header.props.children].flat().join('');
+};
+const pager = (target: ReactTestRenderer) =>
+  target.root.findAll((node) => node.props.testID === 'home-pages' && typeof node.props.onScroll === 'function')[0];
 const tilesOn = (pageNode: ReactTestInstance) =>
   pageNode
     .findAll((node) => typeof node.props.testID === 'string' && typeof node.props.onPress === 'function' && typeof node.type !== 'string')
     .map((node) => node.props.testID)
     .filter((id, index, all) => all.indexOf(id) === index);
 
-async function swipeTo(target: ReactTestRenderer, index: number, width = 390): Promise<void> {
-  const pager = target.root.find((node) => node.props.testID === 'home-pages' && typeof node.props.onScroll === 'function');
+async function layOut(target: ReactTestRenderer, width = 390): Promise<void> {
   await act(async () => {
-    pager.props.onLayout({ nativeEvent: { layout: { width, height: 700, x: 0, y: 0 } } });
+    pager(target).props.onLayout({ nativeEvent: { layout: { width, height: 700, x: 0, y: 0 } } });
   });
+}
+
+/** Scrolls to page `index` (0 is Chat), past the history page; `x` overrides. */
+async function swipeTo(target: ReactTestRenderer, index: number, width = 390, x?: number): Promise<void> {
+  await layOut(target, width);
   await act(async () => {
-    pager.props.onScroll({ nativeEvent: { contentOffset: { x: index * width, y: 0 } } });
+    pager(target).props.onScroll({ nativeEvent: { contentOffset: { x: x ?? drawerWidth(width) + index * width, y: 0 } } });
   });
 }
 
@@ -198,6 +206,26 @@ describe('HomeScreen pager (M19-07)', () => {
     await flush();
     expect(loads()).toBe(before + 2);
     expect(title()).toBe('Book club');
+  });
+
+  it('on a phone the history is a narrower page left of Chat, snapped to (M19-08)', async () => {
+    threeSpaces();
+    renderer = await render(HomeScreen);
+    await layOut(renderer);
+    const lead = drawerWidth(390);
+    expect(lead).toBe(332);
+    expect(pager(renderer).props.pagingEnabled).toBe(false);
+    expect(pager(renderer).props.snapToOffsets).toEqual([0, lead, lead + 390, lead + 780, lead + 1170]);
+    const paged = mockChatPage.mock.calls.at(-1)?.[0].paged as PagedHistory;
+    expect(paged.width).toBe(lead);
+
+    await swipeTo(renderer, 2);
+    await swipeTo(renderer, 0, 390, 40);
+    expect(chatActive()).toBe(false);
+    await swipeTo(renderer, 0, 390, lead - 40);
+    expect(chatActive()).toBe(true);
+    await swipeTo(renderer, 0, 390, 10);
+    expect(chatActive()).toBe(true);
   });
 
   it('the chat indicator carries the chats-needing-you count', async () => {

@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Platform,
   Pressable,
   ScrollView,
@@ -13,11 +14,11 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppActionSheet } from '@/components/AppActionSheet';
-import { ChatPage } from '@/components/ChatPage';
+import { drawerWidth } from '@/components/ChatHistoryDrawer';
+import { ChatPage, type PagedHistory } from '@/components/ChatPage';
 import { SpacePage, spaceLabel } from '@/components/SpacePage';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
@@ -49,8 +50,9 @@ interface Menu {
 
 /**
  * The home screen (M19-07): one row of pages you swipe through — Chat, then
- * each space's apps (Personal first, then shared spaces by name). On the
- * Chat page a swipe right opens the history drawer instead. The indicator
+ * each space's apps (Personal first, then shared spaces by name). On a
+ * phone the chat history is a page left of Chat (M19-08), narrower so the
+ * chat still shows beside it, so a swipe right from Chat opens it. The indicator
  * at the bottom (a chat icon with the M17-10 attention count, then a dot
  * per space) shows the page and jumps on tap; it hides while the keyboard
  * is up. The page is kept for the session (`lib/currentPage.ts`); a cold
@@ -70,7 +72,24 @@ export default function HomeScreen() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [busy, setBusy] = useState<'rebuild' | 'uninstall' | null>(null);
   const { message: toast, showToast } = useToast();
-  const pagerGesture = useMemo(() => Gesture.Native(), []);
+
+  // A phone has the history page first; its snap points aren't a page
+  // width apart, so it snaps to offsets rather than paging.
+  const historyPage = Platform.OS !== 'web';
+  const lead = historyPage ? drawerWidth(width) : 0;
+  const [scrollX] = useState(() => new Animated.Value(Number.MAX_SAFE_INTEGER));
+  const paged = useMemo<PagedHistory | undefined>(
+    () =>
+      historyPage
+        ? {
+            width: lead,
+            scrollX,
+            open: () => pager.current?.scrollTo({ x: 0, animated: true }),
+            close: () => pager.current?.scrollTo({ x: lead, animated: true }),
+          }
+        : undefined,
+    [historyPage, lead, scrollX],
+  );
 
   const focused = useRef(false);
   useFocusEffect(
@@ -105,14 +124,17 @@ export default function HomeScreen() {
   // the spaces before landing on one.
   const ready = page === 'chat' || data !== null;
   useEffect(() => {
-    if (width > 0 && ready) pager.current?.scrollTo({ x: indexOf(page) * width, animated: false });
+    if (width > 0 && ready) pager.current?.scrollTo({ x: lead + indexOf(page) * width, animated: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jumps, layout and the page count move the pager, not swipes
   }, [jump, width, ready, pages.length]);
+  const snapTo = useMemo(() => (historyPage ? [0, ...pages.map((_, index) => lead + index * width)] : undefined), [historyPage, pages, lead, width]);
 
   const onLayout = (event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width);
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (width <= 0) return;
-    const index = Math.round(event.nativeEvent.contentOffset.x / width);
+    const x = event.nativeEvent.contentOffset.x;
+    scrollX.setValue(x);
+    if (width <= 0 || x < lead / 2) return;
+    const index = Math.round((x - lead) / width);
     if (pages[index] === undefined) return;
     noteShown(index);
     pageSwiped(pages[index]);
@@ -164,39 +186,35 @@ export default function HomeScreen() {
     }
   };
 
-  const content = (
-    <ScrollView
-      ref={pager}
-      horizontal
-      pagingEnabled
-      showsHorizontalScrollIndicator={false}
-      keyboardShouldPersistTaps="handled"
-      onLayout={onLayout}
-      onScroll={onScroll}
-      scrollEventThrottle={32}
-      style={styles.container}
-      testID="home-pages"
-    >
-      <View style={[styles.chatPage, { width: width || undefined }]} testID="home-page-chat-content">
-        <ChatPage active={activeIndex === 0} swipeBlocks={Platform.OS === 'web' ? undefined : pagerGesture} />
-      </View>
-      {groups.map(({ space, instances }, index) => (
-        <SpacePage
-          key={space.id}
-          space={space}
-          instances={instances}
-          active={activeIndex === index + 1}
-          width={width}
-          onRefresh={reload}
-          onLongPressApp={openMenu}
-        />
-      ))}
-    </ScrollView>
-  );
-
   return (
     <View style={styles.container} testID="home-launcher">
-      {Platform.OS === 'web' ? content : <GestureDetector gesture={pagerGesture}>{content}</GestureDetector>}
+      <ScrollView
+        ref={pager}
+        horizontal
+        pagingEnabled={!historyPage}
+        snapToOffsets={snapTo}
+        decelerationRate={historyPage ? 'fast' : undefined}
+        disableIntervalMomentum
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        onLayout={onLayout}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        style={styles.container}
+        testID="home-pages"
+      >
+        <ChatPage width={width} paged={paged} />
+        {groups.map(({ space, instances }) => (
+          <SpacePage
+            key={space.id}
+            space={space}
+            instances={instances}
+            width={width}
+            onRefresh={reload}
+            onLongPressApp={openMenu}
+          />
+        ))}
+      </ScrollView>
 
       {!keyboardUp ? (
         <View style={[styles.indicator, { paddingBottom: 10 + insets.bottom }]} accessibilityRole="tablist" testID="home-page-indicator">
@@ -280,9 +298,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
-  },
-  chatPage: {
-    flex: 1,
   },
   indicator: {
     flexDirection: 'row',
