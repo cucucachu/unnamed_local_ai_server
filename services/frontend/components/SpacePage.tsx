@@ -1,7 +1,8 @@
-import { Stack, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppGrid, AppTile } from '@/components/AppGrid';
+import { PageHeader } from '@/components/PageHeader';
 import { settingsStyles } from '@/components/SettingsUI';
 import type { Instance } from '@/lib/apps';
 import { isReadOnly, spacePath, type Space } from '@/lib/platform';
@@ -16,7 +17,6 @@ export function spaceLabel(space: Space): string {
 export interface SpacePageProps {
   space: Space;
   instances: Instance[];
-  active: boolean;
   width: number;
   onRefresh: () => void;
   onLongPressApp: (instance: Instance, space: Space) => void;
@@ -28,87 +28,90 @@ export interface SpacePageProps {
  * Settings, which belong to the user rather than a space, are on Personal
  * only; Add app (the space's catalog) comes last where the user can install.
  * A dot marks an update. Tap opens the runner; long press opens the app's
- * action sheet. Sets the header (the space's name) while it's on screen.
+ * action sheet. Titled with the space's name.
  */
-export function SpacePage({ space, instances, active, width, onRefresh, onLongPressApp }: SpacePageProps) {
+export function SpacePage({ space, instances, width, onRefresh, onLongPressApp }: SpacePageProps) {
   const router = useRouter();
   const readOnly = isReadOnly(space);
   const label = spaceLabel(space);
   return (
-    <ScrollView
-      style={{ width: width || undefined }}
-      contentContainerStyle={styles.page}
-      refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} tintColor={theme.textMuted} />}
-      testID={`apps-space-${space.slug}`}
-    >
-      {active ? <Stack.Screen options={{ title: label, headerLeft: () => null }} /> : null}
-      <AppGrid>
-        <AppTile
-          slug="files"
-          name="Files"
-          icon="folder"
-          color={SYSTEM_COLOR}
-          onPress={() => router.push({ pathname: '/files', params: { path: spacePath(space) } })}
-          testID="home-open-files"
-        />
-        {space.kind === 'personal' ? (
+    <View style={[styles.container, { width: width || undefined }]} testID={`apps-space-${space.slug}`}>
+      <PageHeader title={label} />
+      <ScrollView
+        contentContainerStyle={styles.page}
+        refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} tintColor={theme.textMuted} />}
+      >
+        <AppGrid>
           <AppTile
-            slug="routines"
-            name="Routines"
-            icon="alarm"
+            slug="files"
+            name="Files"
+            icon="folder"
             color={SYSTEM_COLOR}
-            onPress={() => router.push('/routines')}
-            testID="home-open-routines"
+            onPress={() => router.push({ pathname: '/files', params: { path: spacePath(space) } })}
+            testID="home-open-files"
           />
+          {space.kind === 'personal' ? (
+            <AppTile
+              slug="routines"
+              name="Routines"
+              icon="alarm"
+              color={SYSTEM_COLOR}
+              onPress={() => router.push('/routines')}
+              testID="home-open-routines"
+            />
+          ) : null}
+          {space.kind === 'personal' ? (
+            <AppTile
+              slug="settings"
+              name="Settings"
+              icon="settings"
+              color={SYSTEM_COLOR}
+              onPress={() => router.push('/settings')}
+              testID="home-open-settings"
+            />
+          ) : null}
+          {instances.map((instance) => (
+            <AppTile
+              key={instance.id}
+              slug={instance.app.slug}
+              name={instance.app.name}
+              icon={instance.app.icon}
+              badge={instance.update !== null && !readOnly}
+              note={readOnly ? 'View only' : undefined}
+              onPress={() => router.push({ pathname: '/apps/[instanceId]', params: { instanceId: instance.id } })}
+              onLongPress={() => onLongPressApp(instance, space)}
+              testID={`apps-open-${instance.app.slug}`}
+            />
+          ))}
+          {!readOnly ? (
+            <AppTile
+              slug="add"
+              name="Add app"
+              icon="add"
+              color={theme.surface}
+              onPress={() => router.push({ pathname: '/apps/catalog', params: { spaceId: space.id } })}
+              testID="apps-add"
+            />
+          ) : null}
+        </AppGrid>
+        {instances.length === 0 ? (
+          <View style={styles.empty} testID="apps-empty">
+            <Text style={settingsStyles.muted}>
+              {readOnly
+                ? `No apps in ${label} yet.`
+                : `No apps in ${label} yet. Add one from the catalog, or ask the agent to make one.`}
+            </Text>
+          </View>
         ) : null}
-        {space.kind === 'personal' ? (
-          <AppTile
-            slug="settings"
-            name="Settings"
-            icon="settings"
-            color={SYSTEM_COLOR}
-            onPress={() => router.push('/settings')}
-            testID="home-open-settings"
-          />
-        ) : null}
-        {instances.map((instance) => (
-          <AppTile
-            key={instance.id}
-            slug={instance.app.slug}
-            name={instance.app.name}
-            icon={instance.app.icon}
-            badge={instance.update !== null && !readOnly}
-            note={readOnly ? 'View only' : undefined}
-            onPress={() => router.push({ pathname: '/apps/[instanceId]', params: { instanceId: instance.id } })}
-            onLongPress={() => onLongPressApp(instance, space)}
-            testID={`apps-open-${instance.app.slug}`}
-          />
-        ))}
-        {!readOnly ? (
-          <AppTile
-            slug="add"
-            name="Add app"
-            icon="add"
-            color={theme.surface}
-            onPress={() => router.push({ pathname: '/apps/catalog', params: { spaceId: space.id } })}
-            testID="apps-add"
-          />
-        ) : null}
-      </AppGrid>
-      {instances.length === 0 ? (
-        <View style={styles.empty} testID="apps-empty">
-          <Text style={settingsStyles.muted}>
-            {readOnly
-              ? `No apps in ${label} yet.`
-              : `No apps in ${label} yet. Add one from the catalog, or ask the agent to make one.`}
-          </Text>
-        </View>
-      ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
   page: {
     width: '100%',
     maxWidth: 1100,

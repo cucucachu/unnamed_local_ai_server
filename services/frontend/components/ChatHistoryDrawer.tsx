@@ -42,14 +42,22 @@ function confirmDeleteThread(title: string): Promise<boolean> {
 /** Chats listed before "More" (unless searching). */
 export const DRAWER_PREVIEW = 5;
 
+const DRAWER_MAX_WIDTH = 360;
+
+/** How wide the history is on a screen `width` wide. */
+export function drawerWidth(width: number): number {
+  return Math.min(Math.round(width * 0.85), DRAWER_MAX_WIDTH);
+}
+
 /**
- * Chat history (M19-02): slides over the chat from the left. Chats come in
- * the server's order (needs approval, then unread, then recent; M17-10);
- * the first five show until "More", and a search looks through them all.
- * Long press a chat to rename or delete it. New chat is a wide button
- * pinned to the bottom, in thumb reach.
+ * Chat history (M19-02). Chats come in the server's order (needs approval,
+ * then unread, then recent; M17-10); the first five show until "More", and
+ * a search looks through them all. Long press a chat to rename or delete
+ * it. New chat is a wide button pinned to the bottom, in thumb reach. On a
+ * phone it's the home pager's first page, left of Chat (M19-08); on web it
+ * slides over the chat (`ChatHistoryDrawer`).
  */
-export function ChatHistoryDrawer({
+export function ChatHistoryPanel({
   open,
   threads,
   loadState,
@@ -89,139 +97,130 @@ export function ChatHistoryDrawer({
   };
 
   return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <View style={[styles.panel, { paddingTop: insets.top + 8, paddingBottom: insets.bottom }]} testID="chat-drawer">
-          <View style={styles.header}>
-            <Text style={styles.title}>Chats</Text>
+    <>
+      <View style={[styles.panel, { paddingTop: insets.top + 8, paddingBottom: insets.bottom }]} testID="chat-drawer">
+        <View style={styles.header}>
+          <Text style={styles.title}>Chats</Text>
+          <Pressable
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close chats"
+            testID="chat-drawer-close"
+            style={styles.iconButton}
+          >
+            <Ionicons name="close" size={22} color={theme.text} />
+          </Pressable>
+        </View>
+        <TextInput
+          style={styles.search}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search chats"
+          placeholderTextColor={theme.textMuted}
+          testID="chat-drawer-search"
+        />
+        {hasRoutineRuns ? (
+          <View style={styles.filters}>
             <Pressable
-              onPress={onClose}
-              accessibilityRole="button"
-              accessibilityLabel="Close chats"
-              testID="chat-drawer-close"
-              style={styles.iconButton}
+              onPress={() => setShowRoutineRuns((prev) => !prev)}
+              style={[styles.filterChip, showRoutineRuns && styles.filterChipOn]}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: showRoutineRuns }}
+              accessibilityLabel="Show routine runs"
+              testID="thread-filter-routine-runs"
             >
-              <Ionicons name="close" size={22} color={theme.text} />
+              <Ionicons name="alarm-outline" size={14} color={theme.text} />
+              <Text style={styles.filterChipText}>Routine runs</Text>
             </Pressable>
           </View>
-          <TextInput
-            style={styles.search}
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search chats"
-            placeholderTextColor={theme.textMuted}
-            testID="chat-drawer-search"
-          />
-          {hasRoutineRuns ? (
-            <View style={styles.filters}>
-              <Pressable
-                onPress={() => setShowRoutineRuns((prev) => !prev)}
-                style={[styles.filterChip, showRoutineRuns && styles.filterChipOn]}
-                accessibilityRole="switch"
-                accessibilityState={{ checked: showRoutineRuns }}
-                accessibilityLabel="Show routine runs"
-                testID="thread-filter-routine-runs"
-              >
-                <Ionicons name="alarm-outline" size={14} color={theme.text} />
-                <Text style={styles.filterChipText}>Routine runs</Text>
+        ) : null}
+        <View style={styles.list}>
+          {loadState === 'loading' && threads.length === 0 ? (
+            <View style={styles.centered}>
+              <ActivityIndicator color={theme.accent} />
+            </View>
+          ) : loadState === 'error' && threads.length === 0 ? (
+            <View style={styles.centered}>
+              <Text style={styles.errorText}>Couldn&apos;t load your conversations.</Text>
+              <Pressable style={styles.retryButton} onPress={onRetry} accessibilityRole="button" testID="chat-drawer-retry">
+                <Text style={styles.retryButtonText}>Retry</Text>
               </Pressable>
             </View>
-          ) : null}
-          <View style={styles.list}>
-            {loadState === 'loading' && threads.length === 0 ? (
-              <View style={styles.centered}>
-                <ActivityIndicator color={theme.accent} />
-              </View>
-            ) : loadState === 'error' && threads.length === 0 ? (
-              <View style={styles.centered}>
-                <Text style={styles.errorText}>Couldn&apos;t load your conversations.</Text>
-                <Pressable style={styles.retryButton} onPress={onRetry} accessibilityRole="button" testID="chat-drawer-retry">
-                  <Text style={styles.retryButtonText}>Retry</Text>
-                </Pressable>
-              </View>
-            ) : shown.length === 0 ? (
-              <View style={styles.centered}>
-                <Text style={styles.emptyText} testID="chat-drawer-empty">
-                  {threads.length === 0 ? 'No conversations yet' : 'No matching chats'}
-                </Text>
-              </View>
-            ) : (
-              <FlatList
-                data={listed}
-                keyExtractor={(thread) => thread.id}
-                renderItem={({ item }) => (
-                  <ThreadRow
-                    thread={item}
-                    current={item.id === currentThreadId}
-                    onPress={() => onSelect(item.id)}
-                    onLongPress={() => setMenuThread(item)}
-                  />
-                )}
-                ListFooterComponent={
-                  limited ? (
-                    <Pressable style={styles.more} onPress={() => setExpanded(true)} accessibilityRole="button" testID="chat-drawer-more">
-                      <Text style={styles.moreText}>More ({shown.length - DRAWER_PREVIEW})</Text>
-                      <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
-                    </Pressable>
-                  ) : null
-                }
-              />
-            )}
-          </View>
-          <Pressable
-            style={styles.newChat}
-            onPress={onNewChat}
-            accessibilityRole="button"
-            accessibilityLabel="New chat"
-            testID="chat-drawer-new-chat"
-          >
-            <Ionicons name="add" size={22} color={theme.text} />
-            <Text style={styles.newChatText}>New chat</Text>
-          </Pressable>
-          {menuThread !== null ? (
-            <View style={styles.menu} testID="thread-action-sheet">
-              <Text style={styles.menuTitle} numberOfLines={1}>
-                {menuThread.title}
+          ) : shown.length === 0 ? (
+            <View style={styles.centered}>
+              <Text style={styles.emptyText} testID="chat-drawer-empty">
+                {threads.length === 0 ? 'No conversations yet' : 'No matching chats'}
               </Text>
-              <Pressable
-                style={styles.menuItem}
-                onPress={() => {
-                  setRenaming(menuThread);
-                  setMenuThread(null);
-                }}
-                accessibilityRole="button"
-                testID="thread-action-rename"
-              >
-                <Ionicons name="pencil-outline" size={18} color={theme.text} />
-                <Text style={styles.menuItemText}>Rename</Text>
-              </Pressable>
-              <Pressable
-                style={styles.menuItem}
-                onPress={() => void handleDelete(menuThread)}
-                accessibilityRole="button"
-                testID="thread-action-delete"
-              >
-                <Ionicons name="trash-outline" size={18} color={theme.danger} />
-                <Text style={[styles.menuItemText, styles.menuItemDanger]}>Delete</Text>
-              </Pressable>
-              <Pressable
-                style={styles.menuItem}
-                onPress={() => setMenuThread(null)}
-                accessibilityRole="button"
-                testID="thread-action-cancel"
-              >
-                <Text style={styles.menuItemText}>Cancel</Text>
-              </Pressable>
             </View>
-          ) : null}
+          ) : (
+            <FlatList
+              data={listed}
+              keyExtractor={(thread) => thread.id}
+              renderItem={({ item }) => (
+                <ThreadRow
+                  thread={item}
+                  current={item.id === currentThreadId}
+                  onPress={() => onSelect(item.id)}
+                  onLongPress={() => setMenuThread(item)}
+                />
+              )}
+              ListFooterComponent={
+                limited ? (
+                  <Pressable style={styles.more} onPress={() => setExpanded(true)} accessibilityRole="button" testID="chat-drawer-more">
+                    <Text style={styles.moreText}>More ({shown.length - DRAWER_PREVIEW})</Text>
+                    <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
+                  </Pressable>
+                ) : null
+              }
+            />
+          )}
         </View>
         <Pressable
-          style={styles.backdrop}
-          onPress={onClose}
+          style={styles.newChat}
+          onPress={onNewChat}
           accessibilityRole="button"
-          accessibilityLabel="Close chats"
-          testID="chat-drawer-backdrop"
-        />
+          accessibilityLabel="New chat"
+          testID="chat-drawer-new-chat"
+        >
+          <Ionicons name="add" size={22} color={theme.text} />
+          <Text style={styles.newChatText}>New chat</Text>
+        </Pressable>
+        {menuThread !== null ? (
+          <View style={styles.menu} testID="thread-action-sheet">
+            <Text style={styles.menuTitle} numberOfLines={1}>
+              {menuThread.title}
+            </Text>
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => {
+                setRenaming(menuThread);
+                setMenuThread(null);
+              }}
+              accessibilityRole="button"
+              testID="thread-action-rename"
+            >
+              <Ionicons name="pencil-outline" size={18} color={theme.text} />
+              <Text style={styles.menuItemText}>Rename</Text>
+            </Pressable>
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => void handleDelete(menuThread)}
+              accessibilityRole="button"
+              testID="thread-action-delete"
+            >
+              <Ionicons name="trash-outline" size={18} color={theme.danger} />
+              <Text style={[styles.menuItemText, styles.menuItemDanger]}>Delete</Text>
+            </Pressable>
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => setMenuThread(null)}
+              accessibilityRole="button"
+              testID="thread-action-cancel"
+            >
+              <Text style={styles.menuItemText}>Cancel</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
       {renaming !== null ? (
         <PromptModal
@@ -235,6 +234,26 @@ export function ChatHistoryDrawer({
           onCancel={() => setRenaming(null)}
         />
       ) : null}
+    </>
+  );
+}
+
+/** The history panel sliding over the chat, with a backdrop that closes it. */
+export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
+  return (
+    <Modal visible={props.open} transparent animationType="fade" onRequestClose={props.onClose}>
+      <View style={styles.overlay}>
+        <View style={styles.drawerPanel}>
+          <ChatHistoryPanel {...props} />
+        </View>
+        <Pressable
+          style={styles.backdrop}
+          onPress={props.onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close chats"
+          testID="chat-drawer-backdrop"
+        />
+      </View>
     </Modal>
   );
 }
@@ -281,9 +300,12 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
   },
-  panel: {
+  drawerPanel: {
     width: '85%',
-    maxWidth: 360,
+    maxWidth: DRAWER_MAX_WIDTH,
+  },
+  panel: {
+    flex: 1,
     backgroundColor: theme.bg,
     borderRightWidth: 1,
     borderRightColor: theme.border,
