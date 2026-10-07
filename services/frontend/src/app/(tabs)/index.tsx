@@ -92,19 +92,30 @@ export default function HomeScreen() {
   );
   const activeIndex = indexOf(page);
 
-  // A jump (a link, the indicator, the first layout) scrolls to the page;
-  // a swipe is already there. Waits for the spaces before landing on one.
+  // Leaving Chat for a space refetches the spaces and apps: chat may have
+  // made or installed one.
+  const shownIndex = useRef(activeIndex);
+  const noteShown = (index: number) => {
+    if (shownIndex.current === 0 && index > 0) reload();
+    shownIndex.current = index;
+  };
+
+  // A jump (a link, the indicator, the first layout) scrolls to the page,
+  // as does a space appearing or going; a swipe is already there. Waits for
+  // the spaces before landing on one.
   const ready = page === 'chat' || data !== null;
   useEffect(() => {
     if (width > 0 && ready) pager.current?.scrollTo({ x: indexOf(page) * width, animated: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only jumps and layout move the pager, not swipes
-  }, [jump, width, ready]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jumps, layout and the page count move the pager, not swipes
+  }, [jump, width, ready, pages.length]);
 
   const onLayout = (event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width);
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (width <= 0) return;
     const index = Math.round(event.nativeEvent.contentOffset.x / width);
-    if (pages[index] !== undefined) pageSwiped(pages[index]);
+    if (pages[index] === undefined) return;
+    noteShown(index);
+    pageSwiped(pages[index]);
   };
 
   const openMenu = useCallback((instance: Instance, space: Space) => {
@@ -190,7 +201,10 @@ export default function HomeScreen() {
       {!keyboardUp ? (
         <View style={[styles.indicator, { paddingBottom: 10 + insets.bottom }]} accessibilityRole="tablist" testID="home-page-indicator">
           <Pressable
-            onPress={() => showPage('chat')}
+            onPress={() => {
+              noteShown(0);
+              showPage('chat');
+            }}
             hitSlop={8}
             accessibilityRole="tab"
             accessibilityLabel="Chat"
@@ -211,7 +225,10 @@ export default function HomeScreen() {
           {groups.map(({ space }, index) => (
             <Pressable
               key={space.id}
-              onPress={() => showPage(space.id)}
+              onPress={() => {
+                noteShown(index + 1);
+                showPage(space.id);
+              }}
               hitSlop={8}
               accessibilityRole="tab"
               accessibilityLabel={spaceLabel(space)}

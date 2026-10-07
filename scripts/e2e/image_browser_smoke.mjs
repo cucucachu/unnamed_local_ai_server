@@ -50,7 +50,7 @@ const RUN_SUFFIX = `${process.pid}-${Date.now()}`;
 const IMAGE_FILE_NAME = `image-browser-smoke-${RUN_SUFFIX}.png`;
 
 async function waitForVisibleText(page, text, timeoutMs = UI_TIMEOUT_MS) {
-  const locator = page.getByText(text, { exact: true }).first();
+  const locator = page.getByTestId('files-screen').getByText(text, { exact: true }).first();
   await locator.waitFor({ state: 'visible', timeout: timeoutMs });
   return locator;
 }

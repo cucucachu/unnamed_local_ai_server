@@ -82,8 +82,9 @@ try {
   check(await inView(personalPage), 'a reload keeps Personal (session)');
   check(!(await inView(sharedPage)), 'the shared page starts off screen');
 
+  const pagerWidth = await page.getByTestId('home-pages').evaluate((el) => el.clientWidth);
   await page.getByTestId('home-pages').hover();
-  await page.mouse.wheel(300, 0);
+  await page.mouse.wheel(pagerWidth * 0.8, 0);
   await page.waitForFunction((slug) => document.querySelector(`[data-testid="home-space-${slug}"]`)?.getAttribute('aria-selected') === 'true', SLUG, { timeout: TIMEOUT_MS });
   ok('a horizontal swipe moved to the shared page');
   await page.waitForFunction(() => {

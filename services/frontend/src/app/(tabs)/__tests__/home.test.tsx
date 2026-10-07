@@ -184,6 +184,22 @@ describe('HomeScreen pager (M19-07)', () => {
     expect(title()).toBe('Personal');
   });
 
+  it('leaving Chat for a space refetches the spaces (chat may have added one)', async () => {
+    const fetchMock = threeSpaces();
+    renderer = await render(HomeScreen);
+    const loads = () => requestsTo(fetchMock, 'GET', '/api/platform/spaces').length;
+    const before = loads();
+    await swipeTo(renderer, 1);
+    expect(loads()).toBe(before + 1);
+    await swipeTo(renderer, 2);
+    expect(loads()).toBe(before + 1);
+    await press(renderer, 'home-page-chat');
+    await press(renderer, 'home-space-shared-s3');
+    await flush();
+    expect(loads()).toBe(before + 2);
+    expect(title()).toBe('Book club');
+  });
+
   it('the chat indicator carries the chats-needing-you count', async () => {
     mockAttention = 2;
     threeSpaces();

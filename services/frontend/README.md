@@ -22,11 +22,12 @@ M2-06, the files UI in M3-05.
 
 ```
 src/app/_layout.tsx          root layout (dark theme, no header)
-src/app/(tabs)/_layout.tsx   tab navigator (Chat, Apps; Files/Routines/Settings hidden, M19-01)
-src/app/(tabs)/apps/         Apps grid (M14-02, M19-04/05): a swipeable page per space + the system dock, long press for actions; [instanceId] is the app runner
-src/app/(tabs)/chat/         Chat tab: the current chat + history drawer (M19-02); [threadId] is a deep link
-src/app/(tabs)/files.tsx     Files tab
-src/app/(tabs)/settings/     Settings tab stack (M10-07 hub; a tab since M14-02): account, sessions, spaces, users + invites (admins)
+src/app/(tabs)/_layout.tsx   the shell Stack (M19-07): Home, with Files, Routines, Settings and the apps routes pushed on top
+src/app/(tabs)/index.tsx     Home (M19-07): a pager of the Chat page (components/ChatPage.tsx) and a page per space (components/SpacePage.tsx), swiped through
+src/app/(tabs)/apps/         The catalog, install, update, app info; [instanceId] is the app runner
+src/app/(tabs)/chat/         [threadId] is a deep link into a chat (the Chat page and its history drawer are on Home)
+src/app/(tabs)/files.tsx     Files (a tile on every space page)
+src/app/(tabs)/settings/     Settings stack (M10-07 hub; a tile on Personal since M19-07): account, sessions, spaces, users + invites (admins)
 src/app/login.tsx            signed-out entry: Setup (bootstrap open) or Login
 src/app/invite.tsx           invite accept (/invite?token=…, homeai://invite?token=…)
 lib/platform.ts              platform /api/platform/* client (me, sessions, TOTP, spaces, members, admin)
