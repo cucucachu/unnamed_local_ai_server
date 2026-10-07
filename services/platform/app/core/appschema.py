@@ -17,6 +17,13 @@ transaction with foreign keys off (table rebuilds need it), then requires
 `PRAGMA foreign_key_check` to be clean and a re-diff to come back empty
 before it commits; anything else rolls back and raises `MigrationError`.
 
+Every table also gets the platform's attribution columns (`STAMP_COLUMNS`:
+`_created_by`, `_created_at`, `_updated_by`, `_updated_at`), added to the
+scratch database right after the CREATE TABLE that makes it, so they diff
+in like any column (an additive ADD COLUMN on existing instances) and
+schema.sql may index them. schema.sql can't declare them itself.
+`appdb.stamp` fills them on every write.
+
 Ported from the M12-01 spike (`spikes/app_runtime/schema/pydiff.py`, which
 classified its 15-case matrix correctly where sqlite3def didn't).
 Standard library only.
@@ -32,6 +39,8 @@ from dataclasses import asdict, dataclass
 MAX_SCHEMA_BYTES = 256 * 1024
 MAX_MIGRATION_S = 60.0
 RESERVED_PREFIXES = ("_homeai_", "sqlite_")
+# Who created / last changed each row and when (UTC ISO 8601): set by the platform only.
+STAMP_COLUMNS = ("_created_by", "_created_at", "_updated_by", "_updated_at")
 _REBUILD_PREFIX = "_homeai_new_"
 
 KINDS = ("additive", "safe", "destructive")
@@ -103,21 +112,61 @@ def _deadline_handler(seconds: float):
     return lambda: int(time.monotonic() > deadline)
 
 
+def _statements(sql: str) -> list[str]:
+    """`sql` cut at each `;` that ends a complete statement."""
+    out, start = [], 0
+    for i, ch in enumerate(sql):
+        if ch == ";" and sqlite3.complete_statement(sql[start : i + 1]):
+            out.append(sql[start : i + 1])
+            start = i + 1
+    if sql[start:].strip():
+        out.append(sql[start:])
+    return out
+
+
+def _add_stamps(con: sqlite3.Connection, stamped: set[str]) -> None:
+    """The attribution columns on every table not yet in `stamped` (which this updates)."""
+    for (name,) in con.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' "
+        "ESCAPE '\\'"
+    ).fetchall():
+        if name in stamped:
+            continue
+        cols = {r[1].lower() for r in con.execute(f"PRAGMA table_xinfo({quote(name)})")}
+        declared = [c for c in STAMP_COLUMNS if c in cols]
+        if declared:
+            raise SchemaError(
+                f"schema.sql: table {name} declares {', '.join(declared)}; the platform adds "
+                f"{', '.join(STAMP_COLUMNS)} to every table itself"
+            )
+        for col in STAMP_COLUMNS:
+            con.execute(f"ALTER TABLE {quote(name)} ADD COLUMN {col} TEXT")
+        stamped.add(name)
+
+
 def scratch_from(schema_sql: str) -> sqlite3.Connection:
     """`schema_sql` executed into a fresh `:memory:` database, or `SchemaError`."""
     if len(schema_sql.encode()) > MAX_SCHEMA_BYTES:
         raise SchemaError(f"schema.sql is larger than {MAX_SCHEMA_BYTES // 1024} KiB")
     con = sqlite3.connect(":memory:", isolation_level=None)
-    con.set_authorizer(_schema_authorizer)
     con.set_progress_handler(_deadline_handler(10.0), 1000)
+    stamped: set[str] = set()
     try:
-        con.executescript(schema_sql)
+        for stmt in _statements(schema_sql):
+            con.set_authorizer(_schema_authorizer)
+            try:
+                con.executescript(stmt)
+            finally:
+                con.set_authorizer(None)
+            _add_stamps(con, stamped)
     except sqlite3.Error as exc:
         con.close()
         raise SchemaError(
             f"schema.sql: {exc} (only CREATE TABLE / CREATE INDEX statements are allowed)"
         ) from exc
-    con.set_authorizer(None)
+    except SchemaError:
+        con.close()
+        raise
     con.set_progress_handler(None, 0)
     names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE sql IS NOT NULL")]
     reserved = [n for n in names if n.lower().startswith(RESERVED_PREFIXES)]

@@ -22,6 +22,14 @@ transaction control, other pragmas and `load_extension` are refused, and
 `VACUUM INTO` bump in `publish()`). Every op has a wall-clock budget
 (progress handler), and results are capped in rows and bytes.
 
+Attribution (`appschema.STAMP_COLUMNS`): before a write op, `stamp()` puts
+the caller in `temp._homeai_actor` and adds TEMP triggers on every table
+that has the columns, setting `_created_*` and `_updated_*` after each
+INSERT and `_updated_*` after each UPDATE. Only those triggers may UPDATE
+the columns or read the actor table (the authorizer checks the trigger
+name it is given), and a value an INSERT supplies is overwritten, so
+neither app code nor an agent's SQL can attribute a row to someone else.
+
 Standard library only.
 """
 
@@ -82,6 +90,11 @@ _OTHER_STATEMENTS = frozenset(
     {"alter", "analyze", "attach", "begin", "commit", "create", "detach", "drop", "end",
      "reindex", "release", "rollback", "savepoint", "vacuum"}
 )  # fmt: skip
+
+
+STAMP_TRIGGER_PREFIX = "_homeai_stamp_"
+ACTOR_TABLE = "_homeai_actor"
+_STAMPS = frozenset(appschema.STAMP_COLUMNS)
 
 
 class InstanceStorageError(Exception):
@@ -305,13 +318,24 @@ def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> No
     )
 
 
-def _authorizer(write: bool, scope: _AttachState | None = None):
+def _authorizer(write: bool, scope: _AttachState | None = None, denied: list[str] | None = None):
+    """`denied` gets a reason when a refusal deserves a more specific message."""
     allowed = _WRITE_ACTIONS if write else _READ_ACTIONS
     extra_tables = scope.tables if scope is not None else {}
     views = scope.views if scope is not None else frozenset()
 
     def check(action, arg1, arg2, dbname, source):
         db = (dbname or "main").lower()
+        stamping = (source or "").startswith(STAMP_TRIGGER_PREFIX)
+        if action == sqlite3.SQLITE_UPDATE and (arg2 or "").lower() in _STAMPS and not stamping:
+            if denied is not None:
+                denied.append(
+                    f"{arg2} is set by the platform: {', '.join(appschema.STAMP_COLUMNS)} "
+                    "can be read but not written"
+                )
+            return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_READ and db == "temp" and arg1 == ACTOR_TABLE:
+            return sqlite3.SQLITE_OK if stamping else sqlite3.SQLITE_DENY
         if action == sqlite3.SQLITE_PRAGMA:
             ok = (arg1 or "").lower() in _PRAGMAS and db in ("main", "temp")
             return sqlite3.SQLITE_OK if ok else sqlite3.SQLITE_DENY
@@ -344,9 +368,13 @@ def _first_keyword(sql: str) -> str:
     return ""
 
 
-def _error(exc: sqlite3.Error, index: int | None, write: bool) -> SqlError:
+def _error(
+    exc: sqlite3.Error, index: int | None, write: bool, reason: str | None = None
+) -> SqlError:
     message = str(exc)
     if isinstance(exc, sqlite3.DatabaseError) and "not authorized" in message:
+        if reason:
+            return SqlError("sql_not_allowed", f"statement not allowed: {reason}", index)
         allowed = (
             "SELECT, INSERT, UPDATE and DELETE on the app's tables"
             if write
@@ -383,11 +411,13 @@ class Session:
         self.budget = _Budget()
         self._deadline = time.monotonic() + OP_TIMEOUT_S
         self._scope = _ATTACH_STATE.get(id(con))
+        self._denied: list[str] = []
 
     @contextmanager
     def _guarded(self) -> Iterator[None]:
+        self._denied.clear()
         self.con.set_progress_handler(lambda: int(time.monotonic() > self._deadline), 1000)
-        self.con.set_authorizer(_authorizer(self.write, self._scope))
+        self.con.set_authorizer(_authorizer(self.write, self._scope, self._denied))
         try:
             yield
         finally:
@@ -430,8 +460,10 @@ class Session:
         except sqlite3.Warning as exc:
             raise SqlError("sql_error", str(exc), index) from exc
         except sqlite3.Error as exc:
-            raise _error(exc, index, self.write) from exc
-        out.changes = self.con.total_changes - before
+            raise _error(exc, index, self.write, self._denied[0] if self._denied else None) from exc
+        if self.con.total_changes != before:
+            # The statement's own rows: total_changes also counts the stamp triggers'.
+            out.changes = self.con.execute("SELECT changes()").fetchone()[0]
         out.last_insert_row_id = cur.lastrowid or 0
         return out
 
@@ -537,6 +569,50 @@ def action(
                 rows = result.rows
         out.update({"changes": changes, "lastInsertRowId": last_id, "rows": rows})
     return out
+
+
+# --- attribution ------------------------------------------------------------------------
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def stamp(con: sqlite3.Connection, user_id: str) -> None:
+    """Attribute this connection's next writes to `user_id` (see the module docstring)."""
+    con.execute(f"CREATE TEMP TABLE IF NOT EXISTS {ACTOR_TABLE} (user_id TEXT, at TEXT)")
+    con.execute(f"DELETE FROM temp.{ACTOR_TABLE}")
+    con.execute(f"INSERT INTO temp.{ACTOR_TABLE} VALUES (?, ?)", (user_id, _now()))
+    for (name,) in con.execute(
+        "SELECT name FROM temp.sqlite_master WHERE type = 'trigger' AND name LIKE ? ESCAPE '\\'",
+        (STAMP_TRIGGER_PREFIX.replace("_", "\\_") + "%",),
+    ).fetchall():
+        con.execute(f"DROP TRIGGER temp.{appschema.quote(name)}")
+    tables = con.execute(
+        "SELECT name, wr FROM pragma_table_list WHERE schema = 'main' AND type = 'table' "
+        "AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
+    ).fetchall()
+    actor = f"(SELECT user_id FROM {ACTOR_TABLE})", f"(SELECT at FROM {ACTOR_TABLE})"
+    for i, (name, without_rowid) in enumerate(tables):
+        info = con.execute(f"PRAGMA main.table_xinfo({appschema.quote(name)})").fetchall()
+        if not _STAMPS <= {r[1].lower() for r in info}:
+            continue
+        if without_rowid:
+            keys = [r[1] for r in sorted(info, key=lambda r: r[5]) if r[5]]
+            match = " AND ".join(f"{appschema.quote(k)} IS NEW.{appschema.quote(k)}" for k in keys)
+        else:
+            match = "rowid = NEW.rowid"
+        q = appschema.quote(name)
+        updated = f"_updated_by = {actor[0]}, _updated_at = {actor[1]}"
+        con.execute(
+            f"CREATE TEMP TRIGGER {STAMP_TRIGGER_PREFIX}i{i} AFTER INSERT ON main.{q} BEGIN "
+            f"UPDATE {q} SET _created_by = {actor[0]}, _created_at = {actor[1]}, {updated} "
+            f"WHERE {match}; END"
+        )
+        con.execute(
+            f"CREATE TEMP TRIGGER {STAMP_TRIGGER_PREFIX}u{i} AFTER UPDATE ON main.{q} BEGIN "
+            f"UPDATE {q} SET {updated} WHERE {match}; END"
+        )
 
 
 # --- migrations -------------------------------------------------------------------------

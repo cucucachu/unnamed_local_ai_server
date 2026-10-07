@@ -37,6 +37,9 @@ declare module '@homeai/sdk' {
   };
 
   export type Space = { id: string; slug: string; name: string; role: 'owner' | 'editor' | 'viewer' };
+  /** A person. `id` is what the platform stamps in every table's `_created_by` / `_updated_by`. */
+  export type User = { id: string; username: string; name: string };
+  export type Member = User & { role: 'owner' | 'editor' | 'viewer' };
 
   export function useDatabase(): Database;
   /** Alias of `useDatabase` (expo-sqlite's hook name). */
@@ -50,6 +53,12 @@ declare module '@homeai/sdk' {
   export function askAgent(prompt: string): Promise<void>;
   /** The space this instance is installed in; null until the host has said. */
   export function useSpace(): Space | null;
+  /** Who is using the app; null until the host has said. */
+  export function useUser(): User | null;
+  /** The space's members, to show names for `_created_by` / `_updated_by`. */
+  export function useMembers(): Member[];
+  /** The member with this user id (e.g. `useMember(row._created_by)`), or undefined. */
+  export function useMember(id: string | null | undefined): Member | undefined;
 }
 
 declare module 'expo-sqlite' {

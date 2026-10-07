@@ -187,6 +187,18 @@ test('a space event re-renders useSpace', async () => {
   s.close();
 });
 
+test('useUser / useMembers / useMember come from the host config, then its events', async () => {
+  const alice = { id: 'u-alice', username: 'alice', name: 'Alice', role: 'owner' };
+  const s = await boot({ config: { initialPath: '/', space: SPACE, user: alice, members: [alice] } });
+  assert.equal(s.text('user'), 'Alice @alice');
+  assert.equal(s.text('members'), '1 members, alice is Alice');
+  s.bridge.event('members', [{ ...alice, name: 'Al' }, { id: 'u-bob', username: 'bob', name: 'Bob', role: 'editor' }]);
+  await until('members', () => s.text('members') === '2 members, alice is Al');
+  s.bridge.event('user', { id: 'u-bob', username: 'bob', name: 'Bob' });
+  await until('user', () => s.text('user') === 'Bob @bob');
+  s.close();
+});
+
 test('SQL errors surface as useQuery.error; viewers are refused writes by the host', async () => {
   const index = fs.readFileSync(new URL('./fixtures/runtime-check/app/index.tsx', import.meta.url), 'utf8');
   const s = await boot({ readOnly: true, edits: { 'app/index.tsx': index.replace("{data ? `${data.length} items` : 'loading'}", "{data ? `${data.length} items` : error ? '0 items' : 'loading'}").replace('FROM items ORDER BY id', 'FROM nope') } });
@@ -224,7 +236,7 @@ test('the runtime provides exactly modules.json, and the typings declare the non
   for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
   for (const m of ['react-dom', 'react-dom/client', 'react-native-web', 'fs']) assert.throws(() => req(m), /not available in the app sandbox/);
   const sdk = req('@homeai/sdk');
-  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'runAction', 'useDatabase', 'useQuery', 'useSQLiteContext', 'useSpace']);
+  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'runAction', 'useDatabase', 'useMember', 'useMembers', 'useQuery', 'useSQLiteContext', 'useSpace', 'useUser']);
   assert.equal(sdk.useSQLiteContext, sdk.useDatabase);
   await assert.rejects(sdk.useDatabase().withTransactionAsync(async () => {}), /not available in SDK 1: put multi-statement writes in an action/);
   assert.deepEqual(Object.keys(req('expo-sqlite')).sort(), ['SQLiteProvider', 'openDatabaseAsync', 'useSQLiteContext']);

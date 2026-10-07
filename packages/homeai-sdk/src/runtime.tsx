@@ -42,6 +42,9 @@ export const modules: Record<string, unknown> = {
     runAction: SDK.runAction,
     askAgent: SDK.askAgent,
     useSpace: SDK.useSpace,
+    useUser: SDK.useUser,
+    useMembers: SDK.useMembers,
+    useMember: SDK.useMember,
   },
 };
 
@@ -79,6 +82,8 @@ let root: Root | null = null;
 let version = 0;
 const config: SandboxConfig = window.__homeai_config ?? {};
 if (config.space) SDK.setSpace(config.space);
+if (config.user) SDK.setUser(config.user);
+if (config.members) SDK.setMembers(config.members);
 
 function mount(app: AppExports) {
   version++;
