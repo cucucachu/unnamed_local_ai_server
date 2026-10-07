@@ -19,6 +19,7 @@ SHIPPED = [
     (10, "public_https"),
     (11, "device_pairs"),
     (12, "routine_grants"),
+    (13, "audit"),
 ]
 
 
@@ -68,12 +69,13 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0010_public_https.sql",
             "0011_device_pairs.sql",
             "0012_routine_grants.sql",
+            "0013_audit.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
         tables |= {"app_migrations", "app_catalog"}
         tables |= {"wireguard_peers", "webauthn_credentials", "webauthn_challenges"}
-        tables |= {"device_pairs", "device_challenges"}
+        tables |= {"device_pairs", "device_challenges", "audit_events"}
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
         cur = await conn.execute("SELECT value FROM platform_state WHERE key = 'public_https'")

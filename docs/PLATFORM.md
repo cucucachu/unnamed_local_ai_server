@@ -305,6 +305,42 @@ enables the routine:
   - its exec container mounts only that space.
 - No admin powers, as for any `act=agent` token.
 
+### Audit log
+
+The platform records what was done on whose behalf in one append-only
+Postgres table, `audit_events` (`app/core/audit.py`), so attribution never
+depends on anything an app or agent wrote. Each event has:
+
+- **who**: `actor_kind` (`user` in person, `agent` for their delegation,
+  `system` for the platform itself), `actor_user_id`, `actor_name` (as it
+  was then), `session_id`, and `thread_id` for an agent's chat;
+- **what**: `kind` (dotted, e.g. `app_data.write`), a one-line `summary`,
+  and a JSON `detail` (at most 16 KiB, long strings cut);
+- **where**: `space_id`, `target_type` + `target_id` (e.g. `app_instance`).
+
+Any part of the platform adds events with `audit.record(conn, principal,
+kind, summary, ...)`, in the same transaction as its own change. Recorded
+so far:
+
+| kind | when |
+|------|------|
+| `app_data.write` | an app RPC `run` / `transaction` / `action` / `exportAction` (UI or agent `app_sql` / `app_action`) that changed rows; `detail` has the SQL or action name, its params, and the change count |
+| `app_data.migration` | a migration applied, failed, held for approval, approved, rejected or superseded |
+| `app.installed`, `app.uninstalled` | an app installed into or uninstalled from a space |
+| `space.member_added`, `space.member_role_changed`, `space.member_removed` | membership changes |
+
+App data lives in SQLite, so its event is recorded from inside the SQLite
+write transaction, just before `COMMIT`: if the event can't be stored the
+write rolls back. Rows are never updated, deleted or truncated (triggers
+refuse), and events have no foreign keys, so they outlive the users,
+spaces and instances they name.
+
+`GET /api/platform/audit?space_id=&target_type=&target_id=&actor_user_id=&kind=&before=&limit=`
+lists events newest first (`limit` ≤ 200, `next_before` pages back; `kind`
+also matches by prefix, so `app_data` covers both app-data kinds). Members
+of a space (any role, and their agents) read its events; leaving out
+`space_id` (everything, including events with no space) is admin-only.
+
 ### Service-to-service auth
 
 Internal endpoints (`/internal/*` other than `jwks` and `auth/verify`)
@@ -1496,6 +1532,11 @@ Each is enforced below the agent and covered by an automated check
    between check and use, and no move or rename replaces an entry created
    at its destination after the check (§5 "Race-free access";
    `services/platform/tests/test_races.py`).
+10. Every app-data write that changes rows, every migration decision,
+    install, uninstall and membership change is in the append-only audit
+    log, attributed from the verified principal (user, or user's agent and
+    chat), and an app-data write whose event can't be recorded doesn't
+    commit (§4 "Audit log"; `services/platform/tests/test_audit.py`).
 
 > **As built (M14-05):** exec app-data is the M13-02 `/app-data/...` root
 > (a separate read-only bind, not `/files/.appdata`). Check 29 of

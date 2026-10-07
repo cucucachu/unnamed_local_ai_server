@@ -2008,6 +2008,7 @@ themselves)
 | `POST /api/platform/spaces/{id}/members` | membership `manage` | `{"user_id", "role": "owner"\|"editor"\|"viewer"}` | `201 Member` | space errors, `409 personal_space`, `422 unknown_user`, `409 user_disabled`, `409 already_member` |
 | `PATCH /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | `{"role"}` | `200 Member` | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` (demoting the only owner) |
 | `DELETE /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | — | `204`; the user loses access at once | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` |
+| `GET /api/platform/audit` | space `read` with `space_id`; admin without | query: `space_id`, `target_type`, `target_id`, `actor_user_id`, `kind` (exact or prefix), `before`, `limit` (≤ 200) | `200 {"events": [AuditEvent], "next_before"}`, newest first (PLATFORM.md §4 "Audit log") | space errors, `403 admin_required` |
 | `GET /api/platform/settings` | user | — | `200 {"public_https": bool, "domain_configured": bool}` | — |
 | `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | `403 public_origin` |
 | `PATCH /api/platform/admin/settings` | admin | `{"public_https": bool}` | `200` same as GET. Enabling needs an RP ID. Does not punch the host firewall. | `403 public_origin`, `422 domain_required` (enabling with no RP ID) |
