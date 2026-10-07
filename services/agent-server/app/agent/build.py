@@ -86,6 +86,7 @@ from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
 from app.agent.prompts import APP_AUTHORING_GUIDE, ROUTINES_GUIDE, SYSTEM_PROMPT
 from app.agent.routine_tools import make_routine_tools
+from app.agent.syntax_check import SyntaxCheckMiddleware
 from app.agent.tool_errors import CompactToolErrorsMiddleware
 from app.agent.tool_notes import ToolNotesMiddleware
 from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
@@ -166,12 +167,14 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
     """`app_state` (the app's stores and delegation client) adds the routine tools (M17-07)."""
     routine_tools = make_routine_tools(app_state) if app_state is not None else []
     prompt = SYSTEM_PROMPT + APP_AUTHORING_GUIDE + (ROUTINES_GUIDE if routine_tools else "")
+    backend = build_backend(settings)
     return create_deep_agent(
         model=build_model(settings),
-        backend=build_backend(settings),
+        backend=backend,
         middleware=[
             CompactToolErrorsMiddleware(),
             approvals.ReadOnlyRunMiddleware(),
+            SyntaxCheckMiddleware(backend),
             ToolNotesMiddleware(),
         ],
         system_prompt=prompt,
