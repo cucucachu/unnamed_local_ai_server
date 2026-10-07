@@ -1,0 +1,1033 @@
+{
+ "app_authoring": {
+  "gemma": [
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 46719,
+     "tool_calls": 5
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 29970,
+     "tool_calls": 3
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 29422,
+     "tool_calls": 4
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 28911,
+     "tool_calls": 3
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 14346,
+     "tool_calls": 2
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 27827,
+     "tool_calls": 3
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 54281,
+     "tool_calls": 7
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 969266,
+     "tool_calls": 20
+    },
+    {
+     "id": "reading-list",
+     "pass": false,
+     "failure": "build_failed",
+     "duration_ms": 80500,
+     "tool_calls": 8
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 44136,
+     "tool_calls": 6
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 42480,
+     "tool_calls": 5
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 25471,
+     "tool_calls": 3
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 30148,
+     "tool_calls": 4
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 41696,
+     "tool_calls": 5
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 17306,
+     "tool_calls": 2
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 28052,
+     "tool_calls": 3
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 27831,
+     "tool_calls": 3
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 853007,
+     "tool_calls": 26
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 196442,
+     "tool_calls": 16
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 44741,
+     "tool_calls": 6
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 43291,
+     "tool_calls": 5
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 30321,
+     "tool_calls": 4
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 27899,
+     "tool_calls": 4
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 26861,
+     "tool_calls": 3
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 16346,
+     "tool_calls": 2
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 25971,
+     "tool_calls": 3
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 29325,
+     "tool_calls": 3
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": false,
+     "failure": "turn_error",
+     "duration_ms": null,
+     "tool_calls": 66
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 362743,
+     "tool_calls": 29
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 46669,
+     "tool_calls": 6
+    }
+   ]
+  ],
+  "qwen": [
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 76223,
+     "tool_calls": 4
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 222539,
+     "tool_calls": 9
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 175917,
+     "tool_calls": 6
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 241444,
+     "tool_calls": 11
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 130262,
+     "tool_calls": 4
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 907909,
+     "tool_calls": 35
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 948956,
+     "tool_calls": 33
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 679687,
+     "tool_calls": 20
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 862909,
+     "tool_calls": 26
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 288721,
+     "tool_calls": 14
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 126665,
+     "tool_calls": 3
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 234939,
+     "tool_calls": 11
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 132554,
+     "tool_calls": 5
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 271586,
+     "tool_calls": 12
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 136802,
+     "tool_calls": 5
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 681763,
+     "tool_calls": 17
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 467973,
+     "tool_calls": 29
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 624012,
+     "tool_calls": 19
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 921766,
+     "tool_calls": 26
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 255430,
+     "tool_calls": 11
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 134010,
+     "tool_calls": 4
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 208687,
+     "tool_calls": 9
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 127968,
+     "tool_calls": 4
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 165636,
+     "tool_calls": 6
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 124002,
+     "tool_calls": 3
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 434096,
+     "tool_calls": 27
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 489546,
+     "tool_calls": 33
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 624613,
+     "tool_calls": 19
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 836947,
+     "tool_calls": 21
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 782695,
+     "tool_calls": 44
+    }
+   ]
+  ],
+  "ornith": [
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 88696,
+     "tool_calls": 11
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 82542,
+     "tool_calls": 10
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 74020,
+     "tool_calls": 9
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 79962,
+     "tool_calls": 10
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 84608,
+     "tool_calls": 11
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 397339,
+     "tool_calls": 54
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 141620,
+     "tool_calls": 23
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 251852,
+     "tool_calls": 21
+    },
+    {
+     "id": "reading-list",
+     "pass": false,
+     "failure": "schema_mismatch: missing columns: read/done/checked/status (have ['_created_at', '_created_by', '_updated_at', '_updated_by', 'author', 'created_at', 'id', 'read_at', 'title'])",
+     "duration_ms": 301247,
+     "tool_calls": 22
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 267435,
+     "tool_calls": 31
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 62547,
+     "tool_calls": 6
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 109218,
+     "tool_calls": 16
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 75723,
+     "tool_calls": 10
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 86871,
+     "tool_calls": 12
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 80669,
+     "tool_calls": 11
+    },
+    {
+     "id": "chore-chart",
+     "pass": false,
+     "failure": "no_app",
+     "duration_ms": 33546,
+     "tool_calls": 0
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 110954,
+     "tool_calls": 20
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 249808,
+     "tool_calls": 20
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 424568,
+     "tool_calls": 27
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 139943,
+     "tool_calls": 21
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 61892,
+     "tool_calls": 5
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 84425,
+     "tool_calls": 11
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 68934,
+     "tool_calls": 9
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 79127,
+     "tool_calls": 10
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 80564,
+     "tool_calls": 11
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 248757,
+     "tool_calls": 28
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 274247,
+     "tool_calls": 34
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 238301,
+     "tool_calls": 17
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 288149,
+     "tool_calls": 18
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 111461,
+     "tool_calls": 16
+    }
+   ]
+  ],
+  "ornith-q8": [
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 71882,
+     "tool_calls": 7
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 86224,
+     "tool_calls": 10
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 82130,
+     "tool_calls": 9
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 93026,
+     "tool_calls": 11
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 81408,
+     "tool_calls": 10
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 476454,
+     "tool_calls": 50
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 293794,
+     "tool_calls": 38
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 277084,
+     "tool_calls": 29
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 400007,
+     "tool_calls": 22
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 720330,
+     "tool_calls": 42
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 99712,
+     "tool_calls": 11
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 81675,
+     "tool_calls": 10
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 81491,
+     "tool_calls": 9
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 83193,
+     "tool_calls": 10
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 87196,
+     "tool_calls": 9
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 652571,
+     "tool_calls": 51
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 174989,
+     "tool_calls": 24
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 303044,
+     "tool_calls": 19
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 378326,
+     "tool_calls": 19
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 520195,
+     "tool_calls": 20
+    }
+   ],
+   [
+    {
+     "id": "grocery-quantities",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 81664,
+     "tool_calls": 8
+    },
+    {
+     "id": "habit-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 111076,
+     "tool_calls": 14
+    },
+    {
+     "id": "notes",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 350827,
+     "tool_calls": 40
+    },
+    {
+     "id": "todo-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 92565,
+     "tool_calls": 10
+    },
+    {
+     "id": "shopping-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 106802,
+     "tool_calls": 13
+    },
+    {
+     "id": "chore-chart",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 245559,
+     "tool_calls": 36
+    },
+    {
+     "id": "packing-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 376904,
+     "tool_calls": 51
+    },
+    {
+     "id": "recipe-notebook",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 313852,
+     "tool_calls": 20
+    },
+    {
+     "id": "reading-list",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 458546,
+     "tool_calls": 32
+    },
+    {
+     "id": "water-tracker",
+     "pass": true,
+     "failure": null,
+     "duration_ms": 405112,
+     "tool_calls": 31
+    }
+   ]
+  ]
+ },
+ "long_turn": {
+  "gemma": [
+   {
+    "run": 1,
+    "pass": true,
+    "failure": null,
+    "wall_s": 78.2,
+    "first_event_s": 6.7,
+    "steps": 4,
+    "tool_counts": {
+     "web_fetch": 2,
+     "web_search": 1,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 2,
+    "pass": true,
+    "failure": null,
+    "wall_s": 41.5,
+    "first_event_s": 3.1,
+    "steps": 4,
+    "tool_counts": {
+     "web_fetch": 2,
+     "web_search": 1,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 3,
+    "pass": true,
+    "failure": null,
+    "wall_s": 66.9,
+    "first_event_s": 2.6,
+    "steps": 4,
+    "tool_counts": {
+     "web_fetch": 2,
+     "web_search": 1,
+     "write_file": 1
+    }
+   }
+  ],
+  "qwen": [
+   {
+    "run": 1,
+    "pass": true,
+    "failure": null,
+    "wall_s": 759.9,
+    "first_event_s": 92.9,
+    "steps": 6,
+    "tool_counts": {
+     "web_fetch": 3,
+     "web_search": 2,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 2,
+    "pass": true,
+    "failure": null,
+    "wall_s": 1003.9,
+    "first_event_s": 89.5,
+    "steps": 8,
+    "tool_counts": {
+     "ls": 1,
+     "web_fetch": 5,
+     "web_search": 1,
+     "write_file": 1
+    }
+   }
+  ],
+  "ornith": [
+   {
+    "run": 1,
+    "pass": true,
+    "failure": null,
+    "wall_s": 214.4,
+    "first_event_s": 22.4,
+    "steps": 8,
+    "tool_counts": {
+     "current_time": 1,
+     "web_fetch": 4,
+     "web_search": 2,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 2,
+    "pass": true,
+    "failure": null,
+    "wall_s": 107.1,
+    "first_event_s": 22.5,
+    "steps": 5,
+    "tool_counts": {
+     "web_fetch": 2,
+     "web_search": 2,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 3,
+    "pass": true,
+    "failure": null,
+    "wall_s": 145.7,
+    "first_event_s": 22.5,
+    "steps": 5,
+    "tool_counts": {
+     "web_fetch": 2,
+     "web_search": 2,
+     "write_file": 1
+    }
+   }
+  ],
+  "ornith-q8": [
+   {
+    "run": 1,
+    "pass": true,
+    "failure": null,
+    "wall_s": 220.8,
+    "first_event_s": 22.4,
+    "steps": 8,
+    "tool_counts": {
+     "current_time": 1,
+     "web_fetch": 4,
+     "web_search": 2,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 2,
+    "pass": true,
+    "failure": null,
+    "wall_s": 540.7,
+    "first_event_s": 22.5,
+    "steps": 20,
+    "tool_counts": {
+     "current_time": 1,
+     "web_fetch": 14,
+     "web_search": 4,
+     "write_file": 1
+    }
+   },
+   {
+    "run": 3,
+    "pass": true,
+    "failure": null,
+    "wall_s": 321.3,
+    "first_event_s": 22.7,
+    "steps": 16,
+    "tool_counts": {
+     "web_fetch": 11,
+     "web_search": 4,
+     "write_file": 1
+    }
+   }
+  ]
+ }
+}

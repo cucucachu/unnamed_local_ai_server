@@ -13,5 +13,7 @@ dist/
 scripts/eval/app_authoring/last-report.json
 scripts/eval/app_authoring/app-ids.txt
 scripts/eval/app_authoring/logs/
+scripts/eval/long_turn/last-report.json
+scripts/eval/m16/
 scripts/e2e/g13-last-report.json
 scripts/eval/routines/last-report.json

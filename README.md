@@ -210,7 +210,7 @@ git clone git@github.com:cucucachu/unnamed_local_ai_server.git
 cd unnamed_local_ai_server
 cp .env.example .env   # fill in POSTGRES_PASSWORD, PLATFORM_* secrets, RENDER_GID/VIDEO_GID, LAN_SUBNET
 
-./services/model-runner/fetch-model.sh   # downloads the default GGUF quant (~14.6 GB) into services/model-runner/models/
+./services/model-runner/fetch-model.sh   # downloads the default model, Ornith-1.5-35B-A3B Q8_0 (~37.8 GB), into services/model-runner/models/
 
 # One-time host prep (idempotent, safe to re-run) — see infra/host/setup-gpu-drivers.md first
 sudo infra/host/setup-files.sh

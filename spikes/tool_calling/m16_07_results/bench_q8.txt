@@ -1,0 +1,20 @@
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = AMD Radeon 890M Graphics (RADV STRIX1) (radv) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 64 | shared memory: 65536 | int dot: 1 | matrix cores: KHR_coopmat
+load_backend: loaded Vulkan backend from /app/libggml-vulkan.so
+load_backend: loaded CPU backend from /app/libggml-cpu-zen4.so
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  35.20 GiB |    35.51 B | Vulkan     | 999 |           pp512 |        331.81 ± 2.69 |
+| qwen35moe 35B.A3B Q8_0         |  35.20 GiB |    35.51 B | Vulkan     | 999 |           tg128 |         19.11 ± 0.13 |
+
+build: d7bd3bfca (10680)
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = AMD Radeon 890M Graphics (RADV STRIX1) (radv) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 64 | shared memory: 65536 | int dot: 1 | matrix cores: KHR_coopmat
+load_backend: loaded Vulkan backend from /app/libggml-vulkan.so
+load_backend: loaded CPU backend from /app/libggml-cpu-zen4.so
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  35.20 GiB |    35.51 B | Vulkan     | 999 |  pp512 @ d16384 |        198.54 ± 0.37 |
+| qwen35moe 35B.A3B Q8_0         |  35.20 GiB |    35.51 B | Vulkan     | 999 |  tg128 @ d16384 |         17.29 ± 0.08 |
+
+build: d7bd3bfca (10680)

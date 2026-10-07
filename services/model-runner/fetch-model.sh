@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fetches the pinned Gemma 4 GGUF quant into services/model-runner/models/
-# using the huggingface_hub CLI via `uvx` (no global install required).
+# Fetches a pinned GGUF into services/model-runner/models/ using the
+# huggingface_hub CLI via `uvx` (no global install required). The default is
+# the live model, Ornith-1.5-35B-A3B Q8_0 (M16-03); `--model gemma` fetches
+# the previous default, Gemma 4 26B-A4B (notes below).
 #
 # --- Deviation from the original ticket assumption (read before editing) ---
 # The Conventions & Contracts reference issue (and this ticket) assumed the
@@ -29,28 +31,96 @@ set -euo pipefail
 # Given `Q4_K_M` doesn't exist, this script defaults to `Q4_0` (the smallest
 # available real quant) instead. Pass `Q8_0` or `BF16` as the [quant] arg to
 # fetch a bigger one.
+#
+# --model qwen3.8-27b (M16-01) fetches the Qwen3.8-27B candidate instead
+# (ggml-org/Qwen3.8-27B-GGUF: dense, Apache-2.0, default Q4_K_M; `mtp`
+# fetches its speculative-decoding head). Those files are sha256-pinned
+# below and verified after download.
+#
+# --model ornith-35b (M16-07, the default) fetches Ornith-1.5-35B-A3B
+# (Qwen3.5 MoE, ~3B active, MIT) from ornith-ai/Ornith-1.5-35B-A3B-GGUF,
+# default Q8_0 (~37.8 GB). Q4_K_M lost tool-calling and app-authoring cases
+# that Q8_0 passed (docs/TOOL_CALLING.md, M16 section).
+#
+#   fetch-model.sh [--model ornith-35b|gemma|qwen3.8-27b] [quant|mtp] [--force]
 
-REPO="ggml-org/gemma-4-26B-A4B-it-GGUF"
-DEFAULT_QUANT="Q4_0"
-
-QUANT="${DEFAULT_QUANT}"
+MODEL="ornith-35b"
+QUANT=""
 FORCE=0
 for arg in "$@"; do
   case "${arg}" in
     --force)
       FORCE=1
       ;;
+    --model=*)
+      MODEL="${arg#--model=}"
+      ;;
+    --model)
+      MODEL="__next__"
+      ;;
     -*)
       echo "Unknown flag: ${arg}" >&2
       exit 1
       ;;
     *)
-      QUANT="${arg}"
+      if [[ "${MODEL}" == "__next__" ]]; then
+        MODEL="${arg}"
+      else
+        QUANT="${arg}"
+      fi
       ;;
   esac
 done
 
-FILENAME="gemma-4-26B-A4B-it-${QUANT}.gguf"
+declare -A SHA256=()
+case "${MODEL}" in
+  gemma)
+    REPO="ggml-org/gemma-4-26B-A4B-it-GGUF"
+    DEFAULT_QUANT="Q4_0"
+    QUANT="${QUANT:-${DEFAULT_QUANT}}"
+    FILENAME="gemma-4-26B-A4B-it-${QUANT}.gguf"
+    ;;
+  qwen3.8-27b)
+    REPO="ggml-org/Qwen3.8-27B-GGUF"
+    DEFAULT_QUANT="Q4_K_M"
+    QUANT="${QUANT:-${DEFAULT_QUANT}}"
+    SHA256=(
+      [Qwen3.8-27B-Q4_K_M.gguf]=c600de0300ae8a0eb3a6c0b8b5561b8b96f16bd2c863c2a66c42de29d391a747
+      [Qwen3.8-27B-Q8_0.gguf]=aab65c67ef0dad127960efef9247f1832bca105faa1c7a052cc039b223cf86a1
+      [mtp-Qwen3.8-27B-Q8_0.gguf]=6447a4e9d29fa6eba89ed508b2127b0803f91bac3ec6cec725fa209f2c3d309d
+    )
+    if [[ "${QUANT}" == "mtp" ]]; then
+      FILENAME="mtp-Qwen3.8-27B-Q8_0.gguf"
+    else
+      FILENAME="Qwen3.8-27B-${QUANT}.gguf"
+    fi
+    if [[ -z "${SHA256[${FILENAME}]:-}" ]]; then
+      echo "No pinned checksum for ${FILENAME}; known: ${!SHA256[*]}" >&2
+      exit 1
+    fi
+    ;;
+  ornith-35b)
+    REPO="ornith-ai/Ornith-1.5-35B-A3B-GGUF"
+    DEFAULT_QUANT="Q8_0"
+    QUANT="${QUANT:-${DEFAULT_QUANT}}"
+    SHA256=(
+      [Ornith-1.5-35B-Q4_K_M.gguf]=42739874cc2ccfdb8523b23fbe52e29b2a7555c8176737ca9ca0b5d59859d41f
+      [Ornith-1.5-35B-Q5_K_M.gguf]=91df97de5845100e850b4b5ec5ff35695382020b880fad6f7f51787b3a953bd0
+      [Ornith-1.5-35B-Q6_K.gguf]=15d4658bbfc9c6034621729c15bbb50662c82b32a7ddd9624a1e545a74bdbb4b
+      [Ornith-1.5-35B-Q8_0.gguf]=de46c4baf4b4dd85ea438bb0f757f21c38841a353506579979bba114311658c3
+    )
+    FILENAME="Ornith-1.5-35B-${QUANT}.gguf"
+    if [[ -z "${SHA256[${FILENAME}]:-}" ]]; then
+      echo "No pinned checksum for ${FILENAME}; known: ${!SHA256[*]}" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Unknown --model: ${MODEL} (gemma, qwen3.8-27b, ornith-35b)" >&2
+    exit 1
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODELS_DIR="${SCRIPT_DIR}/models"
 TARGET="${MODELS_DIR}/${FILENAME}"
@@ -67,10 +137,16 @@ fi
 echo "Fetching ${FILENAME} from ${REPO} into ${MODELS_DIR}/ ..."
 uvx --from huggingface_hub hf download "${REPO}" "${FILENAME}" --local-dir "${MODELS_DIR}"
 
+if [[ -n "${SHA256[${FILENAME}]:-}" ]]; then
+  echo "Verifying sha256 ..."
+  echo "${SHA256[${FILENAME}]}  ${TARGET}" | sha256sum -c -
+fi
+
 SIZE="$(du -h "${TARGET}" | cut -f1)"
 echo "Done: ${TARGET} (${SIZE})"
 
-if [[ "${QUANT}" != "${DEFAULT_QUANT}" ]]; then
-  echo "NOTE: fetched a non-default quant (${QUANT})."
-  echo "Set MODEL_FILE=${FILENAME} in .env before running 'docker compose up -d model-runner'."
+if [[ "${FILENAME}" != "Ornith-1.5-35B-Q8_0.gguf" ]]; then
+  echo "Not the default model: set MODEL_FILE=${FILENAME} (and MODEL_NAME, MODEL_SAMPLING; see .env.example)"
+  echo "before 'docker compose up -d model-runner', or CANDIDATE_MODEL_FILE=${FILENAME} for"
+  echo "'docker compose --profile candidate up -d model-candidate'."
 fi

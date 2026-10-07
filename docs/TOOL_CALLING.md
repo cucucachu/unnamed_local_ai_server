@@ -421,3 +421,104 @@ SPIKE_CONFIG=budget_1024  REPEAT=3 uv run python spike_m8_06.py > /tmp/budget_10
 # and `docker compose up -d model-runner` afterward — this ticket is a spike,
 # not a production config change.
 ```
+
+---
+
+# M16 — candidate models vs Gemma 4 (M16-02 Qwen 3.8 27B, M16-07 Ornith 1.5 35B-A3B)
+
+**Verdict: Ornith 1.5 35B-A3B at Q8_0 is the strongest candidate.** It
+matched Qwen 3.8 27B's quality (30/30 app authoring, 75/75 tool calling in
+both thinking modes, 3/3 long turns). It decodes about 5× faster than Qwen
+without speculation (2–3× faster than Qwen with its MTP draft head), and
+processes prompts 5× faster. Speculative decoding for Qwen (M16-05, #283) can't
+close that gap, because it speeds up decode only and Qwen's slow prefill
+dominated its long turns. That spike is set aside. Ornith Q4_K_M is faster
+still, but dropped two app cases and the C5 file-write case. Gemma is still
+fastest per turn because it does the least work per turn (median 4 tool
+calls per app case, against 19 for Ornith Q8_0). Switching the default
+stays with M16-03 (#250) and needs PM approval.
+
+## Setup
+
+Same host (Radeon 890M iGPU, Vulkan, llama.cpp b10680, 91 GiB shared RAM,
+GTT cap 64 GiB). Each candidate ran on `model-candidate` behind
+`agent-candidate` (compose profile `candidate`), with the M16-01
+`CANDIDATE_*` settings and the vendor's sampling (temp 1.0, top-p 0.95,
+top-k 20), `--reasoning-format deepseek`, 64K context, 4 slots. Gemma is
+the live `model-runner` (Q8_0).
+
+- Ornith: `fetch-model.sh --model ornith-35b [Q4_K_M|Q8_0]`
+  (`ornith-ai/Ornith-1.5-35B-A3B-GGUF`, MIT, text only, no MTP file).
+  The Q4_K_M runs had Gemma loaded alongside. For Q8_0 (35.2 GiB) Gemma was
+  stopped, because both don't fit under the GTT cap.
+- Qwen 3.8 27B (M16-02): Q4_K_M with the MTP draft head
+  (`--spec-type draft-mtp`).
+- Evals: the M8-06 tool-calling harness (5 cases × 5 runs × 3 repetitions,
+  thinking on and off), `scripts/eval/app_authoring` (10 prompts × 3 runs),
+  and `scripts/eval/long_turn` (web research plus file write × 3).
+  Gemma and Qwen numbers are from the M16-02 runs (2026-10-04/05), and
+  Ornith's from 2026-10-06/07, with that day's agent prompts (which include
+  #309/#310).
+
+## Results
+
+| | Gemma 4 26B-A4B Q8_0 | Qwen 3.8 27B Q4_K_M + MTP | Ornith 35B-A3B Q4_K_M | Ornith 35B-A3B Q8_0 |
+|---|---|---|---|---|
+| Active params / token | ~4B | 27B (dense) | ~3B | ~3B |
+| Weights | 25.0 GiB | 17.7 GiB + 2.9 GiB MTP | 20.2 GiB | 35.2 GiB |
+| pp512 (t/s) | 263 | 65 | 318 | 332 |
+| tg128 (t/s) | 12.6 | 3.7 (5.8–9.0 with MTP) | 26.0 | 19.1 |
+| pp512 / tg128 at 16K depth | 215 / 13.9 | — | 186 / 22.6 | 199 / 17.3 |
+| Tool calling, thinking off | 75/75 (254 s) | 71/75 (610 s) | 72/75 (212 s) | **75/75** (245 s) |
+| Tool calling, thinking on | 75/75 (429 s) | 70/75 (3003 s) | 69/75 (291 s) | **75/75** (431 s) |
+| App authoring | 28/30 | **30/30** | 28/30 | **30/30** |
+| App turn median / p90 | 30 s / 196 s | 264 s / 863 s | 99 s / 288 s | 210 s / 476 s |
+| Tool calls per app case (median) | 4 | 11.5 | 14 | 19 |
+| Long turn | 3/3, 42–78 s | 2/3, 760–1004 s | 3/3, 107–214 s | 3/3, 221–541 s |
+
+The bench numbers are `llama-bench -p 512 -n 128 -ngl 999` (3 reps, 2 at
+16K depth). Ornith Q4_K_M was benched with Gemma loaded but idle; Q8_0 and
+the 16K-depth rows with nothing else running. The times in the tool-calling
+rows are whole-harness wall time.
+
+**Failures:**
+- *Tool calling:* every Qwen and Ornith Q4_K_M miss was C5, the deepagents
+  `create_deep_agent` file write ("hello.txt was not created"). Ornith
+  Q8_0 passed it 30/30.
+- *App authoring, Ornith Q4_K_M:*
+  - `reading-list` modelled "read" as a `read_at` timestamp. That's
+    reasonable, but the check wants a read/done/status column.
+  - `chore-chart` (run 2) made **no tool calls at all** and replied that it
+    had created and built the app. It's the only turn across all 120 app
+    cases that claimed work it didn't do.
+- *App authoring, Gemma:* `reading-list` build failed, and one
+  `recipe-notebook` turn errored.
+
+## Findings
+
+1. **Mixture-of-experts fits this iGPU.** Decode is memory-bandwidth bound.
+   Ornith reads ~3B parameters per token and Qwen 27B reads all 27B, so
+   Ornith decodes 5–7× faster on the same hardware. That also makes
+   speculative decoding much less useful for Ornith: MoE models gained only
+   9–16% from MTP on an 890M in [public measurements](https://istitov.github.io/stuff/benchmarks/speculative-decoding-on-890M/).
+2. **Quant matters for this model's reliability.** At Q4_K_M, Ornith lost
+   C5 9 times out of 30 and dropped 2 app cases. At Q8_0 it lost nothing.
+   Q8_0 costs 27% of decode speed (19.1 vs 26.0 t/s), which is still 1.5×
+   Gemma.
+3. **Ornith is more thorough, so its turns are longer.** It reads the
+   template's files before editing and re-checks after building. Q8_0
+   makes ~5× as many tool calls per app case as Gemma, so its turns take
+   longer even though each call decodes faster.
+4. **Cross-chat prompt caching is broken for hybrid models (#313).** Each
+   new chat reprocesses ~5,400 prompt tokens (~23 s). Our prompts diverge
+   ~2.5k tokens in, likely inside the tool list, which the Qwen template
+   renders first. Gated-DeltaNet state can only be restored from a context
+   checkpoint at or before that point. That is the ~22 s `first_event_s`
+   on every Ornith long turn (Gemma: 3–7 s). Fixing it should take about
+   20 s off every new chat, for Ornith and Qwen alike.
+
+Raw data: `spikes/tool_calling/m16_07_results/` (tool-calling JSON and logs,
+`llama-bench` output, `evals_summary.json` with per-case app and long-turn
+results for all four models, and `prefix_cache.py`), plus
+`spikes/tool_calling/m16_02_results/` for the Qwen and Gemma tool-calling
+runs.

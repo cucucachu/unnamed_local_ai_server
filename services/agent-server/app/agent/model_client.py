@@ -12,6 +12,12 @@ the compiled deep agent already owns the model instance, so a per-turn
 
 `profile.max_input_tokens` is what deepagents' summarization middleware
 reads to trigger at 85% of the window (`compute_summarization_defaults`).
+
+`stream_chunk_timeout` (langchain-openai's own limit on silence between
+streamed chunks, 120 s by default) gets the same budget as the call: llama.cpp
+sends nothing while it processes the prompt, which on a dense model with a
+long context (a few web pages in) takes minutes, and the 120 s default ended
+those turns in an error (M16-02).
 """
 
 from app.agent.reasoning_model import ReasoningChatOpenAI
@@ -26,6 +32,7 @@ def build_model(settings: Settings) -> ReasoningChatOpenAI:
         temperature=1.0,
         streaming=True,
         max_retries=1,
-        timeout=600,
+        timeout=settings.model_timeout_s,
+        stream_chunk_timeout=settings.model_timeout_s,
         profile={"max_input_tokens": settings.agent_context_tokens},
     )

@@ -7,7 +7,8 @@ succeeds (expected columns exist; insert a row and read it back).
 
 Env: E2E_AUTH_COOKIE, E2E_BASE (default http://localhost). Optional:
 EVAL_ONLY=<id>, EVAL_LIMIT=<n>, EVAL_TURN_TIMEOUT_S (default 1500),
-EVAL_OUT (default this directory).
+EVAL_OUT (default this directory), EVAL_AGENT=candidate (M16: send every
+request to the agent-candidate service, i.e. the candidate model).
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ CASES_PATH = HERE / "cases.json"
 BASE = os.environ.get("E2E_BASE", "http://localhost").rstrip("/")
 COOKIE = os.environ.get("E2E_AUTH_COOKIE", "")
 TURN_TIMEOUT_S = int(os.environ.get("EVAL_TURN_TIMEOUT_S", "1500"))
+AGENT_HEADERS = {"X-HomeAI-Agent": "candidate"} if os.environ.get("EVAL_AGENT") == "candidate" else {}
 
 
 def fail(msg: str) -> None:
@@ -44,7 +46,7 @@ def api(method: str, path: str, body: Any = None, timeout: int = 60) -> tuple[in
         f"{BASE}{path}",
         data=data,
         method=method,
-        headers={"Cookie": COOKIE, "Content-Type": "application/json"},
+        headers={"Cookie": COOKIE, "Content-Type": "application/json", **AGENT_HEADERS},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -86,7 +88,7 @@ async def turn(thread_id: str, prompt: str) -> list[dict]:
     frames: list[dict] = []
     async with connect(
         f"{ws_base}/ws/chat/{thread_id}",
-        additional_headers={"Cookie": COOKIE},
+        additional_headers={"Cookie": COOKIE, **AGENT_HEADERS},
         max_size=2**22,
     ) as ws:
         await ws.send(json.dumps({"type": "user_message", "content": prompt}))

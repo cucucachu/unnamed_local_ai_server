@@ -1,0 +1,80 @@
+SPIKE_CONFIG=thinking_on REPEAT=3 base_url=http://172.19.0.12:8080/v1 model=qwen3.8-27b max_tokens=2048
+=== repetition 1/3 ===
+  [C1] run 1/5: PASS
+  [C1] run 2/5: PASS
+  [C1] run 3/5: PASS
+  [C1] run 4/5: PASS
+  [C1] run 5/5: PASS
+  [C2] run 1/5: PASS
+  [C2] run 2/5: PASS
+  [C2] run 3/5: PASS
+  [C2] run 4/5: PASS
+  [C2] run 5/5: PASS
+  [C3] run 1/5: PASS
+  [C3] run 2/5: PASS
+  [C3] run 3/5: PASS
+  [C3] run 4/5: PASS
+  [C3] run 5/5: PASS
+  [C4] run 1/5: PASS
+  [C4] run 2/5: PASS
+  [C4] run 3/5: PASS
+  [C4] run 4/5: PASS
+  [C4] run 5/5: PASS
+  [C5] run 1/5: PASS
+  [C5] run 2/5: PASS
+  [C5] run 3/5: PASS
+  [C5] run 4/5: FAIL (/tmp/tmpljpwuhl_/hello.txt was not created)
+  [C5] run 5/5: PASS
+=== repetition 2/3 ===
+  [C1] run 1/5: PASS
+  [C1] run 2/5: PASS
+  [C1] run 3/5: PASS
+  [C1] run 4/5: PASS
+  [C1] run 5/5: PASS
+  [C2] run 1/5: PASS
+  [C2] run 2/5: PASS
+  [C2] run 3/5: PASS
+  [C2] run 4/5: PASS
+  [C2] run 5/5: PASS
+  [C3] run 1/5: PASS
+  [C3] run 2/5: PASS
+  [C3] run 3/5: PASS
+  [C3] run 4/5: PASS
+  [C3] run 5/5: PASS
+  [C4] run 1/5: PASS
+  [C4] run 2/5: PASS
+  [C4] run 3/5: PASS
+  [C4] run 4/5: PASS
+  [C4] run 5/5: PASS
+  [C5] run 1/5: FAIL (/tmp/tmpg61k252q/hello.txt was not created)
+  [C5] run 2/5: PASS
+  [C5] run 3/5: FAIL (/tmp/tmp2_3zm4nl/hello.txt was not created)
+  [C5] run 4/5: PASS
+  [C5] run 5/5: PASS
+=== repetition 3/3 ===
+  [C1] run 1/5: PASS
+  [C1] run 2/5: PASS
+  [C1] run 3/5: PASS
+  [C1] run 4/5: PASS
+  [C1] run 5/5: PASS
+  [C2] run 1/5: PASS
+  [C2] run 2/5: PASS
+  [C2] run 3/5: PASS
+  [C2] run 4/5: PASS
+  [C2] run 5/5: PASS
+  [C3] run 1/5: PASS
+  [C3] run 2/5: PASS
+  [C3] run 3/5: PASS
+  [C3] run 4/5: PASS
+  [C3] run 5/5: PASS
+  [C4] run 1/5: PASS
+  [C4] run 2/5: PASS
+  [C4] run 3/5: PASS
+  [C4] run 4/5: PASS
+  [C4] run 5/5: PASS
+  [C5] run 1/5: PASS
+  [C5] run 2/5: PASS
+  [C5] run 3/5: FAIL (/tmp/tmpgxxo5ac0/hello.txt was not created)
+  [C5] run 4/5: FAIL (/tmp/tmpk_kawa4z/hello.txt was not created)
+  [C5] run 5/5: PASS
+DONE config=thinking_on total=70/75 calls=139 wall_s=3003.2

@@ -1,0 +1,80 @@
+SPIKE_CONFIG=thinking_on REPEAT=3 base_url=http://172.19.0.12:8080/v1 model=ornith-1.5-35b max_tokens=2048
+=== repetition 1/3 ===
+  [C1] run 1/5: PASS
+  [C1] run 2/5: PASS
+  [C1] run 3/5: PASS
+  [C1] run 4/5: PASS
+  [C1] run 5/5: PASS
+  [C2] run 1/5: PASS
+  [C2] run 2/5: PASS
+  [C2] run 3/5: PASS
+  [C2] run 4/5: PASS
+  [C2] run 5/5: PASS
+  [C3] run 1/5: PASS
+  [C3] run 2/5: PASS
+  [C3] run 3/5: PASS
+  [C3] run 4/5: PASS
+  [C3] run 5/5: PASS
+  [C4] run 1/5: PASS
+  [C4] run 2/5: PASS
+  [C4] run 3/5: PASS
+  [C4] run 4/5: PASS
+  [C4] run 5/5: PASS
+  [C5] run 1/5: FAIL (/tmp/tmpuymfgeea/hello.txt was not created)
+  [C5] run 2/5: PASS
+  [C5] run 3/5: PASS
+  [C5] run 4/5: FAIL (/tmp/tmplx_u69uj/hello.txt was not created)
+  [C5] run 5/5: FAIL (/tmp/tmp_3wn3e1o/hello.txt was not created)
+=== repetition 2/3 ===
+  [C1] run 1/5: PASS
+  [C1] run 2/5: PASS
+  [C1] run 3/5: PASS
+  [C1] run 4/5: PASS
+  [C1] run 5/5: PASS
+  [C2] run 1/5: PASS
+  [C2] run 2/5: PASS
+  [C2] run 3/5: PASS
+  [C2] run 4/5: PASS
+  [C2] run 5/5: PASS
+  [C3] run 1/5: PASS
+  [C3] run 2/5: PASS
+  [C3] run 3/5: PASS
+  [C3] run 4/5: PASS
+  [C3] run 5/5: PASS
+  [C4] run 1/5: PASS
+  [C4] run 2/5: PASS
+  [C4] run 3/5: PASS
+  [C4] run 4/5: PASS
+  [C4] run 5/5: PASS
+  [C5] run 1/5: FAIL (/tmp/tmpfcqpkuu7/hello.txt was not created)
+  [C5] run 2/5: PASS
+  [C5] run 3/5: PASS
+  [C5] run 4/5: FAIL (/tmp/tmpea0pmir2/hello.txt was not created)
+  [C5] run 5/5: PASS
+=== repetition 3/3 ===
+  [C1] run 1/5: PASS
+  [C1] run 2/5: PASS
+  [C1] run 3/5: PASS
+  [C1] run 4/5: PASS
+  [C1] run 5/5: PASS
+  [C2] run 1/5: PASS
+  [C2] run 2/5: PASS
+  [C2] run 3/5: PASS
+  [C2] run 4/5: PASS
+  [C2] run 5/5: PASS
+  [C3] run 1/5: PASS
+  [C3] run 2/5: PASS
+  [C3] run 3/5: PASS
+  [C3] run 4/5: PASS
+  [C3] run 5/5: PASS
+  [C4] run 1/5: PASS
+  [C4] run 2/5: PASS
+  [C4] run 3/5: PASS
+  [C4] run 4/5: PASS
+  [C4] run 5/5: PASS
+  [C5] run 1/5: PASS
+  [C5] run 2/5: PASS
+  [C5] run 3/5: PASS
+  [C5] run 4/5: FAIL (/tmp/tmp338dn274/hello.txt was not created)
+  [C5] run 5/5: PASS
+DONE config=thinking_on total=69/75 calls=121 wall_s=290.5

@@ -20,6 +20,15 @@
 	}
 }
 
+# Model evals (M16): `X-HomeAI-Agent: candidate` picks the opt-in
+# agent-candidate service (compose profile `candidate`). It is the same
+# agent-server code behind the same auth; 502 when it isn't running.
+(agent_upstream) {
+	@candidate header X-HomeAI-Agent candidate
+	reverse_proxy @candidate agent-candidate:8000
+	reverse_proxy agent-server:8000
+}
+
 (app) {
 	encode gzip
 
@@ -52,11 +61,11 @@
 	}
 	handle /api/* {
 		import authenticated
-		reverse_proxy agent-server:8000
+		import agent_upstream
 	}
 	handle /ws/* {
 		import authenticated
-		reverse_proxy agent-server:8000
+		import agent_upstream
 	}
 	# The app sandbox runtime per SDK version (static; no data in it). Hosts
 	# fetch it and inline it into the sandbox document; no SPA fallback.
