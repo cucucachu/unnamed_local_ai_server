@@ -9,11 +9,13 @@ import {
   type FetchLike,
   type Forward,
   type PlatformOptions,
+  type Member as SandboxMember,
   type Space as SandboxSpace,
+  type User as SandboxUser,
 } from '@homeai/sdk/host';
 
 import { apiBase } from './api';
-import { isReadOnly, type Space } from './platform';
+import { getMe, isReadOnly, listMembers, type Space } from './platform';
 import { authHeaders, notifyUnauthorized } from './session';
 
 export { isReadOnly };
@@ -76,12 +78,22 @@ export interface InstanceDocument {
   html: string;
 }
 
+/** Who the app shows as the user and the space's members (`useUser` / `useMembers`):
+ * display only, so a failure leaves them empty rather than failing the app. */
+async function sandboxPeople(space: Space): Promise<{ user: SandboxUser | null; members: SandboxMember[] }> {
+  const [me, members] = await Promise.all([getMe().catch(() => null), listMembers(space.id).catch(() => [])]);
+  return {
+    user: me && { id: me.id, username: me.username, name: me.display_name || me.username },
+    members: members.map((m) => ({ id: m.user_id, username: m.username, name: m.display_name || m.username, role: m.role })),
+  };
+}
+
 /** The instance's current bundle and its SDK's runtime, as one sandbox document. */
 export async function loadInstanceDocument(instanceId: string, space: Space): Promise<InstanceDocument> {
   const options = platformOptions();
-  const bundle = await fetchBundle(instanceId, options);
+  const [bundle, people] = await Promise.all([fetchBundle(instanceId, options), sandboxPeople(space)]);
   const runtime = await fetchRuntime(bundle.sdk, options);
-  const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space) } });
+  const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space), ...people } });
   return { appId: bundle.app_id, version: bundle.version, html };
 }
 

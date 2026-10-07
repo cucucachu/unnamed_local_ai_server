@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
-import { askAgent, runAction, useDatabase, useQuery, useSpace, type SDKError } from '@homeai/sdk';
+import { askAgent, runAction, useDatabase, useMember, useMembers, useQuery, useSpace, useUser, type SDKError } from '@homeai/sdk';
 
 type Item = { id: number; name: string; done: number };
 
@@ -10,6 +10,9 @@ export const BUILD = 'v1';
 export default function Index() {
   const db = useDatabase();
   const space = useSpace();
+  const user = useUser();
+  const members = useMembers();
+  const owner = useMember('u-alice');
   const { data, error } = useQuery<Item>('SELECT id, name, done FROM items ORDER BY id');
   const [name, setName] = useState('');
   const [status, setStatus] = useState('');
@@ -34,6 +37,8 @@ export default function Index() {
     <View style={{ flex: 1, padding: 16, gap: 8 }}>
       <Text testID="build">{BUILD}</Text>
       <Text testID="space">{space ? `${space.name} (${space.role})` : 'no space'}</Text>
+      <Text testID="user">{user ? `${user.name} @${user.username}` : 'no user'}</Text>
+      <Text testID="members">{`${members.length} members, alice is ${owner?.name ?? 'unknown'}`}</Text>
       <TextInput testID="new-item" value={name} onChangeText={setName} placeholder="Add an item" />
       <Pressable testID="add" onPress={add}>
         <Text>Add</Text>

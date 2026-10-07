@@ -16,13 +16,15 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { TraceMap, originalPositionFor } from '@jridgewell/trace-mapping';
 import { diagnostic, relative, sourceLine } from './diagnostics.mjs';
-import { checkSql } from './sqlcheck.mjs';
+import { applySchema, checkSql } from './sqlcheck.mjs';
 import { samplePath } from './routes.mjs';
 
 const builderRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const RUNTIME_DEV = path.join(builderRoot, 'dist', 'runtime.dev.js');
 const APP_FILE = 'app.js';
 const SMOKE_SPACE = { id: '00000000-0000-4000-8000-000000000000', slug: 'smoke-test', name: 'Smoke test', role: 'owner' };
+const SMOKE_USER = { id: '00000000-0000-4000-8000-000000000001', username: 'smoke', name: 'Smoke tester' };
+const SMOKE_MEMBERS = [{ ...SMOKE_USER, role: 'owner' }];
 
 function mapper(map, appRoot) {
   const tm = new TraceMap(map);
@@ -76,7 +78,7 @@ async function renderRoute({ runtime, app, appRoot, schema, readsSql, reported, 
   const diagnostics = [];
   const mapStack = mapper(app.map, appRoot);
   const db = new DatabaseSync(':memory:');
-  db.exec(schema);
+  applySchema(db, schema);
   if (readsSql) db.exec(readsSql);
   const vc = new VirtualConsole();
   const dom = new JSDOM('<!doctype html><html><head></head><body><div id="root"></div></body></html>', {
@@ -143,7 +145,7 @@ async function renderRoute({ runtime, app, appRoot, schema, readsSql, reported, 
       });
     },
   };
-  win.__homeai_config = { initialPath: routePath };
+  win.__homeai_config = { initialPath: routePath, user: SMOKE_USER, members: SMOKE_MEMBERS };
   const ctx = dom.getInternalVMContext();
   const start = Date.now();
   try {
@@ -194,7 +196,7 @@ export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeout
   let schema = '';
   try {
     schema = fs.readFileSync(path.join(appRoot, 'schema.sql'), 'utf8');
-    new DatabaseSync(':memory:').exec(schema);
+    applySchema(new DatabaseSync(':memory:'), schema);
   } catch (err) {
     if (err.code !== 'ENOENT') {
       return { ok: false, diagnostics: [diagnostic({ step: 'sql', file: 'schema.sql', message: `schema.sql doesn't run: ${err.message}` })], routes: [] };
@@ -203,7 +205,7 @@ export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeout
   if (readsSql) {
     try {
       const probe = new DatabaseSync(':memory:');
-      probe.exec(schema);
+      applySchema(probe, schema);
       probe.exec(readsSql);
       probe.close();
     } catch (err) {
@@ -211,7 +213,7 @@ export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeout
     }
   }
   const lintDb = new DatabaseSync(':memory:');
-  lintDb.exec(schema);
+  applySchema(lintDb, schema);
   if (readsSql) lintDb.exec(readsSql);
   const lint = checkSql(appRoot, lintDb);
   lintDb.close();

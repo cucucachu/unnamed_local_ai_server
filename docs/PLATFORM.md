@@ -637,6 +637,12 @@ diagnostic until added.
 - `useQuery(sql, params)` → `{ data, error, loading, refresh }`, re-runs when
   the platform reports a change to the instance's database.
 - `runAction(name, params)`; `useSpace()` → `{ id, slug, name, role }`.
+- `useUser()` → `{ id, username, name }` (who is using the app),
+  `useMembers()` → the space's members `[{ id, username, name, role }]`,
+  `useMember(id)` → one of them or `undefined`: for showing who wrote a row
+  (`_created_by` / `_updated_by`, §7 "Data"). Display only: the host
+  supplies them in the sandbox config (empty if it couldn't fetch them);
+  attribution itself never depends on them.
 - `askAgent(prompt)` — opens the host's agent panel with that prompt
   (M13-04; a host-local bridge method, never the instance RPC).
 - Later: cross-instance reads, capability shims.
@@ -859,6 +865,21 @@ The sandbox config (`window.__homeai_config`, in the document) is
   request if the database changed (at most once per second), mounts only
   that `ro/` directory, and exec opens it with `mode=ro&immutable=1`.
 - Viewers get read-only RPC (`db.getAll`/`getFirst`, no `run`/actions).
+- **Row attribution**: every app table has four platform columns,
+  `_created_by`, `_created_at`, `_updated_by`, `_updated_at` (the user's id
+  and a UTC ISO 8601 time, `TEXT`). The migration differ adds them to the
+  scratch schema right after each CREATE TABLE (so existing instances get
+  them as an additive ADD COLUMN on their next build or migrate, with NULL
+  for older rows, and `schema.sql` may index them); `schema.sql` may not
+  declare them. Before each write op the platform puts the verified user
+  (the person, also for their agent's `app_sql` / `app_action`) in a TEMP
+  table and adds TEMP triggers that set `_created_*` + `_updated_*` after an
+  INSERT and `_updated_*` after an UPDATE; a value the INSERT supplied is
+  overwritten. The RPC authorizer refuses any UPDATE of the columns, and
+  any read of the actor table, that doesn't come from those triggers
+  (`sql_not_allowed`, "… is set by the platform"). Apps read them like any
+  column and show names with `useMembers()`. Whether a write was the
+  person or their agent, and deletes, are in the audit log (§4).
 
 > **As built (M12-03)** (contract: `ARCHITECTURE.md` §3 "App data"):
 > `POST /api/platform/apps/instances/{id}/rpc` takes `getAll`, `getFirst`,
@@ -1537,6 +1558,10 @@ Each is enforced below the agent and covered by an automated check
     log, attributed from the verified principal (user, or user's agent and
     chat), and an app-data write whose event can't be recorded doesn't
     commit (§4 "Audit log"; `services/platform/tests/test_audit.py`).
+11. An app row's `_created_by` / `_updated_by` (and `_at`) are always the
+    verified user who made the write: no app code, agent SQL, action or
+    export action can set or change them (§7 "Data";
+    `services/platform/tests/test_attribution.py`).
 
 > **As built (M14-05):** exec app-data is the M13-02 `/app-data/...` root
 > (a separate read-only bind, not `/files/.appdata`). Check 29 of

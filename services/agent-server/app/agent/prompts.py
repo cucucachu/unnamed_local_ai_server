@@ -90,6 +90,13 @@ in this folder. No fetch, window, document, react-dom, or fs.
   useQuery(sql, params)  live SELECT; do not copy rows into state
   runAction(name, params)  actions/<name>.sql
   useSpace()?.role  'owner' | 'editor' | 'viewer' — hide writes from viewers
+  useUser() {id, username, name}; useMembers() [{id, username, name, role}]
+Who wrote a row: the platform adds _created_by, _created_at, _updated_by, _updated_at
+(user id / UTC ISO time) to every table and sets them on every write. Never declare or
+write them, and never add your own sender/author/user column or pass a name in:
+SELECT ..., _created_by FROM t; const members = useMembers() at the top of the
+component; members.find((m) => m.id === row._created_by)?.name ?? 'Someone'. Mine:
+row._created_by === useUser()?.id. ORDER BY _created_at for time order.
 Templates (create_app's template=): grocery-list (default; shopping + quantity), list
 (checklist), notes (title + body), tracker (habits + daily check-ins). Pick the closest,
 then edit. After every edit, build_app and fix every diagnostic. Prefer adding columns

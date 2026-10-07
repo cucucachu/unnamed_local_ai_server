@@ -173,7 +173,11 @@ describe('loadInstanceDocument', () => {
     const calls = mockPlatform(({ url }) =>
       url.endsWith('/bundle')
         ? { body: { app_id: 'app-1', version: '1.0.0', sdk: '1', bundle_id: 'b1', code: '__homeai_define(function(){})' } }
-        : { text: 'window.__runtime = 1;' },
+        : url.endsWith('/api/platform/me')
+          ? { body: { id: 'u1', username: 'alice', display_name: 'Alice A' } }
+          : url.endsWith('/members')
+            ? { body: { members: [{ user_id: 'u1', username: 'alice', display_name: 'Alice A', role: 'owner', added_at: '' }] } }
+            : { text: 'window.__runtime = 1;' },
     );
     const space: Space = {
       id: 's1',
@@ -187,7 +191,14 @@ describe('loadInstanceDocument', () => {
       archived_at: null,
     };
     const doc = await loadInstanceDocument(FIXED, space);
-    expect(calls.map((c) => c.url)).toEqual([`${BASE}/api/platform/apps/instances/${FIXED}/bundle`, `${BASE}/app-runtime/1/runtime.js`]);
+    expect(calls.map((c) => c.url).sort()).toEqual(
+      [
+        `${BASE}/api/platform/apps/instances/${FIXED}/bundle`,
+        `${BASE}/api/platform/me`,
+        `${BASE}/api/platform/spaces/s1/members`,
+        `${BASE}/app-runtime/1/runtime.js`,
+      ].sort(),
+    );
     expect(doc).toMatchObject({ appId: 'app-1', version: '1.0.0' });
     expect(doc.html).toContain("connect-src 'none'");
     expect(doc.html).toContain('window.__runtime = 1;');
@@ -195,5 +206,20 @@ describe('loadInstanceDocument', () => {
     expect(doc.html).toContain('"role":"owner"');
     expect(doc.html).not.toContain(FIXED);
     expect(doc.html).not.toContain(TOKEN);
+    expect(doc.html).toContain('"user":{"id":"u1","username":"alice","name":"Alice A"}');
+    expect(doc.html).toContain('"members":[{"id":"u1","username":"alice","name":"Alice A","role":"owner"}]');
+  });
+
+  it('still loads the app when the user or members can’t be fetched', async () => {
+    mockPlatform(({ url }) =>
+      url.endsWith('/bundle')
+        ? { body: { app_id: 'app-1', version: '1.0.0', sdk: '1', bundle_id: 'b1', code: 'x' } }
+        : url.includes('/api/platform/')
+          ? { status: 500, body: { detail: 'boom' } }
+          : { text: 'runtime' },
+    );
+    const space = { id: 's1', slug: 'family', name: 'Family', kind: 'shared', role: 'editor' } as Space;
+    const doc = await loadInstanceDocument(FIXED, space);
+    expect(doc.html).toContain('"user":null,"members":[]');
   });
 });

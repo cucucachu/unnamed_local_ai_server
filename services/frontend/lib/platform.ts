@@ -93,6 +93,10 @@ function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   );
 }
 
+export function getMe(): Promise<User> {
+  return apiFetch<User>('/api/platform/me');
+}
+
 export function updateMe(changes: {
   display_name?: string;
   password?: string;

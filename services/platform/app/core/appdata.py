@@ -145,6 +145,16 @@ def _up_to_date(instance_id: UUID) -> Row:
     }  # fmt: skip
 
 
+def _stamped[R](principal: Principal, write: Callable[[Any], R]) -> Callable[[Any, int], R]:
+    """`write` on a connection whose writes are attributed to `principal`'s user."""
+
+    def fn(con: Any, _fd: int) -> R:
+        appdb.stamp(con, str(principal.user_id))
+        return write(con)
+
+    return fn
+
+
 def _read_package_fd(dir_fd: int, parts: tuple[str, ...], limit: int) -> bytes | None:
     """`parts` below an already-open package directory, or None if missing/not a file."""
     current = dir_fd
@@ -487,7 +497,8 @@ class AppData:
         )  # fmt: skip
         async with self._lock(owner.id):
             result = await self._run(
-                owner, lambda c, _: appdb.action(c, action_sql, req["params"], audited)
+                owner,
+                _stamped(principal, lambda c: appdb.action(c, action_sql, req["params"], audited)),
             )
         if result["changes"]:
             self._changed(owner)
@@ -522,18 +533,20 @@ class AppData:
             audited = self._audited(
                 principal, target, {"op": "run", "sql": req["sql"], "params": req["params"]}
             )
-            fn = lambda c, _: appdb.run(c, req["sql"], req["params"], audited)
+            fn = _stamped(principal, lambda c: appdb.run(c, req["sql"], req["params"], audited))
         elif op == "transaction":
             statements = [(s["sql"], s["params"]) for s in req["statements"]]
             audited = self._audited(
                 principal, target, {"op": "transaction", "statements": req["statements"]}
             )
-            fn = lambda c, _: {"results": appdb.transaction(c, statements, audited)}
+            fn = _stamped(
+                principal, lambda c: {"results": appdb.transaction(c, statements, audited)}
+            )
         else:
             audited = self._audited(
                 principal, target, {"op": "action", "action": req["name"], "params": req["params"]}
             )
-            fn = lambda c, _: appdb.action(c, action_sql, req["params"], audited)
+            fn = _stamped(principal, lambda c: appdb.action(c, action_sql, req["params"], audited))
         async with self._lock(target.id):
             result = await self._run(target, fn, sources)
         changes = (

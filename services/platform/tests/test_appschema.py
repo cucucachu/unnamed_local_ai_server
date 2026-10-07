@@ -78,7 +78,8 @@ CASES = [
 def live(tmp_path) -> sqlite3.Connection:
     con = sqlite3.connect(tmp_path / "live.sqlite", isolation_level=None)
     con.execute("PRAGMA journal_mode = WAL")
-    con.executescript(BASE + SEED)
+    appschema.apply(con, appschema.plan(con, BASE).steps, BASE)
+    con.executescript(SEED)
     yield con
     con.close()
 

@@ -22,6 +22,9 @@ export type SqlParams = unknown[] | Record<string, unknown>;
 export type RunResult = { changes: number; lastInsertRowId: number };
 export type ActionResult = RunResult & { rows: Record<string, unknown>[] };
 export type Space = { id: string; slug: string; name: string; role: 'owner' | 'editor' | 'viewer' };
+/** A person, for display: `id` is what the platform stamps in `_created_by` / `_updated_by`. */
+export type User = { id: string; username: string; name: string };
+export type Member = User & { role: Space['role'] };
 
 /** Sandbox -> host requests that the host forwards to the instance RPC. */
 export type PlatformMethods = {
@@ -49,6 +52,8 @@ export type HostEvents = {
   'db.changed': Record<string, never>;
   'bundle.load': { code: string };
   space: Space;
+  user: User;
+  members: Member[];
 };
 
 /** Sandbox -> host events. */
@@ -59,7 +64,7 @@ export type SandboxEvents = {
 };
 
 /** What the host puts in the sandbox document (`window.__homeai_config`). */
-export type SandboxConfig = { initialPath?: string; space?: Space | null };
+export type SandboxConfig = { initialPath?: string; space?: Space | null; user?: User | null; members?: Member[] };
 
 /** The largest envelope either side accepts, in UTF-16 code units. */
 export const MAX_MESSAGE_CHARS = 1 << 20;
