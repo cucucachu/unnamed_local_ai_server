@@ -232,6 +232,89 @@ def edit_text(content: str, old: str, new: str, replace_all: bool) -> tuple[str,
     return replace_string(content, old, new, replace_all)
 
 
+# An old_string covering this share of a file longer than _GUARD_MIN_LINES is
+# a rewrite: write_file costs half the tokens and can't fail on one typo.
+_GUARD_SHARE = 0.8
+_GUARD_MIN_LINES = 40
+
+
+@dataclass(frozen=True)
+class Edit:
+    content: str
+    occurrences: int
+    note: str | None = None
+
+
+def _line_count(text: str) -> int:
+    return len(text.removesuffix("\n").split("\n"))
+
+
+def _guard(content: str, covered: int) -> None:
+    total = _line_count(content)
+    if total > _GUARD_MIN_LINES and covered >= _GUARD_SHARE * total:
+        raise AgentFsError(
+            "edit_too_large",
+            f"Error: old_string covers most of the file ({covered} of {total} lines); use "
+            "write_file with the full new contents, or a smaller edit.",
+        )
+
+
+def _fuzzy_spans(file_lines: list[str], old_lines: list[str]) -> list[int]:
+    want = [line.strip() for line in old_lines]
+    n = len(want)
+    return [
+        start
+        for start in range(len(file_lines) - n + 1)
+        if all(file_lines[start + i].strip() == want[i] for i in range(n))
+    ]
+
+
+def _fuzzy_replace(content: str, old: str, new: str) -> Edit | None:
+    """`old` matched line by line ignoring each line's leading/trailing whitespace."""
+    old_lines = old.removesuffix("\n").split("\n")
+    if not any(line.strip() for line in old_lines):
+        return None
+    file_lines = content.split("\n")
+    spans = _fuzzy_spans(file_lines, old_lines)
+    if not spans:
+        return None
+    n = len(old_lines)
+    if len(spans) > 1:
+        raise AgentFsError(
+            "string_not_unique",
+            f"Error: String {_shown(old)} appears {len(spans)} times in file when ignoring "
+            "whitespace. Provide a more specific string with surrounding context.",
+            occurrences=len(spans),
+        )
+    start = spans[0]
+    _guard(content, n)
+    if old.endswith("\n"):
+        new = new.removesuffix("\n")
+    new_lines = new.split("\n") if new or not old.endswith("\n") else []
+    out = file_lines[:start] + new_lines + file_lines[start + n :]
+    return Edit("\n".join(out), 1, f"Matched ignoring whitespace at lines {start + 1}-{start + n}.")
+
+
+def apply_edit(content: str, old: str, new: str, replace_all: bool) -> Edit:
+    """`edit_text`, plus a whitespace-tolerant retry and a guard against whole-file edits."""
+    old = old.replace("\r\n", "\n").replace("\r", "\n")
+    new = new.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        new_content, occurrences = replace_string(content, old, new, replace_all)
+    except AgentFsError as exc:
+        fuzzy = (
+            None
+            if replace_all or exc.code != "string_not_found"
+            else (_fuzzy_replace(content, old, new))
+        )
+        if fuzzy is None:
+            raise
+        return fuzzy
+    if occurrences == 1:
+        _guard(content, _line_count(old))
+    return Edit(new_content, occurrences)
+
+
 # --- grep / glob -----------------------------------------------------------------
 
 

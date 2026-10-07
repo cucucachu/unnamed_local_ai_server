@@ -120,6 +120,76 @@ def test_edit_errors_match_deepagents(content, old, code, message) -> None:
     assert (exc.value.code, exc.value.message) == (code, message)
 
 
+def test_apply_edit_keeps_exact_semantics() -> None:
+    text = "alpha beta\nbeta gamma\n"
+    assert agentfs.apply_edit(text, "alpha", "ALPHA", False) == agentfs.Edit(
+        "ALPHA beta\nbeta gamma\n", 1
+    )
+    assert agentfs.apply_edit(text, "beta", "B", True).occurrences == 2
+    assert agentfs.apply_edit("a\nb\n", "a\r\nb", "c\r\nd", False).content == "c\nd\n"
+
+
+def test_apply_edit_matches_ignoring_indentation() -> None:
+    content = "function A() {\n    if (x) {\n        y();\n    }\n}\n"
+    edit = agentfs.apply_edit(content, "  if (x) {\n    y();\n  }\n", "    z();\n", False)
+    assert edit == agentfs.Edit(
+        "function A() {\n    z();\n}\n", 1, "Matched ignoring whitespace at lines 2-4."
+    )
+
+
+def test_apply_edit_matches_ignoring_trailing_whitespace() -> None:
+    content = "a = 1   \nb = 2\t\nc = 3\n"
+    edit = agentfs.apply_edit(content, "a = 1\nb = 2", "a = 10\nb = 20", False)
+    assert edit.content == "a = 10\nb = 20\nc = 3\n"
+    assert edit.note == "Matched ignoring whitespace at lines 1-2."
+
+
+def test_apply_edit_fuzzy_delete_removes_the_lines() -> None:
+    edit = agentfs.apply_edit("keep\n  drop\nkeep2\n", "\tdrop\n", "", False)
+    assert edit.content == "keep\nkeep2\n"
+
+
+def test_apply_edit_refuses_an_ambiguous_fuzzy_match() -> None:
+    content = "  x()\nother\n    x()\n"
+    with pytest.raises(AgentFsError) as exc:
+        agentfs.apply_edit(content, "x() ", "y()", False)
+    assert exc.value.code == "string_not_unique"
+    assert "2 times in file when ignoring whitespace" in exc.value.message
+    assert agentfs.apply_edit(content, "other", "o", False).content == "  x()\no\n    x()\n"
+
+
+def test_apply_edit_replace_all_stays_exact() -> None:
+    with pytest.raises(AgentFsError) as exc:
+        agentfs.apply_edit("  a\n  a\n", "a ", "b", True)
+    assert exc.value.code == "string_not_found"
+
+
+def test_apply_edit_fuzzy_match_works_on_crlf_files() -> None:
+    content = "one\r\n  two\r\nthree\r\n".replace("\r\n", "\n")
+    edit = agentfs.apply_edit(content, "one\r\ntwo\r\n", "ONE\r\nTWO\r\n", False)
+    assert edit.content == "ONE\nTWO\nthree\n"
+
+
+@pytest.mark.parametrize(
+    ("lines", "covered", "refused"), [(50, 40, True), (50, 39, False), (40, 40, False)]
+)
+def test_whole_file_guard(lines: int, covered: int, refused: bool) -> None:
+    content = "".join(f"line {i}\n" for i in range(lines))
+    old = "".join(f"line {i}\n" for i in range(covered))
+    fuzzy_old = "".join(f"  line {i}\n" for i in range(covered))
+    for candidate in (old, fuzzy_old):
+        if refused:
+            with pytest.raises(AgentFsError) as exc:
+                agentfs.apply_edit(content, candidate, "x\n", False)
+            assert exc.value.code == "edit_too_large"
+            assert exc.value.message == (
+                f"Error: old_string covers most of the file ({covered} of {lines} lines); use "
+                "write_file with the full new contents, or a smaller edit."
+            )
+        else:
+            assert agentfs.apply_edit(content, candidate, "x\n", False).occurrences == 1
+
+
 def test_a_long_old_string_is_not_echoed_back() -> None:
     content = "".join(f"line {i}\n" for i in range(400))
     old = content[: content.index("line 300")] + "line 300 typo\n"
@@ -214,6 +284,22 @@ async def test_edit_over_http(world: World) -> None:
     )  # fmt: skip
     assert r.json() == {"path": "/personal/b.txt", "occurrences": 2}
     assert (world.home("bob") / "b.txt").read_text() == "bye world\nno match\nbye again"
+    r = await _call(world, "edit", path="/personal/b.txt", old_string="  no match", new_string="x")
+    assert r.json() == {
+        "path": "/personal/b.txt",
+        "occurrences": 1,
+        "note": "Matched ignoring whitespace at lines 2-2.",
+    }
+    assert (world.home("bob") / "b.txt").read_text() == "bye world\nx\nbye again"
+
+
+async def test_edit_too_large_over_http(world: World) -> None:
+    _tree(world)
+    content = "".join(f"line {i}\n" for i in range(50))
+    (world.home("bob") / "big.txt").write_text(content)
+    r = await _call(world, "edit", path="/personal/big.txt", old_string=content, new_string="x")
+    assert (r.status_code, r.json()["detail"]) == (422, "edit_too_large")
+    assert (world.home("bob") / "big.txt").read_text() == content
 
 
 async def test_grep_over_http(world: World) -> None:

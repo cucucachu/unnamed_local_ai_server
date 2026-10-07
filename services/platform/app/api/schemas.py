@@ -438,6 +438,8 @@ class EditBody(BaseModel):
 class EditOut(BaseModel):
     path: str
     occurrences: int
+    # Set when the edit matched only after ignoring whitespace.
+    note: str | None = None
 
 
 class GrepBody(BaseModel):

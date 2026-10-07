@@ -447,28 +447,26 @@ async def put_content(request: Request, principal: CurrentUser, path: str) -> Pa
     return PathOut(path=r.vpath)
 
 
-def _edit(r: vfs.Resolved, f: BinaryIO, body: EditBody) -> int:
+def _edit(r: vfs.Resolved, f: BinaryIO, body: EditBody) -> agentfs.Edit:
     with f:
         raw = f.read()
         try:
             content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         except UnicodeDecodeError as exc:
             raise AgentFsError("not_text", f"Error editing file '{r.vpath}': {exc}") from exc
-        new_content, occurrences = agentfs.edit_text(
-            content, body.old_string, body.new_string, body.replace_all
-        )
+        result = agentfs.apply_edit(content, body.old_string, body.new_string, body.replace_all)
         f.seek(0)
         f.truncate()
-        f.write(new_content.encode("utf-8"))
-    return occurrences
+        f.write(result.content.encode("utf-8"))
+    return result
 
 
-@router.post("/edit", response_model=EditOut)
+@router.post("/edit", response_model=EditOut, response_model_exclude_none=True)
 async def edit(body: EditBody, request: Request, principal: CurrentUser) -> EditOut:
     r, f = await open_file(request, principal, body.path, writable=True)
     with _fs_errors():
-        occurrences = await anyio.to_thread.run_sync(_edit, r, f, body)
-    return EditOut(path=r.vpath, occurrences=occurrences)
+        result = await anyio.to_thread.run_sync(_edit, r, f, body)
+    return EditOut(path=r.vpath, occurrences=result.occurrences, note=result.note)
 
 
 async def _trees(request: Request, principal: Principal, path: str | None):

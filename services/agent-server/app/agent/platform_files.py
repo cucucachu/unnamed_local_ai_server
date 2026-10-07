@@ -51,6 +51,8 @@ from deepagents.backends.protocol import (
 )
 from langgraph.config import get_config
 
+from app.agent.tool_notes import add_note
+
 logger = logging.getLogger(__name__)
 
 # Above the platform's own grep (15 s) and glob (5 s) budgets.
@@ -249,6 +251,8 @@ def _edit(file_path: str, old: str, new: str, replace_all: bool) -> Op[EditResul
         return EditResult(error=reply.message)
     if not reply.ok:
         return EditResult(error=f"Error editing file '{file_path}': {_reason(reply, file_path)}")
+    if reply.body.get("note"):
+        add_note(reply.body["note"])
     return EditResult(path=file_path, occurrences=int(reply.body["occurrences"]))
 
 
