@@ -1,12 +1,11 @@
-import { createElement, type ReactElement } from 'react';
-import { Platform, Text as RNText } from 'react-native';
+import { createElement } from 'react';
+import { Animated, BackHandler, Platform, Text as RNText } from 'react-native';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 
 import type { Thread } from '@/lib/threads';
 
 const mockDismissTo = jest.fn();
 let mockSearchParams: Record<string, string> = {};
-let mockHeaderOptions: { title?: string; headerLeft?: () => ReactElement; headerRight?: () => ReactElement } = {};
 
 jest.mock('expo-router', () => {
   const ReactActual = jest.requireActual('react');
@@ -15,12 +14,6 @@ jest.mock('expo-router', () => {
     useLocalSearchParams: () => mockSearchParams,
     useFocusEffect: (callback: () => void | (() => void)) => {
       ReactActual.useEffect(() => callback(), []);
-    },
-    Stack: {
-      Screen: function Screen({ options }: { options: typeof mockHeaderOptions }) {
-        mockHeaderOptions = options;
-        return null;
-      },
     },
   };
 });
@@ -41,10 +34,6 @@ jest.mock('@/components/ChatView', () => {
   };
 });
 
-jest.mock('@/components/SwipeToOpen', () => ({
-  SwipeToOpen: ({ children }: { children: ReactElement }) => children,
-}));
-
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { openChat, resetCurrentChat } from '@/lib/currentChat';
 // eslint-disable-next-line import/first
@@ -52,10 +41,10 @@ import { getCurrentPage } from '@/lib/currentPage';
 // eslint-disable-next-line import/first
 import ChatDeepLink from '../../src/app/(tabs)/chat/[threadId]';
 // eslint-disable-next-line import/first
-import { ChatPage } from '../ChatPage';
+import { ChatPage, type PagedHistory } from '../ChatPage';
 
 function ChatTabScreen() {
-  return createElement(ChatPage, { active: true });
+  return createElement(ChatPage, { width: 390 });
 }
 
 const APPROVAL: Thread = {
@@ -143,14 +132,13 @@ function rowTitles(renderer: ReactTestRenderer): string[] {
   );
 }
 
-function headerButton(render: (() => ReactElement) | undefined, testID: string): { onPress: () => void } {
-  const element = render?.() as ReactElement<{ testID: string; onPress: () => void }> | undefined;
-  if (element?.props.testID !== testID) throw new Error(`no header button ${testID}`);
-  return element.props;
+function headerTitle(renderer: ReactTestRenderer | null = activeRenderer): string | undefined {
+  const node = renderer?.root.findAll((n) => n.type === RNText && n.props.accessibilityRole === 'header')[0];
+  return node ? [node.props.children].flat().join('') : undefined;
 }
 
 async function openDrawer(): Promise<void> {
-  act(() => headerButton(mockHeaderOptions.headerLeft, 'chat-history-button').onPress());
+  press(activeRenderer!, 'chat-history-button');
   await flush();
 }
 
@@ -164,7 +152,6 @@ beforeEach(() => {
   mockChatViewProps = null;
   mockChatViewMounts.mockClear();
   mockDismissTo.mockClear();
-  mockHeaderOptions = {};
   Platform.OS = 'web';
   (window as unknown as { confirm: () => boolean }).confirm = jest.fn(() => true);
 });
@@ -183,7 +170,7 @@ describe('Chat page (M19-02, M19-07)', () => {
     mockThreadsApi(listOk());
     await renderTab();
     expect(mockChatViewProps?.threadId).toBeNull();
-    expect(mockHeaderOptions.title).toBe('New chat');
+    expect(headerTitle()).toBe('New chat');
   });
 
   it('the drawer lists chats in the server order with their markers, and tapping one opens it', async () => {
@@ -201,7 +188,7 @@ describe('Chat page (M19-02, M19-07)', () => {
     press(renderer, 'thread-row', 2);
     expect(hostByTestId(renderer, 'chat-drawer')).toHaveLength(0);
     expect(mockChatViewProps?.threadId).toBe('thread-recent');
-    expect(mockHeaderOptions.title).toBe('Trip planning');
+    expect(headerTitle()).toBe('Trip planning');
   });
 
   it('switching tabs and back returns to the same chat', async () => {
@@ -224,7 +211,7 @@ describe('Chat page (M19-02, M19-07)', () => {
     expect(mockChatViewProps?.threadId).toBeNull();
     expect(mockChatViewMounts.mock.calls.length).toBe(mountsBefore + 1);
     expect(hostByTestId(activeRenderer!, 'chat-drawer')).toHaveLength(0);
-    expect(mockHeaderOptions.headerRight).toBeUndefined();
+    expect(hostByTestId(activeRenderer!, 'new-chat-header-button')).toHaveLength(0);
   });
 
   it('the drawer shows five chats and More for the rest; a search looks through them all (M19-07)', async () => {
@@ -253,16 +240,43 @@ describe('Chat page (M19-02, M19-07)', () => {
     expect(rowTitles(renderer)).toHaveLength(5);
   });
 
-  it('sets the header only while it is the page on screen (M19-07)', async () => {
-    mockThreadsApi(listOk());
+  it("on a phone the history is the page beside the chat, open while the pager shows it (M19-08)", async () => {
+    const fetchMock = mockThreadsApi(listOk());
+    const paged: PagedHistory = { width: 330, scrollX: new Animated.Value(330), open: jest.fn(), close: jest.fn() };
+    const back: { handler: (() => boolean) | null } = { handler: null };
+    jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_event, handler) => {
+      back.handler = handler as () => boolean;
+      return { remove: () => (back.handler = null) };
+    });
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(createElement(ChatPage, { active: false }));
+      renderer = create(createElement(ChatPage, { width: 390, paged }));
     });
     activeRenderer = renderer;
-    expect(mockHeaderOptions).toEqual({});
-    await act(async () => renderer.update(createElement(ChatPage, { active: true })));
-    expect(mockHeaderOptions.title).toBe('New chat');
+    await flush();
+    expect(hostByTestId(renderer, 'chat-drawer')).toHaveLength(1);
+    const backdrop = () => renderer.root.findAll((n) => n.props.pointerEvents !== undefined && n.findAll((c) => c.props.testID === 'chat-drawer-backdrop').length > 0)[0];
+    expect(backdrop().props.pointerEvents).toBe('none');
+
+    press(renderer, 'chat-history-button');
+    expect(paged.open).toHaveBeenCalled();
+
+    const loads = () => fetchMock.mock.calls.filter(([, init]) => (init?.method ?? 'GET') === 'GET').length;
+    const before = loads();
+    act(() => paged.scrollX.setValue(0));
+    await flush();
+    expect(loads()).toBe(before + 1);
+    expect(backdrop().props.pointerEvents).toBe('auto');
+    expect(back.handler?.()).toBe(true);
+    expect(paged.close).toHaveBeenCalledTimes(1);
+
+    press(renderer, 'thread-row', 2);
+    expect(paged.close).toHaveBeenCalledTimes(2);
+    expect(mockChatViewProps?.threadId).toBe('thread-recent');
+
+    act(() => paged.scrollX.setValue(330));
+    expect(backdrop().props.pointerEvents).toBe('none');
+    expect(back.handler).toBeNull();
   });
 
   it('a new chat that gets its thread on the first send stays mounted', async () => {
@@ -349,6 +363,6 @@ describe('Chat page (M19-02, M19-07)', () => {
 
     await renderTab();
     expect(mockChatViewProps?.threadId).toBe('thread-unread');
-    expect(mockHeaderOptions.title).toBe('Morning brief');
+    expect(headerTitle()).toBe('Morning brief');
   });
 });
