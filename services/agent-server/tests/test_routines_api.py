@@ -43,9 +43,7 @@ def client(fake_model: FakeModel, fake_platform: FakePlatform):
     fake_platform.add_space("family", {ALICE: "editor", BOB: "viewer"})
     thread_store = InMemoryThreadStore()
     app = create_app(
-        fake_model.settings(
-            platform_url=fake_platform.base_url, routines_scheduler_enabled=False
-        ),
+        fake_model.settings(platform_url=fake_platform.base_url, routines_scheduler_enabled=False),
         checkpointer_override=MemorySaver(),
         thread_store_override=thread_store,
         settings_store_override=InMemorySettingsStore(),
@@ -199,8 +197,10 @@ def test_run_now_starts_a_run_thread(client, fake_model: FakeModel, fake_platfor
     assert first.status_code == 202, first.text
     messages = _wait_for_reply(client, first.json()["thread_id"])
     assert messages[0]["role"] == "user"
-    assert "(space /spaces/family)" in messages[0]["content"]
-    assert messages[0]["content"].endswith("Summarize my calendar.")
+    assert messages[0]["content"].startswith("This is a run of your routine ")
+    assert "(space /spaces/family), started " in messages[0]["content"]
+    assert "Don't create or change routines" in messages[0]["content"]
+    assert messages[0]["content"].endswith("\n\nSummarize my calendar.")
     assert messages[-1]["content"] == "first brief"
     # The run acts as Alice, through a delegation for its own thread.
     assert fake_platform.exchanges[-1] == ("alice-token", first.json()["thread_id"])
@@ -314,3 +314,25 @@ def test_a_dead_grant_disables_the_routine(client, fake_platform) -> None:
     record = _record(client, routine["id"])
     assert (record.enabled, record.next_run_at, record.grant_token) == (False, None, None)
     assert client.get("/api/threads", headers=ALICE_H).json() == []
+
+
+def test_run_message_frames_the_prompt_as_a_run() -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from app.agent.prompts import ROUTINES_GUIDE
+    from app.routines.runs import RUN_MARKER, run_message
+
+    routine = SimpleNamespace(
+        name="Morning News Briefing",
+        space="/personal",
+        timezone="America/Los_Angeles",
+        prompt="Deliver my morning news briefing.",
+    )
+    message = run_message(routine, datetime(2026, 10, 8, 13, 0, tzinfo=UTC))
+    assert message == (
+        'This is a run of your routine "Morning News Briefing" (space /personal), started '
+        "Thu Oct 8, 06:00. Do what it asks now; nobody is watching live. Don't create or "
+        "change routines and don't ask about the schedule.\n\nDeliver my morning news briefing."
+    )
+    assert f'"{RUN_MARKER}"' in ROUTINES_GUIDE

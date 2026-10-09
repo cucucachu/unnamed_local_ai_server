@@ -28,13 +28,24 @@ from app.routines.schedule import zone
 logger = logging.getLogger(__name__)
 
 
+RUN_MARKER = "This is a run of your routine"
+
+
 def run_title(routine: RoutineRecord, started: datetime) -> str:
     local = started.astimezone(zone(routine.timezone))
     return f"{routine.name} · {local:%b} {local.day}"
 
 
-def run_message(routine: RoutineRecord) -> str:
-    return f'Routine "{routine.name}" (space {routine.space}):\n\n{routine.prompt}'
+def run_message(routine: RoutineRecord, started: datetime) -> str:
+    """The run's first message. Without the framing a model can read a name, a
+    space and a prompt as a request to create that routine (#315)."""
+    local = started.astimezone(zone(routine.timezone))
+    return (
+        f'{RUN_MARKER} "{routine.name}" (space {routine.space}), started '
+        f"{local:%a %b} {local.day}, {local:%H:%M}. Do what it asks now; nobody is watching "
+        "live. Don't create or change routines and don't ask about the schedule.\n\n"
+        f"{routine.prompt}"
+    )
 
 
 async def create_run_thread(app_state: Any, routine: RoutineRecord) -> ThreadRecord:
@@ -78,7 +89,7 @@ async def launch_run(
         TurnRequest(
             thread_id=thread.id,
             user_id=routine.owner_user_id,
-            run_input={"messages": [HumanMessage(content=run_message(routine))]},
+            run_input={"messages": [HumanMessage(content=run_message(routine, datetime.now(UTC)))]},
             hitl_enabled=document.hitl_enabled,
             thinking_enabled=document.thinking_enabled,
             delegation=delegation,
