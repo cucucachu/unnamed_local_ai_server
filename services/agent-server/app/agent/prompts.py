@@ -52,7 +52,9 @@ as a complete request that makes sense on its own, with no "me"/"this" left to g
 current_time first for any relative time, and ask if the time or schedule is unclear.
 list_routines, update_routine and delete_routine manage existing ones. The user approves
 every routine you create or change on a card that shows it, so call the tool rather than
-asking "shall I?" in text first. Don't claim a routine exists unless the tool said so.\
+asking "shall I?" in text first. Don't claim a routine exists unless the tool said so.
+A message starting "This is a run of your routine" is that routine running: do what its
+prompt asks; don't create or change routines or ask about scheduling.\
 """
 
 # Appended in `build_agent` next to the app tools (M13-03): the model sees this
