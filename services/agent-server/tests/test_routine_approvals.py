@@ -116,6 +116,72 @@ def test_allow_writes_still_asks_before_a_delete_and_resumes_in_that_mode(
     assert client.get("/api/threads", headers=HEADERS).json()[0]["needs_approval"] is False
 
 
+def _approve_all(pending: dict, **extra) -> dict:
+    return {
+        "type": "approval_response",
+        "interrupt_id": pending["interrupt_id"],
+        "decisions": [
+            {"tool_call_id": a["tool_call_id"], "decision": "approve"} for a in pending["actions"]
+        ],
+        **extra,
+    }
+
+
+def test_approving_with_allow_writes_switches_the_routine_and_finishes_the_run(
+    client, harness, fake_model, fake_platform
+) -> None:
+    routine, run = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE))
+    pending = _pending(client, run["thread_id"])
+    assert pending["can_allow_writes"] is True
+
+    fake_model.queue(
+        ToolCallTurn("write_file", {"file_path": "/personal/second.md", "content": "more"}),
+        TextTurn("both written"),
+    )
+    with client.websocket_connect(f"/ws/chat/{run['thread_id']}", headers=HEADERS) as ws:
+        ws.send_json(_approve_all(pending, allow_writes=True))
+        frames = _drain_turn(ws)
+    assert frames[-1]["status"] == "completed"
+    assert not any(f["type"] == "approval_request" for f in frames)
+    assert fake_platform.personal(ALICE) == {"brief.md": b"today", "second.md": b"more"}
+    assert _wait_for_status(client, routine["id"], "succeeded")["status"] == "succeeded"
+    updated = client.get(f"/api/routines/{routine['id']}", headers=HEADERS).json()
+    assert updated["approval_mode"] == "allow_writes"
+
+
+def test_allow_writes_is_not_offered_for_a_delete_or_outside_ask_mode(
+    client, harness, fake_model, fake_platform
+) -> None:
+    fake_platform.personal(ALICE)["old.md"] = b"stale"
+    _, ask_run = _run_once(client, harness, fake_model, ToolCallTurn(*DELETE))
+    assert "can_allow_writes" not in _pending(client, ask_run["thread_id"])
+
+    _, writes_run = _run_once(
+        client, harness, fake_model, ToolCallTurn(*DELETE), approval_mode="allow_writes"
+    )
+    assert "can_allow_writes" not in _pending(client, writes_run["thread_id"])
+
+
+@pytest.mark.parametrize("case", ["delete pending", "rejected"])
+def test_allow_writes_is_refused_where_it_was_not_offered(
+    case, client, harness, fake_model, fake_platform
+) -> None:
+    fake_platform.personal(ALICE)["old.md"] = b"stale"
+    turn = ToolCallTurn(*DELETE) if case == "delete pending" else ToolCallTurn(*WRITE)
+    routine, run = _run_once(client, harness, fake_model, turn)
+    pending = _pending(client, run["thread_id"])
+    frame = _approve_all(pending, allow_writes=True)
+    if case == "rejected":
+        frame["decisions"][0]["decision"] = "reject"
+    with client.websocket_connect(f"/ws/chat/{run['thread_id']}", headers=HEADERS) as ws:
+        ws.send_json(frame)
+        error = ws.receive_json()
+    assert error["type"] == "error" and "allow_writes" in error["message"]
+    unchanged = client.get(f"/api/routines/{routine['id']}", headers=HEADERS).json()
+    assert unchanged["approval_mode"] == "ask"
+    assert _pending(client, run["thread_id"]) is not None
+
+
 def test_read_only_refuses_writes(client, harness, fake_model, fake_platform) -> None:
     _, run = _run_once(
         client,

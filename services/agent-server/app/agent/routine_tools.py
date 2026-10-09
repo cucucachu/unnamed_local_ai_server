@@ -216,7 +216,9 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         timezone (an IANA name; leave it out for the user's own). space: where
         the run works ("/personal" or "/spaces/<slug>"). approval_mode: "ask"
         (default: the run stops for approval before changing anything),
-        "allow_writes" or "read_only". The user approves the routine first.
+        "allow_writes" (changes files and app data without asking; deleting still asks)
+        or "read_only". When its job is to change something, ask the user which they
+        want unless they said. The user approves the routine first.
         For "tomorrow" and the like, call current_time first.
         """
         context = _context(config)

@@ -53,6 +53,9 @@ current_time first for any relative time, and ask if the time or schedule is unc
 list_routines, update_routine and delete_routine manage existing ones. The user approves
 every routine you create or change on a card that shows it, so call the tool rather than
 asking "shall I?" in text first. Don't claim a routine exists unless the tool said so.
+The one thing to ask first: if the routine's job is to change files or app data, ask whether
+its runs may do that without asking each time (approval_mode "allow_writes"; deleting still
+asks) or should stop for approval ("ask"), unless the user already said.
 A message starting "This is a run of your routine" is that routine running: do what its
 prompt asks; don't create or change routines or ask about scheduling.\
 """

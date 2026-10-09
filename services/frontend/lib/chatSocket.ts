@@ -65,6 +65,8 @@ export interface ApprovalRequestFrame {
   type: 'approval_request';
   interrupt_id: string;
   actions: PendingApprovalAction[];
+  /** #326: a routine run paused in ask mode, with no delete pending. */
+  can_allow_writes?: boolean;
 }
 
 /** `status` (M8-01/M8-03): `"completed"` for a normal finish, `"cancelled"`
@@ -142,6 +144,8 @@ export interface ApprovalResponseFrame {
   type: 'approval_response';
   interrupt_id: string;
   decisions: ApprovalDecision[];
+  /** #326: also set the run's routine to allow writes from now on. */
+  allow_writes?: true;
 }
 
 /** Connection lifecycle states a UI can render directly (e.g. a "connecting…"
@@ -185,7 +189,7 @@ export interface ChatSocket {
   cancel(): void;
   /** Serialize and send an `approval_response` frame (M8-03). Only
    * meaningful while awaiting approval on the matching `interruptId`. */
-  approvalResponse(interruptId: string, decisions: ApprovalDecision[]): void;
+  approvalResponse(interruptId: string, decisions: ApprovalDecision[], allowWrites?: boolean): void;
   /** Cleanly close the socket; cancels any pending reconnect attempt. */
   close(): void;
   /** M17-01: reconnect now unless open or connecting (e.g. the app came back
@@ -429,11 +433,12 @@ export function openChatSocket(
       const frame: CancelFrame = { type: 'cancel' };
       sendFrame(frame);
     },
-    approvalResponse(interruptId: string, decisions: ApprovalDecision[]): void {
+    approvalResponse(interruptId: string, decisions: ApprovalDecision[], allowWrites = false): void {
       const frame: ApprovalResponseFrame = {
         type: 'approval_response',
         interrupt_id: interruptId,
         decisions,
+        ...(allowWrites ? { allow_writes: true as const } : {}),
       };
       sendFrame(frame);
     },

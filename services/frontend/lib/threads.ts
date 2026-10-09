@@ -55,6 +55,7 @@ export interface PendingApprovalAction {
 export interface PendingApproval {
   interrupt_id: string;
   actions: PendingApprovalAction[];
+  can_allow_writes?: boolean;
 }
 
 export interface ThreadState {

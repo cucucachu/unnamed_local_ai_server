@@ -857,6 +857,34 @@ describe('ChatView', () => {
       expect(respondToApproval).toHaveBeenCalledTimes(1);
     });
 
+    it('offers "allow writes from now on" only when the server does, approving every action', () => {
+      const respondToApproval = jest.fn();
+      setUseChatResult({
+        pendingApproval: { interruptId: 'int-aw', actions: [singleAction], canAllowWrites: true },
+        respondToApproval,
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const allow = renderer!.root.findByProps({ accessibilityLabel: 'Approve, and allow writes from now on' });
+      expect(renderedText(renderer!)).toContain("You can change this in the routine's settings.");
+      act(() => {
+        (allow.props as { onPress: () => void }).onPress();
+      });
+      expect(respondToApproval).toHaveBeenCalledWith([{ tool_call_id: 'call-1', decision: 'approve' }], true);
+
+      setUseChatResult({ pendingApproval: { interruptId: 'int-plain', actions: [singleAction] } });
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+      expect(() =>
+        renderer!.root.findByProps({ accessibilityLabel: 'Approve, and allow writes from now on' }),
+      ).toThrow();
+    });
+
     it('per-row Approve/Reject on a multi-action card waits until every row has a decision', () => {
       const respondToApproval = jest.fn();
       setUseChatResult({

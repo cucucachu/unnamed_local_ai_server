@@ -1084,7 +1084,7 @@ function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): Reac
 
 interface ApprovalCardProps {
   pendingApproval: PendingApproval;
-  onRespond: (decisions: ApprovalDecision[]) => void;
+  onRespond: (decisions: ApprovalDecision[], allowWrites?: boolean) => void;
 }
 
 /**
@@ -1109,10 +1109,11 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
   >({});
 
   const respond = useCallback(
-    (decisions: ApprovalDecision[]) => {
+    (decisions: ApprovalDecision[], allowWrites = false) => {
       if (responded) return;
       setResponded(true);
-      onRespond(decisions);
+      if (allowWrites) onRespond(decisions, true);
+      else onRespond(decisions);
     },
     [responded, onRespond],
   );
@@ -1137,9 +1138,15 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
     [respond, pendingApproval.actions, rowDecisions],
   );
 
-  const approveAll = useCallback(() => {
-    respond(pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })));
-  }, [respond, pendingApproval.actions]);
+  const approveAll = useCallback(
+    (allowWrites = false) => {
+      respond(
+        pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })),
+        allowWrites,
+      );
+    },
+    [respond, pendingApproval.actions],
+  );
 
   return (
     <View style={styles.approvalCard} testID="approval-card">
@@ -1202,13 +1209,30 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
       {pendingApproval.actions.length > 1 ? (
         <Pressable
           style={[styles.approvalButton, styles.approvalApproveAllButton, responded && styles.approvalButtonDisabled]}
-          onPress={approveAll}
+          onPress={() => approveAll()}
           disabled={responded}
           accessibilityRole="button"
           accessibilityLabel="Approve all"
         >
           <Text style={styles.approvalApproveButtonText}>Approve all</Text>
         </Pressable>
+      ) : null}
+      {pendingApproval.canAllowWrites ? (
+        <View style={styles.approvalAllowWrites}>
+          <Pressable
+            style={[styles.approvalButton, styles.approvalApproveAllButton, responded && styles.approvalButtonDisabled]}
+            onPress={() => approveAll(true)}
+            disabled={responded}
+            accessibilityRole="button"
+            accessibilityLabel="Approve, and allow writes from now on"
+          >
+            <Text style={styles.approvalApproveButtonText}>Approve, and allow writes from now on</Text>
+          </Pressable>
+          <Text style={styles.approvalDescription}>
+            This routine will change files and app data without asking; deleting still asks. You can change this in
+            the routine's settings.
+          </Text>
+        </View>
       ) : null}
     </View>
   );
@@ -1698,6 +1722,9 @@ const styles = StyleSheet.create({
   },
   approvalRows: {
     gap: 8,
+  },
+  approvalAllowWrites: {
+    gap: 4,
   },
   approvalRow: {
     gap: 4,

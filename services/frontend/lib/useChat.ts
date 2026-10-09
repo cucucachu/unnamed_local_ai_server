@@ -115,6 +115,8 @@ export interface PendingApprovalAction {
 export interface PendingApproval {
   interruptId: string;
   actions: PendingApprovalAction[];
+  /** #326: offer "approve, and allow writes from now on" (a routine run). */
+  canAllowWrites?: boolean;
 }
 
 /** Not in the ticket's literal `ChatItem` sketch — added to represent an
@@ -287,7 +289,7 @@ export interface UseChatResult {
    * rejected action gets a synthesized `ChatToolItem` with `status:
    * 'rejected'` right away, since no real `tool_start`/`tool_end` frame
    * will ever arrive for it. */
-  respondToApproval: (decisions: ApprovalDecision[]) => void;
+  respondToApproval: (decisions: ApprovalDecision[], allowWrites?: boolean) => void;
   /** M8-05: fork points on the active lineage (empty until a fork exists). */
   branches: ThreadBranchPoint[];
   /** M8-05: PUT the tip, then re-hydrate so the transcript matches. */
@@ -368,6 +370,7 @@ async function loadThread(threadId: string): Promise<ThreadSnapshot> {
       pendingApproval = {
         interruptId: state.pending_approval.interrupt_id,
         actions: state.pending_approval.actions.map(toPendingApprovalAction),
+        ...(state.pending_approval.can_allow_writes ? { canAllowWrites: true } : {}),
       };
     }
   } catch {
@@ -622,6 +625,7 @@ export function useChat(
           const pending: PendingApproval = {
             interruptId: frame.interrupt_id,
             actions: frame.actions.map(toPendingApprovalAction),
+            ...(frame.can_allow_writes ? { canAllowWrites: true } : {}),
           };
           pendingApprovalRef.current = pending;
           setPendingApproval(pending);
@@ -803,7 +807,7 @@ export function useChat(
     socketRef.current?.cancel();
   }, []);
 
-  const respondToApproval = useCallback((decisions: ApprovalDecision[]) => {
+  const respondToApproval = useCallback((decisions: ApprovalDecision[], allowWrites = false) => {
     const pending = pendingApprovalRef.current;
     if (pending === null) return;
 
@@ -837,7 +841,7 @@ export function useChat(
       setItems((prev) => [...prev, ...rejectedItems]);
     }
 
-    socketRef.current?.approvalResponse(pending.interruptId, decisions);
+    socketRef.current?.approvalResponse(pending.interruptId, decisions, allowWrites);
   }, []);
 
   const turns = useMemo(() => groupItemsIntoTurns(items, turnMetas), [items, turnMetas]);
