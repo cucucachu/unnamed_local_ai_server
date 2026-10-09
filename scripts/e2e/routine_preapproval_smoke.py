@@ -172,7 +172,7 @@ def check_allow_writes_from_a_run(routines: list[str], threads: list[str]) -> No
             "name": "e2e preapproval",
             "prompt": f"Write the text 'one' to {NOTE}, then write the text 'two' to "
             f"{NOTE}.second. Use write_file for both; don't run code.",
-            "schedule": {"repeat": "daily", "time": "03:00"},
+            "schedule": {"kind": "daily", "time": "03:00"},
             "timezone": "UTC",
             "approval_mode": "ask",
         },
