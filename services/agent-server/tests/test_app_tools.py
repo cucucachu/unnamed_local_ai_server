@@ -222,6 +222,22 @@ async def test_create_app_refuses_bad_input_without_writing(fake_model, fake_pla
     assert fake_platform.apps == [] and list(fake_platform.personal()) == ["Apps/taken/app.json"]
 
 
+async def test_build_app_on_hand_written_files_points_to_create_app(fake_model, fake_platform):
+    fake_platform.personal()["Apps/weather/app.json"] = b"{}"
+    fake_model.queue(
+        ToolCallTurn("build_app", {"app": "/personal/Apps/weather"}), TextTurn("no app")
+    )
+    with (
+        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        client.websocket_connect("/ws/chat/build-unregistered") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "build it"})
+        _assert_turn_end(_drain_turn(ws)[-1], "completed")
+    [result] = _tool_results(fake_model)
+    assert "no app '/personal/Apps/weather'" in result
+    assert "A new app starts with create_app" in result
+
+
 async def test_build_app_reports_diagnostics_then_success_with_a_pending_migration(
     fake_model, fake_platform
 ):
