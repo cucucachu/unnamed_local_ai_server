@@ -1146,46 +1146,59 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
       <Text style={styles.approvalCardTitle}>
         {pendingApproval.actions.length > 1 ? 'These actions need your approval' : 'This action needs your approval'}
       </Text>
-      {pendingApproval.actions.map((action) => (
-        <View key={action.toolCallId} style={styles.approvalRow} testID="approval-row">
-          <View style={styles.approvalRowHeader}>
-            <Ionicons name={CATEGORY_ICON[action.category]} size={16} color={theme.textMuted} />
-            <Text style={styles.toolName}>{action.name}</Text>
-          </View>
-          <ApprovalActionArgs action={action} />
-          <Text style={styles.approvalDescription}>{action.description}</Text>
-          <View style={styles.approvalButtonRow}>
-            <Pressable
-              style={[
-                styles.approvalButton,
-                styles.approvalRejectButton,
-                rowDecisions[action.toolCallId] === 'reject' && styles.approvalRejectButtonSelected,
-                responded && styles.approvalButtonDisabled,
-              ]}
-              onPress={() => respondOne(action.toolCallId, 'reject')}
-              disabled={responded}
-              accessibilityRole="button"
-              accessibilityLabel={`Reject ${action.name}`}
+      <ScrollView
+        style={{ maxHeight: Dimensions.get('window').height * 0.45 }}
+        contentContainerStyle={styles.approvalRows}
+        nestedScrollEnabled
+        testID="approval-scroll"
+      >
+        {pendingApproval.actions.map((action) => (
+          <View key={action.toolCallId} style={styles.approvalRow} testID="approval-row">
+            <View style={styles.approvalRowHeader}>
+              <Ionicons name={CATEGORY_ICON[action.category]} size={16} color={theme.textMuted} />
+              <Text style={styles.toolName}>{action.name}</Text>
+            </View>
+            <ScrollView
+              style={{ maxHeight: Dimensions.get('window').height * 0.25 }}
+              nestedScrollEnabled
+              testID="approval-args-scroll"
             >
-              <Text style={styles.approvalRejectButtonText}>Reject</Text>
-            </Pressable>
-            <Pressable
-              style={[
-                styles.approvalButton,
-                styles.approvalApproveButton,
-                rowDecisions[action.toolCallId] === 'approve' && styles.approvalApproveButtonSelected,
-                responded && styles.approvalButtonDisabled,
-              ]}
-              onPress={() => respondOne(action.toolCallId, 'approve')}
-              disabled={responded}
-              accessibilityRole="button"
-              accessibilityLabel={`Approve ${action.name}`}
-            >
-              <Text style={styles.approvalApproveButtonText}>Approve</Text>
-            </Pressable>
+              <ApprovalActionArgs action={action} />
+              <Text style={styles.approvalDescription}>{action.description}</Text>
+            </ScrollView>
+            <View style={styles.approvalButtonRow}>
+              <Pressable
+                style={[
+                  styles.approvalButton,
+                  styles.approvalRejectButton,
+                  rowDecisions[action.toolCallId] === 'reject' && styles.approvalRejectButtonSelected,
+                  responded && styles.approvalButtonDisabled,
+                ]}
+                onPress={() => respondOne(action.toolCallId, 'reject')}
+                disabled={responded}
+                accessibilityRole="button"
+                accessibilityLabel={`Reject ${action.name}`}
+              >
+                <Text style={styles.approvalRejectButtonText}>Reject</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.approvalButton,
+                  styles.approvalApproveButton,
+                  rowDecisions[action.toolCallId] === 'approve' && styles.approvalApproveButtonSelected,
+                  responded && styles.approvalButtonDisabled,
+                ]}
+                onPress={() => respondOne(action.toolCallId, 'approve')}
+                disabled={responded}
+                accessibilityRole="button"
+                accessibilityLabel={`Approve ${action.name}`}
+              >
+                <Text style={styles.approvalApproveButtonText}>Approve</Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
-      ))}
+        ))}
+      </ScrollView>
       {pendingApproval.actions.length > 1 ? (
         <Pressable
           style={[styles.approvalButton, styles.approvalApproveAllButton, responded && styles.approvalButtonDisabled]}
@@ -1682,6 +1695,9 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 13,
     fontWeight: '600',
+  },
+  approvalRows: {
+    gap: 8,
   },
   approvalRow: {
     gap: 4,
