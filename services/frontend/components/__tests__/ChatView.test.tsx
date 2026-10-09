@@ -769,6 +769,37 @@ describe('ChatView', () => {
       expect(input?.props.editable).toBe(false);
     });
 
+    it('keeps the buttons reachable under a very long command by scrolling the args', () => {
+      const command = Array.from({ length: 300 }, (_, i) => `echo line ${i}`).join('\n');
+      setUseChatResult({
+        pendingApproval: {
+          interruptId: 'int-long',
+          actions: [
+            {
+              toolCallId: 'call-long',
+              name: 'execute_code',
+              category: 'exec' as const,
+              args: { command },
+              description: `Run command: \`${command}\``,
+            },
+          ],
+        },
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      const args = renderer!.root.findByProps({ testID: 'approval-args-scroll' });
+      expect(args.props.style.maxHeight).toBeGreaterThan(0);
+      expect(renderedText(renderer!)).toContain('echo line 299');
+      const rows = renderer!.root.findByProps({ testID: 'approval-scroll' });
+      expect(rows.props.style.maxHeight).toBeGreaterThan(0);
+      expect(() => args.findByProps({ accessibilityLabel: 'Approve execute_code' })).toThrow();
+      expect(renderer!.root.findByProps({ accessibilityLabel: 'Approve execute_code' })).toBeTruthy();
+    });
+
     it('shows "Approve all" when there is more than one pending action', () => {
       setUseChatResult({
         pendingApproval: {
