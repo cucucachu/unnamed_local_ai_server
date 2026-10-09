@@ -728,6 +728,34 @@ describe('useChat — HITL approvals (M8-03)', () => {
     );
   });
 
+  it('carries can_allow_writes through and sends allow_writes when asked (#326)', async () => {
+    const hook = await renderUseChat();
+    act(() => latestSocket().onopen?.({}));
+
+    act(() => {
+      latestSocket().emit({
+        type: 'approval_request',
+        interrupt_id: 'int-aw',
+        actions: [action],
+        can_allow_writes: true,
+      });
+      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
+    });
+    expect(hook.current().pendingApproval?.canAllowWrites).toBe(true);
+
+    act(() => {
+      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'approve' }], true);
+    });
+    expect(latestSocket().sent).toContain(
+      JSON.stringify({
+        type: 'approval_response',
+        interrupt_id: 'int-aw',
+        decisions: [{ tool_call_id: 'call-1', decision: 'approve' }],
+        allow_writes: true,
+      }),
+    );
+  });
+
   it('respondToApproval with a reject decision synthesizes a rejected ChatToolItem immediately', async () => {
     const hook = await renderUseChat();
 

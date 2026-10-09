@@ -1623,7 +1623,8 @@ Client → server:
  "mode": "truncate"|"fork"?}
 {"type": "cancel"}
 {"type": "approval_response", "interrupt_id": "str",
- "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
+ "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}],
+ "allow_writes": true?}
 ```
 
 `cancel` (M8-01) stops the in-flight turn early. It's only meaningful while
@@ -1648,6 +1649,13 @@ deepagents' HITL shape: `{"type": "approve"}` or `{"type": "reject",
 "message": "The user rejected this action."}`. One decision is required
 per pending `tool_call_id`; a mismatched `interrupt_id` or incomplete
 decision list is an invalid frame (`error` + close 1008).
+
+`allow_writes: true` (#326) is only valid when the `approval_request` had
+`can_allow_writes` and every decision is `approve`; otherwise it's an
+invalid frame (`error` + close 1008). It sets the run's routine to
+`allow_writes` and resumes in that mode, so the paused calls run and later
+writes in the same run don't stop (deletes and destructive migrations
+still do).
 
 `cancel` **while awaiting approval** is not the M8-01 cancel-a-running-task
 path (there is no running task — the graph is paused). It rejects every
@@ -1694,7 +1702,8 @@ Server → client, in order within a turn:
 {"type": "approval_request", "interrupt_id": "str",
  "actions": [{"tool_call_id": "str", "name": "str",
               "category": "file"|"exec"|"plan"|"web"|"app"|"other",
-              "args": {}, "description": "str"}]}           // args truncated like tool_start
+              "args": {}, "description": "str"}],           // args truncated like tool_start
+ "can_allow_writes": true?}   // #326: a routine run paused in ask mode, no delete/migration pending
 {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval",
  "duration_ms": int}   // M9-02: elapsed since this turn's turn_start
 {"type": "error", "message": "str"}                        // followed by a normal close, code 1011

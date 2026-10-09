@@ -11,8 +11,12 @@ Client -> server (four valid incoming frames):
     {"type": "cancel"}   # M8-01: cancels a running turn; M8-03: while
                           # awaiting approval, rejects all pending actions
     {"type": "approval_response", "interrupt_id": "str",
-     "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
-     # M8-03: only valid while awaiting approval (see below)
+     "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}],
+     "allow_writes": true?}
+     # M8-03: only valid while awaiting approval (see below). #326:
+     # `allow_writes` (only with `can_allow_writes` and every action
+     # approved) also sets the run's routine to `allow_writes` and resumes
+     # in that mode, so the rest of the run doesn't stop for writes.
 
 Server -> client (in order within a turn):
     {"type": "turn_start"}
@@ -26,7 +30,10 @@ Server -> client (in order within a turn):
     {"type": "tool_end", "tool_call_id": "str", "name": "str",
      "status": "success"|"error", "result_preview": "str"}
     {"type": "approval_request", "interrupt_id": "str",
-     "actions": [{"tool_call_id", "name", "category", "args", "description"}]}
+     "actions": [{"tool_call_id", "name", "category", "args", "description"}],
+     "can_allow_writes": true?}
+     # #326: present in a routine run paused in `ask` mode with no delete
+     # or migration pending.
      # M8-03: emitted instead of a normal completion when the turn ends with
      # one or more mutating tool calls paused for human approval; ALWAYS
      # immediately followed by `turn_end {"status": "awaiting_approval"}`
@@ -325,6 +332,7 @@ from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.app_tools import APP_TOOL_NAMES
+from app.agent.approvals import DESTRUCTIVE_TOOLS
 from app.agent.build import MUTATING_TOOL_NAMES
 from app.agent.routine_tools import ROUTINE_TOOL_NAMES
 from app.agent.turn_runner import END, ActiveTurn, TurnOutcome, TurnRequest, TurnRunner
@@ -533,7 +541,12 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
                 }
             )
         groups.append((str(interrupt.id), len(action_requests)))
-    return {"interrupt_id": groups[0][0], "actions": actions, _RESUME_KEY: groups}
+    pending = {"interrupt_id": groups[0][0], "actions": actions, _RESUME_KEY: groups}
+    if (state.metadata or {}).get("approval_mode") == "ask" and not any(
+        a["name"] in DESTRUCTIVE_TOOLS for a in actions
+    ):
+        pending["can_allow_writes"] = True
+    return pending
 
 
 _RESUME_KEY = "_resume"
@@ -806,20 +819,21 @@ async def turn_end_frame(app_state: Any, turn: ActiveTurn, status: str) -> dict:
 
 
 def approval_request_frame(pending_approval: dict) -> dict:
-    return {
+    frame = {
         "type": "approval_request",
         "interrupt_id": pending_approval["interrupt_id"],
         "actions": pending_approval["actions"],
     }
+    if pending_approval.get("can_allow_writes"):
+        frame["can_allow_writes"] = True
+    return frame
 
 
 async def _announce_pending_approval(
     websocket: WebSocket, turn: ActiveTurn, pending_approval: dict
 ) -> None:
     await websocket.send_json(approval_request_frame(pending_approval))
-    await websocket.send_json(
-        await turn_end_frame(websocket.app.state, turn, "awaiting_approval")
-    )
+    await websocket.send_json(await turn_end_frame(websocket.app.state, turn, "awaiting_approval"))
 
 
 def _is_cancel_frame(raw: object) -> bool:
@@ -1146,6 +1160,17 @@ async def _start_turn(
             lock.release()
 
 
+async def _allow_writes_from_now_on(app_state: Any, thread_id: str, user_id: str) -> bool:
+    """Set the routine this run belongs to to `allow_writes` (#326); False if there's none."""
+    run = await app_state.routine_store.run_for_thread(thread_id, user_id)
+    if run is None:
+        return False
+    updated = await app_state.routine_store.update(
+        run.routine_id, user_id, {"approval_mode": "allow_writes"}
+    )
+    return updated is not None
+
+
 async def _track_routine_run(
     app_state: Any, thread_id: str, user_id: str, turn: ActiveTurn
 ) -> None:
@@ -1243,6 +1268,7 @@ async def _serve(
             # (matching the pending interrupt) or `cancel` (reject-all) are
             # valid — anything else is an invalid frame -> error + close
             # 1008, same treatment as an invalid frame while idle.
+            resume_mode = await paused_approval_mode(websocket.app.state.agent, thread_id)
             if _is_cancel_frame(raw):
                 decisions = _reject_all_decisions(pending_approval, "The user cancelled.")
             else:
@@ -1255,6 +1281,22 @@ async def _serve(
                         code=1008,
                     )
                     return
+                if raw.get("allow_writes") is True:
+                    # Resumed under `allow_writes`, the paused calls no longer
+                    # stop, so they run without consuming these decisions.
+                    if not (
+                        pending_approval.get("can_allow_writes")
+                        and all(d["type"] == "approve" for d in decisions)
+                        and await _allow_writes_from_now_on(websocket.app.state, thread_id, user_id)
+                    ):
+                        await _send_error_and_close(
+                            websocket,
+                            "invalid frame: allow_writes needs a routine run's approval "
+                            "with every action approved",
+                            code=1008,
+                        )
+                        return
+                    resume_mode = "allow_writes"
 
             resume = TurnRequest(
                 thread_id=thread_id,
@@ -1264,7 +1306,7 @@ async def _serve(
                 thinking_enabled=await _current_thinking_enabled(websocket, user_id),
                 delegation=delegation,
                 detached_timeout_s=detached_timeout_s,
-                approval_mode=await paused_approval_mode(websocket.app.state.agent, thread_id),
+                approval_mode=resume_mode,
             )
             started = await _start_turn(
                 websocket, runner, resume, _active_tip(thread_store, thread_id, user_id)
