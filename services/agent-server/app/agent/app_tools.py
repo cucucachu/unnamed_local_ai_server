@@ -304,7 +304,11 @@ def _find_app(cat: _Catalog, ref: str) -> dict | str:
     if len(found) == 1:
         return found[0]
     if not found:
-        return f"Error: no app '{ref}' whose source the user can edit. Call list_apps to see them."
+        return (
+            f"Error: no app '{ref}' whose source the user can edit. Call list_apps to see them. "
+            "A new app starts with create_app; files written into an Apps folder by hand "
+            "aren't an app."
+        )
     options = ", ".join(a["source_path"] for a in found)
     return f"Error: '{ref}' is ambiguous; use its source path, one of: {options}."
 
