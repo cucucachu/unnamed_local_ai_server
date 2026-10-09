@@ -319,7 +319,11 @@ export default function FilesScreen() {
 
   const handleDownload = useCallback(
     (entry: FileEntry) => {
-      downloadFile(entry.path).catch((error) => showToast(errorDetail(error, 'Download failed')));
+      downloadFile(entry.path)
+        .then((folder) => {
+          if (folder !== null) showToast(`Saved ${entry.name} to ${folder}`);
+        })
+        .catch((error) => showToast(errorDetail(error, 'Download failed')));
     },
     [showToast],
   );

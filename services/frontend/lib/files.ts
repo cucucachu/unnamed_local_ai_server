@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { Directory, File, Paths, UploadType } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as DocumentPicker from 'expo-document-picker';
+import * as SecureStore from 'expo-secure-store';
 import * as Sharing from 'expo-sharing';
 
 import { ApiError, apiBase, apiFetch, detailFromBody } from './api';
@@ -404,15 +405,23 @@ async function pickAndUploadNative(targetDir: string): Promise<UploadResult | nu
  * what's used here instead of reaching for the legacy subpath. Downloads
  * to `Paths.cache` (reclaimable by the OS under storage pressure — fine
  * here, since the file only needs to survive long enough for the
- * subsequent share-sheet hop, not be kept around), then hands off to
- * `expo-sharing`'s share sheet, per the ticket.
+ * subsequent copy or share-sheet hop, not be kept around).
+ *
+ * Android then copies it into a folder the user picks once through the
+ * system folder picker (remembered; picked again if access is lost).
+ * Android 11+ won't grant the Download root itself, so that's a subfolder
+ * such as Download/HomeAI. iOS hands off to the share sheet, whose "Save to
+ * Files" is the iOS way to keep a file.
+ *
+ * Resolves to the folder it was saved in (Android), or null when nothing
+ * was saved here (web, iOS, or the user cancelled the picker).
  */
-export async function downloadFile(path: string): Promise<void> {
+export async function downloadFile(path: string): Promise<string | null> {
   const url = `${apiBase()}${FILES_API}/download?${query(path)}`;
 
   if (Platform.OS === 'web') {
     window.open(url, '_blank');
-    return;
+    return null;
   }
 
   const filename = path.split('/').pop() || 'download';
@@ -436,7 +445,54 @@ export async function downloadFile(path: string): Promise<void> {
     throw new ApiError(0, error instanceof Error ? error.message : 'Download failed');
   }
 
+  if (Platform.OS === 'android') {
+    return saveToDownloadFolder(downloaded);
+  }
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(downloaded.uri);
   }
+  return null;
+}
+
+const DOWNLOAD_DIR_KEY = 'homeai_download_dir';
+
+async function saveToDownloadFolder(file: File): Promise<string | null> {
+  const saved = await SecureStore.getItemAsync(DOWNLOAD_DIR_KEY).catch(() => null);
+  if (saved) {
+    try {
+      await file.copy(new Directory(saved), { overwrite: true });
+      return folderLabel(saved);
+    } catch {
+      await SecureStore.deleteItemAsync(DOWNLOAD_DIR_KEY).catch(() => undefined);
+    }
+  }
+
+  let picked: Directory;
+  try {
+    picked = await Directory.pickDirectoryAsync();
+  } catch (error) {
+    if (isPickerCancelled(error)) return null;
+    throw new ApiError(0, error instanceof Error ? error.message : 'Choosing a folder failed');
+  }
+  try {
+    await file.copy(picked, { overwrite: true });
+  } catch (error) {
+    throw new ApiError(0, error instanceof Error ? error.message : 'Saving the file failed');
+  }
+  await SecureStore.setItemAsync(DOWNLOAD_DIR_KEY, picked.uri).catch(() => undefined);
+  return folderLabel(picked.uri);
+}
+
+function isPickerCancelled(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === 'ERR_PICKER_CANCELLED') return true;
+  return error instanceof Error && /cancel/i.test(error.message);
+}
+
+/** "Download/HomeAI" for content://…/tree/primary%3ADownload%2FHomeAI. */
+export function folderLabel(treeUri: string): string {
+  const tree = treeUri.split('/tree/')[1];
+  if (!tree) return 'the chosen folder';
+  const decoded = decodeURIComponent(tree.split('/')[0]);
+  return decoded.slice(decoded.indexOf(':') + 1) || decoded;
 }
