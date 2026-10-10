@@ -182,7 +182,7 @@ step_bob_isolated() {
   expect 404 "Bob GET branches" GET "/threads/${THREAD_ID}/branches" "$BOB" ""
   expect 404 "Bob PUT active_branch" PUT "/threads/${THREAD_ID}/active_branch" "$BOB" "" '{"checkpoint_id": "x"}'
   expect 200 "Bob GET state" GET "/threads/${THREAD_ID}/state" "$BOB" ""
-  [ "$BODY" = '{"pending_approval":null}' ] || fail "Bob GET state leaked something: ${BODY}"
+  [ "$BODY" = '{"pending_approval":null,"running":false}' ] || fail "Bob GET state leaked something: ${BODY}"
   expect 200 "Bob GET /api/threads" GET /threads "$BOB" ""
   if grep -q "$THREAD_ID" <<<"$BODY"; then fail "Alice's thread is in Bob's list: ${BODY}"; fi
   log "OK: Alice's thread absent from Bob's list"
