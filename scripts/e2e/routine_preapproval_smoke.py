@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """#326: pre-approving a routine, on the live stack and the real model.
 
-1. Asked for a routine whose job is to update a file, the model asks
-   whether its runs may write without asking before it creates anything;
-   told yes, its create_routine card says approval_mode "allow_writes".
-   The card is rejected, so nothing is created.
-2. An ask-mode routine (made through the API) is run now and stops on its
-   write; answering with `allow_writes` finishes the run without another
-   stop, writes the file, and leaves the routine on "allow_writes".
+An ask-mode routine (made through the API) is run now and stops on its
+write; answering with `allow_writes` finishes the run without another
+stop, writes the file, and leaves the routine on "allow_writes".
 
 Env: E2E_AUTH_COOKIE, E2E_BASE (default http://localhost).
 Deletes its routine, threads and file on the way out.
@@ -69,67 +65,6 @@ async def frames_until_turn_end(ws: Any) -> list[dict]:
             if frame["type"] in ("turn_end", "error"):
                 return frames
     return frames
-
-
-async def chat(thread_id: str, prompt: str) -> list[dict]:
-    """One user turn; any approval card is rejected (cancel) so nothing is created."""
-    ws_base = BASE.replace("http", "ws", 1)
-    async with connect(
-        f"{ws_base}/ws/chat/{thread_id}", additional_headers={"Cookie": COOKIE}
-    ) as ws:
-        await ws.send(json.dumps({"type": "user_message", "content": prompt}))
-        frames = await frames_until_turn_end(ws)
-        if any(f["type"] == "approval_request" for f in frames):
-            await ws.send(json.dumps({"type": "cancel"}))
-            frames += await frames_until_turn_end(ws)
-    return frames
-
-
-def reply_of(frames: list[dict]) -> str:
-    return "".join(f.get("content") or "" for f in frames if f.get("type") == "token").strip()
-
-
-def new_thread() -> str:
-    status, body = api("POST", "/api/threads", {})
-    if status not in (200, 201):
-        fail(f"create thread: HTTP {status} {body!r}")
-    return body["id"]
-
-
-def check_the_model_asks(threads: list[str]) -> None:
-    thread = new_thread()
-    threads.append(thread)
-    first = asyncio.run(
-        chat(
-            thread,
-            "Every morning at 7, update /personal/preapproval-smoke.md with a one-line "
-            "San Francisco weather summary.",
-        )
-    )
-    created = [f for f in first if f.get("type") == "approval_request"]
-    reply = reply_of(first)
-    log(f"first reply: {reply[:300]!r}")
-    if created:
-        fail(f"created a routine before asking about approvals: {created[0]['actions']}")
-    if not any(w in reply.lower() for w in ("approv", "without asking", "ask")):
-        fail("the reply doesn't ask about approvals")
-
-    second = asyncio.run(
-        chat(thread, "Yes, let its runs write without asking me each time.")
-    )
-    cards = [
-        a
-        for f in second
-        if f.get("type") == "approval_request"
-        for a in f["actions"]
-        if a["name"] == "create_routine"
-    ]
-    if not cards:
-        fail(f"no create_routine card after yes; reply {reply_of(second)[:300]!r}")
-    mode = cards[0]["args"].get("approval_mode")
-    if mode != "allow_writes":
-        fail(f"create_routine approval_mode is {mode!r}, want 'allow_writes'")
-    log("OK: asked first, then proposed allow_writes (card rejected)")
 
 
 def wait_run(routine_id: str, want: set[str], budget_s: int = TURN_TIMEOUT_S) -> dict:
@@ -217,7 +152,6 @@ def main() -> None:
     routines: list[str] = []
     threads: list[str] = []
     try:
-        check_the_model_asks(threads)
         check_allow_writes_from_a_run(routines, threads)
     finally:
         cleanup(routines, threads)

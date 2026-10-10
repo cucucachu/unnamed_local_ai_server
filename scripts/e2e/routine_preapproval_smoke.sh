@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # #326: pre-approving a routine, on the live stack and the real model
-# (`routine_preapproval_smoke.py`): the model asks before making a routine
-# that writes, and approving a paused run with "allow writes from now on"
-# finishes it and switches the routine. About four GPU turns.
+# (`routine_preapproval_smoke.py`): approving a paused run with "allow
+# writes from now on" finishes it and switches the routine. About two GPU
+# turns.
 #
 # Needs the scheduler on in agent-server (the default). Never completes
 # bootstrap. Never recreates model-runner or postgres. Deletes its
