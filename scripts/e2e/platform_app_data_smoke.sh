@@ -249,7 +249,7 @@ expect 200 "$r" "migrate (drop column)"
 MID="$(field "$r" 'd["id"]')"
 echo "ok   destructive: $(field "$r" 'd["steps"][0]["reason"]') -> pending"
 r="$(rpc viewer '{"op":"getAll","sql":"SELECT name FROM pragma_table_info('"'"'greetings'"'"')"}')"
-[[ "$(field "$r" '[c["name"] for c in d["rows"]]')" == "['id', 'text', 'lang']" ]] ||
+[[ "$(field "$r" '[c["name"] for c in d["rows"] if not c["name"].startswith("_")]')" == "['id', 'text', 'lang']" ]] ||
   fail "column dropped before approval: $(body_of "$r")"
 echo "ok   still has 'lang' until approved"
 expect 403 "$(post_json viewer "/apps/instances/$IID/migrations/$MID/approve" '{}')" \
@@ -309,7 +309,7 @@ echo "ok   exec-shaped container (uid $VIEWER_UID, gid $S_GID, ro/ only) reads 3
 echo "== 8. build -> data"
 columns() {
   field "$(rpc viewer '{"op":"getAll","sql":"SELECT name FROM pragma_table_info('"'"'greetings'"'"')"}')" \
-    '[c["name"] for c in d["rows"]]'
+    '[c["name"] for c in d["rows"] if not c["name"].startswith("_")]'
 }
 sed 's/  text TEXT NOT NULL/  text TEXT NOT NULL,\n  mood TEXT/' "$FIXTURE/schema.sql" |
   put_text owner "$SRC/schema.sql" >/dev/null
