@@ -181,6 +181,18 @@ describe('HomeScreen pager (M19-07)', () => {
     expect(chatActive()).toBe(true);
   });
 
+  it("a collapsed pager clamping to 0 (web, coming back to a hidden home) isn't a swipe to Chat", async () => {
+    threeSpaces();
+    renderer = await render(HomeScreen);
+    await swipeTo(renderer, 1);
+    await act(async () => {
+      const lead = drawerWidth(390);
+      pager(renderer!).props.onScroll({ nativeEvent: { contentOffset: { x: lead, y: 0 }, contentSize: { width: lead + 390, height: 700 } } });
+    });
+    expect(title()).toBe('Personal');
+    expect(getCurrentPage().page).toBe('s1');
+  });
+
   it('the indicator and links jump to a page', async () => {
     threeSpaces();
     renderer = await render(HomeScreen);

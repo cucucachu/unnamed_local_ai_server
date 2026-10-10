@@ -22,6 +22,16 @@ function check(cond, what, detail) {
   ok(what);
 }
 
+/** `check`, for a condition the UI reaches a moment later (a scroll, a load). */
+async function eventually(probe, what) {
+  const deadline = Date.now() + TIMEOUT_MS;
+  while (!(await probe())) {
+    if (Date.now() > deadline) check(false, what);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  ok(what);
+}
+
 const startedAt = Date.now();
 const member = createE2eUser({ prefix: 'e2e-home' });
 let browser;
@@ -36,7 +46,7 @@ try {
   await page.getByTestId('home-page-chat').waitFor({ timeout: TIMEOUT_MS });
   check(new URL(page.url()).pathname === '/', 'signed in lands on the home pager', page.url());
   const dots = page.getByTestId('home-page-indicator').getByRole('tab');
-  check((await dots.count()) === 2, 'with only Personal, the indicator is Chat and Personal');
+  await eventually(async () => (await dots.count()) === 2, 'with only Personal, the indicator is Chat and Personal');
   check((await dots.nth(0).getAttribute('aria-selected')) === 'true', 'the Chat page is current');
 
   const personal = await openSpacePage(page);
@@ -119,7 +129,7 @@ try {
     await button.click();
     await page.waitForURL((url) => url.pathname === '/', { timeout: TIMEOUT_MS });
     await page.getByTestId('home-launcher').waitFor({ timeout: TIMEOUT_MS });
-    check(await inView(personalPage), 'back on Personal');
+    await eventually(() => inView(personalPage), 'back on Personal');
   };
 
   await openSystemApp(page, 'files');

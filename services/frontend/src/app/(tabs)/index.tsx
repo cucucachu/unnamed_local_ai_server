@@ -131,9 +131,13 @@ export default function HomeScreen() {
 
   const onLayout = (event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width);
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const x = event.nativeEvent.contentOffset.x;
+    const { contentOffset, contentSize } = event.nativeEvent;
+    const x = contentOffset.x;
     scrollX.setValue(x);
     if (width <= 0 || x < lead / 2) return;
+    // A hidden home screen's pages lay out zero wide; the browser clamps the
+    // scroll to 0 then, and coming back isn't a swipe to Chat.
+    if (contentSize !== undefined && contentSize.width < lead + pages.length * width - 1) return;
     const index = Math.round((x - lead) / width);
     if (pages[index] === undefined) return;
     noteShown(index);
