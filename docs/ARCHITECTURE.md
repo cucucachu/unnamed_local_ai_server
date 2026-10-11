@@ -3831,6 +3831,8 @@ M7-03; the recipe below is what it actually does, not a plan):**
   without HSTS and without HTTP→HTTPS redirects. Real certificates via
   ACME DNS-01 shipped in M15-03; `https://homeai.local` stays Caddy
   `tls internal`.
+- MCP integrations (M18, #259): designed, not built; see
+  `docs/INTEGRATIONS.md`.
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
 - EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution. M15-06 landed the Android **dev client** (`expo-dev-client`, package `ai.homeai.host`) plus `eas.json` development profile and `scripts/build_host_app_android.sh` (debug APK via throwaway Docker Android image; no `eas login` from an agent). iOS ipa is later.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).
