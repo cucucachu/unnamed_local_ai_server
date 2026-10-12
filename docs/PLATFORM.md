@@ -386,7 +386,8 @@ credential key.
     `credential_model` (`per_user` | `shared` | `none`), `auth_method`
     (`token` | `oauth` | `none`; `none` exactly when the model is `none`),
     `cert_fingerprint` (a pinned SHA-256), `private_address` (the admin's
-    exception), and what discovery found: `server_info`,
+    exception), `token_header` (`0016`; the header a token goes in, NULL
+    for `Authorization: Bearer`), and what discovery found: `server_info`,
     `protocol_version`, `instructions`, `discovered_at`.
   - `integration_tools` (with the server's `annotations`, shown and never
     trusted), `integration_resources`, `integration_prompts`: replaced
@@ -407,12 +408,28 @@ credential key.
   Integration tools never appear in `/api/platform/tools` or its policy.
 - **Who may use one**: `usable_by`, the single check every user path, the
   grant and connecting go through. Everyone, until #340.
-- **Credentials**: the platform passes a pasted token or key to the
-  gateway's `/encrypt` and stores only the ciphertext it gets back (sealed
-  to the integration and user). No API returns credential material, not
-  even ciphertext, except the gateway's own grant. Admins see connection
-  status only. Uninstalling deletes every credential and the integration's
+- **Credentials** (M18-07): the platform passes a pasted token or key
+  (surrounding whitespace trimmed; printable ASCII, so it fits in a header)
+  to the gateway's `/encrypt`, then asks the server through the gateway's
+  `/discover` whether it takes it. One the server refuses is
+  `422 credential_rejected` and nothing is stored (an earlier credential
+  stays). One that couldn't be checked (`unreachable`, `timeout`,
+  `gateway_unavailable`, ...) is stored, and the answer says so:
+  `PUT .../connection` and `PUT .../shared-credential` return
+  `{"status": "connected", "checked": bool, "problem": code|null}`. Only
+  the ciphertext is kept (sealed to the integration and user). No API
+  returns credential material, not even ciphertext, except the gateway's
+  own grant. Admins see connection status only. Both views carry
+  `plain_http`, for the warning that a credential would cross the LAN
+  unencrypted. Uninstalling deletes every credential and the integration's
   tool settings; a new URL or credential model deletes its credentials.
+- **Token header**: by default a token goes in `Authorization: Bearer …`.
+  An admin can name another header (`token_header`, token auth only), where
+  it goes as is; naming `Authorization` means the default. Headers that
+  belong to HTTP framing, the egress proxy (`Proxy-*`), the browser
+  (`Sec-*`) or MCP itself (`Mcp-Session-Id`, `Mcp-Protocol-Version`, ...)
+  are `reserved_header`. Changing the auth method away from token clears
+  it.
 - **The gateway's side** (`PLATFORM_GATEWAY_TOKEN`): the grant for a call
   (the delegation's user, the server, the ciphertext to use, the tools'
   policy), storing a changed list it discovered, and marking a rejected

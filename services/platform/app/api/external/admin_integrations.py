@@ -14,6 +14,7 @@ from app.api.schemas import (
     AdminIntegrationList,
     AdminIntegrationOut,
     AdminIntegrationToolChanges,
+    ConnectionOut,
     CredentialIn,
     DiscoveryIn,
     IntegrationInstall,
@@ -98,11 +99,14 @@ async def change_tools(
         return await _one(conn, integration_id)
 
 
-@router.put("/{integration_id}/shared-credential", status_code=status.HTTP_204_NO_CONTENT)
+@router.put("/{integration_id}/shared-credential", response_model=ConnectionOut)
 async def set_shared_credential(
     integration_id: UUID, body: CredentialIn, request: Request, principal: SteppedUpAdmin
-) -> None:
-    """The household's token or API key: the gateway encrypts it, only the ciphertext is kept."""
+) -> ConnectionOut:
+    """The household's token or API key: the gateway encrypts it, only the ciphertext is kept.
+
+    The server is asked first; a token it refuses is `credential_rejected`, not stored.
+    """
     state = request.app.state
     async with state.db_pool.connection() as conn:
         integration = await integrations.get(conn, integration_id)
@@ -111,8 +115,10 @@ async def set_shared_credential(
     if integration["auth_method"] != "token":
         raise InvalidInput("auth_method_mismatch")
     ciphertext = await state.gateway.encrypt(integration_id, None, body.secret)
+    check = await integrations.check_credential(state.gateway, integration, None, ciphertext)
     async with state.db_pool.connection() as conn:
         await integrations.store_credential(conn, principal, integration_id, None, ciphertext)
+    return ConnectionOut(status="connected", **check)
 
 
 @router.delete("/{integration_id}/shared-credential", status_code=status.HTTP_204_NO_CONTENT)

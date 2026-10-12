@@ -73,10 +73,16 @@ class CredentialKey:
         return secret
 
 
-def auth_headers(secret: dict[str, Any]) -> dict[str, str]:
-    """The headers a stored credential becomes on each request to the server."""
+def auth_headers(secret: dict[str, Any], header: str | None = None) -> dict[str, str]:
+    """The headers a stored credential becomes on each request to the server.
+
+    A token goes in `Authorization: Bearer …` unless the integration names
+    another header (the platform vets the name), where it goes as is.
+    """
     if secret.get("kind") == "token" and isinstance(secret.get("value"), str):
         value = secret["value"].strip()
+        if header:
+            return {header: value}
         if not value.lower().startswith("bearer "):
             value = f"Bearer {value}"
         return {"Authorization": value}

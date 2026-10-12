@@ -47,7 +47,8 @@ Name = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.\-]{1,128}$")]
 class EncryptIn(BaseModel):
     integration_id: UUID
     user_id: UUID | None
-    secret: Annotated[str, Field(min_length=1, max_length=8192)]
+    # It becomes a header value: printable ASCII, no line breaks.
+    secret: Annotated[str, Field(min_length=1, max_length=8192, pattern=r"^[\x20-\x7e]+$")]
 
 
 class DiscoverIn(BaseModel):

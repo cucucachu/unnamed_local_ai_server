@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 
-from app.api.schemas import CredentialIn, IntegrationList, IntegrationToolChanges
+from app.api.schemas import ConnectionOut, CredentialIn, IntegrationList, IntegrationToolChanges
 from app.core import integrations
 from app.core.errors import InvalidInput, NotFound
 from app.core.principal import CurrentUser, HumanUser
@@ -32,11 +32,14 @@ async def change_my_tools(
         return IntegrationList(integrations=await integrations.user_view(conn, principal.user_id))
 
 
-@router.put("/{integration_id}/connection", status_code=status.HTTP_204_NO_CONTENT)
+@router.put("/{integration_id}/connection", response_model=ConnectionOut)
 async def connect(
     integration_id: UUID, body: CredentialIn, request: Request, principal: HumanUser
-) -> None:
-    """Connect with a token or API key: the gateway encrypts it, only the ciphertext is kept."""
+) -> ConnectionOut:
+    """Connect with a token or API key: the gateway encrypts it, only the ciphertext is kept.
+
+    The server is asked first; a token it refuses is `credential_rejected`, not stored.
+    """
     state = request.app.state
     async with state.db_pool.connection() as conn:
         integration = await integrations.get(conn, integration_id)
@@ -47,10 +50,14 @@ async def connect(
     if integration["auth_method"] != "token":
         raise InvalidInput("auth_method_mismatch")
     ciphertext = await state.gateway.encrypt(integration_id, principal.user_id, body.secret)
+    check = await integrations.check_credential(
+        state.gateway, integration, principal.user_id, ciphertext
+    )
     async with state.db_pool.connection() as conn:
         await integrations.store_credential(
             conn, principal, integration_id, principal.user_id, ciphertext
         )
+    return ConnectionOut(status="connected", **check)
 
 
 @router.delete("/{integration_id}/connection", status_code=status.HTTP_204_NO_CONTENT)

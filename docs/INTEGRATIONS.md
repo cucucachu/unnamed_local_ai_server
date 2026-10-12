@@ -189,8 +189,12 @@ its admin and user tool settings and every stored credential.
 **Auth methods:**
 
 - **Token / API key** (a header the server expects, e.g. Home Assistant's
-  long-lived access tokens as `Authorization: Bearer …`). Works on every
-  setup. The primary method for Home Assistant in v1.
+  long-lived access tokens as `Authorization: Bearer …`; the admin can name
+  another header, such as `X-Api-Key`). Works on every setup. The primary
+  method for Home Assistant in v1. A pasted token is tried against the
+  server before it's stored: one the server refuses is turned away on the
+  spot; one that couldn't be checked (server down) is kept with a note.
+  Connecting to a plain `http://` server shows a warning first.
 - **OAuth 2.1** as MCP specifies, with PKCE. The gateway handles discovery,
   client registration (Client ID Metadata Documents, dynamic registration,
   or a client ID/secret the admin registered with the provider), the code
