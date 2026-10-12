@@ -88,6 +88,7 @@ class FakePlatform:
         self.audits: list[dict[str, Any]] = []
         self.reconnect: list[tuple[UUID, UUID | None]] = []
         self.discoveries: list[dict[str, Any]] = []
+        self.token_header: str | None = None
 
     def mint(self, tool: str, arguments: dict[str, Any]) -> str:
         token = f"marker-{uuid4().hex}"
@@ -113,6 +114,7 @@ class FakePlatform:
                 "cert_fingerprint": None,
                 "private_address": True,
                 "protocol_version": self.protocol_version,
+                "token_header": self.token_header,
             },
             "status": self.status,
             "credential": {

@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 
 from app.core import integrations
-from app.core.errors import InvalidInput
+from app.core.errors import InvalidInput, Unavailable
 from app.core.integrations import check_url
 from app.main import create_app
 from tests.conftest import Platform, make_settings, running
@@ -53,6 +53,7 @@ class FakeGateway:
         self.discovery = DISCOVERY
         self.encrypted: list[tuple] = []
         self.discovered: list[tuple] = []
+        self.fails: Exception | None = None
 
     async def encrypt(self, integration_id, user_id, secret) -> bytes:
         self.encrypted.append((integration_id, user_id, secret))
@@ -60,6 +61,8 @@ class FakeGateway:
 
     async def discover(self, integration, credential):
         self.discovered.append((integration, credential))
+        if self.fails is not None:
+            raise self.fails
         return self.discovery
 
 
@@ -450,8 +453,9 @@ async def test_integration_tools_stay_out_of_the_built_in_lists(platform, people
 
 async def test_connecting_stores_only_the_gateways_ciphertext(platform, people):
     iid = await _installed(platform, people)
-    response = await _connect(platform, people["bob"], iid)
-    assert response.status_code == 204, response.text
+    response = await _connect(platform, people["bob"], iid, secret=f"  {SECRET}\n")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "connected", "checked": True, "problem": None}
     bob_id = UUID(sql(platform, "SELECT id FROM users WHERE username = 'bob'")[0]["id"].hex)
     assert platform.app.state.gateway.encrypted == [(UUID(iid), bob_id, SECRET)]
     (row,) = sql(platform, "SELECT ciphertext, status FROM integration_credentials")
@@ -500,6 +504,13 @@ async def test_the_grant_carries_the_users_own_credential(platform, people):
     assert (carol["status"], carol["credential"]) == ("not_connected", None)
     assert (await _grant(platform, people["bob_agent"], slug="nope")).status_code == 404
 
+    carol_in_person = await identity(platform, await login(platform, "carol"))
+    assert (await _connect(platform, carol_in_person, iid)).status_code == 200
+    bob, carol = [(await _grant(platform, people[a])).json() for a in ("bob_agent", "carol_agent")]
+    assert bob["credential"]["user_id"] == bob["user_id"] != carol["user_id"]
+    assert carol["credential"]["user_id"] == carol["user_id"]
+    assert bob["credential"]["ciphertext"] != carol["credential"]["ciphertext"]
+
 
 async def test_a_shared_credential_serves_everyone(platform, people):
     iid = await _installed(platform, people, credential_model="shared")
@@ -509,7 +520,10 @@ async def test_a_shared_credential_serves_everyone(platform, people):
     response = await platform.client.put(
         f"{ADMIN}/{iid}/shared-credential", json={"secret": SECRET}, headers=people["admin"]
     )
-    assert response.status_code == 204, response.text
+    assert response.status_code == 200, response.text
+    assert response.json()["checked"] is True
+    _, checked_with = platform.app.state.gateway.discovered[-1]
+    assert checked_with["user_id"] is None
     assert platform.app.state.gateway.encrypted[-1] == (UUID(iid), None, SECRET)
     for agent in ("bob_agent", "carol_agent"):
         got = (await _grant(platform, people[agent])).json()
@@ -572,6 +586,97 @@ async def test_a_rejected_credential_needs_reconnecting(platform, people):
     assert (await _mine(platform, people["bob"]))["home"]["status"] == "needs_reconnecting"
     await _connect(platform, people["bob"], iid)
     assert (await _mine(platform, people["bob"]))["home"]["status"] == "connected"
+
+
+async def test_a_token_the_server_refuses_is_not_stored(platform, people):
+    iid = await _installed(platform, people)
+    await _connect(platform, people["bob"], iid)
+    before = sql(platform, "SELECT ciphertext, updated_at FROM integration_credentials")
+    platform.app.state.gateway.fails = InvalidInput("auth_expired")
+    response = await _connect(platform, people["bob"], iid, secret="typo")
+    assert response.status_code == 422
+    assert response.json()["detail"] == "credential_rejected"
+    assert sql(platform, "SELECT ciphertext, updated_at FROM integration_credentials") == before
+    bob_id = UUID(sql(platform, "SELECT id FROM users WHERE username = 'bob'")[0]["id"].hex)
+    integration, credential = platform.app.state.gateway.discovered[-1]
+    assert (integration["id"], credential["user_id"]) == (UUID(iid), bob_id)
+    assert base64.b64decode(credential["ciphertext"]) == b"sealed:" + str(bob_id).encode()
+
+
+@pytest.mark.parametrize(
+    "failure", [InvalidInput("unreachable"), Unavailable("gateway_unavailable")]
+)
+async def test_a_token_that_couldnt_be_checked_is_kept(platform, people, failure):
+    iid = await _installed(platform, people)
+    platform.app.state.gateway.fails = failure
+    response = await _connect(platform, people["bob"], iid)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "connected", "checked": False, "problem": failure.code}
+    assert (await _mine(platform, people["bob"]))["home"]["status"] == "connected"
+
+
+@pytest.mark.parametrize("secret", ["", "   ", "a\r\nX-Other: 1", "tab\there", "é"])
+async def test_a_token_must_fit_in_a_header(platform, people, secret):
+    iid = await _installed(platform, people)
+    assert (await _connect(platform, people["bob"], iid, secret=secret)).status_code == 422
+    assert platform.app.state.gateway.encrypted == []
+
+
+async def test_plain_http_is_flagged_for_a_warning(platform, people):
+    await _installed(platform, people)
+    await _installed(
+        platform,
+        people,
+        slug="lan",
+        name="LAN",
+        url="http://192.168.0.20:8123/mcp",
+        private_address=True,
+    )
+    mine = await _mine(platform, people["bob"])
+    assert (mine["home"]["plain_http"], mine["lan"]["plain_http"]) == (False, True)
+    admin = (await platform.client.get(ADMIN, headers=people["admin"])).json()
+    assert {i["slug"]: i["plain_http"] for i in admin["integrations"]} == {
+        "home": False,
+        "lan": True,
+    }
+
+
+async def test_the_token_header(platform, people):
+    iid = (await _install(platform, people, token_header="X-Api-Key"))["id"]
+    await _connect(platform, people["bob"], iid)
+    got = (await _grant(platform, people["bob_agent"])).json()
+    assert got["integration"]["token_header"] == "X-Api-Key"
+    integration, _ = platform.app.state.gateway.discovered[-1]
+    assert integration["token_header"] == "X-Api-Key"
+
+    response = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"token_header": "Authorization"}, headers=people["admin"]
+    )
+    assert response.json()["token_header"] is None
+    for name in ("Host", "Proxy-Authorization", "Mcp-Session-Id", "content-length", "Sec-Foo"):
+        response = await platform.client.patch(
+            f"{ADMIN}/{iid}", json={"token_header": name}, headers=people["admin"]
+        )
+        assert response.json()["detail"] == "reserved_header", name
+    response = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"token_header": "Bad Header"}, headers=people["admin"]
+    )
+    assert response.status_code == 422
+
+    response = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"token_header": "X-Api-Key"}, headers=people["admin"]
+    )
+    assert response.json()["token_header"] == "X-Api-Key"
+    response = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"auth_method": "oauth"}, headers=people["admin"]
+    )
+    assert (response.status_code, response.json()["token_header"]) == (200, None)
+    response = await platform.client.post(
+        ADMIN,
+        json=_install_body(slug="open", auth_method="oauth", token_header="X-Api-Key"),
+        headers=people["admin"],
+    )
+    assert response.json()["detail"] == "token_header_needs_token_auth"
 
 
 # --- wiping credentials ----------------------------------------------------------------

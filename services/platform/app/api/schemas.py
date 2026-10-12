@@ -13,7 +13,14 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 Short = Annotated[str, Field(max_length=256)]
 Secret = Annotated[str, Field(max_length=4096)]
@@ -982,6 +989,8 @@ CredentialModel = Literal["per_user", "shared", "none"]
 AuthMethod = Literal["none", "token", "oauth"]
 ConnectionStatus = Literal["ready", "connected", "not_connected", "needs_reconnecting"]
 Fingerprint = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+# Empty or "Authorization": `Authorization: Bearer <token>`.
+TokenHeader = Annotated[str, Field(pattern=r"^[A-Za-z0-9-]{1,64}$")]
 MAX_JSON_FIELD = 64 * 1024
 
 
@@ -1005,6 +1014,7 @@ class IntegrationInstall(BaseModel):
     auth_method: AuthMethod
     cert_fingerprint: Fingerprint | None = None
     private_address: bool = False
+    token_header: TokenHeader | None = None
 
 
 class IntegrationPatch(BaseModel):
@@ -1018,6 +1028,7 @@ class IntegrationPatch(BaseModel):
     auth_method: AuthMethod | None = None
     cert_fingerprint: Fingerprint | None = None
     private_address: bool | None = None
+    token_header: TokenHeader | None = None
 
 
 class IntegrationToolOut(BaseModel):
@@ -1038,6 +1049,8 @@ class IntegrationOut(BaseModel):
     description: str
     credential_model: CredentialModel
     auth_method: AuthMethod
+    # A credential for it would cross the network unencrypted: warn before connecting.
+    plain_http: bool
     status: ConnectionStatus
     tools: list[IntegrationToolOut]
 
@@ -1075,7 +1088,27 @@ class CredentialIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    secret: Annotated[str, Field(min_length=1, max_length=8192)]
+    # Pasted, so surrounding whitespace goes; it becomes a header value, so no line breaks.
+    secret: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=1, max_length=8192, pattern=r"^[\x20-\x7e]+$"
+        ),
+    ]
+
+
+class ConnectionOut(BaseModel):
+    """A stored credential, and whether the server accepted it when it was entered.
+
+    `checked` is false when the server couldn't be asked (`problem` says
+    why, e.g. `unreachable`); the credential is kept and the first call
+    tells. A credential the server refused is never stored
+    (`credential_rejected`).
+    """
+
+    status: ConnectionStatus
+    checked: bool
+    problem: str | None = None
 
 
 class AdminIntegrationToolOut(BaseModel):
@@ -1118,8 +1151,10 @@ class AdminIntegrationOut(BaseModel):
     credential_model: CredentialModel
     auth_method: AuthMethod
     url: str
+    plain_http: bool
     cert_fingerprint: str | None
     private_address: bool
+    token_header: str | None
     server_info: dict[str, Any] | None
     protocol_version: str | None
     discovered_at: datetime | None
@@ -1198,6 +1233,7 @@ class IntegrationGatewayView(BaseModel):
     credential_model: CredentialModel
     cert_fingerprint: str | None
     private_address: bool
+    token_header: str | None
     protocol_version: str | None
 
 

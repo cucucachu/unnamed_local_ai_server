@@ -22,6 +22,7 @@ SHIPPED = [
     (13, "audit"),
     (14, "agent_tools"),
     (15, "integrations"),
+    (16, "integration_token_header"),
 ]
 
 
@@ -74,6 +75,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0013_audit.sql",
             "0014_agent_tools.sql",
             "0015_integrations.sql",
+            "0016_integration_token_header.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}

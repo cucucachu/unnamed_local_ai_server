@@ -30,7 +30,8 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from app.core import audit, tool_permissions
-from app.core.errors import Conflict, InvalidInput, NotFound
+from app.core.errors import Conflict, InvalidInput, NotFound, Unavailable
+from app.core.integrations_gateway import Gateway
 from app.core.principal import Principal
 from app.core.tool_permissions import Tool
 
@@ -40,7 +41,7 @@ KEY_PREFIX = "mcp"
 
 _COLUMNS = (
     "id, slug, name, url, description, credential_model, auth_method, cert_fingerprint, "
-    "private_address, server_info, protocol_version, instructions, discovered_at, "
+    "private_address, token_header, server_info, protocol_version, instructions, discovered_at, "
     "installed_by, created_at, updated_at"
 )
 
@@ -96,6 +97,46 @@ def check_url(url: str, private_address: bool) -> Address:
     if parts.scheme == "http" and not private_address:
         raise InvalidInput("https_required")
     return Address(parts.scheme, host, port or (443 if parts.scheme == "https" else 80))
+
+
+# Headers a token may not go in: HTTP's own framing and hop-by-hop headers,
+# the egress proxy's credential, and the ones the MCP client sets itself.
+RESERVED_HEADERS = frozenset(
+    {
+        "accept",
+        "accept-encoding",
+        "connection",
+        "content-encoding",
+        "content-length",
+        "content-type",
+        "cookie",
+        "host",
+        "keep-alive",
+        "last-event-id",
+        "mcp-protocol-version",
+        "mcp-session-id",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "user-agent",
+    }
+)
+
+
+def check_token_header(name: str | None) -> str | None:
+    """The header a token goes in, if not `Authorization: Bearer`; None for that default."""
+    if name is None or name.lower() == "authorization":
+        return None
+    lowered = name.lower()
+    if lowered in RESERVED_HEADERS or lowered.startswith(("proxy-", "sec-")):
+        raise InvalidInput("reserved_header")
+    return name
+
+
+def plain_http(url: str) -> bool:
+    """Whether a credential for this server would cross the network unencrypted."""
+    return urlsplit(url).scheme == "http"
 
 
 # --- who may use it -------------------------------------------------------------------
@@ -206,6 +247,7 @@ def _summary_out(integration: dict[str, Any]) -> dict[str, Any]:
         "description": integration["description"],
         "credential_model": integration["credential_model"],
         "auth_method": integration["auth_method"],
+        "plain_http": plain_http(integration["url"]),
     }
 
 
@@ -280,6 +322,7 @@ async def admin_view(conn: AsyncConnection) -> list[dict[str, Any]]:
                 "url": integration["url"],
                 "cert_fingerprint": integration["cert_fingerprint"],
                 "private_address": integration["private_address"],
+                "token_header": integration["token_header"],
                 "server_info": integration["server_info"],
                 "protocol_version": integration["protocol_version"],
                 "discovered_at": integration["discovered_at"],
@@ -312,22 +355,25 @@ async def admin_view(conn: AsyncConnection) -> list[dict[str, Any]]:
 # --- installing and editing ---------------------------------------------------------------
 
 
-def _check_models(credential_model: str, auth_method: str) -> None:
+def _check_models(credential_model: str, auth_method: str, token_header: str | None) -> None:
     if (credential_model == "none") != (auth_method == "none"):
         raise InvalidInput("auth_method_mismatch")
+    if token_header is not None and auth_method != "token":
+        raise InvalidInput("token_header_needs_token_auth")
 
 
 async def install(conn: AsyncConnection, principal: Principal, fields: dict[str, Any]) -> UUID:
     check_url(fields["url"], fields.get("private_address", False))
-    _check_models(fields["credential_model"], fields["auth_method"])
+    token_header = check_token_header(fields.get("token_header"))
+    _check_models(fields["credential_model"], fields["auth_method"], token_header)
     async with conn.transaction():
         cur = await conn.execute("SELECT 1 FROM integrations WHERE slug = %s", (fields["slug"],))
         if await cur.fetchone():
             raise Conflict("slug_taken")
         cur = await conn.execute(
             "INSERT INTO integrations (slug, name, url, description, credential_model, "
-            "auth_method, cert_fingerprint, private_address, installed_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "auth_method, cert_fingerprint, private_address, token_header, installed_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 fields["slug"],
                 fields["name"],
@@ -337,6 +383,7 @@ async def install(conn: AsyncConnection, principal: Principal, fields: dict[str,
                 fields["auth_method"],
                 fields.get("cert_fingerprint"),
                 fields.get("private_address", False),
+                token_header,
                 principal.user_id,
             ),
         )
@@ -372,8 +419,11 @@ async def edit(
             and "cert_fingerprint" not in changes
         ):
             merged["cert_fingerprint"] = None
+        if merged["auth_method"] != "token" and "token_header" not in changes:
+            merged["token_header"] = None
         check_url(merged["url"], merged["private_address"])
-        _check_models(merged["credential_model"], merged["auth_method"])
+        merged["token_header"] = check_token_header(merged["token_header"])
+        _check_models(merged["credential_model"], merged["auth_method"], merged["token_header"])
         if merged["slug"] != current["slug"]:
             cur = await conn.execute(
                 "SELECT 1 FROM integrations WHERE slug = %s AND id <> %s",
@@ -388,7 +438,7 @@ async def edit(
         await conn.execute(
             "UPDATE integrations SET slug = %s, name = %s, url = %s, description = %s, "
             "credential_model = %s, auth_method = %s, cert_fingerprint = %s, "
-            "private_address = %s, updated_at = now() WHERE id = %s",
+            "private_address = %s, token_header = %s, updated_at = now() WHERE id = %s",
             (
                 merged["slug"],
                 merged["name"],
@@ -398,6 +448,7 @@ async def edit(
                 merged["auth_method"],
                 merged["cert_fingerprint"],
                 merged["private_address"],
+                merged["token_header"],
                 integration_id,
             ),
         )
@@ -574,6 +625,7 @@ def gateway_view(integration: dict[str, Any]) -> dict[str, Any]:
         "credential_model": integration["credential_model"],
         "cert_fingerprint": integration["cert_fingerprint"],
         "private_address": integration["private_address"],
+        "token_header": integration["token_header"],
         "protocol_version": integration["protocol_version"],
     }
 
@@ -641,6 +693,28 @@ async def change_admin_tools(
 
 def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode()
+
+
+async def check_credential(
+    gateway: Gateway, integration: dict[str, Any], owner: UUID | None, ciphertext: bytes
+) -> dict[str, Any]:
+    """Ask the server, through the gateway, whether it takes a credential before it's stored.
+
+    A credential the server refuses is `credential_rejected`. One that
+    couldn't be checked (the server unreachable, ...) is reported as such and
+    still kept: the first call tells.
+    """
+    try:
+        await gateway.discover(
+            gateway_view(integration), {"user_id": owner, "ciphertext": _b64(ciphertext)}
+        )
+    except InvalidInput as exc:
+        if exc.code == "auth_expired":
+            raise InvalidInput("credential_rejected") from exc
+        return {"checked": False, "problem": exc.code}
+    except Unavailable as exc:
+        return {"checked": False, "problem": exc.code}
+    return {"checked": True, "problem": None}
 
 
 async def store_credential(

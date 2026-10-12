@@ -165,6 +165,17 @@ async def test_encrypt_and_discover_for_the_platform(api, key, server_url):
         ciphertext = sealed.json()["ciphertext"]
         assert key.open(base64.b64decode(ciphertext), INTEGRATION, USER)["value"] == TOKEN
 
+        smuggled = await api.post(
+            "/encrypt",
+            json={
+                "integration_id": str(INTEGRATION),
+                "user_id": str(USER),
+                "secret": f"{TOKEN}\r\nX-Other: 1",
+            },
+            headers=platform_auth(),
+        )
+        assert smuggled.status_code == 422
+
         integration = {
             "id": str(INTEGRATION),
             "slug": "home",

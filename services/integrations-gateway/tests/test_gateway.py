@@ -175,6 +175,14 @@ async def test_credential_header_reaches_the_server(gateway, connector):
     assert connector.headers[-1] == {"Authorization": f"Bearer {TOKEN}"}
 
 
+async def test_token_goes_in_the_header_the_server_expects(
+    gateway, platform: FakePlatform, connector
+):
+    platform.token_header = "X-Api-Key"
+    await gateway.call(DELEGATION, "home", "list_lights", {}, "chat")
+    assert connector.headers[-1] == {"X-Api-Key": TOKEN}
+
+
 async def test_not_connected(gateway, platform: FakePlatform, connector):
     platform.status = "not_connected"
     body = await gateway.call(DELEGATION, "home", "list_lights", {}, "chat")

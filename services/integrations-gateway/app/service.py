@@ -122,13 +122,18 @@ class Gateway:
         sealed = self.key.seal(integration_id, user_id, {"kind": "token", "value": secret})
         return base64.b64encode(sealed).decode()
 
-    def _headers(self, integration_id: UUID, credential: dict[str, Any] | None) -> dict[str, str]:
+    def _headers(
+        self, integration: dict[str, Any], credential: dict[str, Any] | None
+    ) -> dict[str, str]:
         if credential is None:
             return {}
+        integration_id = UUID(str(integration["id"]))
         try:
             raw = base64.b64decode(credential["ciphertext"], validate=True)
             owner = UUID(str(credential["user_id"])) if credential.get("user_id") else None
-            return auth_headers(self.key.open(raw, integration_id, owner))
+            return auth_headers(
+                self.key.open(raw, integration_id, owner), integration.get("token_header")
+            )
         except (CredentialError, binascii.Error, ValueError, KeyError) as exc:
             logger.warning("stored credential for %s doesn't open", integration_id)
             raise GatewayError("auth_expired") from exc
@@ -137,8 +142,7 @@ class Gateway:
         self, integration: dict[str, Any], credential: dict[str, Any] | None
     ) -> dict[str, Any]:
         """What a server offers, in the platform's `DiscoveryIn` shape."""
-        integration_id = UUID(str(integration["id"]))
-        headers = self._headers(integration_id, credential)
+        headers = self._headers(integration, credential)
         fresh = {**integration, "protocol_version": None}
         async with (
             self.connector.session(fresh, headers, elicitation=False) as session,
@@ -209,9 +213,8 @@ class Gateway:
             raise GatewayError("not_connected")
         if grant["status"] == "needs_reconnecting":
             raise GatewayError("auth_expired")
-        integration_id = UUID(str(grant["integration"]["id"]))
         try:
-            headers = self._headers(integration_id, grant["credential"])
+            headers = self._headers(grant["integration"], grant["credential"])
         except GatewayError:
             await self._needs_reconnecting(grant)
             raise
