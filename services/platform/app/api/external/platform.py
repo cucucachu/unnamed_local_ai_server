@@ -13,6 +13,7 @@ from app.api.external import (
     settings,
     spaces,
     system_apps,
+    tools,
     wireguard,
 )
 
@@ -28,5 +29,6 @@ router.include_router(appdata.router)
 router.include_router(files.router)
 router.include_router(media.router)
 router.include_router(settings.router)
+router.include_router(tools.router)
 router.include_router(admin.router)
 router.include_router(audit.router)
