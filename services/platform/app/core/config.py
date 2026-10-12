@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # means that service can't call anything.
     platform_agent_token: str = ""
     platform_exec_token: str = ""
+    platform_gateway_token: str = ""
+
+    # The integrations gateway (M18, `app/core/integrations_gateway.py`).
+    # Unset: anything that needs it answers 503 `gateway_unavailable`.
+    integrations_gateway_url: str = ""
+    integrations_gateway_token: str = ""
+    integrations_gateway_timeout_s: float = 60.0
 
     # Failed credential attempts allowed per bucket (username, client IP)
     # per window on login/setup/step-up/invite accept. LAN/VPN keep 5/60;

@@ -1,7 +1,9 @@
 # Integrations (MCP): design
 
 Design for M18 (#259): Model Context Protocol servers as integrations the
-agent can use. **Nothing here is built yet.** This is the agreed design,
+agent can use. **Built so far:** the permissions core (#342, M18-02) and
+the platform's registry (M18-03, `docs/PLATFORM.md` §4 "Integrations").
+This is the agreed design,
 written before any implementation issues; as each part lands, its as-built
 description moves into `docs/ARCHITECTURE.md` and this file is trimmed.
 

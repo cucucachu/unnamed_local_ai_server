@@ -21,6 +21,7 @@ SHIPPED = [
     (12, "routine_grants"),
     (13, "audit"),
     (14, "agent_tools"),
+    (15, "integrations"),
 ]
 
 
@@ -72,6 +73,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0012_routine_grants.sql",
             "0013_audit.sql",
             "0014_agent_tools.sql",
+            "0015_integrations.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
@@ -79,6 +81,13 @@ async def test_fresh_database_gets_initial_schema(pg_database):
         tables |= {"wireguard_peers", "webauthn_credentials", "webauthn_challenges"}
         tables |= {"device_pairs", "device_challenges", "audit_events"}
         tables |= {"agent_tools", "agent_tool_admin_settings", "agent_tool_user_settings"}
+        tables |= {
+            "integrations",
+            "integration_tools",
+            "integration_resources",
+            "integration_prompts",
+            "integration_credentials",
+        }
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
         cur = await conn.execute("SELECT value FROM platform_state WHERE key = 'public_https'")

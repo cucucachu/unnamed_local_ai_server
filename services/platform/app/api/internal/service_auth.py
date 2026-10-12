@@ -18,10 +18,15 @@ from app.core.principal import bearer_token
 
 AGENT = "agent"
 EXEC = "exec"
+GATEWAY = "gateway"
 
 
 def _secret(settings: Settings, service: str) -> str:
-    return {AGENT: settings.platform_agent_token, EXEC: settings.platform_exec_token}[service]
+    return {
+        AGENT: settings.platform_agent_token,
+        EXEC: settings.platform_exec_token,
+        GATEWAY: settings.platform_gateway_token,
+    }[service]
 
 
 def require_service(*services: str) -> Callable[[Request], Awaitable[str]]:

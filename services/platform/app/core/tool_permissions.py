@@ -95,12 +95,12 @@ async def replace_catalog(conn: AsyncConnection, tools: list[Tool]) -> None:
             )
 
 
-async def _admin_rows(conn: AsyncConnection) -> dict[str, dict]:
+async def admin_rows(conn: AsyncConnection) -> dict[str, dict]:
     cur = await conn.execute("SELECT tool, enabled, ceiling FROM agent_tool_admin_settings")
     return {r["tool"]: r for r in await cur.fetchall()}
 
 
-async def _user_rows(conn: AsyncConnection, user_id: UUID) -> dict[str, dict]:
+async def user_rows(conn: AsyncConnection, user_id: UUID) -> dict[str, dict]:
     cur = await conn.execute(
         "SELECT tool, enabled, permission FROM agent_tool_user_settings WHERE user_id = %s",
         (user_id,),
@@ -120,7 +120,7 @@ def _tool_out(tool: Tool) -> dict[str, Any]:
 
 async def for_user(conn: AsyncConnection, user_id: UUID) -> list[tuple[Tool, Effective]]:
     tools = await catalog(conn)
-    admin, mine = await _admin_rows(conn), await _user_rows(conn, user_id)
+    admin, mine = await admin_rows(conn), await user_rows(conn, user_id)
     return [(t, evaluate(t, admin.get(t.name), mine.get(t.name))) for t in tools]
 
 
@@ -151,7 +151,7 @@ async def policy(conn: AsyncConnection, user_id: UUID) -> dict[str, dict[str, An
 
 
 async def admin_view(conn: AsyncConnection) -> list[dict[str, Any]]:
-    admin = await _admin_rows(conn)
+    admin = await admin_rows(conn)
     out = []
     for t in await catalog(conn):
         row = admin.get(t.name) or {}
@@ -165,8 +165,11 @@ async def admin_view(conn: AsyncConnection) -> list[dict[str, Any]]:
     return out
 
 
-async def _known(conn: AsyncConnection, names: list[str]) -> dict[str, Tool]:
-    tools = {t.name: t for t in await catalog(conn)}
+async def _known(
+    conn: AsyncConnection, names: list[str], tools: dict[str, Tool] | None
+) -> dict[str, Tool]:
+    if tools is None:
+        tools = {t.name: t for t in await catalog(conn)}
     for name in names:
         if name not in tools:
             raise InvalidInput("unknown_tool")
@@ -174,16 +177,20 @@ async def _known(conn: AsyncConnection, names: list[str]) -> dict[str, Tool]:
 
 
 async def change_mine(
-    conn: AsyncConnection, principal: Principal, changes: list[dict[str, Any]]
+    conn: AsyncConnection,
+    principal: Principal,
+    changes: list[dict[str, Any]],
+    tools: dict[str, Tool] | None = None,
 ) -> None:
     """Apply a user's own changes, all or nothing.
 
     A value the admin's setting doesn't allow (turning on a tool the admin
     turned off, allowing a tool whose ceiling is ask) is refused: the UI
-    never offers it.
+    never offers it. `tools` (by setting key) replaces agent-server's
+    catalog, for an integration's tools.
     """
-    tools = await _known(conn, [c["name"] for c in changes])
-    admin = await _admin_rows(conn)
+    tools = await _known(conn, [c["name"] for c in changes], tools)
+    admin = await admin_rows(conn)
     for c in changes:
         row = admin.get(c["name"]) or {}
         if c.get("enabled") is True and row.get("enabled") is False:
@@ -212,9 +219,12 @@ async def change_mine(
 
 
 async def change_admin(
-    conn: AsyncConnection, principal: Principal, changes: list[dict[str, Any]]
+    conn: AsyncConnection,
+    principal: Principal,
+    changes: list[dict[str, Any]],
+    tools: dict[str, Tool] | None = None,
 ) -> None:
-    tools = await _known(conn, [c["name"] for c in changes])
+    tools = await _known(conn, [c["name"] for c in changes], tools)
     async with conn.transaction():
         for c in changes:
             await conn.execute(
