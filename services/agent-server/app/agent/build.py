@@ -78,9 +78,15 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agent import approvals
 from app.agent.app_tools import make_app_tools
 from app.agent.execute_code_tool import make_execute_code_tool
+from app.agent.integration_tools import IntegrationsListMiddleware, make_integration_tools
 from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
-from app.agent.prompts import APP_AUTHORING_GUIDE, ROUTINES_GUIDE, SYSTEM_PROMPT
+from app.agent.prompts import (
+    APP_AUTHORING_GUIDE,
+    INTEGRATIONS_GUIDE,
+    ROUTINES_GUIDE,
+    SYSTEM_PROMPT,
+)
 from app.agent.routine_tools import make_routine_tools
 from app.agent.symbol_tools import make_symbol_tools
 from app.agent.syntax_check import SyntaxCheckMiddleware
@@ -172,7 +178,12 @@ def build_backend(settings: Settings) -> CompositeBackend:
 def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> CompiledStateGraph:
     """`app_state` (the app's stores and delegation client) adds the routine tools (M17-07)."""
     routine_tools = make_routine_tools(app_state) if app_state is not None else []
-    prompt = SYSTEM_PROMPT + APP_AUTHORING_GUIDE + (ROUTINES_GUIDE if routine_tools else "")
+    prompt = (
+        SYSTEM_PROMPT
+        + APP_AUTHORING_GUIDE
+        + (ROUTINES_GUIDE if routine_tools else "")
+        + INTEGRATIONS_GUIDE
+    )
     backend = build_backend(settings)
     model = build_model(settings)
     middleware = [
@@ -180,6 +191,8 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
         CompactToolErrorsMiddleware(),
         SyntaxCheckMiddleware(backend),
         ToolNotesMiddleware(),
+        # Last, so the per-user list lands after every static part of the prompt.
+        IntegrationsListMiddleware(settings.platform_url),
     ]
     return create_deep_agent(
         model=model,
@@ -194,6 +207,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
             *make_symbol_tools(backend),
             *make_app_tools(settings),
             *routine_tools,
+            *make_integration_tools(settings),
         ],
         checkpointer=checkpointer,
         interrupt_on={name: _interrupt_on_config() for name in approvals.HITL_TOOL_NAMES},

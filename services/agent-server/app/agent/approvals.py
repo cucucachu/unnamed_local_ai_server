@@ -50,6 +50,7 @@ SELF_ASKING_TOOLS = frozenset(
         "create_routine",
         "update_routine",
         "delete_routine",
+        "use_integration",
     }
 )
 HITL_TOOL_NAMES: tuple[str, ...] = tuple(sorted(NAMES - SELF_ASKING_TOOLS))

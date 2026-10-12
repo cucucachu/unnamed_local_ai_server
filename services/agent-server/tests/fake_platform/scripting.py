@@ -153,6 +153,13 @@ class FakePlatform:
     hitl_markers: dict[str, tuple[str, str, str]] = field(default_factory=dict)
     hitl_mints: list[dict] = field(default_factory=list)
     approvals: list[tuple[str, str, str | None]] = field(default_factory=list)
+    # --- integrations (M18-06) ---
+    # What `GET /api/platform/integrations` lists for every user.
+    integrations: list[dict] = field(default_factory=list)
+    integration_lists: list[str | None] = field(default_factory=list)
+    # marker -> (thread_id, integration slug, tool, arguments)
+    integration_markers: dict[str, tuple[str, str, str, dict]] = field(default_factory=dict)
+    integration_mints: list[dict] = field(default_factory=list)
     _counter: itertools.count = field(default_factory=itertools.count)
 
     # --- delegations ------------------------------------------------------------

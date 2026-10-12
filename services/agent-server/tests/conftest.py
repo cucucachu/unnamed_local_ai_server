@@ -19,6 +19,7 @@ from app.db.threads import InMemoryThreadStore
 from app.main import create_app
 from tests.fake_exec_manager.scripting import FakeExecManager
 from tests.fake_exec_manager.server import create_fake_exec_manager_app
+from tests.fake_gateway import FakeGateway, create_fake_gateway_app
 from tests.fake_identity import FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel
 from tests.fake_model.server import create_fake_model_app
@@ -157,6 +158,20 @@ def fake_platform() -> Iterator[FakePlatform]:
     """
     fake = FakePlatform()
     runner = _UvicornThreadServer(create_fake_platform_app(fake))
+    runner.start()
+    fake.base_url = f"http://127.0.0.1:{runner.port}"
+    try:
+        yield fake
+    finally:
+        runner.stop()
+
+
+@pytest.fixture
+def fake_gateway(fake_platform: FakePlatform) -> Iterator[FakeGateway]:
+    """A running fake integrations gateway that checks delegations and markers
+    against `fake_platform`. Point `Settings.integrations_gateway_url` at `.base_url`."""
+    fake = FakeGateway(fake_platform)
+    runner = _UvicornThreadServer(create_fake_gateway_app(fake))
     runner.start()
     fake.base_url = f"http://127.0.0.1:{runner.port}"
     try:

@@ -47,9 +47,17 @@ export interface ThreadMessage {
 export interface PendingApprovalAction {
   tool_call_id: string;
   name: string;
-  category: 'file' | 'exec' | 'plan' | 'web' | 'app' | 'other';
+  category: 'file' | 'exec' | 'plan' | 'web' | 'app' | 'integration' | 'other';
   args: Record<string, unknown>;
   description: string;
+  integration?: {
+    id?: string;
+    slug: string;
+    name: string;
+    tool: string;
+    tool_title: string | null;
+    can_always_allow?: boolean;
+  };
 }
 
 export interface PendingApproval {

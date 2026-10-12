@@ -37,8 +37,9 @@ def _make_client(
     settings_store: SettingsStore | None = None,
     tool_policy: ToolPolicy | None = None,
     tool_policies: ToolPolicies | None = None,
+    **settings_overrides: object,
 ) -> TestClient:
-    settings = fake_model.settings(platform_url=fake_platform.base_url)
+    settings = fake_model.settings(platform_url=fake_platform.base_url, **settings_overrides)
     # `checkpointer_override`/`thread_store_override` keep this on
     # `MemorySaver`/`InMemoryThreadStore` (fast, no real Postgres) rather
     # than the production lifespan's real Postgres connection — see

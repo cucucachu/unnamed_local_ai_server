@@ -324,11 +324,15 @@ def _app_summary(app: dict | None, inst: dict) -> str:
 # --- approvals ------------------------------------------------------------------------
 
 
-def _ask_user(name: str, args: dict, description: str, tool_call_id: str) -> tuple[bool, str]:
+def _ask_user(
+    name: str, args: dict, description: str, tool_call_id: str, extra: dict | None = None
+) -> tuple[bool, str]:
     """Pause the run for the user's decision; `(approved, reason)`.
 
-    The resume value only ever comes from `chat_ws.py`, built from the
-    user's `approval_response` (or `cancel`) on their own socket.
+    `extra` goes on the card's action as is (e.g. an integration call's
+    `integration`). The resume value only ever comes from `chat_ws.py`,
+    built from the user's `approval_response` (or `cancel`) on their own
+    socket.
     """
     response = interrupt(
         {
@@ -338,6 +342,7 @@ def _ask_user(name: str, args: dict, description: str, tool_call_id: str) -> tup
                     "args": args,
                     "description": description,
                     "tool_call_id": tool_call_id,
+                    **(extra or {}),
                 }
             ],
             "review_configs": [{"action_name": name, "allowed_decisions": ["approve", "reject"]}],

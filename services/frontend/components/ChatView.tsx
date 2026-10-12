@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -31,8 +31,15 @@ import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { isSpeechSupported, startListening, stopListening } from '@/lib/speech';
 import { useKeyboardVisible } from '@/lib/useKeyboardVisible';
 import { monospaceFontFamily, theme } from '@/lib/theme';
-import type { ApprovalDecision, EditMode } from '@/lib/chatSocket';
-import { alwaysAllowable, changeMyTools, listMyTools, platformErrorMessage, type MyTool } from '@/lib/platform';
+import type { ApprovalDecision, ApprovalIntegration, EditMode } from '@/lib/chatSocket';
+import {
+  alwaysAllowable,
+  changeMyIntegrationTools,
+  changeMyTools,
+  listMyTools,
+  platformErrorMessage,
+  type MyTool,
+} from '@/lib/platform';
 import type { ThreadBranchPoint } from '@/lib/threads';
 import {
   useChat,
@@ -61,6 +68,7 @@ const CATEGORY_ICON: Record<ChatToolItem['category'], keyof typeof Ionicons.glyp
   // keeps this `globe-outline` default.
   web: 'globe-outline',
   app: 'apps-outline',
+  integration: 'extension-puzzle-outline',
   other: 'construct-outline',
 };
 
@@ -1080,7 +1088,28 @@ function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): Reac
     );
   }
 
+  // An integration call's description already lists its arguments, one per line.
+  if (action.category === 'integration' && action.integration) return <></>;
+
   return <Text style={[styles.toolDetailText, styles.approvalArgsText]}>{JSON.stringify(args)}</Text>;
+}
+
+/** The integration tools on a card the user could stop being asked about (M18-06). */
+function integrationAllowable(actions: PendingApprovalAction[]): ApprovalIntegration[] {
+  const seen = new Set<string>();
+  const out: ApprovalIntegration[] = [];
+  for (const { integration } of actions) {
+    if (!integration?.id || !integration.can_always_allow) continue;
+    const key = `${integration.id}/${integration.tool}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(integration);
+  }
+  return out;
+}
+
+function integrationLabel(integration: ApprovalIntegration): string {
+  return `${integration.name}: ${integration.tool_title ?? integration.tool}`;
 }
 
 interface ApprovalCardProps {
@@ -1121,6 +1150,7 @@ function useAlwaysAllowable(names: string[]): MyTool[] {
 function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps): ReactElement {
   const [responded, setResponded] = useState(false);
   const allowable = useAlwaysAllowable(pendingApproval.actions.map((action) => action.name));
+  const allowableIntegrations = useMemo(() => integrationAllowable(pendingApproval.actions), [pendingApproval.actions]);
   // Per-row picks for the multi-action case: the WS contract requires one
   // decision per pending `tool_call_id` in a single `approval_response`,
   // so a lone Approve/Reject tap on one of N rows only records that row
@@ -1169,14 +1199,30 @@ function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps
     if (responded) return;
     setResponded(true);
     try {
-      await changeMyTools(allowable.map((tool) => ({ name: tool.name, permission: 'allow' as const })));
+      if (allowable.length > 0) {
+        await changeMyTools(allowable.map((tool) => ({ name: tool.name, permission: 'allow' as const })));
+      }
+      for (const integration of allowableIntegrations) {
+        await changeMyIntegrationTools(integration.id as string, [{ name: integration.tool, permission: 'allow' }]);
+      }
     } catch (error) {
       setResponded(false);
       onError(platformErrorMessage(error));
       return;
     }
     onRespond(pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })));
-  }, [responded, allowable, onError, onRespond, pendingApproval.actions]);
+  }, [responded, allowable, allowableIntegrations, onError, onRespond, pendingApproval.actions]);
+
+  const allowLabels = [
+    ...allowable.map((tool) => `“${tool.label}”`),
+    ...allowableIntegrations.map((integration) => `“${integrationLabel(integration)}”`),
+  ];
+  const allowSettings =
+    allowableIntegrations.length === 0
+      ? 'Settings → Agent permissions'
+      : allowable.length === 0
+        ? 'Settings → Integrations'
+        : 'Settings';
 
   return (
     <View style={styles.approvalCard} testID="approval-card">
@@ -1189,52 +1235,55 @@ function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps
         nestedScrollEnabled
         testID="approval-scroll"
       >
-        {pendingApproval.actions.map((action) => (
-          <View key={action.toolCallId} style={styles.approvalRow} testID="approval-row">
-            <View style={styles.approvalRowHeader}>
-              <Ionicons name={CATEGORY_ICON[action.category]} size={16} color={theme.textMuted} />
-              <Text style={styles.toolName}>{action.name}</Text>
-            </View>
-            <ScrollView
-              style={{ maxHeight: Dimensions.get('window').height * 0.25 }}
-              nestedScrollEnabled
-              testID="approval-args-scroll"
-            >
-              <ApprovalActionArgs action={action} />
-              <Text style={styles.approvalDescription}>{action.description}</Text>
-            </ScrollView>
-            <View style={styles.approvalButtonRow}>
-              <Pressable
-                style={[
-                  styles.approvalButton,
-                  styles.approvalRejectButton,
-                  rowDecisions[action.toolCallId] === 'reject' && styles.approvalRejectButtonSelected,
-                  responded && styles.approvalButtonDisabled,
-                ]}
-                onPress={() => respondOne(action.toolCallId, 'reject')}
-                disabled={responded}
-                accessibilityRole="button"
-                accessibilityLabel={`Reject ${action.name}`}
+        {pendingApproval.actions.map((action) => {
+          const label = action.integration ? integrationLabel(action.integration) : action.name;
+          return (
+            <View key={action.toolCallId} style={styles.approvalRow} testID="approval-row">
+              <View style={styles.approvalRowHeader}>
+                <Ionicons name={CATEGORY_ICON[action.category]} size={16} color={theme.textMuted} />
+                <Text style={styles.toolName}>{label}</Text>
+              </View>
+              <ScrollView
+                style={{ maxHeight: Dimensions.get('window').height * 0.25 }}
+                nestedScrollEnabled
+                testID="approval-args-scroll"
               >
-                <Text style={styles.approvalRejectButtonText}>Reject</Text>
-              </Pressable>
-              <Pressable
-                style={[
-                  styles.approvalButton,
-                  styles.approvalApproveButton,
-                  rowDecisions[action.toolCallId] === 'approve' && styles.approvalApproveButtonSelected,
-                  responded && styles.approvalButtonDisabled,
-                ]}
-                onPress={() => respondOne(action.toolCallId, 'approve')}
-                disabled={responded}
-                accessibilityRole="button"
-                accessibilityLabel={`Approve ${action.name}`}
-              >
-                <Text style={styles.approvalApproveButtonText}>Approve</Text>
-              </Pressable>
+                <ApprovalActionArgs action={action} />
+                <Text style={styles.approvalDescription}>{action.description}</Text>
+              </ScrollView>
+              <View style={styles.approvalButtonRow}>
+                <Pressable
+                  style={[
+                    styles.approvalButton,
+                    styles.approvalRejectButton,
+                    rowDecisions[action.toolCallId] === 'reject' && styles.approvalRejectButtonSelected,
+                    responded && styles.approvalButtonDisabled,
+                  ]}
+                  onPress={() => respondOne(action.toolCallId, 'reject')}
+                  disabled={responded}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Reject ${label}`}
+                >
+                  <Text style={styles.approvalRejectButtonText}>Reject</Text>
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.approvalButton,
+                    styles.approvalApproveButton,
+                    rowDecisions[action.toolCallId] === 'approve' && styles.approvalApproveButtonSelected,
+                    responded && styles.approvalButtonDisabled,
+                  ]}
+                  onPress={() => respondOne(action.toolCallId, 'approve')}
+                  disabled={responded}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Approve ${label}`}
+                >
+                  <Text style={styles.approvalApproveButtonText}>Approve</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
-        ))}
+          );
+        })}
       </ScrollView>
       {pendingApproval.actions.length > 1 ? (
         <Pressable
@@ -1247,7 +1296,7 @@ function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps
           <Text style={styles.approvalApproveButtonText}>Approve all</Text>
         </Pressable>
       ) : null}
-      {allowable.length > 0 ? (
+      {allowLabels.length > 0 ? (
         <View style={styles.approvalAllowWrites}>
           <Pressable
             style={[styles.approvalButton, styles.approvalApproveAllButton, responded && styles.approvalButtonDisabled]}
@@ -1262,8 +1311,8 @@ function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps
             </Text>
           </Pressable>
           <Text style={styles.approvalDescription}>
-            {allowable.map((tool) => `“${tool.label}”`).join(' and ')} will run without asking from now on, in chats
-            and routines. You can change this in Settings → Agent permissions.
+            {allowLabels.join(' and ')} will run without asking from now on, in chats and routines. You can
+            change this in {allowSettings}.
           </Text>
         </View>
       ) : null}

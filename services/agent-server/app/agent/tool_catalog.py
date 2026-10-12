@@ -92,6 +92,35 @@ CATALOG: tuple[CatalogTool, ...] = (
         ("delete_routine", "Delete routines", False, "Delete a routine."),
     ),
     *_tools(
+        "Integrations",
+        # Each integration tool also has its own setting (Settings → Integrations);
+        # a call runs unasked only if both allow.
+        (
+            "open_integration",
+            "Look at integrations",
+            True,
+            "See what a connected service, such as Home Assistant, offers.",
+        ),
+        (
+            "use_integration",
+            "Use integrations",
+            True,
+            "Use a connected service's tools; each tool's own setting applies too.",
+        ),
+        (
+            "read_integration_resource",
+            "Read from integrations",
+            True,
+            "Read information a connected service provides.",
+        ),
+        (
+            "get_integration_prompt",
+            "Get integration guidance",
+            True,
+            "Get a connected service's own guidance for a task.",
+        ),
+    ),
+    *_tools(
         "Planning",
         # Delegating changes nothing by itself: the helper's own calls
         # follow the same settings.

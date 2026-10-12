@@ -418,6 +418,31 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         fake.hitl_markers[marker] = (who.thread_id, body["instance_id"], body["migration_id"])
         return JSONResponse({"token": marker, "expires_in_s": 60})
 
+    @app.get("/api/platform/integrations")
+    async def list_integrations(request: Request) -> JSONResponse:
+        fake.integration_lists.append(_bearer(request))
+        if fake.principal(_bearer(request)) is None:
+            raise _error(401, "unauthenticated")
+        return JSONResponse({"integrations": fake.integrations})
+
+    @app.post("/internal/integration-approvals")
+    async def integration_approval(request: Request) -> JSONResponse:
+        if _bearer(request) != AGENT_TOKEN:
+            raise _error(401, "unauthenticated")
+        body = await request.json()
+        fake.integration_mints.append(body)
+        who = fake.principal(body["delegation"])
+        if who is None:
+            raise _error(401, "unauthenticated")
+        marker = f"int_fake{next(fake._counter)}"
+        fake.integration_markers[marker] = (
+            who.thread_id,
+            body["integration"],
+            body["tool"],
+            body["arguments"],
+        )
+        return JSONResponse({"token": marker, "expires_in_s": 60})
+
     @app.get("/api/platform/system-apps")
     async def list_system_apps(request: Request) -> JSONResponse:
         _who(request)
