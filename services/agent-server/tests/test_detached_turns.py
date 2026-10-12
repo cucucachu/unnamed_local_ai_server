@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 
 from app.db.settings import InMemorySettingsStore
 from app.main import create_app
-from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore, FixedIdentityVerifier
+from tests.fake_identity import AutoCreateThreadStore, FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.fake_platform.scripting import FakePlatform
 
@@ -184,13 +184,11 @@ async def test_approval_reached_while_detached_is_restored(
     fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
     thread_id = "detached-approval"
-    settings_store = InMemorySettingsStore()
-    await settings_store.update_document(TEST_USER_ID, {"hitl_enabled": True})
     fake_model.queue(
         ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}),
         TextTurn("written"),
     )
-    with _make_client(fake_model, fake_platform, settings_store) as client:
+    with _make_client(fake_model, fake_platform) as client:
         with client.websocket_connect(f"/ws/chat/{thread_id}") as ws:
             ws.send_json({"type": "user_message", "content": "write a file"})
             assert ws.receive_json() == {"type": "turn_start"}
@@ -226,9 +224,7 @@ async def test_the_chats_list_puts_what_needs_you_first(
     fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
     """M17-10: approval first, then unread, then the rest, newest first."""
-    settings_store = InMemorySettingsStore()
-    await settings_store.update_document(TEST_USER_ID, {"hitl_enabled": True})
-    with _make_client(fake_model, fake_platform, settings_store) as client:
+    with _make_client(fake_model, fake_platform) as client:
         _start_slow_turn(client, fake_model, "away")
         _wait_until_idle(client, "away")
 
@@ -273,10 +269,8 @@ async def test_the_chats_list_puts_what_needs_you_first(
 async def test_an_approval_reached_while_away_is_unread_and_first(
     fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
-    settings_store = InMemorySettingsStore()
-    await settings_store.update_document(TEST_USER_ID, {"hitl_enabled": True})
     fake_model.queue(TextTurn("hi"))
-    with _make_client(fake_model, fake_platform, settings_store) as client:
+    with _make_client(fake_model, fake_platform) as client:
         with client.websocket_connect("/ws/chat/other") as ws:
             ws.send_json({"type": "user_message", "content": "hello"})
             _drain_turn(ws)

@@ -88,7 +88,7 @@ async def a_turn(pg: PostgresCheckpointer, fake_model: FakeModel, owner: str) ->
     stat = TurnStat(record.id, "final-1", "completed", 5, record.created_at)
     await as_user(owner, lambda: PgTurnStatsStore(pg.pool).upsert(stat))
     await as_user(
-        owner, lambda: PgSettingsStore(pg.pool).update_document(owner, {"hitl_enabled": False})
+        owner, lambda: PgSettingsStore(pg.pool).update_document(owner, {"thinking_enabled": True})
     )
     return record.id
 
@@ -149,7 +149,7 @@ async def test_other_users_rows_are_invisible_even_to_raw_sql(pg, pg_server, fak
     assert await as_user(bob, lambda: PgThreadStore(pg.pool).get(thread, alice)) is None
     assert await as_user(bob, lambda: PgTurnStatsStore(pg.pool).list_for_thread(thread)) == []
     bob_view = await as_user(bob, lambda: PgSettingsStore(pg.pool).get_document(alice))
-    assert bob_view.hitl_enabled is True  # defaults: alice's row is invisible
+    assert bob_view.thinking_enabled is False  # defaults: alice's row is invisible
 
 
 async def test_other_users_rows_cant_be_changed_or_deleted(pg, pg_server, fake_model) -> None:

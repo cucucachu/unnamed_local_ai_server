@@ -76,7 +76,7 @@ FILE_WRITE_TIMEOUT_S=90
 WS_TURN_TIMEOUT_S=90
 RESTART_GRACE_S=5
 
-# Empty until we successfully PUT hitl_enabled=false after the API is up.
+# Empty until ensure_hitl.sh has allowed every tool (the permissions to put back).
 SAVED_HITL=""
 
 log() {
@@ -458,9 +458,9 @@ main() {
   e2e_auth_begin gate-m3
   # M8-03 made HITL on by default; this gate's mutating tools are not
   # wired to send approval_response, so turn HITL off for the run.
-  log "Turning hitl_enabled off so write_file/execute_code are not interrupted..."
+  log "Allowing every tool so write_file/execute_code are not interrupted..."
   SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
-  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
+  log "OK: every tool allowed"
   step_create_thread_and_write_file
   step_files_api_round_trip
   step_full_restart

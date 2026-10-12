@@ -59,7 +59,7 @@ API_HEALTH_TIMEOUT_S=120
 WS_TURN_TIMEOUT_S=90
 FILE_APPEAR_TIMEOUT_S=15
 
-# Empty until we successfully PUT hitl_enabled=false after the API is up.
+# Empty until ensure_hitl.sh has allowed every tool (the permissions to put back).
 SAVED_HITL=""
 
 log() {
@@ -317,9 +317,9 @@ main() {
   create_thread
   # M8-03 made HITL on by default; this smoke's execute_code prompt is not
   # wired to send approval_response, so turn HITL off for the run.
-  log "Turning hitl_enabled off so execute_code is not interrupted..."
+  log "Allowing every tool so execute_code is not interrupted..."
   SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
-  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
+  log "OK: every tool allowed"
   step_execute_code_writes_file
   step_read_file_sees_same_content
   step_no_error_frames

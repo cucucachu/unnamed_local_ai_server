@@ -32,6 +32,7 @@ import { isSpeechSupported, startListening, stopListening } from '@/lib/speech';
 import { useKeyboardVisible } from '@/lib/useKeyboardVisible';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision, EditMode } from '@/lib/chatSocket';
+import { alwaysAllowable, changeMyTools, listMyTools, platformErrorMessage, type MyTool } from '@/lib/platform';
 import type { ThreadBranchPoint } from '@/lib/threads';
 import {
   useChat,
@@ -369,7 +370,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
           onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
         />
         {pendingApproval !== null ? (
-          <ApprovalCard pendingApproval={pendingApproval} onRespond={respondToApproval} />
+          <ApprovalCard pendingApproval={pendingApproval} onRespond={respondToApproval} onError={showToast} />
         ) : null}
         {editingItem !== null ? (
           <View style={styles.editBanner} testID="chat-edit-banner">
@@ -1022,7 +1023,7 @@ function firstNLines(text: string, n: number): string {
 /** Renders one pending action's `args` per the spec's per-type rules: exec
  * (`execute_code`) -> the command in monospace; file ops (`write_file`/
  * `edit_file`/`delete`) -> the path + first ~20 lines of content/edit;
- * app tools (`app_sql`/`app_action`/`approve_migration`, M13-02) -> the
+ * app tools (`app_update`/`app_action`/`approve_migration`, M13-02) -> the
  * target space, then the SQL, action name or migration steps.
  * Falls back to a raw JSON dump for anything else (defensive). */
 function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): ReactElement {
@@ -1084,7 +1085,27 @@ function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): Reac
 
 interface ApprovalCardProps {
   pendingApproval: PendingApproval;
-  onRespond: (decisions: ApprovalDecision[], allowWrites?: boolean) => void;
+  onRespond: (decisions: ApprovalDecision[]) => void;
+  onError: (message: string) => void;
+}
+
+/** The card's tools the user could stop being asked about (#342), or `[]`
+ * until their settings load (or if they can't). */
+function useAlwaysAllowable(names: string[]): MyTool[] {
+  const key = [...new Set(names)].sort().join(',');
+  const [loaded, setLoaded] = useState<{ key: string; tools: MyTool[] } | null>(null);
+  useEffect(() => {
+    let live = true;
+    listMyTools()
+      .then((mine) => {
+        if (live) setLoaded({ key, tools: alwaysAllowable(mine, key.split(',')) });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [key]);
+  return loaded?.key === key ? loaded.tools : [];
 }
 
 /**
@@ -1097,8 +1118,9 @@ interface ApprovalCardProps {
  * this card would otherwise still be mounted (and tappable) for that one
  * frame without its own guard.
  */
-function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactElement {
+function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps): ReactElement {
   const [responded, setResponded] = useState(false);
+  const allowable = useAlwaysAllowable(pendingApproval.actions.map((action) => action.name));
   // Per-row picks for the multi-action case: the WS contract requires one
   // decision per pending `tool_call_id` in a single `approval_response`,
   // so a lone Approve/Reject tap on one of N rows only records that row
@@ -1109,11 +1131,10 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
   >({});
 
   const respond = useCallback(
-    (decisions: ApprovalDecision[], allowWrites = false) => {
+    (decisions: ApprovalDecision[]) => {
       if (responded) return;
       setResponded(true);
-      if (allowWrites) onRespond(decisions, true);
-      else onRespond(decisions);
+      onRespond(decisions);
     },
     [responded, onRespond],
   );
@@ -1138,15 +1159,24 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
     [respond, pendingApproval.actions, rowDecisions],
   );
 
-  const approveAll = useCallback(
-    (allowWrites = false) => {
-      respond(
-        pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })),
-        allowWrites,
-      );
-    },
-    [respond, pendingApproval.actions],
-  );
+  const approveAll = useCallback(() => {
+    respond(pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })));
+  }, [respond, pendingApproval.actions]);
+
+  // Saved first, so the resumed turn already runs these unasked; if saving
+  // fails nothing is approved and the card stays.
+  const alwaysAllow = useCallback(async () => {
+    if (responded) return;
+    setResponded(true);
+    try {
+      await changeMyTools(allowable.map((tool) => ({ name: tool.name, permission: 'allow' as const })));
+    } catch (error) {
+      setResponded(false);
+      onError(platformErrorMessage(error));
+      return;
+    }
+    onRespond(pendingApproval.actions.map((action) => ({ tool_call_id: action.toolCallId, decision: 'approve' })));
+  }, [responded, allowable, onError, onRespond, pendingApproval.actions]);
 
   return (
     <View style={styles.approvalCard} testID="approval-card">
@@ -1217,20 +1247,23 @@ function ApprovalCard({ pendingApproval, onRespond }: ApprovalCardProps): ReactE
           <Text style={styles.approvalApproveButtonText}>Approve all</Text>
         </Pressable>
       ) : null}
-      {pendingApproval.canAllowWrites ? (
+      {allowable.length > 0 ? (
         <View style={styles.approvalAllowWrites}>
           <Pressable
             style={[styles.approvalButton, styles.approvalApproveAllButton, responded && styles.approvalButtonDisabled]}
-            onPress={() => approveAll(true)}
+            onPress={alwaysAllow}
             disabled={responded}
             accessibilityRole="button"
-            accessibilityLabel="Approve, and allow writes from now on"
+            accessibilityLabel="Always allow"
+            testID="approval-always-allow"
           >
-            <Text style={styles.approvalApproveButtonText}>Approve, and allow writes from now on</Text>
+            <Text style={styles.approvalApproveButtonText}>
+              {pendingApproval.actions.length > 1 ? 'Approve all, and always allow' : 'Always allow'}
+            </Text>
           </Pressable>
           <Text style={styles.approvalDescription}>
-            This routine will change files and app data without asking; deleting still asks. You can change this in
-            the routine's settings.
+            {allowable.map((tool) => `“${tool.label}”`).join(' and ')} will run without asking from now on, in chats
+            and routines. You can change this in Settings → Agent permissions.
           </Text>
         </View>
       ) : null}

@@ -189,8 +189,7 @@ async def test_paused_runs(pg_server: PgServer) -> None:
     paused_at = datetime(2026, 10, 6, 7, 0, tzinfo=UTC)
     try:
         rls.bind_user(alice)
-        routine = await routines.create(alice, _new(approval_mode="allow_writes"))
-        assert routine.approval_mode == "allow_writes"
+        routine = await routines.create(alice, _new())
         thread = await threads.create(alice, "Brief · Oct 6", routine.id)
         run = await routines.create_run(routine, "schedule", "running", thread_id=thread.id)
         done = await routines.create_run(routine, "manual", "running")

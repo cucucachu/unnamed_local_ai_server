@@ -33,15 +33,6 @@ export default function SettingsScreen() {
   const user = authState.phase === 'ready' ? authState.user : null;
   const { message: toast, showToast } = useToast();
 
-  const handleToggleHitl = useCallback(
-    (value: boolean) => {
-      updateSettings({ hitl_enabled: value }).catch((error) => {
-        showToast(error instanceof ApiError ? error.detail : 'Failed to update settings');
-      });
-    },
-    [updateSettings, showToast],
-  );
-
   const handleToggleThinking = useCallback(
     (value: boolean) => {
       updateSettings({ thinking_enabled: value }).catch((error) => {
@@ -133,28 +124,30 @@ export default function SettingsScreen() {
               onPress={() => router.push('/settings/invites')}
               testID="settings-nav-invites"
             />
+            <NavRow
+              icon="construct-outline"
+              title="Agent tools"
+              description="Which tools the agent has, and which always ask"
+              onPress={() => router.push('/settings/agent-tools')}
+              testID="settings-nav-agent-tools"
+            />
           </>
         ) : null}
 
         <SectionTitle>Chat</SectionTitle>
+        <NavRow
+          icon="hand-left-outline"
+          title="Agent permissions"
+          description="What the agent can use, and what it asks you first"
+          onPress={() => router.push('/settings/permissions')}
+          testID="settings-nav-permissions"
+        />
         {loading || settings === null ? (
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={theme.accent} />
           </View>
         ) : (
           <View style={styles.chatSettings}>
-            <SettingRow
-              title="Require approval"
-              description="Require approval before the agent writes files or runs code."
-              testID="settings-hitl-row"
-            >
-              <Switch
-                value={settings.hitl_enabled}
-                onValueChange={handleToggleHitl}
-                testID="settings-hitl-switch"
-              />
-            </SettingRow>
-
             <SettingRow
               title="Show thinking"
               description="Show the agent's step-by-step reasoning while it works."

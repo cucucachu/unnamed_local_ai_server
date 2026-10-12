@@ -82,7 +82,6 @@ const ROUTINE: Routine = {
   schedule: { kind: 'weekly', days: ['mon', 'thu'], time: '08:30:00' },
   timezone: 'Europe/Berlin',
   enabled: false,
-  approval_mode: 'read_only',
   next_run_at: null,
   last_run_at: null,
   created_at: '',
@@ -92,7 +91,7 @@ const ROUTINE: Routine = {
 describe('routine form', () => {
   it('round-trips a routine', () => {
     const form = initialForm(ROUTINE);
-    expect(form).toMatchObject({ kind: 'weekly', time: '08:30', days: ['mon', 'thu'], approvalMode: 'read_only' });
+    expect(form).toMatchObject({ kind: 'weekly', time: '08:30', days: ['mon', 'thu'] });
     expect(formToInput(form)).toEqual({
       input: {
         name: 'Brief',
@@ -101,16 +100,15 @@ describe('routine form', () => {
         schedule: { kind: 'weekly', days: ['mon', 'thu'], time: '08:30' },
         timezone: 'Europe/Berlin',
         enabled: false,
-        approval_mode: 'read_only',
       },
     });
     const once = initialForm({ ...ROUTINE, schedule: { kind: 'once', at: '2026-11-02T07:05:00' } });
     expect([once.date, once.time]).toEqual(['2026-11-02', '07:05']);
   });
 
-  it('defaults a new routine to the device timezone, weekdays, asking', () => {
+  it('defaults a new routine to the device timezone and weekdays', () => {
     const form = initialForm(null);
-    expect(form).toMatchObject({ kind: 'weekdays', space: '/personal', approvalMode: 'ask', enabled: true });
+    expect(form).toMatchObject({ kind: 'weekdays', space: '/personal', enabled: true });
     expect(form.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from app.agent.approvals import PolicyUnavailable
 from app.core.delegation import Delegation, DelegationDenied
 from app.db.rls import bind_user
 
@@ -60,15 +61,16 @@ class TurnRequest:
     thread_id: str
     user_id: str
     run_input: Any
-    hitl_enabled: bool
     thinking_enabled: bool
     checkpoint_id: str | None = None
     delegation: Delegation | None = None
     # The `user_message` behind a fresh turn, for clients attaching later.
     user_message: dict | None = None
     detached_timeout_s: float | None = None
-    # A routine run's approval mode (M17-05, `app.agent.approvals`); None in a chat.
-    approval_mode: str | None = None
+    # An unattended routine run, or its resume (M17-05): no routine tools.
+    routine_run: bool = False
+    # A resume's fixed decisions for the calls it stopped on (`app.agent.approvals`).
+    pinned_approvals: dict[str, bool] | None = None
 
 
 @dataclass(eq=False)
@@ -277,14 +279,19 @@ class TurnRunner:
         ws = _ws()
         request = turn.request
         agent = self._state.agent
+        try:
+            policy = await self._state.tool_policies.for_turn(request.delegation)
+        except PolicyUnavailable as exc:
+            raise RuntimeError(f"couldn't load the user's tool settings ({exc})") from exc
         config = ws.graph_config(
             request.thread_id,
             request.checkpoint_id,
-            hitl_enabled=request.hitl_enabled,
             thinking_enabled=request.thinking_enabled,
             delegation=request.delegation,
-            approval_mode=request.approval_mode,
             user_id=request.user_id,
+            tool_policy=policy,
+            routine_run=request.routine_run,
+            pinned_approvals=request.pinned_approvals,
         )
         config["recursion_limit"] = self._state.settings.agent_recursion_limit
 

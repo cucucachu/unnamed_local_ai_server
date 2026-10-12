@@ -20,7 +20,6 @@ function mockSettingsApi(routes: Partial<Record<'GET' | 'PUT', () => { ok: boole
 }
 
 const DEFAULTS = {
-  hitl_enabled: true,
   thinking_enabled: false,
   edit_mode_default: 'truncate' as const,
   timezone: deviceTimezone(),
@@ -101,16 +100,16 @@ describe('SettingsProvider', () => {
   it('applies an update optimistically, then adopts the server-merged response', async () => {
     const fetchMock = mockSettingsApi({
       GET: () => ({ ok: true, status: 200, body: DEFAULTS }),
-      PUT: () => ({ ok: true, status: 200, body: { ...DEFAULTS, hitl_enabled: false } }),
+      PUT: () => ({ ok: true, status: 200, body: { ...DEFAULTS, thinking_enabled: true } }),
     });
 
     await renderProvider();
 
     await act(async () => {
-      await capturedRef.current?.updateSettings({ hitl_enabled: false });
+      await capturedRef.current?.updateSettings({ thinking_enabled: true });
     });
 
-    expect(capturedRef.current?.settings).toEqual({ ...DEFAULTS, hitl_enabled: false });
+    expect(capturedRef.current?.settings).toEqual({ ...DEFAULTS, thinking_enabled: true });
     const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
     expect(putCall).toBeDefined();
   });
@@ -125,7 +124,7 @@ describe('SettingsProvider', () => {
     await renderProvider(onError);
 
     await act(async () => {
-      await capturedRef.current?.updateSettings({ hitl_enabled: false }).catch(() => {});
+      await capturedRef.current?.updateSettings({ thinking_enabled: true }).catch(() => {});
     });
 
     // Reverted back to the pre-update value.

@@ -186,10 +186,10 @@ def test_ws_unknown_thread_closes_4404_without_creating_it(client: TestClient, k
 
 def test_settings_are_per_user(client: TestClient, keys: LocalKeyPair):
     alice, bob = keys.headers(ALICE), keys.headers(BOB)
-    updated = client.put("/api/settings", json={"hitl_enabled": False}, headers=alice)
-    assert updated.json()["hitl_enabled"] is False
-    assert client.get("/api/settings", headers=alice).json()["hitl_enabled"] is False
-    assert client.get("/api/settings", headers=bob).json()["hitl_enabled"] is True
+    updated = client.put("/api/settings", json={"thinking_enabled": True}, headers=alice)
+    assert updated.json()["thinking_enabled"] is True
+    assert client.get("/api/settings", headers=alice).json()["thinking_enabled"] is True
+    assert client.get("/api/settings", headers=bob).json()["thinking_enabled"] is False
 
 
 # --- orphans -----------------------------------------------------------------
@@ -199,7 +199,7 @@ def _orphan_app(test_settings: Settings, keys: LocalKeyPair):
     settings = test_settings.model_copy(update={"platform_agent_token": AGENT_TOKEN})
     thread_store = InMemoryThreadStore()
     thread_store.insert("legacy-thread", None, title="Before accounts")
-    settings_store = InMemorySettingsStore(legacy={"hitl_enabled": False})
+    settings_store = InMemorySettingsStore(legacy={"thinking_enabled": True})
     app = _app(
         settings,
         keys,
@@ -225,7 +225,7 @@ def test_orphans_invisible_while_bootstrap_pending(test_settings: Settings, keys
             assert response.status_code == 404
     assert route.called
     assert route.calls[0].request.headers["Authorization"] == f"Bearer {AGENT_TOKEN}"
-    assert settings_store.legacy == {"hitl_enabled": False}
+    assert settings_store.legacy == {"thinking_enabled": True}
     assert not app.state.orphan_adopter.done
 
 
@@ -237,8 +237,8 @@ def test_orphans_go_to_bootstrap_admin(test_settings: Settings, keys):
         assert client.get("/api/threads", headers=keys.headers(BOB)).json() == []
         listed = client.get("/api/threads", headers=keys.headers(ALICE)).json()
         assert [(t["id"], t["title"]) for t in listed] == [("legacy-thread", "Before accounts")]
-        assert client.get("/api/settings", headers=keys.headers(ALICE)).json()["hitl_enabled"] is False
-        assert client.get("/api/settings", headers=keys.headers(BOB)).json()["hitl_enabled"] is True
+        assert client.get("/api/settings", headers=keys.headers(ALICE)).json()["thinking_enabled"] is True
+        assert client.get("/api/settings", headers=keys.headers(BOB)).json()["thinking_enabled"] is False
         client.get("/api/threads", headers=keys.headers(ALICE))
     assert route.call_count == 1
     assert settings_store.legacy == {}

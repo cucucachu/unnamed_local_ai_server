@@ -33,7 +33,6 @@ jest.mock('@/components/AuthProvider', () => ({
 // logic itself in isolation.
 const mockUpdateSettings = jest.fn();
 let mockSettingsValue: SettingsDocument | null = {
-  hitl_enabled: true,
   thinking_enabled: false,
   edit_mode_default: 'truncate',
   timezone: null,
@@ -80,7 +79,7 @@ beforeEach(() => {
   mockLogout.mockResolvedValue(undefined);
   mockUpdateSettings.mockReset();
   mockUpdateSettings.mockResolvedValue(undefined);
-  mockSettingsValue = { hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate', timezone: null };
+  mockSettingsValue = { thinking_enabled: false, edit_mode_default: 'truncate', timezone: null };
   mockLoading = false;
 });
 
@@ -97,17 +96,14 @@ describe('SettingsScreen', () => {
     const renderer = await renderScreen();
 
     // No settings controls are rendered while still loading.
-    expect(renderer.root.findAllByProps({ testID: 'settings-hitl-switch' }).length).toBe(0);
+    expect(renderer.root.findAllByProps({ testID: 'settings-thinking-switch' }).length).toBe(0);
     expect(textOf(renderer)).toContain('Settings');
   });
 
   it('renders the current values for each control', async () => {
-    mockSettingsValue = { hitl_enabled: false, thinking_enabled: true, edit_mode_default: 'fork', timezone: null };
+    mockSettingsValue = { thinking_enabled: true, edit_mode_default: 'fork', timezone: null };
 
     const renderer = await renderScreen();
-
-    const hitlSwitch = renderer.root.findByProps({ testID: 'settings-hitl-switch' });
-    expect(hitlSwitch.props.value).toBe(false);
 
     const thinkingSwitch = renderer.root.findByProps({ testID: 'settings-thinking-switch' });
     expect(thinkingSwitch.props.value).toBe(true);
@@ -121,19 +117,20 @@ describe('SettingsScreen', () => {
     expect(flatStyle(branchLabel.props.style).color).toBe(theme.text);
     expect(flatStyle(replaceLabel.props.style).color).toBe(theme.textMuted);
 
-    expect(textOf(renderer)).toContain('Require approval before the agent writes files or runs code.');
+    // #342: approvals are per tool now, in Agent permissions.
+    expect(renderer.root.findAllByProps({ testID: 'settings-hitl-switch' })).toHaveLength(0);
     expect(textOf(renderer)).toContain("Voice input uses your browser's speech service.");
   });
 
-  it('toggling the HITL switch calls updateSettings with the new value', async () => {
+  it('toggling Show thinking calls updateSettings with the new value', async () => {
     const renderer = await renderScreen();
 
-    const hitlSwitch = renderer.root.findByProps({ testID: 'settings-hitl-switch' });
+    const thinkingSwitch = renderer.root.findByProps({ testID: 'settings-thinking-switch' });
     await act(async () => {
-      hitlSwitch.props.onValueChange(false);
+      thinkingSwitch.props.onValueChange(true);
     });
 
-    expect(mockUpdateSettings).toHaveBeenCalledWith({ hitl_enabled: false });
+    expect(mockUpdateSettings).toHaveBeenCalledWith({ thinking_enabled: true });
   });
 
   it('tapping the "Branch" segment calls updateSettings with edit_mode_default: "fork"', async () => {
@@ -151,10 +148,10 @@ describe('SettingsScreen', () => {
     mockUpdateSettings.mockRejectedValue(new ApiError(422, 'update failed'));
 
     const renderer = await renderScreen();
-    const hitlSwitch = renderer.root.findByProps({ testID: 'settings-hitl-switch' });
+    const thinkingSwitch = renderer.root.findByProps({ testID: 'settings-thinking-switch' });
 
     await act(async () => {
-      hitlSwitch.props.onValueChange(false);
+      thinkingSwitch.props.onValueChange(true);
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -189,7 +186,7 @@ describe('SettingsScreen', () => {
     expect(mockLogout).toHaveBeenCalledTimes(1);
   });
 
-  it('links to Account, Sessions, Remote access, and Spaces; members see no Admin section', async () => {
+  it('links to Account, Sessions, Remote access, Spaces and Agent permissions; members see no Admin section', async () => {
     const renderer = await renderScreen();
 
     for (const [testID, path] of [
@@ -197,6 +194,7 @@ describe('SettingsScreen', () => {
       ['settings-nav-sessions', '/settings/sessions'],
       ['settings-nav-remote', '/settings/remote'],
       ['settings-nav-spaces', '/settings/spaces'],
+      ['settings-nav-permissions', '/settings/permissions'],
     ]) {
       await act(async () => {
         renderer.root.findByProps({ testID }).props.onPress();
@@ -205,11 +203,12 @@ describe('SettingsScreen', () => {
     }
     expect(renderer.root.findAllByProps({ testID: 'settings-nav-users' })).toHaveLength(0);
     expect(renderer.root.findAllByProps({ testID: 'settings-nav-invites' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ testID: 'settings-nav-agent-tools' })).toHaveLength(0);
     // M17-09: routines are their own app now.
     expect(renderer.root.findAllByProps({ testID: 'settings-nav-routines' })).toHaveLength(0);
   });
 
-  it('admins also get Users and Invites', async () => {
+  it('admins also get Users, Invites and Agent tools', async () => {
     mockRole = 'admin';
     const renderer = await renderScreen();
 
@@ -221,5 +220,9 @@ describe('SettingsScreen', () => {
       renderer.root.findByProps({ testID: 'settings-nav-invites' }).props.onPress();
     });
     expect(mockPush).toHaveBeenLastCalledWith('/settings/invites');
+    await act(async () => {
+      renderer.root.findByProps({ testID: 'settings-nav-agent-tools' }).props.onPress();
+    });
+    expect(mockPush).toHaveBeenLastCalledWith('/settings/agent-tools');
   });
 });

@@ -194,15 +194,25 @@ def tool_starts(frames, name):
 def tool_results(frames, name):
     return [f["result_preview"] for f in frames if f["type"] == "tool_end" and f["name"] == name]
 
+def allow_all_tools(cookie: str) -> None:
+    """Every tool the user can allow runs without asking (#342)."""
+    status, body = api(cookie, "GET", "/api/platform/tools")
+    if status != 200:
+        fail(f"GET /api/platform/tools: HTTP {status} {body!r}")
+    changes = [
+        {"name": t["name"], "permission": "allow"}
+        for t in body["tools"]
+        if t["enabled"] and not t["permission_locked"] and t["permission"] != "allow"
+    ]
+    if changes:
+        status, body = api(cookie, "PATCH", "/api/platform/tools", {"changes": changes})
+        if status != 200:
+            fail(f"PATCH /api/platform/tools: HTTP {status} {body!r}")
+
 
 def setup() -> None:
-    for who, cookie in (("A", A), ("B", B)):
-        status, body = api(cookie, "PUT", "/api/settings", {"hitl_enabled": False})
-        if status != 200:
-            fail(f"{who}: PUT settings: HTTP {status} {body!r}")
-        status, body = api(cookie, "GET", "/api/settings")
-        if status != 200 or body.get("hitl_enabled") is not False:
-            fail(f"{who}: hitl_enabled not off: HTTP {status} {body!r}")
+    for cookie in (A, B):
+        allow_all_tools(cookie)
     status, body = api(A, "POST", "/api/platform/files/write", {"path": PRIVATE, "content": "private to A"})
     if status != 200:
         fail(f"A: plant {PRIVATE}: HTTP {status} {body!r}")

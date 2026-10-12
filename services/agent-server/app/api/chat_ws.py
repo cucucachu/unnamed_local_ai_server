@@ -11,12 +11,10 @@ Client -> server (four valid incoming frames):
     {"type": "cancel"}   # M8-01: cancels a running turn; M8-03: while
                           # awaiting approval, rejects all pending actions
     {"type": "approval_response", "interrupt_id": "str",
-     "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}],
-     "allow_writes": true?}
-     # M8-03: only valid while awaiting approval (see below). #326:
-     # `allow_writes` (only with `can_allow_writes` and every action
-     # approved) also sets the run's routine to `allow_writes` and resumes
-     # in that mode, so the rest of the run doesn't stop for writes.
+     "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
+     # M8-03: only valid while awaiting approval (see below). "Always
+     # allow" on a card is the app changing the user's tool settings on
+     # the platform before it answers (#342); the socket only resumes.
 
 Server -> client (in order within a turn):
     {"type": "turn_start"}
@@ -30,10 +28,7 @@ Server -> client (in order within a turn):
     {"type": "tool_end", "tool_call_id": "str", "name": "str",
      "status": "success"|"error", "result_preview": "str"}
     {"type": "approval_request", "interrupt_id": "str",
-     "actions": [{"tool_call_id", "name", "category", "args", "description"}],
-     "can_allow_writes": true?}
-     # #326: present in a routine run paused in `ask` mode with no delete
-     # or migration pending.
+     "actions": [{"tool_call_id", "name", "category", "args", "description"}]}
      # M8-03: emitted instead of a normal completion when the turn ends with
      # one or more mutating tool calls paused for human approval; ALWAYS
      # immediately followed by `turn_end {"status": "awaiting_approval"}`
@@ -69,17 +64,15 @@ invalid frame while idle.
 ## M8-03 human-in-the-loop approvals (`interrupt_on`)
 
 - `build_agent` (`app/agent/build.py`) installs `HumanInTheLoopMiddleware`
-  for the four mutating tools (`write_file`, `edit_file`, `delete`,
-  `execute_code`) via `interrupt_on=...`, gated per-turn by a `when`
-  predicate reading `config["configurable"]["hitl_enabled"]`. **Finding**
-  (see `build.py`'s module docstring for the full empirical writeup): the
-  direct `InterruptOnConfig.when` predicate mechanism works as-is with the
+  for the tools in `approvals.HITL_TOOL_NAMES` via `interrupt_on=...`,
+  gated per call by a `when` predicate reading the turn's tool policy
+  (#342, `app.agent.approvals`). **Finding** (see `build.py`'s module
+  docstring for the full empirical writeup): the direct
+  `InterruptOnConfig.when` predicate mechanism works as-is with the
   installed `deepagents==0.7.11`/`langchain==1.6.x` — no dual-compiled-graph
-  fallback was needed. This module is the ONLY thing that sets
-  `hitl_enabled` in `configurable` — read fresh from the connected user's
-  `SettingsStore` document at the start of every turn
-  (`_current_hitl_enabled` below), so a mid-conversation settings change
-  takes effect on the very next turn.
+  fallback was needed. The turn runner fetches the policy from the
+  platform at the start of every turn, so a settings change takes effect
+  on the very next turn.
 - After a turn's `astream_events` stream completes (fresh OR resumed —
   see below), `_run_turn` checks `agent.aget_state(config).tasks[*].
   interrupts` for a pending `Interrupt`. `HumanInTheLoopMiddleware.
@@ -96,9 +89,8 @@ invalid frame while idle.
   ids by re-reading the checkpointed state's last `AIMessage.tool_calls`
   and matching each of `action_requests` (built in call order by
   `HumanInTheLoopMiddleware.after_model`, args copied from the call) to the
-  first unclaimed mutating call with the same name and args. Not every
-  mutating call need have interrupted: a routine's `allow_writes` mode
-  (M17-05) stops only deletes.
+  first unclaimed call with the same name and args. Not every call need
+  have interrupted: the user may allow some tools and not others.
   This needs no extra persistent storage: everything is reconstructed from
   the checkpointer's own state on every read.
 - Resuming: `{"type": "approval_response", ...}` (or a `cancel`,
@@ -191,7 +183,7 @@ M2-04's final report for the full transcript):
   written to `turn_stats` or the history DTO.
 - Per-turn thinking (M8-07): `_run_turn` sets
   `configurable["thinking_enabled"]` from `SettingsStore` (same fresh
-  per-turn read as `hitl_enabled`). `ReasoningChatOpenAI._default_params`
+  per-turn read as the tool policy). `ReasoningChatOpenAI._default_params`
   turns that into
   `extra_body={"chat_template_kwargs": {"enable_thinking": <bool>}}`
   (configurable -> model kwargs, not `model.bind(...)`).
@@ -332,8 +324,7 @@ from langgraph.types import Command, StateSnapshot
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.app_tools import APP_TOOL_NAMES
-from app.agent.approvals import DESTRUCTIVE_TOOLS
-from app.agent.build import MUTATING_TOOL_NAMES
+from app.agent.approvals import HITL_TOOL_NAMES, ToolPolicy
 from app.agent.routine_tools import ROUTINE_TOOL_NAMES
 from app.agent.turn_runner import END, ActiveTurn, TurnOutcome, TurnRequest, TurnRunner
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
@@ -507,13 +498,13 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
 
     messages = state.values.get("messages", [])
     last_ai_msg = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
-    # Not every mutating call need have stopped (a routine's `allow_writes`
+    # Not every call need have stopped (the user may allow some tools
     # mode stops only deletes), so each request takes the first unclaimed
     # call with its name and arguments, in call order.
     unclaimed = [
         tc
         for tc in (last_ai_msg.tool_calls if last_ai_msg is not None else [])
-        if tc["name"] in MUTATING_TOOL_NAMES
+        if tc["name"] in HITL_TOOL_NAMES
     ]
 
     def middleware_id(name: str, args: Any) -> str:
@@ -541,12 +532,26 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
                 }
             )
         groups.append((str(interrupt.id), len(action_requests)))
-    pending = {"interrupt_id": groups[0][0], "actions": actions, _RESUME_KEY: groups}
-    if (state.metadata or {}).get("approval_mode") == "ask" and not any(
-        a["name"] in DESTRUCTIVE_TOOLS for a in actions
-    ):
-        pending["can_allow_writes"] = True
-    return pending
+    return {"interrupt_id": groups[0][0], "actions": actions, _RESUME_KEY: groups}
+
+
+def pinned_approvals(state: Any, pending_approval: dict) -> dict[str, bool]:
+    """A resume's decisions for the calls it stopped on (`app.agent.approvals`).
+
+    The calls on the card ask again, so they take the user's answer even if
+    the user has just allowed their tool. A card action without an id (its
+    call couldn't be matched) pins every paused call to that tool, so a
+    mismatch fails the resume rather than running a rejected call.
+    """
+    pinned = {a["tool_call_id"]: True for a in pending_approval["actions"] if a["tool_call_id"]}
+    unmatched = {a["name"] for a in pending_approval["actions"] if not a["tool_call_id"]}
+    if unmatched:
+        messages = state.values.get("messages", [])
+        last_ai_msg = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+        for call in last_ai_msg.tool_calls if last_ai_msg is not None else []:
+            if call["name"] in unmatched:
+                pinned[call["id"]] = True
+    return pinned
 
 
 _RESUME_KEY = "_resume"
@@ -577,46 +582,35 @@ def graph_config(
     thread_id: str,
     checkpoint_id: str | None = None,
     *,
-    hitl_enabled: bool | None = None,
     thinking_enabled: bool | None = None,
     delegation: Delegation | None = None,
-    approval_mode: str | None = None,
     user_id: str | None = None,
+    tool_policy: ToolPolicy | None = None,
+    routine_run: bool = False,
+    pinned_approvals: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """RunnableConfig for this thread, optionally pinned to a checkpoint (M8-05).
 
     `user_id` is the turn's user, for tools that act on their own records
-    (the routine tools, M17-07).
-
-    `approval_mode` (a routine run's, M17-05) is a string, so LangGraph also
-    writes it into each checkpoint's metadata - which is how a resume from a
-    chat (`paused_approval_mode`) answers under the mode the run paused in.
+    (the routine tools, M17-07). `tool_policy`, `routine_run` and
+    `pinned_approvals` are read by `app.agent.approvals` (#342).
     """
     configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": ""}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
-    if hitl_enabled is not None:
-        configurable["hitl_enabled"] = hitl_enabled
     if thinking_enabled is not None:
         configurable["thinking_enabled"] = thinking_enabled
     if delegation is not None:
         configurable["delegation"] = delegation
-    if approval_mode is not None:
-        configurable["approval_mode"] = approval_mode
     if user_id is not None:
         configurable["user_id"] = user_id
+    if tool_policy is not None:
+        configurable["tool_policy"] = tool_policy
+    if routine_run:
+        configurable["routine_run"] = True
+    if pinned_approvals:
+        configurable["pinned_approvals"] = pinned_approvals
     return {"configurable": configurable}
-
-
-async def paused_approval_mode(agent: Any, thread_id: str) -> str | None:
-    """The approval mode the thread's pending approval was raised under (None: a chat's).
-
-    The HITL middleware decides again on resume which calls needed approval,
-    so a resume must run under the same mode or the decisions won't line up.
-    """
-    state = await agent.aget_state(graph_config(thread_id))
-    mode = (state.metadata or {}).get("approval_mode")
-    return mode if isinstance(mode, str) else None
 
 
 def checkpoint_id_of(config_or_state: Any) -> str | None:
@@ -824,8 +818,6 @@ def approval_request_frame(pending_approval: dict) -> dict:
         "interrupt_id": pending_approval["interrupt_id"],
         "actions": pending_approval["actions"],
     }
-    if pending_approval.get("can_allow_writes"):
-        frame["can_allow_writes"] = True
     return frame
 
 
@@ -970,22 +962,12 @@ async def _send_error_and_close(websocket: WebSocket, message: str, code: int) -
         await websocket.close(code=code)
 
 
-async def _current_hitl_enabled(websocket: WebSocket, user_id: str) -> bool:
-    """Fresh per-turn read of `SettingsStore.get_document().hitl_enabled` (M8-03).
+async def _current_thinking_enabled(websocket: WebSocket, user_id: str) -> bool:
+    """Fresh per-turn read of `SettingsStore.get_document().thinking_enabled` (M8-07).
 
     Read at the START of every turn (fresh AND resumed) rather than cached
     for the connection's lifetime, so a mid-conversation settings change
     (`PUT /api/settings`) takes effect on the very next turn.
-    """
-    settings_store = websocket.app.state.settings_store
-    document = await settings_store.get_document(user_id)
-    return document.hitl_enabled
-
-
-async def _current_thinking_enabled(websocket: WebSocket, user_id: str) -> bool:
-    """Fresh per-turn read of `SettingsStore.get_document().thinking_enabled` (M8-07).
-
-    Same "read at the start of every turn" rule as `_current_hitl_enabled`.
     Default is `False` (`SettingsDocument.thinking_enabled`).
     """
     settings_store = websocket.app.state.settings_store
@@ -1160,24 +1142,14 @@ async def _start_turn(
             lock.release()
 
 
-async def _allow_writes_from_now_on(app_state: Any, thread_id: str, user_id: str) -> bool:
-    """Set the routine this run belongs to to `allow_writes` (#326); False if there's none."""
-    run = await app_state.routine_store.run_for_thread(thread_id, user_id)
-    if run is None:
-        return False
-    updated = await app_state.routine_store.update(
-        run.routine_id, user_id, {"approval_mode": "allow_writes"}
-    )
-    return updated is not None
+async def _waiting_routine_run(app_state: Any, thread_id: str, user_id: str) -> Any:
+    """The routine run paused on this thread's approval, if any (M17-05).
 
-
-async def _track_routine_run(
-    app_state: Any, thread_id: str, user_id: str, turn: ActiveTurn
-) -> None:
-    """A routine run's approval answered here: its run record follows the turn (M17-05)."""
+    Answered here, it resumes as that run (no routine tools), and its run
+    record follows the turn.
+    """
     run = await app_state.routine_store.run_for_thread(thread_id, user_id)
-    if run is not None and run.status == "waiting_approval":
-        app_state.routine_scheduler.track_resumed(run, turn)
+    return run if run is not None and run.status == "waiting_approval" else None
 
 
 async def _active_tip(
@@ -1268,7 +1240,6 @@ async def _serve(
             # (matching the pending interrupt) or `cancel` (reject-all) are
             # valid — anything else is an invalid frame -> error + close
             # 1008, same treatment as an invalid frame while idle.
-            resume_mode = await paused_approval_mode(websocket.app.state.agent, thread_id)
             if _is_cancel_frame(raw):
                 decisions = _reject_all_decisions(pending_approval, "The user cancelled.")
             else:
@@ -1281,38 +1252,29 @@ async def _serve(
                         code=1008,
                     )
                     return
-                if raw.get("allow_writes") is True:
-                    # Resumed under `allow_writes`, the paused calls no longer
-                    # stop, so they run without consuming these decisions.
-                    if not (
-                        pending_approval.get("can_allow_writes")
-                        and all(d["type"] == "approve" for d in decisions)
-                        and await _allow_writes_from_now_on(websocket.app.state, thread_id, user_id)
-                    ):
-                        await _send_error_and_close(
-                            websocket,
-                            "invalid frame: allow_writes needs a routine run's approval "
-                            "with every action approved",
-                            code=1008,
-                        )
-                        return
-                    resume_mode = "allow_writes"
 
+            app_state = websocket.app.state
+            paused = await app_state.agent.aget_state(
+                graph_config(
+                    thread_id, await active_checkpoint_id_for(thread_store, thread_id, user_id)
+                )
+            )
+            run = await _waiting_routine_run(app_state, thread_id, user_id)
             resume = TurnRequest(
                 thread_id=thread_id,
                 user_id=user_id,
                 run_input=_resume_command(pending_approval, decisions),
-                hitl_enabled=await _current_hitl_enabled(websocket, user_id),
                 thinking_enabled=await _current_thinking_enabled(websocket, user_id),
                 delegation=delegation,
                 detached_timeout_s=detached_timeout_s,
-                approval_mode=resume_mode,
+                routine_run=run is not None,
+                pinned_approvals=pinned_approvals(paused, pending_approval),
             )
             started = await _start_turn(
                 websocket, runner, resume, _active_tip(thread_store, thread_id, user_id)
             )
-            if started is not None:
-                await _track_routine_run(websocket.app.state, thread_id, user_id, started[0])
+            if started is not None and run is not None:
+                app_state.routine_scheduler.track_resumed(run, started[0])
             if started is None or not await follow(*started):
                 return
             continue
@@ -1352,7 +1314,6 @@ async def _serve(
             thread_id=thread_id,
             user_id=user_id,
             run_input={"messages": [human]},
-            hitl_enabled=document.hitl_enabled,
             thinking_enabled=document.thinking_enabled,
             delegation=delegation,
             user_message={"id": human.id, "content": parsed.content},

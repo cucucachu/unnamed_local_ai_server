@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agent.approvals import ToolPolicy
 from app.core.delegation import Delegation
 from app.main import create_app
 from tests.fake_identity import FixedIdentityVerifier
@@ -70,14 +71,12 @@ async def test_agent_file_tool_roundtrip(
     client = fake_platform.client()
     delegation = await Delegation.obtain(client, "identity", "t2")
 
-    # `hitl_enabled: False` (M8-03): this test is about the tool roundtrip
-    # itself, not the approval flow (see `tests/test_chat_ws.py` for HITL
-    # coverage) — HITL defaults on, so it must be explicitly disabled here
-    # for the tool to execute directly like it always has.
+    # Nothing asks (#342): this test is about the tool roundtrip itself, not
+    # the approval flow; with no policy, every call would ask.
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "write a note"}]},
         config={
-            "configurable": {"thread_id": "t2", "hitl_enabled": False, "delegation": delegation}
+            "configurable": {"thread_id": "t2", "tool_policy": ToolPolicy.allow_all(), "delegation": delegation}
         },
     )
 
@@ -124,7 +123,7 @@ async def test_file_tools_fail_closed_without_a_delegation(
 
     await agent.ainvoke(
         {"messages": [{"role": "user", "content": "write a note"}]},
-        config={"configurable": {"thread_id": "t3", "hitl_enabled": False}},
+        config={"configurable": {"thread_id": "t3", "tool_policy": ToolPolicy.allow_all()}},
     )
 
     assert fake_platform.file_requests == []

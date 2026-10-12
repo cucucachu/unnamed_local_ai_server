@@ -13,7 +13,7 @@
 #   2. `app_history_smoke.sh`     — M13-01: a commit per build, history,
 #      revert restores the files and rebuilds; a planted .git stays inert.
 #   3. agent-server `test_app_tools.py` — M13-02: create_app / build_app /
-#      app_sql / app_action / approve_migration (fake model, no GPU).
+#      app_query / app_update / app_action / approve_migration (fake model, no GPU).
 #   4. `app_runner_browser_smoke.sh` — M12-06 / M13-04: Apps tab, sandboxed
 #      runner, Ask the agent panel + live db_changed.
 #   5. `g13_grocery_smoke.sh`     — the G13 scenario, real model: create a

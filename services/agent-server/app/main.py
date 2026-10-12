@@ -4,6 +4,7 @@
 what the Dockerfile's `uv run uvicorn app.main:app` command serves.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,8 @@ from datetime import timedelta
 from fastapi import Depends, FastAPI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.agent import tool_catalog
+from app.agent.approvals import PlatformToolPolicies, StaticToolPolicies, ToolPolicies
 from app.agent.build import build_agent
 from app.agent.turn_runner import TurnRunner
 from app.api import chat, chat_ws, health, routines
@@ -44,6 +47,7 @@ def create_app(
     routine_store_override: RoutineStore | None = None,
     identity_verifier_override: IdentityVerifier | None = None,
     delegation_client_override: DelegationClient | None = None,
+    tool_policies_override: ToolPolicies | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -94,6 +98,11 @@ def create_app(
     `delegation_client_override` (M11-02) replaces the HTTP client that
     exchanges and refreshes delegation tokens (`app/core/delegation.py`);
     by default it talks to `settings.platform_url`.
+
+    `tool_policies_override` (#342) replaces where each turn's tool policy
+    comes from (`app.agent.approvals`): the platform by default, or the
+    catalog defaults alongside a `checkpointer_override`. Only the platform
+    path registers the tool catalog at startup.
     """
     settings = settings or Settings()
 
@@ -143,6 +152,7 @@ def create_app(
                 app.state.thread_store
             )
             install_orphan_adopter(app)
+            app.state.tool_policies = tool_policies_override or StaticToolPolicies()
             app.state.agent = build_agent(app.state.settings, checkpointer_override, app.state)
             app.state.turn_runner = TurnRunner(app.state)
             async with _running_turns(app):
@@ -150,6 +160,7 @@ def create_app(
             return
 
         pg_checkpointer = await build_postgres_checkpointer(app.state.settings.postgres_dsn)
+        registering: asyncio.Task | None = None
         try:
             app.state.checkpointer = pg_checkpointer.saver
             app.state.thread_store = thread_store_override or PgThreadStore(pg_checkpointer.pool)
@@ -161,11 +172,18 @@ def create_app(
             )
             app.state.routine_store = routine_store_override or PgRoutineStore(pg_checkpointer.pool)
             install_orphan_adopter(app)
+            s = app.state.settings
+            app.state.tool_policies = tool_policies_override or PlatformToolPolicies(s.platform_url)
+            registering = asyncio.create_task(
+                tool_catalog.register(s.platform_url, s.platform_agent_token)
+            )
             app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver, app.state)
             app.state.turn_runner = TurnRunner(app.state)
             async with _running_turns(app):
                 yield
         finally:
+            if registering is not None:
+                registering.cancel()
             await pg_checkpointer.close()
 
     app = FastAPI(lifespan=lifespan)

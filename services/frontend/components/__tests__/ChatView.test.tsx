@@ -4,6 +4,7 @@ import { act, create } from 'react-test-renderer';
 
 import { groupItemsIntoTurns } from '@/lib/chatTurns';
 import type { EditMode } from '@/lib/chatSocket';
+import type { MyTool } from '@/lib/platform';
 import type { StartListeningOptions } from '@/lib/speech';
 import type { ChatToolItem, ChatUserItem, UseChatResult } from '@/lib/useChat';
 
@@ -35,7 +36,6 @@ let mockEditModeDefault: EditMode = 'truncate';
 jest.mock('@/components/SettingsProvider', () => ({
   useSettings: () => ({
     settings: {
-      hitl_enabled: true,
       thinking_enabled: false,
       edit_mode_default: mockEditModeDefault,
     },
@@ -57,6 +57,34 @@ jest.mock('@/lib/speech', () => ({
   startListening: (options: StartListeningOptions) => mockStartListening(options),
   stopListening: () => mockStopListening(),
 }));
+
+const mockListMyTools = jest.fn<Promise<MyTool[]>, []>();
+const mockChangeMyTools = jest.fn<Promise<MyTool[]>, unknown[]>();
+jest.mock('@/lib/platform', () => ({
+  ...jest.requireActual('@/lib/platform'),
+  listMyTools: () => mockListMyTools(),
+  changeMyTools: (...args: unknown[]) => mockChangeMyTools(...args),
+}));
+
+function myTool(name: string, label: string, overrides: Partial<MyTool> = {}): MyTool {
+  return {
+    name,
+    label,
+    description: '',
+    group: 'Files',
+    read_only: false,
+    enabled: true,
+    permission: 'ask',
+    enabled_locked: false,
+    permission_locked: false,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  mockListMyTools.mockReset().mockResolvedValue([]);
+  mockChangeMyTools.mockReset().mockResolvedValue([]);
+});
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import { ChatView, type ChatViewProps } from '../ChatView';
@@ -857,32 +885,58 @@ describe('ChatView', () => {
       expect(respondToApproval).toHaveBeenCalledTimes(1);
     });
 
-    it('offers "allow writes from now on" only when the server does, approving every action', () => {
+    it('"Always allow" saves the setting, then approves every action (#342)', async () => {
       const respondToApproval = jest.fn();
-      setUseChatResult({
-        pendingApproval: { interruptId: 'int-aw', actions: [singleAction], canAllowWrites: true },
-        respondToApproval,
-      });
+      mockListMyTools.mockResolvedValue([myTool('write_file', 'Write files')]);
+      setUseChatResult({ pendingApproval: { interruptId: 'int-aw', actions: [singleAction] }, respondToApproval });
 
       let renderer: ReturnType<typeof create> | undefined;
-      act(() => {
+      await act(async () => {
         renderer = create(createElement(ChatScreen));
       });
 
-      const allow = renderer!.root.findByProps({ accessibilityLabel: 'Approve, and allow writes from now on' });
-      expect(renderedText(renderer!)).toContain("You can change this in the routine's settings.");
-      act(() => {
-        (allow.props as { onPress: () => void }).onPress();
+      const allow = renderer!.root.findByProps({ testID: 'approval-always-allow' });
+      expect(renderedText(renderer!)).toContain('“Write files”');
+      expect(renderedText(renderer!)).toContain('will run without asking from now on, in chats and routines.');
+      await act(async () => {
+        await (allow.props as { onPress: () => Promise<void> }).onPress();
       });
-      expect(respondToApproval).toHaveBeenCalledWith([{ tool_call_id: 'call-1', decision: 'approve' }], true);
+      expect(mockChangeMyTools).toHaveBeenCalledWith([{ name: 'write_file', permission: 'allow' }]);
+      expect(respondToApproval).toHaveBeenCalledWith([{ tool_call_id: 'call-1', decision: 'approve' }]);
+    });
 
+    it('offers "Always allow" only for tools the user can allow', async () => {
       setUseChatResult({ pendingApproval: { interruptId: 'int-plain', actions: [singleAction] } });
-      act(() => {
+      for (const tool of [
+        myTool('write_file', 'Write files', { permission_locked: true }),
+        myTool('write_file', 'Write files', { permission: 'allow' }),
+        myTool('edit_file', 'Edit files'),
+      ]) {
+        mockListMyTools.mockResolvedValue([tool]);
+        let renderer: ReturnType<typeof create> | undefined;
+        await act(async () => {
+          renderer = create(createElement(ChatScreen));
+        });
+        expect(renderer!.root.findAllByProps({ testID: 'approval-always-allow' })).toHaveLength(0);
+      }
+    });
+
+    it('if saving "Always allow" fails, nothing is approved and the card stays usable', async () => {
+      const respondToApproval = jest.fn();
+      mockListMyTools.mockResolvedValue([myTool('write_file', 'Write files')]);
+      mockChangeMyTools.mockRejectedValue(new Error('offline'));
+      setUseChatResult({ pendingApproval: { interruptId: 'int-aw', actions: [singleAction] }, respondToApproval });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      await act(async () => {
         renderer = create(createElement(ChatScreen));
       });
-      expect(() =>
-        renderer!.root.findByProps({ accessibilityLabel: 'Approve, and allow writes from now on' }),
-      ).toThrow();
+      await act(async () => {
+        await (renderer!.root.findByProps({ testID: 'approval-always-allow' }).props as { onPress: () => Promise<void> }).onPress();
+      });
+      expect(respondToApproval).not.toHaveBeenCalled();
+      const approve = renderer!.root.findByProps({ accessibilityLabel: 'Approve write_file' });
+      expect((approve.props as { disabled: boolean }).disabled).toBe(false);
     });
 
     it('per-row Approve/Reject on a multi-action card waits until every row has a decision', () => {
@@ -1024,7 +1078,7 @@ describe('ChatView', () => {
           actions: [
             {
               toolCallId: 'call-sql',
-              name: 'app_sql',
+              name: 'app_update',
               category: 'app',
               args: {
                 instance: 'i-1',

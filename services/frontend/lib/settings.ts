@@ -12,7 +12,6 @@ import { apiFetch } from './api';
 export type EditModeDefault = 'truncate' | 'fork';
 
 export interface SettingsDocument {
-  hitl_enabled: boolean;
   thinking_enabled: boolean;
   edit_mode_default: EditModeDefault;
   /** The user's IANA zone, the default for routines the agent makes (M17-07);

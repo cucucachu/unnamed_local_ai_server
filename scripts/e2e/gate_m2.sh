@@ -53,7 +53,7 @@ source "$SCRIPT_DIR/lib/files.sh"
 THREAD_ID=""
 FILE_NAME="gate-m2.txt"
 EXPECTED_CONTENT="GATE-OK"
-# Empty until we successfully PUT hitl_enabled=false after the API is up.
+# Empty until ensure_hitl.sh has allowed every tool (the permissions to put back).
 SAVED_HITL=""
 
 
@@ -278,9 +278,9 @@ main() {
   create_thread
   # M8-03 made HITL on by default; this gate's write_file prompt is not
   # wired to send approval_response, so turn HITL off for the run.
-  log "Turning hitl_enabled off so write_file is not interrupted..."
+  log "Allowing every tool so write_file is not interrupted..."
   SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
-  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
+  log "OK: every tool allowed"
   step_chat_streams
   step_agent_writes_file
   step_persistence_across_restart

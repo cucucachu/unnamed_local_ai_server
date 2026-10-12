@@ -3,7 +3,7 @@
 
 Three routines due at the same minute, one to two minutes out (UTC):
 
-- A, once, read-only: runs with nobody connected; its thread is listed
+- A, once: runs with nobody connected; its thread is listed
   under the routine and in the chats list with the model's answer, unread
   and ahead of every chat that doesn't need the user (M17-10), until it's
   read.
@@ -70,13 +70,12 @@ def expect(status: int, body: Any, want: int, what: str) -> Any:
     return body
 
 
-def create(name: str, schedule: dict, **extra: Any) -> dict:
+def create(name: str, schedule: dict) -> dict:
     body = {
         "name": name,
         "prompt": f"Reply with exactly the text {MARKER} and nothing else.",
         "schedule": schedule,
         "timezone": "UTC",
-        **extra,
     }
     return expect(*api("POST", "/api/routines", body), 201, f"create {name}")
 
@@ -127,7 +126,7 @@ def scenario(made: list[str]) -> None:
     at, hhmm = due.strftime("%Y-%m-%dT%H:%M"), due.strftime("%H:%M")
     log(f"all three due at {at}Z")
 
-    a = create("e2e-g17 once", {"kind": "once", "at": at}, approval_mode="read_only")
+    a = create("e2e-g17 once", {"kind": "once", "at": at})
     b = create("e2e-g17 disabled", {"kind": "daily", "time": hhmm})
     c = create("e2e-g17 revoked", {"kind": "daily", "time": hhmm})
     made.extend(r["id"] for r in (a, b, c))

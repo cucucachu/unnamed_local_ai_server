@@ -18,6 +18,7 @@ export default function SettingsLayout() {
         <Stack.Screen name="account" />
         <Stack.Screen name="sessions" />
         <Stack.Screen name="remote" />
+        <Stack.Screen name="permissions" />
         <Stack.Screen name="spaces/index" />
         <Stack.Screen name="spaces/[spaceId]" />
         <Stack.Screen name="routines/index" />
@@ -26,6 +27,7 @@ export default function SettingsLayout() {
         <Stack.Protected guard={isAdmin}>
           <Stack.Screen name="users" />
           <Stack.Screen name="invites" />
+          <Stack.Screen name="agent-tools" />
         </Stack.Protected>
       </Stack>
     </StepUpProvider>

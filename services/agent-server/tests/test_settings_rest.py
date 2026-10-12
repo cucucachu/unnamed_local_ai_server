@@ -66,7 +66,6 @@ async def test_get_defaults_when_nothing_stored(settings_client: AsyncClient) ->
 
     assert response.status_code == 200
     assert response.json() == {
-        "hitl_enabled": True,
         "thinking_enabled": False,
         "edit_mode_default": "truncate",
         "timezone": None,
@@ -79,13 +78,12 @@ async def test_get_defaults_when_nothing_stored(settings_client: AsyncClient) ->
 
 
 async def test_put_partial_merges_and_persists(settings_client: AsyncClient) -> None:
-    response = await settings_client.put("/api/settings", json={"hitl_enabled": False})
+    response = await settings_client.put("/api/settings", json={"edit_mode_default": "fork"})
 
     assert response.status_code == 200
     assert response.json() == {
-        "hitl_enabled": False,
         "thinking_enabled": False,
-        "edit_mode_default": "truncate",
+        "edit_mode_default": "fork",
         "timezone": None,
     }
 
@@ -102,7 +100,6 @@ async def test_put_multiple_fields_at_once(settings_client: AsyncClient) -> None
 
     assert response.status_code == 200
     assert response.json() == {
-        "hitl_enabled": True,
         "thinking_enabled": True,
         "edit_mode_default": "fork",
         "timezone": None,
@@ -110,14 +107,13 @@ async def test_put_multiple_fields_at_once(settings_client: AsyncClient) -> None
 
 
 async def test_put_second_call_only_touches_its_own_fields(settings_client: AsyncClient) -> None:
-    await settings_client.put("/api/settings", json={"hitl_enabled": False})
+    await settings_client.put("/api/settings", json={"edit_mode_default": "fork"})
     response = await settings_client.put("/api/settings", json={"thinking_enabled": True})
 
     assert response.status_code == 200
     assert response.json() == {
-        "hitl_enabled": False,  # preserved from the first PUT
         "thinking_enabled": True,
-        "edit_mode_default": "truncate",
+        "edit_mode_default": "fork",  # preserved from the first PUT
         "timezone": None,
     }
 
@@ -127,7 +123,6 @@ async def test_put_empty_body_is_a_noop(settings_client: AsyncClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "hitl_enabled": True,
         "thinking_enabled": False,
         "edit_mode_default": "truncate",
         "timezone": None,
@@ -145,8 +140,16 @@ async def test_put_unknown_key_is_422(settings_client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
+async def test_put_hitl_enabled_from_an_older_app_is_ignored(settings_client: AsyncClient) -> None:
+    response = await settings_client.put("/api/settings", json={"hitl_enabled": False})
+
+    assert response.status_code == 200
+    assert "hitl_enabled" not in response.json()
+    assert "hitl_enabled" not in (await settings_client.get("/api/settings")).json()
+
+
 async def test_put_wrong_type_is_422(settings_client: AsyncClient) -> None:
-    response = await settings_client.put("/api/settings", json={"hitl_enabled": "yes"})
+    response = await settings_client.put("/api/settings", json={"thinking_enabled": "yes"})
 
     assert response.status_code == 422
 
@@ -166,12 +169,12 @@ async def test_put_invalid_request_does_not_persist_partial_state(
     really a confirmation of that, not custom code in `app/api/settings.py`.
     """
     response = await settings_client.put(
-        "/api/settings", json={"hitl_enabled": False, "nonexistent_key": True}
+        "/api/settings", json={"thinking_enabled": True, "nonexistent_key": True}
     )
     assert response.status_code == 422
 
     get_response = await settings_client.get("/api/settings")
-    assert get_response.json()["hitl_enabled"] is True  # untouched
+    assert get_response.json()["thinking_enabled"] is False  # untouched
 
 
 async def test_put_timezone(settings_client: AsyncClient) -> None:

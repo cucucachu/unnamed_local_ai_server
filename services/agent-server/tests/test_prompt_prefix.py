@@ -7,9 +7,10 @@ chats before the user's message forces a full prefill of the system prompt.
 
 import json
 
+from app.agent.approvals import ToolPolicy
 from tests.fake_model.scripting import FakeModel, TextTurn
 from tests.fake_platform.scripting import FakePlatform
-from tests.test_chat_ws import _drain_turn, _make_client, _no_hitl_settings_store
+from tests.test_chat_ws import _drain_turn, _make_client
 
 
 def _prefix(body: dict) -> str:
@@ -20,8 +21,8 @@ async def test_first_request_prefix_is_identical_across_chats(
     fake_model: FakeModel, fake_platform: FakePlatform
 ) -> None:
     fake_model.queue(TextTurn("one"), TextTurn("two"))
-    store = await _no_hitl_settings_store()
-    with _make_client(fake_model, fake_platform, settings_store=store) as client:
+    policy = ToolPolicy.allow_all()
+    with _make_client(fake_model, fake_platform, tool_policy=policy) as client:
         for thread, text in (("prefix-a", "make me a grocery app"), ("prefix-b", "what's 2+2?")):
             with client.websocket_connect(f"/ws/chat/{thread}") as ws:
                 ws.send_json({"type": "user_message", "content": text})

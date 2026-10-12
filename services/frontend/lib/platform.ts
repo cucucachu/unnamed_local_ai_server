@@ -280,6 +280,71 @@ export function adminRevokeInvite(id: string): Promise<void> {
   return send<void>('DELETE', `/api/platform/admin/invites/${encodeURIComponent(id)}`);
 }
 
+/** The agent's tools (#342): each is on or off, and asks first or runs
+ * unasked. A user's setting can't go past the admin's: `*_locked` says the
+ * admin decided, and the value shown is what applies. */
+export type ToolPermission = 'ask' | 'allow';
+
+export interface MyTool {
+  name: string;
+  label: string;
+  description: string;
+  group: string;
+  read_only: boolean;
+  enabled: boolean;
+  permission: ToolPermission;
+  enabled_locked: boolean;
+  permission_locked: boolean;
+}
+
+export interface AdminTool {
+  name: string;
+  label: string;
+  description: string;
+  group: string;
+  read_only: boolean;
+  enabled: boolean;
+  /** `ask`: everyone is asked first, whatever they set. */
+  ceiling: ToolPermission;
+}
+
+export async function listMyTools(): Promise<MyTool[]> {
+  return (await apiFetch<{ tools: MyTool[] }>('/api/platform/tools')).tools;
+}
+
+export async function changeMyTools(
+  changes: { name: string; enabled?: boolean; permission?: ToolPermission }[],
+): Promise<MyTool[]> {
+  return (await send<{ tools: MyTool[] }>('PATCH', '/api/platform/tools', { changes })).tools;
+}
+
+export async function adminListTools(): Promise<AdminTool[]> {
+  return (await apiFetch<{ tools: AdminTool[] }>('/api/platform/admin/tools')).tools;
+}
+
+export async function adminChangeTools(
+  changes: { name: string; enabled?: boolean; ceiling?: ToolPermission }[],
+): Promise<AdminTool[]> {
+  return (await send<{ tools: AdminTool[] }>('PATCH', '/api/platform/admin/tools', { changes })).tools;
+}
+
+/** Tools by group, in the order the server lists them. */
+export function toolGroups<T extends { group: string }>(tools: T[]): [string, T[]][] {
+  const byGroup = new Map<string, T[]>();
+  for (const tool of tools) {
+    const members = byGroup.get(tool.group) ?? [];
+    members.push(tool);
+    byGroup.set(tool.group, members);
+  }
+  return [...byGroup.entries()];
+}
+
+/** The tools in `names` the user could switch from asking to allowed. */
+export function alwaysAllowable(tools: MyTool[], names: string[]): MyTool[] {
+  const wanted = new Set(names);
+  return tools.filter((t) => wanted.has(t.name) && t.enabled && t.permission === 'ask' && !t.permission_locked);
+}
+
 export interface PlatformSettings {
   public_https: boolean;
   domain_configured: boolean;
@@ -369,6 +434,8 @@ const MESSAGES: Record<string, string> = {
   invalid_public_key: "This phone's pairing key isn't supported.",
   already_enrolled: 'This phone is already paired.',
   invalid_pairing_qr: "That pairing code isn't valid.",
+  locked_by_admin: 'An admin has set this for everyone.',
+  unknown_tool: 'That tool is no longer available. Reload and try again.',
 };
 
 /** Human-readable text for a failed platform call. */

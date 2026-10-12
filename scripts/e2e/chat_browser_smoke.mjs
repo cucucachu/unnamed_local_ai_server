@@ -29,13 +29,14 @@
 // in a `finally` block, so re-running this script (standalone or inside
 // `gate_full.sh`) doesn't accumulate cruft.
 //
-// M8-03: after the existing steps (which need HITL *off* so `execute_code`
-// in step 6 still runs without an approval card), this script toggles
-// `hitl_enabled` via `PUT /api/settings` and drives the three Playwright
-// scenarios from that ticket: Approve writes `/personal/hello.txt` (the
-// e2e user's personal space, checked through the platform files API),
-// Reject leaves the reject-target file absent, HITL-off writes with no
-// approval card. Original settings are restored in `finally`.
+// M8-03: after the existing steps (which need every tool allowed so
+// `execute_code` in step 6 still runs without an approval card), this script
+// switches the user's tool permissions (`/api/platform/tools`, #342) and
+// drives the three Playwright scenarios from that ticket: Approve writes
+// `/personal/hello.txt` (the e2e user's personal space, checked through the
+// platform files API), Reject leaves the reject-target file absent, allowed
+// tools write with no approval card. Original settings are restored in
+// `finally`.
 //
 // M8-04: a fresh three-turn thread, edit turn 2, reload, assert only
 // turns 1 + edited 2 remain (`GET /api/threads/{id}/messages` agrees),
@@ -53,8 +54,8 @@
 //
 // M9-03: prompt the model to create a file and mention where it saved it;
 // the answer must contain a `file:` link, and clicking it opens the Files
-// tab at that path with the entry highlighted. HITL is on (default), so
-// the write is Approved like the M8-03 scenarios.
+// tab at that path with the entry highlighted. Writes ask first (the
+// default), so the write is Approved like the M8-03 scenarios.
 //
 // M9-06: a fake `SpeechRecognition` is injected via `addInitScript`. Over
 // `https://homeai.local` the composer mic is visible and a transcript
@@ -379,6 +380,41 @@ with urlopen(req, timeout=15) as resp:
   return JSON.parse(raw);
 }
 
+/** #342: the page's user's tool permissions. `setApprovals(true)` makes every
+ * tool that isn't read-only ask first; `false` lets every tool run unasked;
+ * a saved map (`{name: permission}`, what this returns) puts those back.
+ * Returns the permissions from before the change. */
+function setApprovals(want) {
+  const script = `${pythonSslPreamble()}
+import json, sys
+
+url, want = sys.argv[1], json.loads(sys.argv[2])
+
+def call(method, body=None):
+    req = urllib.request.Request(url, method=method)
+    if body is not None:
+        req.data = json.dumps(body).encode()
+        req.add_header('Content-Type', 'application/json')
+    with urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode())
+
+tools = [t for t in call('GET')['tools'] if t['enabled'] and not t['permission_locked']]
+before = {t['name']: t['permission'] for t in tools}
+if isinstance(want, dict):
+    target = {n: p for n, p in want.items() if n in before}
+else:
+    target = {t['name']: ('allow' if (t['read_only'] or not want) else 'ask') for t in tools}
+changes = [{'name': n, 'permission': p} for n, p in target.items() if before[n] != p]
+if changes:
+    call('PATCH', {'changes': changes})
+sys.stdout.write(json.dumps(before))
+`;
+  const raw = execFileSync('python3', ['-c', script, `${API_BASE}/platform/tools`, JSON.stringify(want)], {
+    encoding: 'utf8',
+  });
+  return JSON.parse(raw);
+}
+
 /** HTTP status of the platform files API as the page's user (M11-02: the
  * agent's file tools write there): `GET` stats `/personal/<name>`, `PUT`
  * writes `content` to it, `DELETE` removes it. The throwaway user's
@@ -572,6 +608,7 @@ async function main() {
   let editThreadId;
   let forkThreadId;
   let savedSettings = null;
+  let savedTools = null;
   const launchOptions = { headless: true };
   const contextOptions = {};
   // Step 18 always opens https://homeai.local even when this smoke's own
@@ -609,11 +646,11 @@ async function main() {
     await loginThroughUi(page, e2eUser);
     process.env.E2E_AUTH_COOKIE = await sessionCookie(context);
 
-    // Existing steps include `execute_code` (step 6), which HITL-on would
-    // pause behind an approval card. Force HITL off for those, then
-    // toggle it for the M8-03 scenarios below. Restore in `finally`.
+    // Existing steps include `execute_code` (step 6), which asks first by
+    // default. Allow every tool for those, then switch writes back to
+    // asking for the M8-03 scenarios below. Restore in `finally`.
     savedSettings = settingsRequest('GET');
-    settingsRequest('PUT', { hitl_enabled: false });
+    savedTools = setApprovals(false);
 
     // Explicit navigation to the Chat page (even though `/` lands there
     // today, so this script keeps working if that default ever changes).
@@ -790,7 +827,7 @@ async function main() {
     console.log(`Step 8 OK — follow-up after Stop completed normally: ${stopFollowUpReply}`);
 
     // --- Step 9: HITL approve (M8-03) -----------------------------------
-    settingsRequest('PUT', { hitl_enabled: true });
+    setApprovals(true);
 
     const approvePriorTools = await toolCardLocator.count();
     await sendAndAwaitApprovalCard(page, HITL_APPROVE_MESSAGE);
@@ -851,7 +888,7 @@ async function main() {
     await page.getByRole('button', { name: 'Send message' }).waitFor({ state: 'visible', timeout: TIMEOUT_MS });
 
     // --- Step 11: HITL off — no approval card (M8-03) -------------------
-    settingsRequest('PUT', { hitl_enabled: false });
+    setApprovals(false);
     const offPriorTools = await toolCardLocator.count();
     await input.fill(HITL_OFF_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -1063,8 +1100,8 @@ async function main() {
 
     // --- Step 15: reasoning stream + thinking toggle (M8-07) ------------
     // Stay on the edit thread (same composer-already-idle reason as step 13).
-    // HITL stays off. thinking_enabled defaults false; flip it for this step.
-    settingsRequest('PUT', { thinking_enabled: true, hitl_enabled: false });
+    // Tools stay allowed. thinking_enabled defaults false; flip it for this step.
+    settingsRequest('PUT', { thinking_enabled: true });
     const thinkingPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     await input.fill(THINKING_ON_MESSAGE);
     await page.getByRole('button', { name: 'Send message' }).click();
@@ -1119,7 +1156,7 @@ async function main() {
       throw new Error('Step 15: thinking-on turn did not produce a finished assistant answer');
     }
 
-    settingsRequest('PUT', { thinking_enabled: false, hitl_enabled: false });
+    settingsRequest('PUT', { thinking_enabled: false });
     const offPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     const offPriorReasoning = await page.locator('[data-testid="turn-activity-reasoning"]').count();
     const offReply = await sendMessageAndAwaitReply(page, THINKING_OFF_MESSAGE, offPriorAssistants);
@@ -1265,9 +1302,11 @@ async function main() {
     console.log('Step 16 OK — reload kept ‹ 1/2 › and the original continuation');
 
     // --- Step 17: file: link opens Files tab at that path (M9-03) -------
-    // HITL defaults on and is restored in finally; force it on here so the
-    // write shows an approval card (same Approve pattern as step 9).
-    settingsRequest('PUT', { hitl_enabled: true, thinking_enabled: false });
+    // Writes ask by default and permissions are restored in finally; set them
+    // to ask here so the write shows an approval card (same Approve pattern
+    // as step 9).
+    setApprovals(true);
+    settingsRequest('PUT', { thinking_enabled: false });
 
     const fileLinkPriorAssistants = await page.locator('[data-testid="chat-item-assistant"]').count();
     await sendAndAwaitApprovalCard(page, FILE_LINK_MESSAGE);
@@ -1354,10 +1393,16 @@ async function main() {
     if (savedSettings !== null) {
       try {
         settingsRequest('PUT', {
-          hitl_enabled: savedSettings.hitl_enabled,
           thinking_enabled: savedSettings.thinking_enabled,
           edit_mode_default: savedSettings.edit_mode_default,
         });
+      } catch {
+        // best-effort restore
+      }
+    }
+    if (savedTools !== null) {
+      try {
+        setApprovals(savedTools);
       } catch {
         // best-effort restore
       }

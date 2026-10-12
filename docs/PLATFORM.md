@@ -70,7 +70,7 @@ explicitly revisits it (and updates this list).
 | D9 | **Option B stays open**: app code may only use React Native primitives, an allowlist of Expo-API-compatible modules, and `@homeai/sdk` — never DOM/web APIs — so the same code can later run natively for trusted apps. New capabilities are added by growing the SDK/shim allowlist. |
 | D10 | **App data**: **SQLite, one file per app instance**, in the space's directory. Core data (users, spaces, registry, chat threads/checkpoints) stays in Postgres. No MongoDB. |
 | D11 | **Plain SQL everywhere**: app code uses an expo-sqlite-shaped async API; schema is a plain `schema.sql` of `CREATE TABLE` statements; migrations are *computed* by diffing — the platform's own stdlib differ (M12-01 rejected `sqlite3def`: it silently skips type/constraint changes) — and classified additive / safe (auto) vs destructive (approval + snapshot). |
-| D12 | **The platform is the only writer** of app databases (UI via SDK RPC, agent via `app_sql`/actions). Exec containers get read-only access to app data. |
+| D12 | **The platform is the only writer** of app databases (UI via SDK RPC, agent via `app_update`/actions). Exec containers get read-only access to app data. |
 | D13 | **Cross-app data, phase 1**: the agent is the integration layer (reads across all apps/spaces the user can see). **Phase 2**: apps declare `exports`; other apps declare `reads`; granted at install; read-only via SQLite `ATTACH`; writes via the owning app's exported actions; exports are versioned contracts. |
 | D14 | **App source is a git repo per app, run by the platform** (the agent never needs the git CLI). One commit per successful build. History + revert in the UI. *Amended (M13-01, security):* the repo is a bare one in platform-owned storage, never a `.git` in the source folder; it records the staged copy each build makes (§7 "Source history"). |
 | D15 | **Live editing**: the author's own install tracks the working copy (hot reload; additive migrations auto; destructive need approval + snapshot). Installs in other spaces pin **published versions**; updates are approved; permission changes re-prompt. Forking = copy into your space. |
@@ -244,7 +244,7 @@ session cookie/bearer and returns `200` with `X-HomeAI-Identity: <JWT>`, or
   auth/session-management endpoints, regardless of `role`.
 - The token lives in the LangGraph run config (`configurable["delegation"]`)
   — never in the prompt, messages, or tool arguments. It's held there as an
-  object rather than a bare string like `hitl_enabled`, because LangGraph
+  object rather than a bare string like `thinking_enabled`, because LangGraph
   copies primitive `configurable` values into the checkpoint metadata it
   stores; the token must not be persisted.
 - A chat socket exchanges its identity token once, at connect (the
@@ -324,7 +324,7 @@ so far:
 
 | kind | when |
 |------|------|
-| `app_data.write` | an app RPC `run` / `transaction` / `action` / `exportAction` (UI or agent `app_sql` / `app_action`) that changed rows; `detail` has the SQL or action name, its params, and the change count |
+| `app_data.write` | an app RPC `run` / `transaction` / `action` / `exportAction` (UI or agent `app_update` / `app_action`) that changed rows; `detail` has the SQL or action name, its params, and the change count |
 | `app_data.migration` | a migration applied, failed, held for approval, approved, rejected or superseded |
 | `app.installed`, `app.uninstalled` | an app installed into or uninstalled from a space |
 | `space.member_added`, `space.member_role_changed`, `space.member_removed` | membership changes |
@@ -902,7 +902,7 @@ The sandbox config (`window.__homeai_config`, in the document) is
   them as an additive ADD COLUMN on their next build or migrate, with NULL
   for older rows, and `schema.sql` may index them); `schema.sql` may not
   declare them. Before each write op the platform puts the verified user
-  (the person, also for their agent's `app_sql` / `app_action`) in a TEMP
+  (the person, also for their agent's `app_query` / `app_update` / `app_action`) in a TEMP
   table and adds TEMP triggers that set `_created_*` + `_updated_*` after an
   INSERT and `_updated_*` after an UPDATE; a value the INSERT supplied is
   overwritten. The RPC authorizer refuses any UPDATE of the columns, and
@@ -1166,9 +1166,9 @@ filters, `include`). So there is no `.git` in the source folder:
 ### Agent tools for apps (M13)
 
 `list_apps`, `create_app` (from a template), `build_app` (verify + migrate +
-build + commit + hot reload; returns diagnostics), `app_sql` (run SQL against
-an instance the user can access; destructive writes in shared spaces → HITL),
-`app_action`. Editing source uses the normal file tools. The agent reads an
+build + commit + hot reload; returns diagnostics), `app_query` / `app_update`
+(read / write SQL against an instance the user can access; #342 split
+M13's `app_sql`), `app_action`. Editing source uses the normal file tools. The agent reads an
 app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 
 > **As built (M12-07)** — the first template is the hand-written reference
@@ -1203,10 +1203,12 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >   (step, file:line:column, message, source excerpt) or success plus each
 >   instance's migration. A pending destructive migration is reported with
 >   its steps and the `approve_migration` call to make; it is not applied.
-> - `app_sql(instance, sql, params)`: one statement. It's tried as
->   `getAll` first; if the platform says `sql_not_allowed` it's a write and
->   goes through `run`. DDL is refused (schema changes go through
->   `schema.sql` + `build_app`).
+> - `app_query(instance, sql, params)` / `app_update(instance, sql, params)`
+>   (#342; M13 had one `app_sql` that tried `getAll` and fell back to
+>   `run`): one statement each. `app_query` runs `getAll` and, if the
+>   platform says `sql_not_allowed`, tells the model to use `app_update`;
+>   `app_update` refuses a `SELECT` and runs `run`. DDL is refused (schema
+>   changes go through `schema.sql` + `build_app`).
 > - `app_action(instance, name, params)`: `op: action` on a user-app instance;
 >   for system app `files`, `POST /system-apps/files/actions/{name}`.
 > - `approve_migration(instance, migration_id)` (not in the original list:
@@ -1219,13 +1221,16 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > interrupt carries the middleware's `HITLRequest` shape plus the call's
 > `tool_call_id`, so the chat UI shows it as an ordinary approval card
 > (category `app`); parallel calls that each interrupt are merged into one
-> card and resumed together. What asks:
+> card and resumed together. What asks (since #342, the user's tool
+> permissions, §4 "Agent tool permissions", whatever the space; M13 asked
+> by space and HITL setting):
 >
-> - `approve_migration`: always, even with HITL off. The card lists the
->   steps (SQL), the app and the space.
-> - `app_sql` writes and `app_action` calls in a shared space, when HITL is
->   on. The card shows the SQL (or the action's `actions/<name>.sql`),
->   params and the space. Personal-space writes and all reads don't ask.
+> - `approve_migration`, unless allowed. The card lists the steps (SQL),
+>   the app and the space. An allowed migration is applied with a marker
+>   all the same.
+> - `app_update` and `app_action`, unless allowed. The card shows the SQL
+>   (or the action's `actions/<name>.sql`), params and the space.
+>   `app_query` is read-only and allowed by default.
 >
 > A rejected write or action isn't run. A rejected migration stays
 > `pending` (the user can still decide in the Apps screen).
@@ -1251,10 +1256,9 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > service token, and can't get agent-server to mint one without the
 > human's decision.
 >
-> Deviations: `create_app` and `build_app` never ask (the source is the
-> user's own files; a build applies only non-destructive changes).
-> `app_sql` runs a single statement; use an action for a multi-statement
-> write.
+> Deviations: `create_app` and `build_app` never asked in M13; since #342
+> they follow the user's permissions like every tool. `app_update` runs a
+> single statement; use an action for a multi-statement write.
 
 > **As built (M13-03)** — templates in `examples/apps/` (baked into
 > agent-server at `/app/templates` the same way as M13-02): `grocery-list`
@@ -1273,7 +1277,7 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > `GET /files/stream`). The first `user_message` is those files plus the
 > prompt; the bubble shows only the prompt. `@homeai/sdk` `askAgent(prompt)`
 > is bridge method `agent.ask`, handled in `createBridgeHost` (`onAskAgent`)
-> and never sent through `platformForward`. Agent `app_sql` / `app_action`
+> and never sent through `platformForward`. Agent `app_update` / `app_action`
 > / file writes still surface as this instance's existing `db_changed` on
 > `/ws/platform/events`, which the runner already relays. Tests: SDK jest
 > (jsdom) + Playwright (stub platform, fake model) and frontend jest;
@@ -1285,11 +1289,11 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > `app_history_smoke.sh`, agent-server `test_app_tools.py`,
 > `app_runner_browser_smoke.sh`, then the real-model scenario
 > `g13_grocery_smoke.sh`. That scenario signs in as a throwaway
-> `e2e-g13-*` user (HITL off, never completes bootstrap) and: creates a
+> `e2e-g13-*` user (every tool allowed, never completes bootstrap) and: creates a
 > grocery list app from chat (`create_app` + `build_app`); iterates once
 > ("add quantities") and builds again; opens it from the Apps tab; a row
-> added in the runner is in the instance database and `app_sql` sees it;
-> an `app_action` / `app_sql` write appears in the still-open runner
+> added in the runner is in the instance database and `app_query` sees it;
+> an `app_action` / `app_update` write appears in the still-open runner
 > (`db_changed`); `POST /apps/{id}/revert` restores the first build's
 > commit and rebuilds. Report: `scripts/e2e/g13-last-report.json`
 > (gitignored) with failure taxonomy if the model misses a step. Also in
@@ -1567,7 +1571,7 @@ Each is enforced below the agent and covered by an automated check
 1. No authenticated route is reachable without a valid session; forged or
    client-supplied `X-HomeAI-Identity` headers are rejected/stripped.
 2. User B cannot read, list, or write user A's personal space — via the UI
-   API, the agent's file tools, `execute_code`, app RPC, or `app_sql`.
+   API, the agent's file tools, `execute_code`, app RPC, or `app_query` / `app_update`.
 3. A viewer cannot write to a space by any of the same paths.
 4. An agent run can never perform admin or auth-management actions, even for
    an admin user.

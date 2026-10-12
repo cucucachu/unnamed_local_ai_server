@@ -16,10 +16,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.agent.approvals import DEFAULT_POLICY, StaticToolPolicies, ToolPolicy
 from app.core.delegation import HttpDelegationClient
-from app.db.settings import InMemorySettingsStore
 from app.main import create_app
-from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore, FixedIdentityVerifier
+from tests.fake_identity import AutoCreateThreadStore, FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.fake_platform.scripting import AGENT_TOKEN, TEST_SESSION_ID, FakePlatform
 from tests.test_chat_ws import _assert_turn_end, _drain_turn
@@ -27,16 +27,10 @@ from tests.test_chat_ws import _assert_turn_end, _drain_turn
 IDENTITY = {"X-HomeAI-Identity": "identity-jwt-alice"}
 
 
-async def _settings_store(hitl: bool) -> InMemorySettingsStore:
-    store = InMemorySettingsStore()
-    await store.update_document(TEST_USER_ID, {"hitl_enabled": hitl})
-    return store
-
-
 def _client(
     fake_model: FakeModel,
     fake_platform: FakePlatform,
-    settings_store: InMemorySettingsStore,
+    tool_policy: ToolPolicy,
     *,
     saver: MemorySaver | None = None,
     over_http: bool = False,
@@ -48,7 +42,7 @@ def _client(
         settings,
         checkpointer_override=saver or MemorySaver(),
         thread_store_override=AutoCreateThreadStore(),
-        settings_store_override=settings_store,
+        tool_policies_override=StaticToolPolicies(tool_policy),
         identity_verifier_override=FixedIdentityVerifier(),
         # `over_http`: the production client against the fake's endpoints.
         delegation_client_override=None if over_http else fake_platform.client(),
@@ -73,7 +67,7 @@ async def test_exchange_at_connect_refresh_every_turn(
     fake_model.queue(TextTurn("two"))
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/dlg-thread", headers=IDENTITY) as ws,
     ):
         assert fake_platform.exchanges == [("identity-jwt-alice", "dlg-thread")]
@@ -97,7 +91,7 @@ async def test_production_client_against_the_platform_endpoints(
 ) -> None:
     fake_model.queue(_write("/personal/a.md"), TextTurn("done"))
 
-    with _client(fake_model, fake_platform, await _settings_store(False), over_http=True) as client:
+    with _client(fake_model, fake_platform, ToolPolicy.allow_all(), over_http=True) as client:
         assert isinstance(client.app.state.delegation_client, HttpDelegationClient)
         with client.websocket_connect("/ws/chat/http-thread", headers=IDENTITY) as ws:
             ws.send_json({"type": "user_message", "content": "write"})
@@ -114,7 +108,7 @@ async def test_resume_refreshes_before_running_the_approved_tool(
     fake_model.queue(_write("/personal/x.txt"))
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/resume-thread", headers=IDENTITY) as ws,
     ):
         ws.send_json({"type": "user_message", "content": "write"})
@@ -149,7 +143,7 @@ async def test_hitl_description_normalizes_a_relative_path(
     fake_model.queue(_write("personal/notes.md"))
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/rel-thread", headers=IDENTITY) as ws,
     ):
         ws.send_json({"type": "user_message", "content": "write"})
@@ -165,7 +159,7 @@ async def test_revoked_session_is_refused_at_connect(
     fake_platform.revoked_sessions.add(TEST_SESSION_ID)
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/revoked-thread", headers=IDENTITY) as ws,
     ):
         assert _close_code(ws) == 4401
@@ -179,7 +173,7 @@ async def test_session_revoked_mid_socket_stops_the_next_turn(
     fake_model.queue(TextTurn("first"))
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/revoke-thread", headers=IDENTITY) as ws,
     ):
         ws.send_json({"type": "user_message", "content": "hi"})
@@ -198,7 +192,7 @@ async def test_session_revoked_while_awaiting_approval_blocks_the_resume(
     fake_model.queue(_write("/personal/x.txt"))
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/revoke-resume", headers=IDENTITY) as ws,
     ):
         ws.send_json({"type": "user_message", "content": "write"})
@@ -229,7 +223,7 @@ async def test_platform_unavailable_at_connect_closes_1011(
     fake_platform.unavailable = True
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/down-thread", headers=IDENTITY) as ws,
     ):
         assert _close_code(ws) == 1011
@@ -241,7 +235,7 @@ async def test_platform_blip_at_turn_start_uses_the_current_delegation(
     fake_model.queue(_write("/personal/a.md"), TextTurn("done"))
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/blip-thread", headers=IDENTITY) as ws,
     ):
         fake_platform.unavailable = True
@@ -259,7 +253,7 @@ async def test_delegation_never_reaches_the_model_or_the_checkpointer(
     saver = MemorySaver()
 
     with (
-        _client(fake_model, fake_platform, await _settings_store(False), saver=saver) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all(), saver=saver) as client,
         client.websocket_connect("/ws/chat/leak-thread", headers=IDENTITY) as ws,
     ):
         ws.send_json({"type": "user_message", "content": "write"})

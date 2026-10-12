@@ -29,12 +29,12 @@ script first" instruction) before writing this code:
   whose `.config` is populated from `langgraph.config.get_config()` — the
   REAL `RunnableConfig` for the in-flight run (not a stripped-down copy).
   `req.runtime.config["configurable"]` — including any extra key a caller
-  put there, e.g. `configurable={"thread_id": ..., "hitl_enabled": True}` —
+  put there, e.g. `configurable={"thread_id": ..., "tool_policy": ...}` —
   is visible inside `when(req)` at call time. Confirmed with a live
   `agent.astream_events(..., config={"configurable": {"thread_id": ...,
-  "hitl_enabled": True}})` call against the fake-model harness: the `when`
-  predicate observed `hitl_enabled=True` in `req.runtime.config
-  ["configurable"]` and correctly triggered a pending `Interrupt` (verified
+  "tool_policy": ...}})` call against the fake-model harness: the `when`
+  predicate observed the policy in `req.runtime.config["configurable"]`
+  and correctly triggered a pending `Interrupt` (verified
   via `agent.aget_state(config).tasks[*].interrupts`).
 - `Command(resume={"decisions": [{"type": "approve"}]})` /
   `Command(resume={"decisions": [{"type": "reject", "message": "..."}]})`
@@ -46,25 +46,20 @@ script first" instruction) before writing this code:
   (`"User rejected the tool call for `write_file` with reason: <message>"`)
   in place of a real tool result.
 
-So a single compiled graph, with one `interrupt_on` entry per mutating tool
-whose `when` reads `configurable["hitl_enabled"]`, is sufficient — this is
-exactly the ticket's primary (non-fallback) design, and `chat_ws.py` sets
-`configurable.hitl_enabled` per turn from `SettingsStore` (see that module's
-docstring for the resume-as-a-new-turn machinery).
+So a single compiled graph, with one `interrupt_on` entry per tool whose
+`when` reads the turn's tool policy from `configurable` (#342,
+`app.agent.approvals`), is sufficient. `_describe` builds the
+human-readable `description` surfaced in the `approval_request` frame's
+`actions[].description` (`app/api/chat_ws.py`'s
+`_pending_approval_from_state` reads it straight off the interrupt).
 
-`_hitl_enabled` intentionally ignores which of the four tools is asking (all
-four share the exact same on/off flag — no ticket requirement for per-tool
-granularity, which is explicitly out of scope per the issue body) — it only
-reads `req.runtime.config`. `_describe_write_file`/`_describe_edit_file`/
-`_describe_delete`/`_describe_execute_code` build the human-readable
-`description` string surfaced in the `approval_request` frame's `actions[].
-description` (`app/api/chat_ws.py`'s `_pending_approval_from_state` reads it
-straight off the interrupt's own `ActionRequest.description` — no
-recomputation needed there).
+The app and routine tools (`approvals.SELF_ASKING_TOOLS`) are not in
+`interrupt_on`; they raise their own approvals from inside the tool, since
+their cards need facts from the platform first (see `app_tools.py`).
 
-M13-02: the app tools (`app/agent/app_tools.py`) are not in `interrupt_on`;
-they raise their own approvals from inside the tool, since whether one is
-needed depends on what the platform says about the call (see that module).
+The general-purpose subagent behind `task` is passed explicitly so it gets
+`ToolPolicyMiddleware` too: deepagents' default one doesn't inherit the
+main agent's middleware, which would let a turned-off tool run there.
 """
 
 from __future__ import annotations
@@ -74,6 +69,7 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.utils import validate_path
+from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolCall
@@ -88,33 +84,21 @@ from app.agent.prompts import APP_AUTHORING_GUIDE, ROUTINES_GUIDE, SYSTEM_PROMPT
 from app.agent.routine_tools import make_routine_tools
 from app.agent.symbol_tools import make_symbol_tools
 from app.agent.syntax_check import SyntaxCheckMiddleware
+from app.agent.tool_catalog import CATALOG
 from app.agent.tool_errors import CompactToolErrorsMiddleware
 from app.agent.tool_notes import ToolNotesMiddleware
 from app.agent.web_tools import make_web_fetch_tool, make_web_search_tool
 from app.core.config import Settings
 
-# Kept in sync with `app/api/chat_ws.py`'s `_TOOL_CATEGORY_BY_NAME` mapping —
-# the tools that need approval (category `"file"` for the filesystem ones,
-# `"exec"` for `execute_code`).
-MUTATING_TOOL_NAMES: tuple[str, ...] = (
-    "write_file",
-    "edit_file",
-    "replace_symbol",
-    "delete",
-    "execute_code",
-)
 
-
-def _hitl_enabled(request: ToolCallRequest) -> bool:
-    """`InterruptOnConfig.when` predicate shared by all the mutating tools.
-
-    In a chat, the per-turn flag `chat_ws.py` sets in `config["configurable"]
-    ["hitl_enabled"]`; in a routine run, its approval mode (M17-05,
-    `app.agent.approvals`). HITL-on when neither is set (e.g. a stray direct
-    `.ainvoke()` from a test/script) — the safer failure mode for a
-    middleware that guards file writes and code execution.
-    """
-    return approvals.needs_approval(request.runtime.config, request.tool_call["name"])
+def _asks(request: ToolCallRequest) -> bool:
+    """`InterruptOnConfig.when`: the policy says ask, and the tool is available
+    (an unavailable one is refused by `ToolPolicyMiddleware` without a card)."""
+    config = request.runtime.config
+    call = request.tool_call
+    return call["name"] in approvals.available_now(config) and approvals.needs_approval(
+        config, call["name"], call.get("id")
+    )
 
 
 def _virtual_path(path: Any) -> str:
@@ -146,13 +130,26 @@ def _describe(tool_call: ToolCall, _state: Any, _runtime: Any) -> str:
         return f"Delete `{_virtual_path(args.get('file_path', args.get('path')))}`"
     if name == "execute_code":
         return f"Run command: `{args.get('command', '?')}`"
-    return f"Run tool `{name}`"
+    if name in ("ls", "read_file", "outline"):
+        return f"{_LABELS[name]} `{_virtual_path(args.get('path', args.get('file_path')))}`"
+    if name in ("glob", "grep"):
+        return f"{_LABELS[name]}: `{args.get('pattern', '?')}`"
+    if name == "web_search":
+        return f"Search the web: {args.get('query', '?')}"
+    if name == "web_fetch":
+        return f"Read web page {args.get('url', '?')}"
+    if name == "task":
+        return f"Hand a job to a helper: {str(args.get('description', '?'))[:300]}"
+    return _LABELS.get(name, f"Run tool `{name}`")
+
+
+_LABELS = {t.name: t.label for t in CATALOG}
 
 
 def _interrupt_on_config() -> InterruptOnConfig:
     return InterruptOnConfig(
         allowed_decisions=["approve", "reject"],
-        when=_hitl_enabled,
+        when=_asks,
         description=_describe,
     )
 
@@ -177,15 +174,18 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
     routine_tools = make_routine_tools(app_state) if app_state is not None else []
     prompt = SYSTEM_PROMPT + APP_AUTHORING_GUIDE + (ROUTINES_GUIDE if routine_tools else "")
     backend = build_backend(settings)
+    model = build_model(settings)
+    middleware = [
+        approvals.ToolPolicyMiddleware(),
+        CompactToolErrorsMiddleware(),
+        SyntaxCheckMiddleware(backend),
+        ToolNotesMiddleware(),
+    ]
     return create_deep_agent(
-        model=build_model(settings),
+        model=model,
         backend=backend,
-        middleware=[
-            CompactToolErrorsMiddleware(),
-            approvals.ReadOnlyRunMiddleware(),
-            SyntaxCheckMiddleware(backend),
-            ToolNotesMiddleware(),
-        ],
+        middleware=middleware,
+        subagents=[{**GENERAL_PURPOSE_SUBAGENT, "model": model, "middleware": middleware}],
         system_prompt=prompt,
         tools=[
             make_execute_code_tool(settings),
@@ -196,5 +196,5 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
             *routine_tools,
         ],
         checkpointer=checkpointer,
-        interrupt_on={name: _interrupt_on_config() for name in MUTATING_TOOL_NAMES},
+        interrupt_on={name: _interrupt_on_config() for name in approvals.HITL_TOOL_NAMES},
     )

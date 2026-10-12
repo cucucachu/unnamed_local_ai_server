@@ -44,6 +44,7 @@ API_BASE = "http://localhost/api"
 WS_BASE = "ws://localhost/ws/chat"
 WS_TURN_TIMEOUT_S = 90
 AUTH = {"Cookie": os.environ.get("E2E_AUTH_COOKIE", "")}
+TOOLS_URL = f"{API_BASE}/platform/tools"
 
 
 def _stack_reachable() -> bool:
@@ -81,6 +82,11 @@ async def _run_ws_turn(thread_id: str, prompt: str) -> list[dict]:
     return frames
 
 
+async def _set_permission(client: httpx.AsyncClient, permission: str) -> None:
+    change = {"name": "execute_code", "permission": permission}
+    (await client.patch(TOOLS_URL, json={"changes": [change]})).raise_for_status()
+
+
 def _execute_code_tool_end_with_42(frames: list[dict]) -> dict | None:
     for frame in frames:
         if (
@@ -97,19 +103,17 @@ async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
     prompt = "Use execute_code to run: python3 -c 'print(21*2)' and tell me the output."
 
     # This test is about `execute_code` reaching the real exec-manager, not
-    # M8-03's approval flow. HITL defaults on, so a mutating tool would
-    # pause on `approval_request` instead of producing `tool_end`. Disable
-    # for the duration and restore whatever was there.
-    saved_settings = None
+    # the approval flow: allow it in the user's tool settings (#342) for the
+    # duration and restore whatever was there.
+    saved_permission = None
     try:
         async with httpx.AsyncClient(headers=AUTH) as client:
             created = await client.post(f"{API_BASE}/threads", json={})
             created.raise_for_status()
             thread_id = created.json()["id"]
-            saved = await client.get(f"{API_BASE}/settings")
-            if saved.status_code == 200:
-                saved_settings = saved.json()
-                await client.put(f"{API_BASE}/settings", json={"hitl_enabled": False})
+            tools = (await client.get(TOOLS_URL)).raise_for_status().json()["tools"]
+            saved_permission = next(t for t in tools if t["name"] == "execute_code")["permission"]
+            await _set_permission(client, "allow")
 
         frames = await _run_ws_turn(thread_id, prompt)
         match = _execute_code_tool_end_with_42(frames)
@@ -132,14 +136,7 @@ async def test_execute_code_real_stack_runs_python_and_reports_output() -> None:
             async with httpx.AsyncClient(headers=AUTH) as client:
                 if thread_id is not None:
                     await client.delete(f"{API_BASE}/threads/{thread_id}")
-                if saved_settings is not None:
-                    await client.put(
-                        f"{API_BASE}/settings",
-                        json={
-                            "hitl_enabled": saved_settings.get("hitl_enabled", True),
-                            "thinking_enabled": saved_settings.get("thinking_enabled", False),
-                            "edit_mode_default": saved_settings.get("edit_mode_default", "truncate"),
-                        },
-                    )
+                if saved_permission is not None:
+                    await _set_permission(client, saved_permission)
         except httpx.HTTPError:
             pass

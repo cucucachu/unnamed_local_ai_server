@@ -13,7 +13,7 @@
 #      shown after a page reload;
 #   2b. Ask the agent opens a panel seeded with app.json, AGENT.md, schema.sql,
 #      instance id and space; a write to the instance (as if the agent ran
-#      app_sql) shows up live via db_changed while the panel is open;
+#      app_update) shows up live via db_changed while the panel is open;
 #   3. a rebuild hot-reloads the running app (same frame, same route) to v2;
 #   4. a runtime error in the app (v2's Crash button) raises the host's
 #      error overlay, whose Reload brings the app back;

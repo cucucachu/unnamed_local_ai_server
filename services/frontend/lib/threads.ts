@@ -39,7 +39,7 @@ export interface ThreadMessage {
   turn?: { status: 'completed' | 'cancelled' | 'awaiting_approval'; duration_ms: number } | null;
 }
 
-/** M8-03: one pending mutating tool call awaiting a human decision — same
+/** M8-03: one pending tool call awaiting a human decision — same
  * shape as `lib/chatSocket.ts`'s `PendingApprovalAction` (the `approval_request`
  * frame's own `actions[]` entries), duplicated here rather than imported so
  * this module (a plain REST client) doesn't need to depend on the WS
@@ -55,7 +55,6 @@ export interface PendingApprovalAction {
 export interface PendingApproval {
   interrupt_id: string;
   actions: PendingApprovalAction[];
-  can_allow_writes?: boolean;
 }
 
 export interface ThreadState {

@@ -6,13 +6,13 @@
 than an identity token: the platform checks the space and issues the
 routine's grant for the user behind it.
 
-Creating, changing (other than just turning a routine off) and deleting a
-routine always ask the user first, whatever the HITL setting, with the
-schedule in words and the prompt on the card (the same tool-raised
-`interrupt` as `app_tools`, so everything before it is a read). A routine
-run can't use any of them but `current_time`: an unattended run making
-more unattended runs would outlive whatever the user approved it for (the
-platform refuses a routine run's delegation too).
+Creating, changing and deleting a routine ask the user first unless their
+tool policy allows it (#342, `app.agent.approvals`), with the schedule in
+words and the prompt on the card (the same tool-raised `interrupt` as
+`app_tools`, so everything before it is a read). A routine run can't use
+any of them but `current_time`: an unattended run making more unattended
+runs would outlive whatever the user approved it for (the platform refuses
+a routine run's delegation too).
 
 Times are local to the routine's timezone; the default is the user's
 (`SettingsDocument.timezone`, kept in step with their device by the app),
@@ -33,7 +33,7 @@ from pydantic import ValidationError
 from app.agent import approvals
 from app.agent.app_tools import _ask_user, _delegation_token
 from app.core.delegation import Caller
-from app.db.routines import ApprovalMode, RoutineRecord
+from app.db.routines import RoutineRecord
 from app.routines import schedule as sched
 from app.routines import service
 
@@ -46,12 +46,6 @@ ROUTINE_TOOL_NAMES: tuple[str, ...] = (
 )
 
 Repeat = Literal["once", "daily", "weekdays", "weekly", "monthly"]
-
-APPROVAL_MODE_WORDS: dict[str, str] = {
-    "ask": "asks before changing anything",
-    "allow_writes": "may change files without asking (still asks before deleting)",
-    "read_only": "read-only: can't change anything",
-}
 
 _NO_DELEGATION = "Error: routines are unavailable for this run (no delegation)."
 _IN_ROUTINE = (
@@ -128,8 +122,7 @@ def _summary(record: RoutineRecord) -> str:
     state = "on" if record.enabled else "off"
     return (
         f'- "{record.name}" (id {record.id}), {state}: {_when(record.schedule, record.timezone)}; '
-        f"next run {_local(record.next_run_at, record.timezone)}; space {record.space}; "
-        f"{APPROVAL_MODE_WORDS.get(record.approval_mode, record.approval_mode)}.\n"
+        f"next run {_local(record.next_run_at, record.timezone)}; space {record.space}.\n"
         f"  Prompt: {_shorten(record.prompt)}"
     )
 
@@ -156,7 +149,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
     """The routine tools, bound to the app's state (stores, delegation client)."""
 
     def _context(config: RunnableConfig) -> tuple[Caller, str] | str:
-        if approvals.approval_mode(config) is not None:
+        if approvals.in_routine_run(config):
             return _IN_ROUTINE
         token = _delegation_token(config)
         user_id = _user_id(config)
@@ -204,7 +197,6 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         day_of_month: int | None = None,
         space: str = "/personal",
         timezone: str | None = None,
-        approval_mode: ApprovalMode = "ask",
     ) -> str:
         """Schedule a prompt for the assistant to run by itself later (a routine).
 
@@ -214,11 +206,8 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         (with days, e.g. ["mon", "thu"]) or "monthly" (with day_of_month 1-31;
         a short month uses its last day). time: HH:MM, 24-hour, local to
         timezone (an IANA name; leave it out for the user's own). space: where
-        the run works ("/personal" or "/spaces/<slug>"). approval_mode: "ask"
-        (default: the run stops for approval before changing anything),
-        "allow_writes" (changes files and app data without asking; deleting still asks)
-        or "read_only". When its job is to change something, ask the user which they
-        want unless they said. The user approves the routine first.
+        the run works ("/personal" or "/spaces/<slug>"). A run uses the user's own
+        tool settings: whatever they haven't allowed, it stops and asks in its chat.
         For "tomorrow" and the like, call current_time first.
         """
         context = _context(config)
@@ -239,7 +228,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         description = (
             f'Create the routine "{name}": {_when(schedule, zone)}, '
             f"first run {_local(first, zone)}.\n"
-            f"Space: {canonical}. This routine {APPROVAL_MODE_WORDS[approval_mode]}.\n\n"
+            f"Space: {canonical}.\n\n"
             f"Prompt:\n{prompt}"
         )
         args = {
@@ -248,18 +237,17 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
             "schedule": sched.dump_schedule(schedule),
             "timezone": zone,
             "space": canonical,
-            "approval_mode": approval_mode,
         }
-        approved, reason = _ask_user("create_routine", args, description, tool_call_id)
-        if not approved:
-            return f"The user rejected this routine; it wasn't created. {reason}"
+        if approvals.needs_approval(config, "create_routine", tool_call_id):
+            approved, reason = _ask_user("create_routine", args, description, tool_call_id)
+            if not approved:
+                return f"The user rejected this routine; it wasn't created. {reason}"
         draft = service.Draft(
             name=name,
             prompt=prompt,
             space=canonical,
             schedule=schedule,
             timezone=zone,
-            approval_mode=approval_mode,
         )
         try:
             record = await service.create(state, caller, user_id, draft, _now())
@@ -282,14 +270,13 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         space: str | None = None,
         timezone: str | None = None,
         enabled: bool | None = None,
-        approval_mode: ApprovalMode | None = None,
     ) -> str:
         """Change one of the user's routines; only what you pass changes.
 
         routine: its id (or exact name) from list_routines. To change when it
         runs, pass the whole new schedule (repeat and time, plus date / days /
         day_of_month as for create_routine). enabled: false pauses it, true
-        turns it back on. Anything but pausing needs the user's approval.
+        turns it back on. May need the user's approval.
         """
         context = _context(config)
         if isinstance(context, str):
@@ -305,7 +292,6 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
                 "prompt": prompt,
                 "timezone": timezone,
                 "enabled": enabled,
-                "approval_mode": approval_mode,
             }.items()
             if value is not None
         }
@@ -329,7 +315,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
             next_at = service.next_run_at(sched.dump_schedule(schedule), zone, on, _now())
         except service.RoutineError as exc:
             return _error(exc)
-        if changes != {"enabled": False}:
+        if approvals.needs_approval(config, "update_routine", tool_call_id):
             description = "\n".join(
                 [f'Change the routine "{current.name}":', *_change_lines(current, changes)]
                 + [f"Next run: {_local(next_at, zone)}."]
@@ -352,8 +338,8 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
     ) -> str:
         """Delete one of the user's routines for good (its past runs stay in the chats list).
 
-        routine: its id (or exact name) from list_routines. The user approves it
-        first; to stop it for now, update_routine with enabled false instead.
+        routine: its id (or exact name) from list_routines. May need the user's
+        approval; to stop it for now, update_routine with enabled false instead.
         """
         context = _context(config)
         if isinstance(context, str):
@@ -367,9 +353,10 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
             f"\n\nPrompt:\n{_shorten(current.prompt)}"
         )
         args = {"routine_id": current.id, "name": current.name}
-        approved, reason = _ask_user("delete_routine", args, description, tool_call_id)
-        if not approved:
-            return f"The user rejected this; the routine wasn't deleted. {reason}"
+        if approvals.needs_approval(config, "delete_routine", tool_call_id):
+            approved, reason = _ask_user("delete_routine", args, description, tool_call_id)
+            if not approved:
+                return f"The user rejected this; the routine wasn't deleted. {reason}"
         try:
             await service.delete(state, current)
         except service.RoutineError as exc:
@@ -394,8 +381,6 @@ def _change_lines(current: RoutineRecord, changes: dict) -> list[str]:
         lines.append(f"Space: {changes['space']}")
     if "enabled" in changes:
         lines.append("Turn it on" if changes["enabled"] else "Turn it off")
-    if "approval_mode" in changes:
-        lines.append(f"This routine {APPROVAL_MODE_WORDS[changes['approval_mode']]}.")
     if "prompt" in changes:
         lines.append(f"Prompt:\n{changes['prompt']}")
     return lines

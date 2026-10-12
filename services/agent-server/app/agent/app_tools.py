@@ -1,23 +1,19 @@
 """The agent's app tools (M13-02, docs/PLATFORM.md §7 "Agent tools for apps").
 
-`list_apps`, `create_app`, `build_app`, `app_sql`, `app_action` and
-`approve_migration`, each a thin client of the platform's apps API acting
-as the user through the run's delegation (`configurable["delegation"]`, as
-`PlatformFilesBackend` does). No delegation, no request. Nothing here
-raises: a failure is a string the model reads.
+`list_apps`, `create_app`, `build_app`, `app_query`, `app_update`,
+`app_action` and `approve_migration`, each a thin client of the platform's
+apps API acting as the user through the run's delegation
+(`configurable["delegation"]`, as `PlatformFilesBackend` does). No
+delegation, no request. Nothing here raises: a failure is a string the
+model reads.
 
-Approvals are raised by the tools themselves (`langgraph.types.interrupt`)
-rather than by `HumanInTheLoopMiddleware`, because whether a call needs one
-depends on facts only the platform knows (the instance's space, whether a
-statement writes, the migration's steps):
-
-- `approve_migration` always asks, whatever the HITL setting;
-- `app_sql` writes and `app_action` calls ask when the instance is in a
-  shared space and HITL is on (`configurable["hitl_enabled"]`); reads never do.
-
-In a routine run its approval mode decides instead (`app.agent.approvals`,
-M17-05): `allow_writes` skips those asks (a migration still asks),
-`read_only` refuses every write.
+Reads and changes are separate tools (`app_query`, `app_update`) because
+each tool has its own permission (#342, `app.agent.approvals`).
+`app_update`, `app_action` and `approve_migration` ask from inside the
+tool (`langgraph.types.interrupt`) rather than through
+`HumanInTheLoopMiddleware`, because the card shows facts only the platform
+knows (the instance's space, the action's SQL, the migration's steps).
+Whether they ask is the user's tool policy, like every other tool.
 
 The interrupt carries the same `HITLRequest` shape the middleware uses, plus
 the call's `tool_call_id`, so `app/api/chat_ws.py` shows it as an ordinary
@@ -26,8 +22,9 @@ so everything before `interrupt()` is a read.
 
 A destructive migration is applied only with a HITL marker
 (`X-HomeAI-HITL-Approval`, `app.core.hitl` in the platform): minted here with
-the service token right after the user's approve decision comes back, bound
-to this thread, instance and migration, single-use, never shown to the model.
+the service token once the user approved (on the card, or by allowing
+`approve_migration`), bound to this thread, instance and migration,
+single-use, never shown to the model.
 """
 
 from __future__ import annotations
@@ -55,7 +52,8 @@ APP_TOOL_NAMES: tuple[str, ...] = (
     "list_apps",
     "create_app",
     "build_app",
-    "app_sql",
+    "app_query",
+    "app_update",
     "app_action",
     "approve_migration",
 )
@@ -351,21 +349,6 @@ def _ask_user(name: str, args: dict, description: str, tool_call_id: str) -> tup
         return True, ""
     reason = decision.get("message") if isinstance(decision, dict) else None
     return False, reason if isinstance(reason, str) and reason else "The user rejected it."
-
-
-def _needs_write_approval(inst: dict, config: RunnableConfig, tool_name: str) -> bool:
-    return inst["space"]["kind"] == "shared" and approvals.needs_approval(config, tool_name)
-
-
-def _vpath_is_shared(path: object) -> bool:
-    return isinstance(path, str) and path.startswith("/spaces/")
-
-
-def _needs_files_approval(params: dict[str, Any], config: RunnableConfig) -> bool:
-    """Files privileged actions: HITL when a shared space is involved, like app_sql writes."""
-    return approvals.needs_approval(config, "app_action") and (
-        _vpath_is_shared(params.get("src")) or _vpath_is_shared(params.get("dst"))
-    )
 
 
 def _system_app_lines(app: dict) -> list[str]:
@@ -688,31 +671,33 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         ]
         return head + ("\n" + "\n".join(lines) if lines else "\nNo installed instance to migrate.")
 
-    @tool
-    async def app_sql(
-        instance: str,
-        sql: str,
-        config: RunnableConfig,
-        tool_call_id: Annotated[str, InjectedToolCallId],
-        params: SqlParams | None = None,
-    ) -> str:
-        """Run one SQLite statement against an installed app's database.
-
-        instance: the instance id from list_apps (or "<space>/<app-slug>"). sql: a single
-        SELECT, INSERT, UPDATE or DELETE on the app's tables; params: values for ? (a list)
-        or :name (an object). Reads return rows; writes return how many rows changed.
-        Schema changes go in schema.sql + build_app, never here. Writes in a shared space
-        may need the user's approval.
-        """
-        token = _delegation_token(config)
-        if token is None:
-            return _NO_DELEGATION
+    def _sql_refusal(sql: str) -> str | None:
         keyword = _first_keyword(sql)
         if keyword in _DDL:
             return (
                 f"Error: {keyword.upper()} isn't allowed here. Change the schema by editing the "
                 "app's schema.sql and calling build_app."
             )
+        return None
+
+    @tool
+    async def app_query(
+        instance: str,
+        sql: str,
+        config: RunnableConfig,
+        params: SqlParams | None = None,
+    ) -> str:
+        """Read an installed app's data with one SQLite SELECT.
+
+        instance: the instance id from list_apps (or "<space>/<app-slug>"). sql: a single
+        SELECT on the app's tables; params: values for ? (a list) or :name (an object).
+        Returns the rows. To change data use app_update.
+        """
+        token = _delegation_token(config)
+        if token is None:
+            return _NO_DELEGATION
+        if refusal := _sql_refusal(sql):
+            return refusal
         async with _Platform(settings, token) as api:
             cat = await _catalog(api, with_apps=False)
             if isinstance(cat, str):
@@ -722,15 +707,45 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 return inst
             rpc = f"{API}/apps/instances/{inst['id']}/rpc"
             reply = await api.call("POST", rpc, json={"op": "getAll", "sql": sql, "params": params})
-            if reply.ok:
-                return _rows(reply.body["rows"])
-            if reply.field("detail") != "sql_not_allowed":
-                return f"Error: {_why(reply)}"
+        if reply.ok:
+            return _rows(reply.body["rows"])
+        if reply.field("detail") == "sql_not_allowed":
+            return "Error: this statement changes data; app_query only reads. Use app_update."
+        return f"Error: {_why(reply)}"
+
+    @tool
+    async def app_update(
+        instance: str,
+        sql: str,
+        config: RunnableConfig,
+        tool_call_id: Annotated[str, InjectedToolCallId],
+        params: SqlParams | None = None,
+    ) -> str:
+        """Change an installed app's data with one SQLite INSERT, UPDATE or DELETE.
+
+        instance: the instance id from list_apps (or "<space>/<app-slug>"). sql: a single
+        INSERT, UPDATE or DELETE on the app's tables; params: values for ? (a list) or
+        :name (an object). Returns how many rows changed. Schema changes go in schema.sql
+        + build_app, never here. To read data use app_query. May need the user's approval.
+        """
+        token = _delegation_token(config)
+        if token is None:
+            return _NO_DELEGATION
+        if refusal := _sql_refusal(sql):
+            return refusal
+        if _first_keyword(sql) == "select":
+            return "Error: this statement only reads; use app_query."
+        async with _Platform(settings, token) as api:
+            cat = await _catalog(api, with_apps=False)
+            if isinstance(cat, str):
+                return cat
+            inst = _find_instance(cat, instance)
+            if isinstance(inst, str):
+                return inst
+            rpc = f"{API}/apps/instances/{inst['id']}/rpc"
             if inst["space"]["role"] == "viewer":
                 return f"Error: the user can only view {_space_label(inst['space'])}; this statement writes."
-            if approvals.is_read_only(config):
-                return approvals.read_only_error("change app data (this statement writes)")
-            if _needs_write_approval(inst, config, "app_sql"):
+            if approvals.needs_approval(config, "app_update", tool_call_id):
                 description = (
                     f"Change data in {inst['app']['name']} in {_space_label(inst['space'])}:\n{sql}"
                     + (f"\nparams: {_json(params)}" if params else "")
@@ -738,7 +753,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 args = {"instance": inst["id"], "space": _space_path(inst["space"]), "sql": sql}
                 if params:
                     args["params"] = params
-                approved, reason = _ask_user("app_sql", args, description, tool_call_id)
+                approved, reason = _ask_user("app_update", args, description, tool_call_id)
                 if not approved:
                     return f"The user rejected this statement; it was not run. {reason}"
             reply = await api.call("POST", rpc, json={"op": "run", "sql": sql, "params": params})
@@ -759,7 +774,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         For a user-app instance: its actions/<name>.sql, instance id from list_apps (or
         "<space>/<app-slug>"). For an image-shipped system app: instance is the slug
         (e.g. "files") and name is a privileged action such as moveToSpace. Params are
-        an object. In a shared space this may need the user's approval.
+        an object. May need the user's approval.
         """
         token = _delegation_token(config)
         if token is None:
@@ -774,7 +789,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 known = {a["name"] for a in sysapp.get("actions") or [] if isinstance(a, dict)}
                 if name not in known:
                     return f"Error: {sysapp['name']} has no action '{name}'."
-                if _needs_files_approval(action_params, config):
+                if approvals.needs_approval(config, "app_action", tool_call_id):
                     description = f"Run action {name} of system app {sysapp['name']}" + (
                         f" with {_json(action_params)}" if action_params else ""
                     )
@@ -799,7 +814,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 return inst
             if inst["space"]["role"] == "viewer":
                 return f"Error: the user can only view {_space_label(inst['space'])}; actions change data."
-            if _needs_write_approval(inst, config, "app_action"):
+            if approvals.needs_approval(config, "app_action", tool_call_id):
                 app = cat.app(inst["app_id"]) or {}
                 action_sql = "(the action's SQL isn't visible to this user)"
                 if app.get("source_path"):
@@ -841,10 +856,10 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         config: RunnableConfig,
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> str:
-        """Ask the user to approve a pending destructive migration that build_app reported.
+        """Apply a pending destructive migration that build_app reported.
 
-        The user always sees the exact steps and decides; the database is snapshotted
-        before it's applied. Only call this when the user wants that change (e.g. they
+        Unless the user allows this tool, they see the exact steps and decide first; the
+        database is snapshotted before it's applied. Only call this when the user wants that change (e.g. they
         asked to remove a field); otherwise change schema.sql so nothing is dropped.
         """
         token = _delegation_token(config)
@@ -880,12 +895,13 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                 "migration_id": migration["id"],
                 "steps": [s for step in migration["steps"] for s in step.get("sql") or []],
             }
-            approved, reason = _ask_user("approve_migration", args, description, tool_call_id)
-            if not approved:
-                return (
-                    "The user rejected the migration; it was not applied and stays pending "
-                    f"(they can still approve or reject it in the Apps screen). {reason}"
-                )
+            if approvals.needs_approval(config, "approve_migration", tool_call_id):
+                approved, reason = _ask_user("approve_migration", args, description, tool_call_id)
+                if not approved:
+                    return (
+                        "The user rejected the migration; it was not applied and stays pending "
+                        f"(they can still approve or reject it in the Apps screen). {reason}"
+                    )
             marker = await api.mint_hitl_marker(inst["id"], migration["id"])
             if not marker.ok:
                 return f"Error: couldn't record the user's approval: {_why(marker)}"
@@ -903,4 +919,4 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
             + "."
         )
 
-    return [list_apps, create_app, build_app, app_sql, app_action, approve_migration]
+    return [list_apps, create_app, build_app, app_query, app_update, app_action, approve_migration]

@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.delegation import Caller, DelegationDenied, DelegationUnavailable
-from app.db.routines import ApprovalMode, NewRoutine, RoutineRecord
+from app.db.routines import NewRoutine, RoutineRecord
 from app.routines import schedule as sched
 
 EDIT_ROLES = frozenset({"editor", "owner"})
@@ -37,7 +37,6 @@ class Draft:
     schedule: sched.Schedule
     timezone: str
     enabled: bool = True
-    approval_mode: ApprovalMode = "ask"
 
 
 def _platform_error(exc: DelegationDenied | DelegationUnavailable) -> RoutineError:
@@ -113,7 +112,6 @@ async def create(
             timezone=draft.timezone,
             enabled=draft.enabled,
             next_run_at=next_run_at(schedule, draft.timezone, draft.enabled, now),
-            approval_mode=draft.approval_mode,
         ),
     )
     if record.enabled:

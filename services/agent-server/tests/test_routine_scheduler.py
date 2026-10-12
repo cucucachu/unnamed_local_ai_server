@@ -22,6 +22,7 @@ from app.routines.runs import _ended
 from app.routines.scheduler import RoutineScheduler
 from tests.fake_model.scripting import ErrorTurn, FakeModel, TextTurn
 from tests.fake_platform.scripting import FakePlatform
+from tests.fake_tool_policies import FakeToolPolicies
 
 ALICE = "00000000-0000-4000-8000-0000000000a1"
 HEADERS = {IDENTITY_HEADER: "alice-token"}
@@ -51,7 +52,12 @@ def _fixed_now(monkeypatch) -> None:
 
 
 @pytest.fixture
-def client(fake_model: FakeModel, fake_platform: FakePlatform):
+def tool_policies() -> FakeToolPolicies:
+    return FakeToolPolicies()
+
+
+@pytest.fixture
+def client(fake_model: FakeModel, fake_platform: FakePlatform, tool_policies: FakeToolPolicies):
     fake_platform.identities["alice-token"] = (ALICE, "s-alice")
     app = create_app(
         fake_model.settings(
@@ -62,6 +68,7 @@ def client(fake_model: FakeModel, fake_platform: FakePlatform):
         settings_store_override=InMemorySettingsStore(),
         identity_verifier_override=Verifier(),
         delegation_client_override=fake_platform.client(),
+        tool_policies_override=tool_policies,
     )
     with TestClient(app) as test_client:
         yield test_client
@@ -238,7 +245,6 @@ def test_routines_wait_for_interactive_turns(client, harness, fake_model) -> Non
                 thread_id=thread.id,
                 user_id=ALICE,
                 run_input={"messages": [HumanMessage(content="hi")]},
-                hitl_enabled=False,
                 thinking_enabled=False,
             )
         )

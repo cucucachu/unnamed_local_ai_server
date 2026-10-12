@@ -20,6 +20,7 @@ from tests.test_routine_scheduler import ALICE, HEADERS, NOW, _create
 client = scheduler_tests.client
 _fixed_now = scheduler_tests._fixed_now
 harness = scheduler_tests.harness
+tool_policies = scheduler_tests.tool_policies
 
 DAILY = {
     "name": "Notes digest",
@@ -90,11 +91,7 @@ def test_create_asks_with_the_schedule_in_words(client, fake_model, fake_platfor
     [routine] = _routines(client)
     assert routine["schedule"] == {"kind": "weekdays", "time": "07:00:00"}
     assert routine["timezone"] == "America/Los_Angeles"
-    assert (routine["space"], routine["approval_mode"], routine["enabled"]) == (
-        "/personal",
-        "ask",
-        True,
-    )
+    assert (routine["space"], routine["enabled"]) == ("/personal", True)
     assert routine["next_run_at"] == "2026-10-06T14:00:00Z"
     [grant] = fake_platform.routine_grants.values()
     assert (grant.user_id, grant.routine_id) == (ALICE, routine["id"])
@@ -102,8 +99,15 @@ def test_create_asks_with_the_schedule_in_words(client, fake_model, fake_platfor
     assert out.startswith("Created.") and routine["id"] in out
 
 
-def test_create_asks_even_with_approvals_off(client, fake_model) -> None:
-    client.put("/api/settings", json={"hitl_enabled": False}, headers=HEADERS)
+def test_create_runs_unasked_when_the_user_allows_it(client, fake_model, tool_policies) -> None:
+    tool_policies.allow("create_routine")
+    fake_model.queue(ToolCallTurn("create_routine", DAILY), TextTurn("ok"))
+    _, frames = _chat(client, "make a routine")
+    _assert_turn_end(frames[-1], "completed")
+    assert [r["name"] for r in _routines(client)] == ["Notes digest"]
+
+
+def test_create_asks_by_default(client, fake_model) -> None:
     fake_model.queue(ToolCallTurn("create_routine", DAILY), TextTurn("ok"))
     _, frames = _chat(client, "make a routine")
     assert _approval(frames)["actions"][0]["name"] == "create_routine"
@@ -178,14 +182,15 @@ def test_list_routines(client, fake_model) -> None:
     assert "Prompt: Summarize my calendar." in out
 
 
-def test_pausing_needs_no_approval(client, fake_model, fake_platform) -> None:
+def test_pausing_asks_like_any_change(client, fake_model, fake_platform) -> None:
     created = _create(client)
     assert fake_platform.routine_grants
     args = {"routine": "Morning brief", "enabled": False}
-    fake_model.queue(ToolCallTurn("update_routine", args), TextTurn("paused"))
-    _, frames = _chat(client, "pause my morning brief")
-    _assert_turn_end(frames[-1], "completed")
-    assert not any(f["type"] == "approval_request" for f in frames)
+    fake_model.queue(ToolCallTurn("update_routine", args))
+    thread_id, frames = _chat(client, "pause my morning brief")
+    assert _approval(frames)["actions"][0]["name"] == "update_routine"
+    fake_model.queue(TextTurn("paused"))
+    _assert_turn_end(_answer(client, thread_id, _approval(frames), "approve")[-1], "completed")
     [routine] = _routines(client)
     assert (routine["id"], routine["enabled"], routine["next_run_at"]) == (
         created["id"],
@@ -248,14 +253,14 @@ def test_current_time_is_in_the_users_timezone(client, fake_model) -> None:
     )
 
 
-def test_a_routine_run_cannot_make_routines(client, harness, fake_model) -> None:
+def test_a_routine_run_cannot_make_routines(client, harness, fake_model, tool_policies) -> None:
+    tool_policies.allow("create_routine")
     routine, run = _run_once(
         client,
         harness,
         fake_model,
         ToolCallTurn("create_routine", DAILY),
         TextTurn("couldn't"),
-        approval_mode="allow_writes",
     )
     assert run["status"] == "succeeded"
     assert _tool_results(fake_model) == [routine_tools._IN_ROUTINE]
