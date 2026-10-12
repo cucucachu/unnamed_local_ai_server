@@ -1218,3 +1218,39 @@ class CredentialStatusIn(BaseModel):
 
     user_id: UUID | None = None
     status: Literal["needs_reconnecting"]
+
+
+class IntegrationApprovalRequest(BaseModel):
+    """agent-server, after the user approved this exact call on its card."""
+
+    delegation: Secret
+    integration: IntegrationSlug
+    tool: McpName
+    arguments: SmallJson
+
+
+class IntegrationApprovalConsume(BaseModel):
+    """The gateway, about to run a call that asks first."""
+
+    delegation: Secret
+    token: Secret
+    integration: IntegrationSlug
+    tool: McpName
+    arguments: SmallJson
+
+
+class IntegrationAuditIn(BaseModel):
+    """One gateway action, recorded in the platform's audit log (docs/INTEGRATIONS.md §11).
+
+    The gateway leaves secrets out of `arguments` before sending them.
+    """
+
+    delegation: Secret
+    integration: IntegrationSlug
+    action: Literal["open", "call", "read", "prompt"]
+    target: Annotated[str, Field(max_length=2000)] = ""
+    arguments: SmallJson = {}
+    context: Literal["chat", "routine", "app"] | None = None
+    approval: Literal["allowed", "approved"] | None = None
+    status: Literal["ok", "error"]
+    error_code: Annotated[str, Field(max_length=40)] | None = None

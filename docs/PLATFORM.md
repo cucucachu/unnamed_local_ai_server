@@ -416,11 +416,19 @@ credential key.
 - **The gateway's side** (`PLATFORM_GATEWAY_TOKEN`): the grant for a call
   (the delegation's user, the server, the ciphertext to use, the tools'
   policy), storing a changed list it discovered, and marking a rejected
-  credential. The platform calls the gateway (`INTEGRATIONS_GATEWAY_URL`
+  credential; spending a call's approval marker; and recording each call in
+  the audit log. The platform calls the gateway (`INTEGRATIONS_GATEWAY_URL`
   with `INTEGRATIONS_GATEWAY_TOKEN`) for `/encrypt` and `/discover`;
   unset, those answer `503 gateway_unavailable`.
+- **Approval markers** (`app/core/hitl.py`): a call that asks first runs
+  only with a marker. agent-server mints it after the user approves the
+  card (`/internal/integration-approvals`); the gateway spends it on that
+  call. It is bound to the user, session, thread, integration, tool and the
+  exact arguments, lives 60 s, and is spent on first use.
 - Installs, changes, discoveries, connections and disconnections are
-  audited (`integrations.*`), never with a secret.
+  audited (`integrations.*`), never with a secret. So is everything the
+  agent does through the gateway (`integrations.open` / `call` / `read` /
+  `prompt`).
 
 ### Service-to-service auth
 
