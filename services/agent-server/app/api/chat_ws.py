@@ -325,6 +325,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.app_tools import APP_TOOL_NAMES
 from app.agent.approvals import HITL_TOOL_NAMES, ToolPolicy
+from app.agent.integration_tools import INTEGRATION_TOOL_NAMES
 from app.agent.routine_tools import ROUTINE_TOOL_NAMES
 from app.agent.turn_runner import END, ActiveTurn, TurnOutcome, TurnRequest, TurnRunner
 from app.core.delegation import Delegation, DelegationDenied, DelegationUnavailable
@@ -354,6 +355,7 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "web_fetch": "web",
     **dict.fromkeys(APP_TOOL_NAMES, "app"),
     **dict.fromkeys(ROUTINE_TOOL_NAMES, "plan"),
+    **dict.fromkeys(INTEGRATION_TOOL_NAMES, "integration"),
 }
 
 _ARGS_VALUE_TRUNCATE_LEN = 500
@@ -522,15 +524,18 @@ def _pending_approval_from_state(state: StateSnapshot) -> dict | None:
             tool_call_id = action_request.get("tool_call_id") or middleware_id(
                 name, action_request.get("args")
             )
-            actions.append(
-                {
-                    "tool_call_id": tool_call_id,
-                    "name": name,
-                    "category": _category_for_tool(name),
-                    "args": _truncated_args(action_request.get("args")),
-                    "description": action_request.get("description", ""),
-                }
-            )
+            action = {
+                "tool_call_id": tool_call_id,
+                "name": name,
+                "category": _category_for_tool(name),
+                "args": _truncated_args(action_request.get("args")),
+                "description": action_request.get("description", ""),
+            }
+            # An integration call's card: which integration and tool, and whether
+            # "Always allow" may set that tool's own setting.
+            if isinstance(action_request.get("integration"), dict):
+                action["integration"] = action_request["integration"]
+            actions.append(action)
         groups.append((str(interrupt.id), len(action_requests)))
     return {"interrupt_id": groups[0][0], "actions": actions, _RESUME_KEY: groups}
 

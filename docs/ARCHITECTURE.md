@@ -1445,7 +1445,7 @@ belong to the bootstrap admin once one exists (see `agent-server` in §2).
   last assistant message.
 - `GET /api/threads/{id}/state` (M8-03) → `200 {"pending_approval":
   {"interrupt_id": str, "actions": [{"tool_call_id": str, "name": str,
-  "category": "file"|"exec"|"plan"|"web"|"app"|"other", "args": {},
+  "category": "file"|"exec"|"plan"|"web"|"app"|"integration"|"other", "args": {},
   "description": str}]} | null}` — same payload as the live
   `approval_request` frame (minus the frame's `type` envelope). Derived
   from the checkpointer's pending interrupt (no extra storage). The
@@ -1740,13 +1740,14 @@ Server → client, in order within a turn:
 {"type": "reasoning", "content": "str"}                   // M8-07: thought delta; not persisted to history
 {"type": "token", "content": "str"}                       // one per streamed model token chunk
 {"type": "tool_start", "tool_call_id": "str", "name": "str",
- "category": "file"|"exec"|"plan"|"web"|"app"|"other", "args": {}}     // args truncated to 500 chars/value
+ "category": "file"|"exec"|"plan"|"web"|"app"|"integration"|"other", "args": {}}     // args truncated to 500 chars/value
 {"type": "tool_end", "tool_call_id": "str", "name": "str",
  "status": "success"|"error", "result_preview": "str"}     // truncated to 2000 chars
 {"type": "approval_request", "interrupt_id": "str",
  "actions": [{"tool_call_id": "str", "name": "str",
-              "category": "file"|"exec"|"plan"|"web"|"app"|"other",
-              "args": {}, "description": "str"}]}           // args truncated like tool_start
+              "category": "file"|"exec"|"plan"|"web"|"app"|"integration"|"other",
+              "args": {}, "description": "str",
+              "integration": {...}}]}                      // args truncated like tool_start; integration: M18-06, use_integration only
 {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval",
  "duration_ms": int}   // M9-02: elapsed since this turn's turn_start
 {"type": "error", "message": "str"}                        // followed by a normal close, code 1011
@@ -1780,6 +1781,47 @@ to Ask first. `approval_request` is **always** immediately followed by
   admin's locks shown; admins also get Settings → Agent tools
   (`settings/agent-tools.tsx`, step-up) for the everyone-wide on/off and
   "Each person chooses" / "Always ask".
+
+**Integration tools** (M18-06, category `integration`,
+`app/agent/integration_tools.py`; design: `docs/INTEGRATIONS.md` §6–§8).
+- Four fixed tools, in the Integrations group of the catalog, all default
+  allow: `open_integration(name)`, `use_integration(integration, tool,
+  arguments, input_handle?, answers?)`, `read_integration_resource
+  (integration, uri)` and `get_integration_prompt(integration, name,
+  arguments)`. Each posts to the integrations gateway
+  (`INTEGRATIONS_GATEWAY_URL`, default `http://integrations-gateway:8000`)
+  with the turn's delegation as the bearer and `context` `routine` in a
+  routine run, else `chat`. Results come back marked untrusted; every
+  failure is a tool result (`Error (<code>): ...`), never a failed turn.
+- The static prompt's `INTEGRATIONS_GUIDE` says how to use them.
+  `IntegrationsListMiddleware` (last in the middleware list, so it lands
+  after every static part) appends one line per integration the user has
+  (`GET /api/platform/integrations`, with "not connected" / "needs
+  reconnecting" notes) to the system message. It's fetched when the
+  thread's first turn starts and kept in the thread's state
+  (`bound_integrations`), so it never changes mid-thread. A user without
+  `open_integration` gets no list; a platform that can't answer leaves it
+  unfixed until the next turn.
+- `use_integration` asks from inside the tool (`approvals.SELF_ASKING_TOOLS`).
+  A call runs unasked only if the user's "Use integrations" setting and
+  the MCP tool's own setting both allow. Unless "Use integrations" asks, it
+  first calls the gateway without a marker: the gateway checks the
+  arguments (so bad ones come back without a card) and answers
+  `approval_required` when the tool asks. Then the card: its action
+  carries `integration` `{id, slug, name, tool, tool_title,
+  can_always_allow}` (from the user's integrations list). On approve, a
+  marker is minted with the service token (`POST
+  /internal/integration-approvals`) and the call is made again with it;
+  the model never sees it. "Always allow" on such a card sets the MCP
+  tool's own setting (`PATCH /api/platform/integrations/{id}/tools`),
+  hidden when the admin's ceiling is ask.
+- `needs_input`: the result gives the handle and what the server asks;
+  the model asks the user and, after their reply, calls again with
+  `input_handle` and `answers`. Each call carries the id of the thread's
+  latest user message (`latest_user_message`), so the gateway takes
+  answers only after a new one.
+- Tests: `tests/test_integration_tools.py` and
+  `tests/test_integration_routines.py`, against `tests/fake_gateway.py`.
 
 App tools (M13-02, category `app`) raise their own interrupts from inside
 the call, after its `tool_start` (and no `tool_end` for the paused call);

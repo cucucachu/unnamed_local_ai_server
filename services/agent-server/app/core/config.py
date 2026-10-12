@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     exec_manager_url: str = "http://code-exec-manager:8090"
     exec_default_timeout_s: int = 120
 
+    # The integration tools' only way to an MCP server (M18-06, docs/INTEGRATIONS.md).
+    integrations_gateway_url: str = "http://integrations-gateway:8000"
+
     web_fetch_url: str = "http://web-fetch:8000"
     # Tool-side cap on `web_fetch`'s returned text — independent of, and on
     # top of, `web-fetch`'s own server-side `FETCH_MAX_TEXT_CHARS` cap (the

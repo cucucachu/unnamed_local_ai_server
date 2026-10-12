@@ -339,6 +339,14 @@ export function toolGroups<T extends { group: string }>(tools: T[]): [string, T[
   return [...byGroup.entries()];
 }
 
+/** Change the user's own settings for an integration's tools (M18-03). */
+export async function changeMyIntegrationTools(
+  integrationId: string,
+  changes: { name: string; enabled?: boolean; permission?: ToolPermission }[],
+): Promise<void> {
+  await send('PATCH', `/api/platform/integrations/${encodeURIComponent(integrationId)}/tools`, { changes });
+}
+
 /** The tools in `names` the user could switch from asking to allowed. */
 export function alwaysAllowable(tools: MyTool[], names: string[]): MyTool[] {
   const wanted = new Set(names);

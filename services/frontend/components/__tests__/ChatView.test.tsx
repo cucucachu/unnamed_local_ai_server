@@ -60,10 +60,12 @@ jest.mock('@/lib/speech', () => ({
 
 const mockListMyTools = jest.fn<Promise<MyTool[]>, []>();
 const mockChangeMyTools = jest.fn<Promise<MyTool[]>, unknown[]>();
+const mockChangeMyIntegrationTools = jest.fn<Promise<void>, unknown[]>();
 jest.mock('@/lib/platform', () => ({
   ...jest.requireActual('@/lib/platform'),
   listMyTools: () => mockListMyTools(),
   changeMyTools: (...args: unknown[]) => mockChangeMyTools(...args),
+  changeMyIntegrationTools: (...args: unknown[]) => mockChangeMyIntegrationTools(...args),
 }));
 
 function myTool(name: string, label: string, overrides: Partial<MyTool> = {}): MyTool {
@@ -84,6 +86,7 @@ function myTool(name: string, label: string, overrides: Partial<MyTool> = {}): M
 beforeEach(() => {
   mockListMyTools.mockReset().mockResolvedValue([]);
   mockChangeMyTools.mockReset().mockResolvedValue([]);
+  mockChangeMyIntegrationTools.mockReset().mockResolvedValue(undefined);
 });
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
@@ -903,6 +906,62 @@ describe('ChatView', () => {
       });
       expect(mockChangeMyTools).toHaveBeenCalledWith([{ name: 'write_file', permission: 'allow' }]);
       expect(respondToApproval).toHaveBeenCalledWith([{ tool_call_id: 'call-1', decision: 'approve' }]);
+    });
+
+    it('an integration call shows its integration and tool, and "Always allow" sets that tool (M18-06)', async () => {
+      const respondToApproval = jest.fn();
+      const integrationAction = {
+        toolCallId: 'call-int',
+        name: 'use_integration',
+        category: 'integration' as const,
+        args: { integration: 'home', tool: 'turn_on', arguments: { entity: 'light.kitchen' } },
+        description: 'Use Home Assistant: Turn on\nentity: light.kitchen',
+        integration: {
+          id: 'int-1',
+          slug: 'home',
+          name: 'Home Assistant',
+          tool: 'turn_on',
+          tool_title: 'Turn on',
+          can_always_allow: true,
+        },
+      };
+      setUseChatResult({ pendingApproval: { interruptId: 'int-i', actions: [integrationAction] }, respondToApproval });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      await act(async () => {
+        renderer = create(createElement(ChatScreen));
+      });
+      const text = renderedText(renderer!);
+      expect(text).toContain('Home Assistant: Turn on');
+      expect(text).toContain('entity: light.kitchen');
+      expect(text).not.toContain('{"integration"');
+      expect(text).toContain('“Home Assistant: Turn on”');
+      expect(text).toContain('will run without asking');
+      renderer!.root.findByProps({ accessibilityLabel: 'Approve Home Assistant: Turn on' });
+      expect(text).toContain('Settings → Integrations');
+      await act(async () => {
+        await (renderer!.root.findByProps({ testID: 'approval-always-allow' }).props as { onPress: () => Promise<void> }).onPress();
+      });
+      expect(mockChangeMyTools).not.toHaveBeenCalled();
+      expect(mockChangeMyIntegrationTools).toHaveBeenCalledWith('int-1', [{ name: 'turn_on', permission: 'allow' }]);
+      expect(respondToApproval).toHaveBeenCalledWith([{ tool_call_id: 'call-int', decision: 'approve' }]);
+    });
+
+    it('no "Always allow" for an integration tool whose ceiling is ask', async () => {
+      const locked = {
+        toolCallId: 'call-int',
+        name: 'use_integration',
+        category: 'integration' as const,
+        args: {},
+        description: 'Use Home Assistant: Unlock',
+        integration: { id: 'int-1', slug: 'home', name: 'Home Assistant', tool: 'unlock', tool_title: null, can_always_allow: false },
+      };
+      setUseChatResult({ pendingApproval: { interruptId: 'int-l', actions: [locked] } });
+      let renderer: ReturnType<typeof create> | undefined;
+      await act(async () => {
+        renderer = create(createElement(ChatScreen));
+      });
+      expect(renderer!.root.findAllByProps({ testID: 'approval-always-allow' })).toHaveLength(0);
     });
 
     it('offers "Always allow" only for tools the user can allow', async () => {

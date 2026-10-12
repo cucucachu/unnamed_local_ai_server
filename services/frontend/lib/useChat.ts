@@ -5,6 +5,7 @@ import { ApiError } from './api';
 import {
   openChatSocket,
   type ApprovalDecision,
+  type ApprovalIntegration,
   type ApprovalRequestFrame,
   type ChatConnectionState,
   type ChatSocket,
@@ -110,6 +111,8 @@ export interface PendingApprovalAction {
   category: ToolCategory;
   args: Record<string, unknown>;
   description: string;
+  /** M18-06: as on the wire. */
+  integration?: ApprovalIntegration;
 }
 
 export interface PendingApproval {
@@ -181,6 +184,10 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   create_routine: 'plan',
   update_routine: 'plan',
   delete_routine: 'plan',
+  open_integration: 'integration',
+  use_integration: 'integration',
+  read_integration_resource: 'integration',
+  get_integration_prompt: 'integration',
 };
 
 function categoryForToolName(name: string): ToolCategory {
@@ -341,6 +348,7 @@ function toPendingApprovalAction(action: {
   category: ToolCategory;
   args: Record<string, unknown>;
   description: string;
+  integration?: ApprovalIntegration;
 }): PendingApprovalAction {
   return {
     toolCallId: action.tool_call_id,
@@ -348,6 +356,7 @@ function toPendingApprovalAction(action: {
     category: action.category,
     args: action.args,
     description: action.description,
+    ...(action.integration ? { integration: action.integration } : {}),
   };
 }
 

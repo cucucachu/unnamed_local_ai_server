@@ -7,7 +7,7 @@ import { authHeaders } from './session';
  * frame shapes; M2-06's chat screen imports these types directly.
  */
 
-export type ToolCategory = 'file' | 'exec' | 'plan' | 'web' | 'app' | 'other';
+export type ToolCategory = 'file' | 'exec' | 'plan' | 'web' | 'app' | 'integration' | 'other';
 export type ToolStatus = 'success' | 'error';
 
 export interface TurnStartFrame {
@@ -56,6 +56,19 @@ export interface PendingApprovalAction {
   category: ToolCategory;
   args: Record<string, unknown>;
   description: string;
+  /** M18-06: on a `use_integration` call, the integration and tool it calls. */
+  integration?: ApprovalIntegration;
+}
+
+/** Which integration tool a card's call uses; `can_always_allow` is false when
+ * the admin's ceiling is ask. `id` is missing if the list couldn't be read. */
+export interface ApprovalIntegration {
+  id?: string;
+  slug: string;
+  name: string;
+  tool: string;
+  tool_title: string | null;
+  can_always_allow?: boolean;
 }
 
 /** M8-03: emitted instead of a normal completion when the turn ends with
