@@ -2868,6 +2868,21 @@ credential or an instance id.
 - `POST /internal/integrations/{id}/credential-status` (M18-03) — gateway
   auth. Body `{"user_id": uuid|null, "status": "needs_reconnecting"}` →
   `204`; `404 credential_not_found`.
+- `POST /internal/integration-approvals` (M18-04) — agent auth
+  (`PLATFORM_AGENT_TOKEN`). Body `{"delegation", "integration": slug,
+  "tool", "arguments"}` → `200 {"token": "hitl_…", "expires_in_s"}`: a
+  marker for that one call, minted after the user approved it on the card.
+  `404 integration_not_found` / `tool_not_found`.
+- `POST /internal/integration-approvals/consume` (M18-04) — gateway auth.
+  Body `{"delegation", "token", "integration", "tool", "arguments"}` →
+  `204`, or `403 hitl_approval_required` unless the marker was minted for
+  this user, session, thread, integration, tool and arguments (compared as
+  canonical JSON). Spent on its first presentation, matching or not.
+- `POST /internal/integration-audit` (M18-04) — gateway auth. Body
+  `{"delegation", "integration", "action": "open"|"call"|"read"|"prompt",
+  "target", "arguments", "context", "approval": "allowed"|"approved",
+  "status": "ok"|"error", "error_code"}` → `204`; recorded as
+  `integrations.<action>`, attributed to the delegation's agent.
 
 **Delegation contract** (`app/core/delegations.py`; agent-server side
 `app/core/delegation.py`). A delegation is a platform JWT (format below)

@@ -159,6 +159,10 @@ async def _prompts(conn: AsyncConnection, integration_id: UUID) -> list[dict[str
     return await cur.fetchall()
 
 
+async def tool_names(conn: AsyncConnection, integration_id: UUID) -> set[str]:
+    return {row["name"] for row in await _tools(conn, integration_id)}
+
+
 def _as_tool(integration: dict[str, Any], row: dict[str, Any]) -> Tool:
     """An integration tool in the permissions rule's terms (never read-only by default)."""
     return Tool(

@@ -625,3 +625,114 @@ async def test_audit_records_installs_and_connections_without_secrets(platform, 
         kinds
     )
     assert SECRET not in json.dumps([dict(r) for r in rows], default=str)
+
+
+# --- approval markers for calls (M18-04) -----------------------------------------------
+
+
+def _deleg(headers) -> str:
+    return headers["Authorization"].split()[1]
+
+
+async def _mint(platform, agent, tool="turn_on", arguments=None, token=AGENT_TOKEN):
+    return await platform.client.post(
+        "/internal/integration-approvals",
+        json={
+            "delegation": _deleg(agent),
+            "integration": "home",
+            "tool": tool,
+            "arguments": arguments
+            if arguments is not None
+            else {"entity": "light.kitchen", "on": True},
+        },
+        headers=bearer(token),
+    )
+
+
+async def _spend(platform, agent, marker, tool="turn_on", arguments=None, token=GATEWAY_TOKEN):
+    return await platform.client.post(
+        "/internal/integration-approvals/consume",
+        json={
+            "delegation": _deleg(agent),
+            "token": marker,
+            "integration": "home",
+            "tool": tool,
+            "arguments": arguments
+            if arguments is not None
+            else {"on": True, "entity": "light.kitchen"},
+        },
+        headers=bearer(token),
+    )
+
+
+async def test_a_call_marker_runs_its_exact_call_once(platform, people):
+    await _installed(platform, people)
+    agent = people["bob_agent"]
+    response = await _mint(platform, agent)
+    assert response.status_code == 200, response.text
+    marker = response.json()["token"]
+    assert (await _spend(platform, agent, marker)).status_code == 204  # key order doesn't matter
+    response = await _spend(platform, agent, marker)
+    assert (response.status_code, response.json()["detail"]) == (403, "hitl_approval_required")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"arguments": {"entity": "light.kitchen", "on": False}},
+        {"arguments": {"entity": "light.kitchen", "on": True, "extra": 1}},
+        {"tool": "get_state"},
+    ],
+)
+async def test_a_call_marker_is_bound_to_the_tool_and_arguments(platform, people, change):
+    await _installed(platform, people)
+    agent = people["bob_agent"]
+    marker = (await _mint(platform, agent)).json()["token"]
+    assert (await _spend(platform, agent, marker, **change)).status_code == 403
+    # A mismatched try spends it.
+    assert (await _spend(platform, agent, marker)).status_code == 403
+
+
+async def test_a_call_marker_is_bound_to_the_user(platform, people):
+    await _installed(platform, people)
+    marker = (await _mint(platform, people["bob_agent"])).json()["token"]
+    assert (await _spend(platform, people["carol_agent"], marker)).status_code == 403
+
+
+async def test_call_markers_need_the_right_services(platform, people):
+    await _installed(platform, people)
+    agent = people["bob_agent"]
+    assert (await _mint(platform, agent, token=GATEWAY_TOKEN)).status_code == 401
+    marker = (await _mint(platform, agent)).json()["token"]
+    assert (await _spend(platform, agent, marker, token=AGENT_TOKEN)).status_code == 401
+    assert (await _mint(platform, agent, tool="no_such_tool")).status_code == 404
+
+
+async def test_the_gateway_records_calls_in_the_audit_log(platform, people):
+    iid = await _installed(platform, people)
+    response = await platform.client.post(
+        "/internal/integration-audit",
+        json={
+            "delegation": _deleg(people["bob_agent"]),
+            "integration": "home",
+            "action": "call",
+            "target": "turn_on",
+            "arguments": {"entity": "light.kitchen"},
+            "context": "chat",
+            "approval": "approved",
+            "status": "error",
+            "error_code": "timeout",
+        },
+        headers=bearer(GATEWAY_TOKEN),
+    )
+    assert response.status_code == 204, response.text
+    (row,) = sql(
+        platform,
+        "SELECT actor_kind, summary, target_id, detail FROM audit_events "
+        "WHERE kind = 'integrations.call'",
+    )
+    assert row["actor_kind"] == "agent"
+    assert row["summary"] == "Called turn_on on Home (failed: timeout)"
+    assert str(row["target_id"]) == iid
+    assert row["detail"]["approval"] == "approved"
+    assert "delegation" not in row["detail"]
