@@ -5,13 +5,12 @@
 # request` convention).
 #
 # From a running (or freshly brought-up) compose stack, this script:
-#   1. GETs the current document (records `hitl_enabled`'s starting value
-#      so this script is re-runnable without assuming a fresh DB).
-#   2. PUTs `{"hitl_enabled": <the opposite of the starting value>}` and
-#      confirms the response reflects it while the other two fields stay
-#      at their prior values (a real partial-merge check, not just
-#      "toggled to false" — safe to re-run against a DB that already has
-#      `hitl_enabled: false` from a previous run).
+#   1. GETs the current document (records `thinking_enabled`'s starting
+#      value so this script is re-runnable without assuming a fresh DB).
+#   2. PUTs `{"thinking_enabled": <the opposite of the starting value>}` and
+#      confirms the response reflects it while `edit_mode_default` stays at
+#      its prior value (a real partial-merge check, safe to re-run against
+#      a DB that already has the flipped value from a previous run).
 #   3. GETs again and confirms it still reflects the change (in-process
 #      consistency, before touching the container at all).
 #   4. Runs `docker compose restart agent-server` FOR REAL, waits for
@@ -126,24 +125,23 @@ step_get_starting_document() {
     return 1
   fi
 
-  STARTING_HITL="$(json_field "$body" hitl_enabled)"
   STARTING_THINKING="$(json_field "$body" thinking_enabled)"
   STARTING_EDIT_MODE="$(json_field "$body" edit_mode_default)"
 
-  if [ "$STARTING_HITL" = "true" ]; then
-    TARGET_HITL="false"
+  if [ "$STARTING_THINKING" = "true" ]; then
+    TARGET_THINKING="false"
   else
-    TARGET_HITL="true"
+    TARGET_THINKING="true"
   fi
 
-  log "OK: starting document hitl_enabled=${STARTING_HITL} thinking_enabled=${STARTING_THINKING} edit_mode_default=${STARTING_EDIT_MODE}"
-  log "    (this run flips hitl_enabled -> ${TARGET_HITL} and leaves the other two fields untouched)"
+  log "OK: starting document thinking_enabled=${STARTING_THINKING} edit_mode_default=${STARTING_EDIT_MODE}"
+  log "    (this run flips thinking_enabled -> ${TARGET_THINKING} and leaves edit_mode_default untouched)"
 }
 
 step_put_partial_and_confirm_merge() {
-  log "Step 3/5: PUT {\"hitl_enabled\": ${TARGET_HITL}} - confirm the merged response..."
+  log "Step 3/5: PUT {\"thinking_enabled\": ${TARGET_THINKING}} - confirm the merged response..."
   local resp status body
-  resp="$(rest_request PUT "${API_BASE}/settings" "{\"hitl_enabled\": ${TARGET_HITL}}")"
+  resp="$(rest_request PUT "${API_BASE}/settings" "{\"thinking_enabled\": ${TARGET_THINKING}}")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
 
@@ -152,25 +150,24 @@ step_put_partial_and_confirm_merge() {
     return 1
   fi
 
-  local put_hitl put_thinking put_edit_mode
-  put_hitl="$(json_field "$body" hitl_enabled)"
+  local put_thinking put_edit_mode
   put_thinking="$(json_field "$body" thinking_enabled)"
   put_edit_mode="$(json_field "$body" edit_mode_default)"
 
-  if [ "$put_hitl" != "$TARGET_HITL" ]; then
-    log "ERROR: expected hitl_enabled=${TARGET_HITL} in PUT response, got ${put_hitl}"
+  if [ "$put_thinking" != "$TARGET_THINKING" ]; then
+    log "ERROR: expected thinking_enabled=${TARGET_THINKING} in PUT response, got ${put_thinking}"
     return 1
   fi
-  if [ "$put_thinking" != "$STARTING_THINKING" ] || [ "$put_edit_mode" != "$STARTING_EDIT_MODE" ]; then
+  if [ "$put_edit_mode" != "$STARTING_EDIT_MODE" ]; then
     log "ERROR: PUT response changed a field it shouldn't have (partial-merge broken): ${body}"
     return 1
   fi
-  log "OK: PUT response reflects hitl_enabled=${TARGET_HITL}, other fields unchanged"
+  log "OK: PUT response reflects thinking_enabled=${TARGET_THINKING}, edit_mode_default unchanged"
 }
 
 step_get_confirms_change_in_process() {
   log "Step 4/5: GET /api/settings - confirm the change, before any restart..."
-  local resp status body get_hitl
+  local resp status body get_thinking
   resp="$(rest_request GET "${API_BASE}/settings")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
@@ -180,12 +177,12 @@ step_get_confirms_change_in_process() {
     return 1
   fi
 
-  get_hitl="$(json_field "$body" hitl_enabled)"
-  if [ "$get_hitl" != "$TARGET_HITL" ]; then
-    log "ERROR: expected hitl_enabled=${TARGET_HITL}, got ${get_hitl}: ${body}"
+  get_thinking="$(json_field "$body" thinking_enabled)"
+  if [ "$get_thinking" != "$TARGET_THINKING" ]; then
+    log "ERROR: expected thinking_enabled=${TARGET_THINKING}, got ${get_thinking}: ${body}"
     return 1
   fi
-  log "OK: GET reflects hitl_enabled=${TARGET_HITL}"
+  log "OK: GET reflects thinking_enabled=${TARGET_THINKING}"
 }
 
 step_restart_and_confirm_persistence() {
@@ -197,7 +194,7 @@ step_restart_and_confirm_persistence() {
     return 1
   fi
 
-  local resp status body get_hitl
+  local resp status body get_thinking
   resp="$(rest_request GET "${API_BASE}/settings")"
   status="$(sed -n '1p' <<<"$resp")"
   body="$(sed -n '2p' <<<"$resp")"
@@ -206,12 +203,12 @@ step_restart_and_confirm_persistence() {
     return 1
   fi
 
-  get_hitl="$(json_field "$body" hitl_enabled)"
-  if [ "$get_hitl" != "$TARGET_HITL" ]; then
-    log "ERROR: hitl_enabled did NOT survive the restart - expected ${TARGET_HITL}, got ${get_hitl}: ${body}"
+  get_thinking="$(json_field "$body" thinking_enabled)"
+  if [ "$get_thinking" != "$TARGET_THINKING" ]; then
+    log "ERROR: thinking_enabled did NOT survive the restart - expected ${TARGET_THINKING}, got ${get_thinking}: ${body}"
     return 1
   fi
-  log "OK: hitl_enabled=${TARGET_HITL} survived a real agent-server restart (Postgres persistence confirmed)"
+  log "OK: thinking_enabled=${TARGET_THINKING} survived a real agent-server restart (Postgres persistence confirmed)"
 }
 
 main() {

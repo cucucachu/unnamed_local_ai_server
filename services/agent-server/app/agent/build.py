@@ -29,12 +29,12 @@ script first" instruction) before writing this code:
   whose `.config` is populated from `langgraph.config.get_config()` — the
   REAL `RunnableConfig` for the in-flight run (not a stripped-down copy).
   `req.runtime.config["configurable"]` — including any extra key a caller
-  put there, e.g. `configurable={"thread_id": ..., "hitl_enabled": True}` —
+  put there, e.g. `configurable={"thread_id": ..., "tool_policy": ...}` —
   is visible inside `when(req)` at call time. Confirmed with a live
   `agent.astream_events(..., config={"configurable": {"thread_id": ...,
-  "hitl_enabled": True}})` call against the fake-model harness: the `when`
-  predicate observed `hitl_enabled=True` in `req.runtime.config
-  ["configurable"]` and correctly triggered a pending `Interrupt` (verified
+  "tool_policy": ...}})` call against the fake-model harness: the `when`
+  predicate observed the policy in `req.runtime.config["configurable"]`
+  and correctly triggered a pending `Interrupt` (verified
   via `agent.aget_state(config).tasks[*].interrupts`).
 - `Command(resume={"decisions": [{"type": "approve"}]})` /
   `Command(resume={"decisions": [{"type": "reject", "message": "..."}]})`

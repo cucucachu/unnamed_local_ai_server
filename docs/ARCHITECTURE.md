@@ -1422,8 +1422,7 @@ in one of their spaces. Owned like threads (row-level security on
 `routine_id` set. Deleting the routine deletes its run records but keeps
 their threads as plain chats (`ON DELETE SET NULL`).
 - `{routine}` = `{"id", "name", "prompt", "space": "/personal"|"/spaces/<slug>",
-  "schedule", "timezone": IANA name, "enabled": bool, "approval_mode":
-  "ask"|"allow_writes"|"read_only", "next_run_at": iso8601|null,
+  "schedule", "timezone": IANA name, "enabled": bool, "next_run_at": iso8601|null,
   "last_run_at": iso8601|null, "created_at", "updated_at", "last_run":
   {"id", "status", "finished_at", "thread_id"}|null}`. `last_run` (M17-06)
   is its newest run record; it's on the list and on `GET /api/routines/{id}`,
@@ -1437,8 +1436,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   occurrence. Null while disabled, or once a one-shot has run.
 - `GET /api/routines` → `200 [{routine}, ...]` by name.
 - `POST /api/routines` body `{"name", "prompt", "space"?: "/personal",
-  "schedule", "timezone", "enabled"?: true, "approval_mode"?: "ask"}` →
-  `201 {routine}`. The caller
+  "schedule", "timezone", "enabled"?: true}` →
+  `201 {routine}`. An `approval_mode` from an older app is ignored (#342). The caller
   needs `editor` or `owner` on `space` (asked of the platform, `POST
   /internal/space-access`; `403` otherwise, `422` for a space that isn't
   theirs). `422` for an enabled schedule with no future run.
@@ -1495,21 +1494,12 @@ their threads as plain chats (`ON DELETE SET NULL`).
     revoked once its run is over.
   - **Restarts.** At startup, runs a restart cut off are `failed`
     ("interrupted by a server restart"), and queued ones are queued again.
-- **Approval modes** (M17-05, `app/agent/approvals.py`). A run passes its
-  routine's `approval_mode` in `configurable["approval_mode"]`; the chat
-  `hitl_enabled` setting doesn't apply to it.
-  - `ask` (the default): everything a chat with HITL on asks about pauses
-    the run (`waiting_approval`) until the owner answers in its chat.
-  - `allow_writes`: file writes and edits, `execute_code`, app data writes,
-    app actions and building apps go ahead. `delete` and
-    `approve_migration` still ask. A scheduled run's grant reaches only the
-    routine's space.
-  - `read_only`: those tools are refused with a tool error the model reads
-    (`ReadOnlyRunMiddleware`; `app_sql` refuses a statement that writes).
-  - LangGraph writes the mode into each checkpoint's metadata. Answering in
-    the chat resumes under the mode the run paused in, so HITL's re-check
-    of which calls needed approval matches the decisions. The run's
-    record then follows the resumed turn to its end.
+- **Approvals** (#342, replacing M17-05's approval modes). A run follows
+  its owner's agent tool permissions, like a chat (see "Agent tool
+  permissions" below): a tool set to Ask first pauses the run
+  (`waiting_approval`) until the owner answers in its chat, and a tool
+  that's turned off isn't there. A scheduled run's grant reaches only the
+  routine's space. The run's record follows the resumed turn to its end.
   - **Expiry.** A run left `waiting_approval` for `ROUTINE_APPROVAL_TTL_S`
     (24 h) is answered reject-all on the next poll, under the same GPU cap
     and the routine's grant. The model is told nobody answered, and the
@@ -1524,8 +1514,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   `/routines/<id>/runs` with all of them. A run opens in Chat like any
   other thread. The editor
   (`components/RoutineForm.tsx`) covers the name, prompt, a space the user
-  can edit, the schedule, the timezone (the device's by default) and the
-  approval mode. The chats list badges routine runs and can hide them;
+  can edit, the schedule and the timezone (the device's by default); a
+  note says the run uses the user's Agent permissions. The chats list badges routine runs and can hide them;
   it also marks chats "Needs approval" or "New" (unread, M17-10).
 - **Agent tools** (M17-07, `app/agent/routine_tools.py`): `current_time`,
   `list_routines`, `create_routine`, `update_routine`, `delete_routine`,
@@ -1534,8 +1524,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
     above, but as the chat turn's delegation: the platform checks the space
     and issues the grant for the user behind it (`docs/PLATFORM.md` §4).
     The turn's user is `configurable["user_id"]`.
-  - Creating, changing (except just turning one off) and deleting always
-    ask first, whatever the HITL setting. The card has the schedule in
+  - Creating, changing (turning one off included) and deleting follow the
+    user's permissions; they ask by default. The card has the schedule in
     words, the first run and the prompt; bad input is refused before it.
   - The schedule arguments are flat (`repeat`, `time`, `date`, `days`,
     `day_of_month`), which small models fill in more reliably than the
@@ -1571,11 +1561,13 @@ see "Platform API" → "Files"). agent-server's `/api/files*` and
 **Settings** — per user since M10-04 (`user_settings`, keyed by
 `(user_id, key)`); the pre-M10 global document was moved to the bootstrap
 admin. The WS reads the connected user's values each turn.
-- `GET /api/settings` → `200 {"hitl_enabled": bool, "thinking_enabled":
-  bool, "edit_mode_default": "truncate"|"fork", "timezone": str|null}` —
+- `GET /api/settings` → `200 {"thinking_enabled": bool,
+  "edit_mode_default": "truncate"|"fork", "timezone": str|null}` —
   the full document, defaults applied for any key not yet stored
-  (`hitl_enabled` defaults `true`, `thinking_enabled` defaults `false`,
-  `edit_mode_default` defaults `"truncate"`, `timezone` `null`).
+  (`thinking_enabled` defaults `false`, `edit_mode_default` defaults
+  `"truncate"`, `timezone` `null`). `hitl_enabled` (removed in #342; what
+  the agent may do is the platform's tool permissions) is ignored, in a
+  `PUT` and in stored rows.
   `timezone` (M17-07) is an IANA zone the app sets from the device whenever
   they differ; it's the default for routines the agent makes.
 - `PUT /api/settings` body: any subset of the fields above → `200`
@@ -1623,8 +1615,7 @@ Client → server:
  "mode": "truncate"|"fork"?}
 {"type": "cancel"}
 {"type": "approval_response", "interrupt_id": "str",
- "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}],
- "allow_writes": true?}
+ "decisions": [{"tool_call_id": "str", "decision": "approve"|"reject"}]}
 ```
 
 `cancel` (M8-01) stops the in-flight turn early. It's only meaningful while
@@ -1650,12 +1641,12 @@ deepagents' HITL shape: `{"type": "approve"}` or `{"type": "reject",
 per pending `tool_call_id`; a mismatched `interrupt_id` or incomplete
 decision list is an invalid frame (`error` + close 1008).
 
-`allow_writes: true` (#326) is only valid when the `approval_request` had
-`can_allow_writes` and every decision is `approve`; otherwise it's an
-invalid frame (`error` + close 1008). It sets the run's routine to
-`allow_writes` and resumes in that mode, so the paused calls run and later
-writes in the same run don't stop (deletes and destructive migrations
-still do).
+The paused calls take the user's answer even if their permission changed
+meanwhile (a rejection holds after "Always allow"). Later calls in the
+resumed turn follow the permissions read for it, so "Always allow"
+(the card saves the permission through `PATCH /api/platform/tools`, then
+approves) lets the rest of the turn run unasked. An `allow_writes` from an
+older app is ignored.
 
 `cancel` **while awaiting approval** is not the M8-01 cancel-a-running-task
 path (there is no running task — the graph is paused). It rejects every
@@ -1702,8 +1693,7 @@ Server → client, in order within a turn:
 {"type": "approval_request", "interrupt_id": "str",
  "actions": [{"tool_call_id": "str", "name": "str",
               "category": "file"|"exec"|"plan"|"web"|"app"|"other",
-              "args": {}, "description": "str"}],           // args truncated like tool_start
- "can_allow_writes": true?}   // #326: a routine run paused in ask mode, no delete/migration pending
+              "args": {}, "description": "str"}]}           // args truncated like tool_start
 {"type": "turn_end", "status": "completed"|"cancelled"|"awaiting_approval",
  "duration_ms": int}   // M9-02: elapsed since this turn's turn_start
 {"type": "error", "message": "str"}                        // followed by a normal close, code 1011
@@ -1711,21 +1701,40 @@ Server → client, in order within a turn:
 
 `turn_end.status` (M8-01 / M8-03) is `"completed"` for a normal finish,
 `"cancelled"` if the client sent `cancel` mid-turn, or `"awaiting_approval"`
-when the turn paused on one or more mutating tool calls (`write_file`,
-`edit_file`, `delete`, `execute_code`) with HITL on. `approval_request` is
-**always** immediately followed by `turn_end {"status": "awaiting_approval"}`
-— there is no `turn_end {"status": "completed"}` for that turn. HITL is
-gated per turn by `SettingsStore.hitl_enabled` (read at the start of every
-fresh and resumed turn into `configurable.hitl_enabled`); with HITL off
-those four tools run without an interrupt, same as any other tool.
+when the turn paused on one or more tool calls the user's permissions set
+to Ask first. `approval_request` is **always** immediately followed by
+`turn_end {"status": "awaiting_approval"}` — there is no `turn_end
+{"status": "completed"}` for that turn.
+
+**Agent tool permissions** (#342; the platform side is
+`docs/PLATFORM.md` §4 "Agent tool permissions").
+- At startup agent-server registers its tool catalog
+  (`app/agent/tool_catalog.py`: name, label, group, read-only, description)
+  with `PUT /internal/tool-catalog`, retrying until the platform takes it.
+- Every fresh and resumed turn (chat, routine run, app helper) reads the
+  user's policy with its delegation (`GET /api/platform/tools/policy`,
+  `app/agent/tool_policy.py`) into `configurable["tool_policy"]`. If it
+  can't be read the turn ends with an `error` frame and the model isn't
+  called. A turn with no delegation binds every tool and asks for each.
+- `ToolPolicyMiddleware` (also on the general-purpose subagent) binds only
+  the tools that are on. The list is fixed for the thread, so the prompt
+  prefix stays cached; a call to a tool turned off since is refused with a
+  tool error the model reads (no `tool_start`/`tool_end`).
+- A tool asks unless its permission is allow. The UI shows "Always allow"
+  on the card for tools the user may allow.
+- Frontend: Settings → Agent permissions (`settings/permissions.tsx`) has
+  each tool's on/off switch and Ask first / Allow, by group, with the
+  admin's locks shown; admins also get Settings → Agent tools
+  (`settings/agent-tools.tsx`, step-up) for the everyone-wide on/off and
+  "Each person chooses" / "Always ask".
 
 App tools (M13-02, category `app`) raise their own interrupts from inside
 the call, after its `tool_start` (and no `tool_end` for the paused call);
 the resumed call sends `tool_start` again with the same `tool_call_id`.
-`approve_migration` always asks; `app_sql` writes and `app_action` in a
-shared space ask when HITL is on. Their `args` carry `space` (`/personal`
-or `/spaces/<slug>`) plus `sql`, `name` + `params`, or `migration_id` +
-`steps`. Several interrupts in one step (parallel tool calls) arrive as
+`app_update`, `app_action` and `approve_migration` ask unless the user
+allows them (`app_query` only reads). Their `args` carry `space`
+(`/personal` or `/spaces/<slug>`) plus `sql`, `name` + `params`, or
+`migration_id` + `steps`. Several interrupts in one step (parallel tool calls) arrive as
 one `approval_request` with one action each, answered by one
 `approval_response`. A rejected app tool still runs to report the
 rejection, so a `tool_start`/`tool_end` does follow for it.
@@ -3507,7 +3516,7 @@ and the model weights.
   (D1), so one user can slow others down, and request timing isn't
   isolated.
 - Apps (M12/M13): invariant 7 (sandboxed apps hold no credentials, RPC
-  touches only the instance's database) and the app RPC/`app_sql` paths
+  touches only the instance's database) and the app RPC/`app_query`/`app_update` paths
   of invariants 2 and 3 get their checks with those milestones.
 - The egress proxy's DNS-rebinding window ("Egress proxy (M7-02)" below).
 - Nothing is hardened for public internet exposure yet (M15's opt-in
@@ -3912,8 +3921,8 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/platform_files_smoke.sh` | M11-01: same transport — CLI-created owner/editor/viewer/outsider users and two shared spaces; the files API role matrix (reads 200/206 for members, writes 403 `insufficient_role` for the viewer, everything 404 for the outsider, same as an unknown slug), on-disk `<uid>:<gid>` `0660`/`2770`, cross-space move/copy needing write on both, Range 206/416/HEAD, a planted cross-space symlink `422`; deletes its rows and dirs on exit. Also in `gate_full.sh` | After touching `services/platform/` files/media code |
 | `scripts/e2e/app_runner_browser_smoke.sh` | M12-06 / M13-04: through Caddy in headless Chromium — CLI-created owner and viewer of a throwaway `e2e-runner-*` shared space; the owner uploads the SDK's `runtime-check` fixture to the space's `Apps` folder, registers, installs and builds it; then in the web app: Apps tab → the instance under its space → the runner at `/apps/<id>` in an `<iframe sandbox="allow-scripts">`; a row written in the app is in the instance database (REST) and shown after a page reload; Ask the agent opens a panel seeded with app.json, AGENT.md, schema.sql, instance id and space, and a REST write while it is open appears in the app (`db_changed`); a rebuild (v2, from `app_fixture.mjs`) hot-reloads in the same frame; v2's Crash button raises the host's error overlay with the message and its Reload brings the app back in a fresh frame; the viewer sees "View only", the row, and a write refused `read_only` with the database unchanged; the viewer's long-press sheet has no rebuild or uninstall; (M19-04) the owner's tile has an icon, and its long-press sheet rebuilds the app, opens App info and uninstalls the instance; no sandbox-frame request got a response. Deletes the space (apps and instances cascade), bundles, users on exit. Also in `gate_full.sh`. `scripts/e2e/app_fixture.mjs` installs the same fixture as your own user for trying it by hand (`HOST-CHECKS.md` M12) | After touching the Apps tab / runner (`services/frontend`), `@homeai/sdk` `askAgent`, or the Caddy image |
 | `scripts/e2e/grocery_app_smoke.sh` | M12-07: the reference app `examples/apps/grocery-list` through Caddy in headless Chromium — CLI-created owner, editor and viewer of a throwaway `e2e-grocery-*` shared space; the owner uploads, registers, installs and builds the app in their Personal space and in the shared space (zero diagnostics each). Personal: Apps tab → the app; add three items (button and Enter), re-adding "milk" doesn't duplicate it (`addItem` action), check/uncheck (`aria-checked` and the database), open Bread's detail screen and save a quantity, Clear checked (`clearChecked` action) deletes only the checked item, the list is the same after a reload. Shared: the owner's new item and the editor's check / new item each appear in the other's open app without a reload (`db_changed`); the personal list is untouched. The viewer sees the list, no add / clear controls and a disabled checkbox, and RPC `run` and `action` as the viewer are `403` with the database unchanged; no sandbox-frame request got a response. Deletes the shared space, bundles and users (with their personal spaces) on exit. Also in `gate_full.sh`. `app_fixture.mjs install --app examples/apps/grocery-list` installs it as your own user (`examples/apps/README.md`) | After touching `examples/apps/grocery-list`, the SDK, the runner, or the platform's app data path |
-| `scripts/eval/app_authoring/run.sh` | M13-03: ten real-model authoring prompts (grocery list with quantities, habit tracker, notes, …) through Caddy as a throwaway `e2e-authoring-*` user with HITL off. Pass = `build_app` succeeded (compile + smoke) and a scripted data-model check (expected columns + insert/select). Reports pass rate, failure taxonomy, template choice, and `useDatabase` vs `useSQLiteContext`. Bar ≥ 7/10; below 5/10 escalate. Not in `gate_full.sh` (GPU, ~tens of minutes). Deletes the user, personal space, bundles and git repos on exit | After changing app templates, the authoring guide, `@homeai/sdk`, or the app tools |
-| `scripts/e2e/g13_grocery_smoke.sh` | M13-05 GATE G13: real-model scenario through Caddy as a throwaway `e2e-g13-*` user with HITL off — chat creates a grocery list app (`create_app` + `build_app`), a follow-up adds quantities and builds again, the Apps tab runner shows it, a UI add is visible to `app_sql`, an agent `app_action`/`app_sql` write appears in the open runner, `POST /apps/{id}/revert` restores the first commit. Assertions on tool transcripts / apps API / instance RPC / runner DOM, never prose alone; one retry per turn if the required tool call didn't happen. Writes `scripts/e2e/g13-last-report.json` (gitignored). Deletes the user, personal space, bundles and git repo on exit. Also in `gate_m13.sh` / `gate_full.sh`. Takes `/tmp/homeai-stack.lock`. | Before the M13 milestone gate; after changing app tools, templates, the runner, or history/revert |
+| `scripts/eval/app_authoring/run.sh` | M13-03: ten real-model authoring prompts (grocery list with quantities, habit tracker, notes, …) through Caddy as a throwaway `e2e-authoring-*` user with every tool allowed. Pass = `build_app` succeeded (compile + smoke) and a scripted data-model check (expected columns + insert/select). Reports pass rate, failure taxonomy, template choice, and `useDatabase` vs `useSQLiteContext`. Bar ≥ 7/10; below 5/10 escalate. Not in `gate_full.sh` (GPU, ~tens of minutes). Deletes the user, personal space, bundles and git repos on exit | After changing app templates, the authoring guide, `@homeai/sdk`, or the app tools |
+| `scripts/e2e/g13_grocery_smoke.sh` | M13-05 GATE G13: real-model scenario through Caddy as a throwaway `e2e-g13-*` user with every tool allowed — chat creates a grocery list app (`create_app` + `build_app`), a follow-up adds quantities and builds again, the Apps tab runner shows it, a UI add is visible to `app_query`, an agent `app_action`/`app_update` write appears in the open runner, `POST /apps/{id}/revert` restores the first commit. Assertions on tool transcripts / apps API / instance RPC / runner DOM, never prose alone; one retry per turn if the required tool call didn't happen. Writes `scripts/e2e/g13-last-report.json` (gitignored). Deletes the user, personal space, bundles and git repo on exit. Also in `gate_m13.sh` / `gate_full.sh`. Takes `/tmp/homeai-stack.lock`. | Before the M13 milestone gate; after changing app tools, templates, the runner, or history/revert |
 | `scripts/e2e/gate_m13.sh` | M13-05 GATE G13: milestone gate for M13 — stack healthy (no rebuild; never recreates model-runner or postgres), `app_history_smoke.sh`, agent-server `tests/test_app_tools.py`, `app_runner_browser_smoke.sh`, then `g13_grocery_smoke.sh`. Throwaway `e2e-*` users only; never completes bootstrap. Takes `/tmp/homeai-stack.lock`. Also in `gate_full.sh` | After touching app authoring, app tools, history/revert, or the runner's Ask-the-agent panel; before the M13 milestone gate |
 | `scripts/e2e/g14_exports_smoke.sh` | M14-06 GATE G14: live scenario through Caddy as throwaway `e2e-g14-*` owner + family editor — calendar (export `events` v1) uploaded/registered/built/installed in Personal and the family space; planner (reads that export) built in Personal and published into the family catalog; editor pinned-install without `granted_reads` is `422 reads_required`, then succeeds with the grant; seed an event in each calendar; planner RPC `getAll` on `calendar_events` sees both `_space`s; a write to the view is `sql_not_allowed`; an ungranted hello app cannot see the view (`sql_error`). REST (`lib/auth.sh`); no browser, no GPU. Deletes users, spaces, apps, instances, bundles, git repos and `app-releases/` on exit. Also in `gate_m14.sh` / `gate_full.sh`. Takes `/tmp/homeai-stack.lock`. | Before the M14 milestone gate; after changing publish/catalog/install, exports/reads, or app RPC |
 | `scripts/e2e/gate_m14.sh` | M14-06 GATE G14: milestone gate for M14 — stack healthy (no rebuild; never recreates model-runner or postgres; no GPU), `app_publish_smoke.sh`, `home_launcher_smoke.sh`, platform pytest (`test_app_exports.py`, `test_system_apps.py`, `test_exec_grants.py`, `test_manifest.py`), then `g14_exports_smoke.sh`. Throwaway `e2e-*` users only; never completes bootstrap. Does not re-run `verify_tenancy.sh` (already earlier in `gate_full.sh`). Takes `/tmp/homeai-stack.lock`. Also in `gate_full.sh` | After touching publish/catalog, Home, system apps, exports/reads, or exec app-data grants; before the M14 milestone gate |
@@ -3931,7 +3940,7 @@ reachability, reboot survival, etc.) live in
 | `scripts/e2e/home_launcher_smoke.sh` | M14-02, M19-01, M19-05, M19-07: through Caddy in headless Chromium — CLI-created `e2e-home-*` member signs in and lands on the Chat page of the `/` pager; with only Personal the indicator is Chat and Personal; Personal has Files, Routines, Settings and Add app tiles (each opens, back returns to Personal) and an empty installed list; a throwaway shared space with the runtime-check app is a further page: Personal without the app, a horizontal swipe moves to the shared page with its app and title (no Routines or Settings), Files opens at that space, and the page survives back and a reload; Add app on Personal opens its catalog; `/settings/routines` opens Routines; the old `/apps` and `/chat` links land on Personal and Chat. Deletes the user, personal space, and shared space on exit. Takes `/tmp/homeai-stack.lock`. | After touching the home pager or the space pages |
 | `scripts/e2e/auth_browser_smoke.sh` | M10-06: web sign-in through Caddy → `platform` — Setup screen renders while bootstrap is open (never submitted), wrong password shows its error, CLI user signs in → Home (session survives reload), Settings → Log out → `/login` with the session revoked, invite accept via `/invite?token=…` (e2e admin creates the invite) and reuse refused; deletes every `e2e-*` account and the invite on exit | After touching the frontend auth flow, `/api/auth/*`, or the Caddy auth route |
 | `scripts/e2e/tenancy_threads_smoke.sh` | M10-04: two CLI-created `e2e-*` users through Caddy — unauthenticated `/api/threads` and WS upgrade `401`; without a session even a genuine identity token (minted via `/internal/auth/verify`) is `401`, and with Bob's session plus Alice's token the request is still Bob's; Bob gets Alice's thread as nonexistent (REST `404`s, `state` null, `DELETE` no-op, WS close `4404`) while Alice's thread and messages are intact | After touching Caddy auth routing, agent-server identity checks, or thread ownership |
-| `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with HITL off — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |
+| `scripts/e2e/agent_tenancy_smoke.sh` | M11-02: three `e2e-*` users and a CLI shared space (owner / editor / viewer), real model over the chat WS with every tool allowed — A's `write_file` to `/personal/notes.md` shows up in A's Files API; B's `read_file` of the same path is not found and B's `/personal` is empty; the editor's edit in the shared space is visible to the owner; the viewer can read but its `write_file` is refused and nothing is written. Prints the tool transcripts | After touching the delegation endpoints, `PlatformFilesBackend`, or the agent's system prompt |
 | `scripts/check_socket_exclusivity.sh` | No service besides `code-exec-manager` mounts `docker.sock` | After touching `docker-compose.yml`'s volumes |
 
 Each script is self-contained (does its own health-waiting/cleanup) and
@@ -3946,7 +3955,7 @@ order if you need to run a subset by hand.
 `e2e_auth_end` deletes the user, its personal space, and its threads,
 checkpoints, and settings. A script started by another that is already
 signed in (e.g. everything under `gate_full.sh`) reuses that session, so
-per-user state like `hitl_enabled` carries across the chain. The
+per-user state like tool permissions carries across the chain. The
 browser smokes sign in through the UI (`auth_helpers.mjs`) and send the
 page's cookie on their side-channel REST calls. None of this completes
 bootstrap.

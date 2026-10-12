@@ -15,10 +15,10 @@
 #      the turn pauses on `approval_request`, then asserts
 #      `GET /api/threads/{id}/state` reports a non-null `pending_approval`.
 #   5. (M8-08) Restarts agent-server again and re-GETs the same endpoint —
-#      `pending_approval` (same `interrupt_id`) must still be there. HITL
-#      is on by default; this step still PUTs `hitl_enabled: true` so a
-#      leftover `false` from `settings_rest_smoke.sh` / a previous UI
-#      toggle cannot silently skip the interrupt.
+#      `pending_approval` (same `interrupt_id`) must still be there.
+#      write_file asks by default; this step still sets it to ask
+#      (`ensure_hitl.sh true`) so a leftover "allow" from another script
+#      cannot silently skip the interrupt.
 #
 # Uses `scripts/ws_smoke.py` (already parameterized via `WS_SMOKE_THREAD_ID`/
 # `WS_SMOKE_PROMPT` env vars, M2-07) rather than writing a new WS client, and
@@ -33,7 +33,7 @@
 # repeated runs (e.g. inside gate_full.sh, which chains this script
 # alongside 9 others against the same live stack).
 #
-# M8-08: the HITL thread / leftover target file / original `hitl_enabled`
+# M8-08: the HITL thread / leftover target file / original tool permissions
 # are cleaned up in the same EXIT trap so this stays re-runnable inside
 # `gate_m8.sh` / `gate_full.sh`.
 #
@@ -265,31 +265,8 @@ print(''.join(tokens))
 }
 
 ensure_hitl_on() {
-  local resp status body current
-  resp="$(rest_request GET "${API_BASE}/settings")"
-  status="$(sed -n '1p' <<<"$resp")"
-  body="$(sed -n '2p' <<<"$resp")"
-  if [ "$status" != "200" ]; then
-    log "ERROR: GET /api/settings expected 200, got ${status}: ${body}"
-    return 1
-  fi
-  SAVED_HITL="$(json_field "$body" hitl_enabled)"
-  current="$SAVED_HITL"
-  if [ "$current" != "true" ]; then
-    log "hitl_enabled=${current}; PUT hitl_enabled=true for the pending-approval check..."
-    resp="$(rest_request PUT "${API_BASE}/settings" '{"hitl_enabled": true}')"
-    status="$(sed -n '1p' <<<"$resp")"
-    body="$(sed -n '2p' <<<"$resp")"
-    if [ "$status" != "200" ]; then
-      log "ERROR: PUT /api/settings expected 200, got ${status}: ${body}"
-      return 1
-    fi
-    if [ "$(json_field "$body" hitl_enabled)" != "true" ]; then
-      log "ERROR: PUT /api/settings did not set hitl_enabled=true: ${body}"
-      return 1
-    fi
-  fi
-  log "OK: hitl_enabled=true (was ${SAVED_HITL})"
+  SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" true)" || return 1
+  log "OK: tools that change things ask first (was ${SAVED_HITL})"
 }
 
 # One WS turn that should pause on write_file. Prints the transcript path
@@ -383,12 +360,12 @@ cleanup() {
   # re-runnable and doesn't leave its checkpoint growing across repeated
   # runs - this script previously had no cleanup at all.
   # M8-08: also drop the HITL thread, the unused target file, and restore
-  # whatever hitl_enabled was before this script forced it on.
+  # the tool permissions from before this script set them to ask.
   delete_thread "$THREAD_ID"
   delete_thread "$HITL_THREAD_ID"
   e2e_personal_rm "$HITL_FILE_NAME"
-  if [ -n "$SAVED_HITL" ] && [ "$SAVED_HITL" != "true" ]; then
-    rest_request PUT "${API_BASE}/settings" "{\"hitl_enabled\": ${SAVED_HITL}}" >/dev/null 2>&1 || true
+  if [ -n "$SAVED_HITL" ]; then
+    bash "${SCRIPT_DIR}/ensure_hitl.sh" "$SAVED_HITL" >/dev/null 2>&1 || true
   fi
   e2e_auth_end
 }

@@ -20,7 +20,7 @@
 #                    `curl -b`)
 # If E2E_AUTH_COOKIE is already set (a parent script such as gate_full.sh
 # signed in), it's reused and this script owns no user: per-user state like
-# `hitl_enabled` then carries across the whole chain, as before M10-04.
+# tool permissions then carry across the whole chain, as before M10-04.
 #
 # `e2e_auth_create_user <prefix>` makes an extra user for multi-user checks
 # (sets E2E_NEW_USER / E2E_NEW_PASSWORD); `e2e_auth_login <username>

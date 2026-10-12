@@ -144,9 +144,9 @@ async function createNewThread(page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   await loginThroughUi(page, e2eUser);
   smokeCookie = await sessionCookie(page.context());
-  // HITL is per user and on by default; the positive scenario's write_file
+  // write_file asks first by default; the positive scenario's write_file
   // isn't wired to approve it.
-  apiRequest('PUT', `${API_BASE}/settings`, { hitl_enabled: false });
+  allowWriteFile();
   await startNewChat(page);
 }
 
@@ -221,6 +221,13 @@ urllib.request.urlopen(req, timeout=15)
 `;
   execFileSync('python3', ['-c', script, method, url, body ? JSON.stringify(body) : ''], {
     env: { ...process.env, E2E_AUTH_COOKIE: smokeCookie ?? '' },
+  });
+}
+
+/** Lets the smoke user's write_file run without asking (#342). */
+function allowWriteFile() {
+  apiRequest('PATCH', `${API_BASE}/platform/tools`, {
+    changes: [{ name: 'write_file', permission: 'allow' }],
   });
 }
 

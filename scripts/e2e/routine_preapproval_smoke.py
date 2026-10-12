@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""#326: pre-approving a routine, on the live stack and the real model.
+"""#342: "Always allow" from a paused routine run, on the live stack and the real model.
 
-An ask-mode routine (made through the API) is run now and stops on its
-write; answering with `allow_writes` finishes the run without another
-stop, writes the file, and leaves the routine on "allow_writes".
+A routine (made through the API) is run now and stops on its first write,
+because write_file asks by default. Setting write_file to allow (what the
+app's "Always allow" does) and approving finishes the run without another
+stop and writes both files. The user's write_file setting is put back.
 
 Env: E2E_AUTH_COOKIE, E2E_BASE (default http://localhost).
 Deletes its routine, threads and file on the way out.
@@ -78,7 +79,21 @@ def wait_run(routine_id: str, want: set[str], budget_s: int = TURN_TIMEOUT_S) ->
     return {}
 
 
-async def approve_with_allow_writes(thread_id: str, pending: dict) -> list[dict]:
+def write_file_permission() -> str:
+    status, body = api("GET", "/api/platform/tools")
+    if status != 200:
+        fail(f"GET /api/platform/tools: HTTP {status} {body!r}")
+    return next(t["permission"] for t in body["tools"] if t["name"] == "write_file")
+
+
+def set_write_file(permission: str) -> None:
+    change = {"name": "write_file", "permission": permission}
+    status, body = api("PATCH", "/api/platform/tools", {"changes": [change]})
+    if status != 200:
+        fail(f"PATCH write_file={permission}: HTTP {status} {body!r}")
+
+
+async def approve(thread_id: str, pending: dict) -> list[dict]:
     ws_base = BASE.replace("http", "ws", 1)
     async with connect(
         f"{ws_base}/ws/chat/{thread_id}", additional_headers={"Cookie": COOKIE}
@@ -92,14 +107,14 @@ async def approve_with_allow_writes(thread_id: str, pending: dict) -> list[dict]
                         {"tool_call_id": a["tool_call_id"], "decision": "approve"}
                         for a in pending["actions"]
                     ],
-                    "allow_writes": True,
                 }
             )
         )
         return await frames_until_turn_end(ws)
 
 
-def check_allow_writes_from_a_run(routines: list[str], threads: list[str]) -> None:
+def check_always_allow_from_a_run(routines: list[str], threads: list[str]) -> None:
+    set_write_file("ask")
     status, routine = api(
         "POST",
         "/api/routines",
@@ -109,7 +124,6 @@ def check_allow_writes_from_a_run(routines: list[str], threads: list[str]) -> No
             f"{NOTE}.second. Use write_file for both; don't run code.",
             "schedule": {"kind": "daily", "time": "03:00"},
             "timezone": "UTC",
-            "approval_mode": "ask",
         },
     )
     if status not in (200, 201):
@@ -121,22 +135,24 @@ def check_allow_writes_from_a_run(routines: list[str], threads: list[str]) -> No
     threads.append(run["thread_id"])
     run = wait_run(routine["id"], {"waiting_approval", "succeeded", "failed"})
     if run["status"] != "waiting_approval":
-        fail(f"an ask-mode run didn't stop for its write: {run['status']}")
+        fail(f"the run didn't stop for its write: {run['status']}")
     _, state = api("GET", f"/api/threads/{run['thread_id']}/state")
     pending = state["pending_approval"]
-    if not pending.get("can_allow_writes"):
-        fail(f"no can_allow_writes on the pending approval: {pending!r}")
+    if [a["name"] for a in pending["actions"]] != ["write_file"]:
+        fail(f"unexpected pending approval: {pending!r}")
 
-    frames = asyncio.run(approve_with_allow_writes(run["thread_id"], pending))
+    set_write_file("allow")
+    frames = asyncio.run(approve(run["thread_id"], pending))
     if any(f.get("type") == "approval_request" for f in frames):
-        fail("the run stopped again after allow_writes")
+        fail("the run stopped again after Always allow")
     run = wait_run(routine["id"], {"succeeded", "failed", "waiting_approval"})
     if run["status"] != "succeeded":
         fail(f"run ended {run['status']} ({run.get('detail')})")
-    _, after = api("GET", f"/api/routines/{routine['id']}")
-    if after["approval_mode"] != "allow_writes":
-        fail(f"routine mode is {after['approval_mode']!r}")
-    log("OK: allow_writes finished the run and switched the routine")
+    for path in (NOTE, f"{NOTE}.second"):
+        status, _ = api("GET", f"/api/platform/files/download?path={urllib.parse.quote(path)}")
+        if status != 200:
+            fail(f"{path} wasn't written: HTTP {status}")
+    log("OK: Always allow finished the run without another stop")
 
 
 def cleanup(routines: list[str], threads: list[str]) -> None:
@@ -151,10 +167,12 @@ def cleanup(routines: list[str], threads: list[str]) -> None:
 def main() -> None:
     routines: list[str] = []
     threads: list[str] = []
+    saved = write_file_permission()
     try:
-        check_allow_writes_from_a_run(routines, threads)
+        check_always_allow_from_a_run(routines, threads)
     finally:
         cleanup(routines, threads)
+        set_write_file(saved)
     log("PASS")
 
 

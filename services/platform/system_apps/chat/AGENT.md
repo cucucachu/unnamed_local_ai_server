@@ -14,4 +14,4 @@ Settings tab, not in this app.
 
 Chat has no SQLite database and no `app_action`s. You already *are* the
 chat: reply in this thread. File work uses the file tools; app data uses
-`list_apps` / `app_sql` / `app_action`. Do not try to edit this package.
+`list_apps` / `app_query` / `app_update` / `app_action`. Do not try to edit this package.

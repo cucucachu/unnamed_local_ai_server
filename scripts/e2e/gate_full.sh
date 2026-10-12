@@ -90,13 +90,13 @@
 #      the launcher, runner and chat smokes again)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
-# and PUTs hitl_enabled=false. HITL is on by default (M8-03); older mutating
-# gates (m2/m3/m4/exec/research) send write_file/execute_code without an
-# approval_response and would stall on approval_request. Those scripts also
-# disable HITL themselves now; this chain-level PUT is belt-and-suspenders
-# so a leftover `true` from a previous UI toggle cannot fail the first
-# step. persistence_smoke.sh / chat_browser_smoke.sh / gate_m8.sh turn HITL
-# back on for their own assertions and restore afterwards.
+# and allows every tool for the e2e user (`ensure_hitl.sh false`, #342).
+# Tools that change things ask by default; older gates (m2/m3/m4/exec/
+# research) send write_file/execute_code without an approval_response and
+# would stall on approval_request. Those scripts also allow tools themselves;
+# this chain-level call is belt-and-suspenders. persistence_smoke.sh /
+# chat_browser_smoke.sh / gate_m8.sh set tools back to asking for their own
+# assertions and restore afterwards.
 #
 # M10-04: every API call needs a session and settings are per user, so this
 # script signs in once as a throwaway `e2e-*` user (`lib/auth.sh`) before
@@ -195,9 +195,9 @@ step_stack_up() {
   e2e_auth_begin gate-full
   log "Signed in as ${E2E_AUTH_USER} for the whole chain"
   # HITL-on-by-default would stall pre-M8 mutating gates on approval_request.
-  log "Turning hitl_enabled off for pre-M8 mutating steps..."
+  log "Allowing every tool for pre-M8 mutating steps..."
   bash "${SCRIPT_DIR}/ensure_hitl.sh" false >/dev/null
-  log "OK: docker compose up -d --build done; hitl_enabled=false"
+  log "OK: docker compose up -d --build done; every tool allowed"
 }
 
 # $1: display name for the summary table. $2..: the command to run.

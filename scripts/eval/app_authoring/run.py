@@ -434,9 +434,18 @@ async def main() -> int:
     if args.limit:
         cases = cases[: args.limit]
 
-    status, _ = api("PUT", "/api/settings", {"hitl_enabled": False})
+    status, body = api("GET", "/api/platform/tools")
     if status != 200:
-        fail(f"PUT hitl_enabled=false: HTTP {status}")
+        fail(f"GET /api/platform/tools: HTTP {status}")
+    changes = [
+        {"name": t["name"], "permission": "allow"}
+        for t in body["tools"]
+        if t["enabled"] and not t["permission_locked"] and t["permission"] != "allow"
+    ]
+    if changes:
+        status, _ = api("PATCH", "/api/platform/tools", {"changes": changes})
+        if status != 200:
+            fail(f"allowing every tool: HTTP {status}")
 
     seen = {a["id"] for a in apps_in_personal()}
     results: list[dict] = []

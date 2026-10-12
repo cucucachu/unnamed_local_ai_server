@@ -122,9 +122,9 @@ step_stack_up_and_healthy() {
   # M8-03 made HITL on by default; web_research_smoke / research_browser
   # write_file turns are not wired to send approval_response.
   # (research_browser_smoke.mjs also turns it off for its own browser user.)
-  log "Turning hitl_enabled off so research write_file is not interrupted..."
+  log "Allowing every tool so research write_file is not interrupted..."
   bash "${SCRIPT_DIR}/ensure_hitl.sh" false >/dev/null
-  log "OK: hitl_enabled=false"
+  log "OK: every tool allowed"
 }
 
 # ---- steps 1-4: the existing verify_*/smoke scripts, chained -------------

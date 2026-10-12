@@ -2,12 +2,12 @@
 # M13-05 (GATE G13) real-model scenario: "make me a grocery list app"
 # end-to-end; the agent and the UI edit the same data.
 #
-# A throwaway `e2e-g13-*` user (recovery CLI, `lib/auth.sh`) with HITL off:
+# A throwaway `e2e-g13-*` user (recovery CLI, `lib/auth.sh`) with every tool allowed:
 #   1. Chat: create a grocery list app (`create_app` + `build_app`).
 #   2. Iterate once ("add quantities") and build again.
 #   3. The Apps tab runner shows it; adding an item in the UI lands in the
 #      instance database.
-#   4. The agent `app_sql`s that row; then `app_action` / `app_sql` adds
+#   4. The agent reads that row (`app_query`); then `app_action` / `app_update` adds
 #      another, which appears in the still-open runner (`db_changed`).
 #   5. `POST /apps/{id}/revert` to the first build's commit; a revert
 #      commit is current and the app rebuilds.

@@ -14,6 +14,6 @@ sandboxed app and not editable: this package ships in the platform image.
 ## For the agent
 
 Home has no database and no actions. To work with an installed app, call
-`list_apps` and then `app_sql` / `app_action` on that instance. To move
+`list_apps` and then `app_query` / `app_update` / `app_action` on that instance. To move
 files between spaces, use the Files system app (`app_action` with
 instance `files`), not Home.

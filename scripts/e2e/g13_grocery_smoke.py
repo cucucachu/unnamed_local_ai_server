@@ -400,38 +400,38 @@ def wait_state(key: str, timeout_s: int, what: str) -> dict[str, Any]:
 async def roundtrip(app: dict, inst: dict) -> None:
     thread = new_thread()
     read_prompt = (
-        f"In the grocery list app {app.get('slug')} (instance {inst['id']}), use app_sql to "
+        f"In the grocery list app {app.get('slug')} (instance {inst['id']}), use app_query to "
         f"SELECT the items from the database. Tell me the names you see, including whether "
         f"{UI_ITEM} is there. Don't change anything."
     )
     for attempt in (1, 2):
         frames = await run_turn(thread, f"read attempt {attempt}/2", read_prompt)
         blob = json.dumps(frames).lower()
-        previews = " ".join(tool_previews(frames, "app_sql")).lower()
+        previews = " ".join(tool_previews(frames, "app_query")).lower()
         if UI_ITEM.lower() in previews or UI_ITEM.lower() in blob:
-            log(f"ok   agent app_sql saw {UI_ITEM}")
+            log(f"ok   agent app_query saw {UI_ITEM}")
             break
-        log(f"  WARN: read attempt {attempt}: app_sql did not mention {UI_ITEM}")
+        log(f"  WARN: read attempt {attempt}: app_query did not mention {UI_ITEM}")
         if attempt == 2:
-            fail(f"agent never read {UI_ITEM} via app_sql", "agent_did_not_read")
+            fail(f"agent never read {UI_ITEM} via app_query", "agent_did_not_read")
 
     write_prompt = (
         f"Add an item named exactly {AGENT_ITEM} to the grocery list app {app.get('slug')} "
-        f"(instance {inst['id']}) using app_action addItem with that name, or app_sql INSERT "
+        f"(instance {inst['id']}) using app_action addItem with that name, or app_update INSERT "
         "if there is no addItem action. Don't ask questions — just add it."
     )
     for attempt in (1, 2):
         frames = await run_turn(thread, f"write attempt {attempt}/2", write_prompt)
-        tools_ok = tool_starts(frames, "app_action") or tool_starts(frames, "app_sql")
+        tools_ok = tool_starts(frames, "app_action") or tool_starts(frames, "app_update")
         if tools_ok and rows_mention(inst["id"], AGENT_ITEM):
             log(f"ok   agent wrote {AGENT_ITEM} (in the instance database)")
             break
         log(
             f"  WARN: write attempt {attempt}: actions={tool_starts(frames, 'app_action')} "
-            f"sql={tool_starts(frames, 'app_sql')} in_db={rows_mention(inst['id'], AGENT_ITEM)}"
+            f"sql={tool_starts(frames, 'app_update')} in_db={rows_mention(inst['id'], AGENT_ITEM)}"
         )
         if attempt == 2:
-            fail(f"agent never wrote {AGENT_ITEM} via app_action/app_sql", "agent_did_not_write")
+            fail(f"agent never wrote {AGENT_ITEM} via app_action/app_update", "agent_did_not_write")
 
 
 def revert_change(app: dict, first_commit: str | None) -> None:

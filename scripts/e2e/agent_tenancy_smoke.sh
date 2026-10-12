@@ -144,12 +144,25 @@ async def turn(who: str, cookie: str, prompt: str) -> list[dict]:
 def tool_results(frames: list[dict], name: str) -> list[str]:
     return [f["result_preview"] for f in frames if f["type"] == "tool_end" and f["name"] == name]
 
+def allow_all_tools(cookie: str) -> None:
+    """Every tool the user can allow runs without asking (#342)."""
+    status, body = api(cookie, "GET", "/api/platform/tools")
+    if status != 200:
+        fail(f"GET /api/platform/tools: HTTP {status} {body!r}")
+    changes = [
+        {"name": t["name"], "permission": "allow"}
+        for t in body["tools"]
+        if t["enabled"] and not t["permission_locked"] and t["permission"] != "allow"
+    ]
+    if changes:
+        status, body = api(cookie, "PATCH", "/api/platform/tools", {"changes": changes})
+        if status != 200:
+            fail(f"PATCH /api/platform/tools: HTTP {status} {body!r}")
+
 
 async def main() -> None:
     for cookie in (A, B, C):
-        status, _ = api(cookie, "PUT", "/api/settings", {"hitl_enabled": False})
-        if status != 200:
-            fail(f"settings: HTTP {status}")
+        allow_all_tools(cookie)
 
     marker_a = f"alpha-{secrets.token_hex(4)}"
     marker_s = f"shared-{secrets.token_hex(4)}"

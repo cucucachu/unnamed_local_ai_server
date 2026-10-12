@@ -123,7 +123,7 @@ MIN_HOST_POLL_TIMEOUT_S=20
 # Relative to /personal (`lib/files.sh`).
 GATE_M4_DIR="gate-m4"
 PHOTOS_DIR="${GATE_M4_DIR}/photos"
-# Empty until we successfully PUT hitl_enabled=false after the API is up.
+# Empty until ensure_hitl.sh has allowed every tool (the permissions to put back).
 SAVED_HITL=""
 
 log() {
@@ -492,9 +492,9 @@ main() {
   create_thread
   # M8-03 made HITL on by default; this gate's write_file/execute_code
   # prompts are not wired to send approval_response, so turn HITL off.
-  log "Turning hitl_enabled off so mutating tools are not interrupted..."
+  log "Allowing every tool so mutating tools are not interrupted..."
   SAVED_HITL="$(bash "${SCRIPT_DIR}/ensure_hitl.sh" false)"
-  log "OK: hitl_enabled=false (was ${SAVED_HITL})"
+  log "OK: every tool allowed"
   step_seed_files
   step_agent_writes_and_runs_script
   step_ws_frame_categories
