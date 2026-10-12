@@ -274,7 +274,8 @@ except Exception as e:
 # Registers four throwaway destinations as `e2e-egress-*` integrations
 # (straight into the platform's registry; removed in the EXIT trap):
 #   pub   https://example.com/mcp        a public server
-#   lan   http://10.255.255.1:8123/mcp   a private-address exception (nothing listens)
+#   lan   http://<gateway container IP>:8000/health   a private-address exception
+#         (a private address that answers, so passing is visible: 405 to POST)
 #   loop  https://localtest.me/mcp       a public name that resolves to 127.0.0.1
 #   pin   https://example.net/mcp        pinned to a certificate it doesn't have
 # The gateway's credential (EGRESS_GATEWAY_TOKEN, read from .env and handed to
@@ -289,12 +290,19 @@ register_destinations() {
     log "ERROR: EGRESS_GATEWAY_TOKEN not set in .env (M18-05)"
     exit 1
   fi
+  local gw_cid
+  gw_cid="$(docker compose ps -q integrations-gateway 2>/dev/null)"
+  LAN_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$gw_cid" 2>/dev/null | awk '{print $1}')"
+  if [ -z "$LAN_IP" ]; then
+    log "ERROR: integrations-gateway isn't running (its address is the private test destination)"
+    exit 1
+  fi
   log "Registering e2e-egress-* destinations ..."
   _e2e_psql homeai_platform "
     DELETE FROM integrations WHERE slug IN (${E2E_SLUGS});
     INSERT INTO integrations (slug, name, url, credential_model, auth_method, private_address, cert_fingerprint) VALUES
       ('e2e-egress-pub', 'e2e', 'https://example.com/mcp', 'none', 'none', false, NULL),
-      ('e2e-egress-lan', 'e2e', 'http://10.255.255.1:8123/mcp', 'none', 'none', true, NULL),
+      ('e2e-egress-lan', 'e2e', 'http://${LAN_IP}:8000/health', 'none', 'none', true, NULL),
       ('e2e-egress-loop', 'e2e', 'https://localtest.me/mcp', 'none', 'none', false, NULL),
       ('e2e-egress-pin', 'e2e', 'https://example.net/mcp', 'none', 'none', false, repeat('0', 64));
   " >/dev/null
@@ -355,10 +363,10 @@ check_gateway_rules() {
     gateway "https://example.org/" connect:403
   expect_probe 9 "gateway POST https://example.com:8443/ (registered host, other port) refused" \
     gateway "https://example.com:8443/" connect:403
-  expect_probe 10 "gateway POST http://10.255.255.1:8123/mcp (private exception) passes the proxy" \
-    gateway "http://10.255.255.1:8123/mcp" passes
-  expect_probe 11 "gateway POST http://10.255.255.1:8124/mcp (same host, other port) refused" \
-    gateway "http://10.255.255.1:8124/mcp" denied:not_registered
+  expect_probe 10 "gateway POST http://${LAN_IP}:8000/health (private exception) passes the proxy" \
+    gateway "http://${LAN_IP}:8000/health" passes
+  expect_probe 11 "gateway POST http://${LAN_IP}:8001/health (same host, other port) refused" \
+    gateway "http://${LAN_IP}:8001/health" denied:not_registered
   expect_probe 12 "gateway POST https://localtest.me/mcp (registered, resolves to loopback) refused" \
     gateway "https://localtest.me/mcp" connect:403
   expect_probe 13 "gateway POST https://example.net/mcp (pinned to another certificate) refused" \
@@ -384,7 +392,7 @@ print(r.status_code, r.headers.get('x-egress-denied', '-'))
 import urllib.request, urllib.error
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': 'http://egress-proxy:8080'}))
 try:
-    opener.open(urllib.request.Request('http://10.255.255.1:8123/mcp', data=b'{}', method='POST'), timeout=15)
+    opener.open(urllib.request.Request('http://${LAN_IP}:8000/health', data=b'{}', method='POST'), timeout=15)
     print('allowed')
 except urllib.error.HTTPError as e:
     print(e.code, e.headers.get('X-Egress-Denied', '-'))
@@ -399,7 +407,7 @@ from app.config import Settings
 from app.connector import proxy_url
 s = Settings()
 r = httpx2.post('https://example.com/mcp', json={}, proxy=proxy_url(s.egress_proxy_url, s.egress_gateway_token),
-                verify=ssl.create_default_context(cafile=s.ca_bundle), timeout=15)
+                verify=ssl.create_default_context(cafile='/tmp/ca-bundle.pem'), timeout=15)
 print(r.status_code, r.headers.get('x-egress-denied', '-'))
 " 2>&1)" && [ "${out##* }" = "-" ]; then
     pass 18 "the deployed gateway's own credential passes the proxy to a registered host (${out})"
