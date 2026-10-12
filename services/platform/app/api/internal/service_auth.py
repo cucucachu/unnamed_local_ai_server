@@ -19,6 +19,7 @@ from app.core.principal import bearer_token
 AGENT = "agent"
 EXEC = "exec"
 GATEWAY = "gateway"
+EGRESS = "egress"
 
 
 def _secret(settings: Settings, service: str) -> str:
@@ -26,6 +27,7 @@ def _secret(settings: Settings, service: str) -> str:
         AGENT: settings.platform_agent_token,
         EXEC: settings.platform_exec_token,
         GATEWAY: settings.platform_gateway_token,
+        EGRESS: settings.platform_egress_token,
     }[service]
 
 

@@ -356,7 +356,10 @@ what another doc says it should be.
   the exact consumer-side mount/trust recipe.
 - **Env vars consumed** (compose `environment:` block, cross-checked
   against `policy.py`'s own `max_bytes()`): `EGRESS_MAX_BYTES` (default 20
-  MB if unset/unparseable — see `.env.example`).
+  MB if unset/unparseable — see `.env.example`); M18-05:
+  `EGRESS_GATEWAY_TOKEN` (the integrations gateway's proxy credential),
+  `PLATFORM_URL` and `PLATFORM_EGRESS_TOKEN` (where its rules come from).
+- **The integrations gateway's rules** (M18-05): §5 "Egress proxy".
 - **Policy** (`services/egress-proxy/policy.py`, a mitmproxy addon loaded
   via `-s /app/policy.py`): in `request()` — method allowlist (`GET`/`HEAD`
   only, else `403 {"error": "method not allowed by egress policy"}`),
@@ -389,10 +392,13 @@ what another doc says it should be.
   `request()`/`responseheaders()`/`response()` addon hooks driven directly
   through `mitmproxy.test.tflow`/`tutils` (the same test helpers
   mitmproxy's own addon suite uses) for the 403/kill/streaming/logging
-  paths. Run: `cd services/egress-proxy && uv run ruff check . && uv run
-  pytest`. No integration test drives a real mitmproxy process end to end
-  from this repo — `scripts/verify_egress.sh` (below) is that check,
-  against the live stack with real internet.
+  paths. `test_gateway_policy.py` (M18-05) covers the gateway's credential,
+  rules, rule cache and hooks the same way, and `test_live_proxy.py` runs a
+  real `mitmdump` with the addon against local self-signed HTTPS servers
+  (the credential on a real `CONNECT`, a matching and a changed pin, an
+  unpinned self-signed server, an unregistered port). Run: `cd
+  services/egress-proxy && uv run ruff check . && uv run pytest`. Against
+  the live stack with real internet: `scripts/verify_egress.sh` (below).
 
 ### `web-fetch`
 
@@ -487,9 +493,11 @@ what another doc says it should be.
   `services/integrations-gateway/Dockerfile`.
 - **Published port**: none. **Internal port**: `8000`.
 - **Network**: `homeai-internal` only; MCP servers are reached only
-  through `egress-proxy` (`EGRESS_PROXY_URL`). Until M18-05 gives the
-  gateway its own identity at the proxy, the proxy's GET/HEAD-only and
-  no-private-address rules refuse its MCP requests (`unreachable`).
+  through `egress-proxy` (`EGRESS_PROXY_URL`), with the gateway's own proxy
+  credential (`EGRESS_GATEWAY_TOKEN`), which opens installed integrations'
+  exact addresses to it (§5 "Egress proxy"). The proxy's refusals become
+  standard errors: `certificate_changed` for a pin mismatch, `unreachable`
+  (with the reason) otherwise.
 - **Mounts**: named volume `integrations-gateway-keys:/keys` (the
   credential key, `credentials.key`, 32 random bytes, 0600, made on first
   start; only this container mounts it, and it's in neither the database
@@ -506,7 +514,8 @@ what another doc says it should be.
   "needs reconnecting".
 - **Env vars consumed**: `PLATFORM_URL`, `PLATFORM_GATEWAY_TOKEN` (its
   bearer on the platform's `/internal/*`), `INTEGRATIONS_GATEWAY_TOKEN`
-  (what the platform presents here), `EGRESS_PROXY_URL`; `CA_BUNDLE` is set
+  (what the platform presents here), `EGRESS_PROXY_URL`,
+  `EGRESS_GATEWAY_TOKEN`; `CA_BUNDLE` is set
   by the entrypoint. Either token unset: integrations are unavailable.
 - **Tests**: `services/integrations-gateway/tests/` against a fake MCP
   server (`tests/fake_server.py`) in both spec versions, in process and
@@ -2927,6 +2936,10 @@ credential or an instance id.
   "target", "arguments", "context", "approval": "allowed"|"approved",
   "status": "ok"|"error", "error_code"}` → `204`; recorded as
   `integrations.<action>`, attributed to the delegation's agent.
+- `GET /internal/egress-rules` (M18-05) — service auth with
+  `PLATFORM_EGRESS_TOKEN` (egress-proxy). → `200 {"rules": [{"integration":
+  slug, "scheme", "host", "port", "private_address", "cert_fingerprint"}]}`,
+  one per installed integration whose URL still passes the install rules.
 
 **Delegation contract** (`app/core/delegations.py`; agent-server side
 `app/core/delegation.py`). A delegation is a platform JWT (format below)
@@ -3921,6 +3934,39 @@ is how that guarantee is enforced independently of any fetcher's own code:
   in scope for that script's "internal services can't reach the internet"
   checks; those checks continue to cover exactly the same four services
   they always did.
+- **The integrations gateway (M18-05)** is the one client with other
+  rules, and only when it presents its proxy credential (Basic
+  `Proxy-Authorization`, `gateway:EGRESS_GATEWAY_TOKEN`). Then:
+  - **Where**: only the exact scheme, host and port of an installed
+    integration, from the platform's `GET /internal/egress-rules`
+    (`PLATFORM_EGRESS_TOKEN`). The proxy caches the rules for 5 s and
+    refetches early (at most once a second) for a destination it doesn't
+    know, so a new install works on its first call and an uninstall stops
+    within seconds. If the platform can't be reached, the last rules stand;
+    before the first fetch there are none. A tunnel (`CONNECT`) is checked
+    before anything connects, and every request inside it again.
+  - **Methods**: `GET`, `HEAD`, `POST`, `DELETE` (Streamable HTTP).
+  - **Addresses**: a host that resolves to a private address needs the
+    admin's exception (scoped to that host and port, as registered);
+    loopback, unspecified and multicast are refused even with it, including
+    for a public name that resolves there. Plain `http://` only with the
+    exception.
+  - **Certificates**: a pinned fingerprint replaces the CA and hostname
+    checks with an exact SHA-256 match on the server's certificate;
+    without a pin, the normal checks apply.
+  - **Headers**: `Authorization` passes (it's the server credential);
+    `Cookie` and the proxy credential are stripped.
+  - **Denials** carry `X-Egress-Denied: <code>` (`not_registered`,
+    `destination`, `method`, `certificate_changed`,
+    `certificate_untrusted`; certificate denials add
+    `X-Egress-Certificate: <sha256>`, what the server presented), so the
+    gateway can tell the proxy's 403 from the server's. A refused tunnel is
+    a `403` (a wrong credential `407`) to the `CONNECT`.
+  - **DNS rebinding**: the gap above applies to registered names too; for
+    a private server, register its IP address.
+
+  Everyone else, the gateway included when it doesn't present the
+  credential, keeps exactly the rules above.
 
 **CA handling — how any consumer that fetches through this proxy must
 mount the volume and trust the cert (implemented for real by `web-fetch`,

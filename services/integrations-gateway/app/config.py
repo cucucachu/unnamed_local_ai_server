@@ -16,6 +16,9 @@ class Settings(BaseSettings):
 
     # Every request to an MCP server goes through the egress proxy (M18-05).
     egress_proxy_url: str = ""
+    # The gateway's own credential at the proxy, which opens registered
+    # integrations' addresses to it alone (M18-05).
+    egress_gateway_token: str = ""
     # The CA bundle that trusts the proxy's certificates (`entrypoint.sh`).
     ca_bundle: str = ""
 

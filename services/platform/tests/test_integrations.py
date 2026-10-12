@@ -24,6 +24,7 @@ from tests.helpers import (
 )
 
 GATEWAY_TOKEN = "gateway-secret"
+EGRESS_TOKEN = "egress-secret"
 AGENT_TOKEN = "agent-secret"
 API = "/api/platform"
 ADMIN = f"{API}/admin/integrations"
@@ -69,6 +70,7 @@ async def platform(pg_database, tmp_path: Path):
             pg_database,
             tmp_path,
             platform_gateway_token=GATEWAY_TOKEN,
+            platform_egress_token=EGRESS_TOKEN,
             platform_agent_token=AGENT_TOKEN,
         )
     )
@@ -239,6 +241,41 @@ async def test_internal_routes_need_the_gateway_token(platform, people):
         headers=bearer("wrong"),
     )
     assert response.status_code == 401
+
+
+async def test_egress_rules_list_each_integrations_destination(platform, people):
+    await _install(platform, people)
+    await _install(
+        platform,
+        people,
+        slug="lan",
+        url="http://192.168.0.50:8123/api/mcp",
+        private_address=True,
+        cert_fingerprint="ab" * 32,
+    )
+    response = await platform.client.get("/internal/egress-rules", headers=bearer(EGRESS_TOKEN))
+    assert response.status_code == 200, response.text
+    assert sorted(response.json()["rules"], key=lambda r: r["integration"]) == [
+        {
+            "integration": "home",
+            "scheme": "https",
+            "host": "ha.example.com",
+            "port": 443,
+            "private_address": False,
+            "cert_fingerprint": None,
+        },
+        {
+            "integration": "lan",
+            "scheme": "http",
+            "host": "192.168.0.50",
+            "port": 8123,
+            "private_address": True,
+            "cert_fingerprint": "ab" * 32,
+        },
+    ]
+    for token in (GATEWAY_TOKEN, AGENT_TOKEN, "wrong"):
+        response = await platform.client.get("/internal/egress-rules", headers=bearer(token))
+        assert response.status_code == 401
 
 
 # --- installing ----------------------------------------------------------------------

@@ -14,6 +14,7 @@ addon wired against tflow" split:
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -174,7 +175,7 @@ class TestRequestHook:
     def test_disallowed_method_denied_with_403_json(self) -> None:
         f = self._flow_for(method=b"POST", host="example.com", port=443)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response is not None
         assert f.response.status_code == 403
@@ -185,7 +186,7 @@ class TestRequestHook:
         monkeypatch.setattr(policy, "resolve_host", lambda host: ["93.184.216.34"])
         f = self._flow_for(method=b"GET", host="example.com", port=8443)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response is not None
         assert f.response.status_code == 403
@@ -195,7 +196,7 @@ class TestRequestHook:
         monkeypatch.setattr(policy, "resolve_host", lambda host: ["192.168.1.1"])
         f = self._flow_for(method=b"GET", host="192.168.1.1", port=80)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response is not None
         assert f.response.status_code == 403
@@ -205,17 +206,19 @@ class TestRequestHook:
         monkeypatch.setattr(policy, "resolve_host", lambda host: ["172.20.0.5"])
         f = self._flow_for(method=b"GET", host="agent-server", port=80)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response is not None
         assert f.response.status_code == 403
         assert json.loads(f.response.content) == {"error": policy.DESTINATION_DENIAL_REASON}
 
-    def test_allowed_request_passes_through_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_allowed_request_passes_through_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(policy, "resolve_host", lambda host: ["93.184.216.34"])
         f = self._flow_for(method=b"GET", host="example.com", port=443)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response is None
 
@@ -229,7 +232,7 @@ class TestRequestHook:
         req.headers["Accept"] = "text/html"
         f = tflow.tflow(req=req)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response is None  # allowed through
         assert "Cookie" not in f.request.headers
@@ -246,7 +249,7 @@ class TestRequestHook:
         req.headers["Cookie"] = "session=abc123"
         f = tflow.tflow(req=req)
 
-        policy.request(f)
+        asyncio.run(policy.request(f))
 
         assert f.response.status_code == 403
 

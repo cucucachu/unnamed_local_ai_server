@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.connector import HttpConnector
+from app.connector import HttpConnector, proxy_url
 from app.crypto import CredentialKey
 from app.errors import GatewayError, PlatformUnavailable, Unauthorized
 from app.handles import InputHandles
@@ -104,7 +104,7 @@ def build(settings: Settings, gateway: Gateway | None = None) -> FastAPI:
                 CredentialKey.load_or_create(settings.key_file),
                 HttpPlatform(settings.platform_url, settings.platform_gateway_token),
                 HttpConnector(
-                    settings.egress_proxy_url,
+                    proxy_url(settings.egress_proxy_url, settings.egress_gateway_token),
                     settings.ca_bundle,
                     settings.connect_timeout_s,
                     settings.call_timeout_s,

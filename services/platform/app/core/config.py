@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     platform_agent_token: str = ""
     platform_exec_token: str = ""
     platform_gateway_token: str = ""
+    platform_egress_token: str = ""
 
     # The integrations gateway (M18, `app/core/integrations_gateway.py`).
     # Unset: anything that needs it answers 503 `gateway_unavailable`.
