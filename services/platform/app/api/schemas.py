@@ -8,11 +8,12 @@ they produce specific error codes.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 Short = Annotated[str, Field(max_length=256)]
 Secret = Annotated[str, Field(max_length=4096)]
@@ -971,3 +972,249 @@ class ToolPolicyEntry(BaseModel):
 
 class ToolPolicyOut(BaseModel):
     tools: dict[str, ToolPolicyEntry]
+
+
+# --- integrations (M18-03, app.core.integrations) -------------------------------------
+
+IntegrationSlug = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,39}$")]
+McpName = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.\-]{1,128}$")]
+CredentialModel = Literal["per_user", "shared", "none"]
+AuthMethod = Literal["none", "token", "oauth"]
+ConnectionStatus = Literal["ready", "connected", "not_connected", "needs_reconnecting"]
+Fingerprint = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+MAX_JSON_FIELD = 64 * 1024
+
+
+def _small_json(value: Any) -> Any:
+    if len(json.dumps(value)) > MAX_JSON_FIELD:
+        raise ValueError("too large")
+    return value
+
+
+SmallJson = Annotated[dict[str, Any], AfterValidator(_small_json)]
+
+
+class IntegrationInstall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: IntegrationSlug
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    url: Annotated[str, Field(min_length=1, max_length=2000)]
+    description: Annotated[str, Field(max_length=500)] = ""
+    credential_model: CredentialModel
+    auth_method: AuthMethod
+    cert_fingerprint: Fingerprint | None = None
+    private_address: bool = False
+
+
+class IntegrationPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: IntegrationSlug | None = None
+    name: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    url: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    description: Annotated[str, Field(max_length=500)] | None = None
+    credential_model: CredentialModel | None = None
+    auth_method: AuthMethod | None = None
+    cert_fingerprint: Fingerprint | None = None
+    private_address: bool | None = None
+
+
+class IntegrationToolOut(BaseModel):
+    name: str
+    title: str | None
+    description: str
+    annotations: dict[str, Any]
+    enabled: bool
+    permission: ToolPermission
+    enabled_locked: bool
+    permission_locked: bool
+
+
+class IntegrationOut(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    description: str
+    credential_model: CredentialModel
+    auth_method: AuthMethod
+    status: ConnectionStatus
+    tools: list[IntegrationToolOut]
+
+
+class IntegrationList(BaseModel):
+    integrations: list[IntegrationOut]
+
+
+class IntegrationToolChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: McpName
+    enabled: bool | None = None
+    permission: ToolPermission | None = None
+
+
+class IntegrationToolChanges(BaseModel):
+    changes: Annotated[list[IntegrationToolChange], Field(min_length=1, max_length=500)]
+
+
+class AdminIntegrationToolChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: McpName
+    enabled: bool | None = None
+    ceiling: ToolPermission | None = None
+
+
+class AdminIntegrationToolChanges(BaseModel):
+    changes: Annotated[list[AdminIntegrationToolChange], Field(min_length=1, max_length=500)]
+
+
+class CredentialIn(BaseModel):
+    """A token or API key, on its way to the gateway to be encrypted. Never stored as is."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    secret: Annotated[str, Field(min_length=1, max_length=8192)]
+
+
+class AdminIntegrationToolOut(BaseModel):
+    name: str
+    title: str | None
+    description: str
+    annotations: dict[str, Any]
+    enabled: bool
+    ceiling: ToolPermission
+
+
+class IntegrationResourceOut(BaseModel):
+    uri: str
+    name: str
+    title: str | None
+    description: str
+    mime_type: str | None
+
+
+class IntegrationPromptOut(BaseModel):
+    name: str
+    title: str | None
+    description: str
+    arguments: list[dict[str, Any]]
+
+
+class IntegrationConnectionOut(BaseModel):
+    user_id: UUID
+    username: str | None
+    display_name: str | None
+    status: Literal["connected", "needs_reconnecting"]
+    updated_at: datetime
+
+
+class AdminIntegrationOut(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    description: str
+    credential_model: CredentialModel
+    auth_method: AuthMethod
+    url: str
+    cert_fingerprint: str | None
+    private_address: bool
+    server_info: dict[str, Any] | None
+    protocol_version: str | None
+    discovered_at: datetime | None
+    installed_by: UUID | None
+    created_at: datetime
+    # Only for a shared integration: is the household's credential set.
+    shared_credential: ConnectionStatus | None
+    connections: list[IntegrationConnectionOut]
+    tools: list[AdminIntegrationToolOut]
+    resources: list[IntegrationResourceOut]
+    prompts: list[IntegrationPromptOut]
+
+
+class AdminIntegrationList(BaseModel):
+    integrations: list[AdminIntegrationOut]
+
+
+class DiscoveredTool(BaseModel):
+    name: McpName
+    title: Annotated[str, Field(max_length=200)] | None = None
+    description: Annotated[str, Field(max_length=10_000)] = ""
+    input_schema: SmallJson
+    annotations: SmallJson = {}
+
+
+class DiscoveredResource(BaseModel):
+    uri: Annotated[str, Field(min_length=1, max_length=2000)]
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    title: Annotated[str, Field(max_length=200)] | None = None
+    description: Annotated[str, Field(max_length=10_000)] = ""
+    mime_type: Annotated[str, Field(max_length=200)] | None = None
+
+
+class DiscoveredPrompt(BaseModel):
+    name: McpName
+    title: Annotated[str, Field(max_length=200)] | None = None
+    description: Annotated[str, Field(max_length=10_000)] = ""
+    arguments: Annotated[list[SmallJson], Field(max_length=100)] = []
+
+
+class DiscoveryIn(BaseModel):
+    """What the gateway found on a server (`app.core.integrations.store_discovery`)."""
+
+    protocol_version: Annotated[str, Field(max_length=40)] | None = None
+    server: SmallJson = {}
+    instructions: Annotated[str, Field(max_length=20_000)] = ""
+    tools: Annotated[list[DiscoveredTool], Field(max_length=500)] = []
+    resources: Annotated[list[DiscoveredResource], Field(max_length=1000)] = []
+    prompts: Annotated[list[DiscoveredPrompt], Field(max_length=500)] = []
+
+    @model_validator(mode="after")
+    def _unique(self) -> DiscoveryIn:
+        for items, key in ((self.tools, "name"), (self.resources, "uri"), (self.prompts, "name")):
+            names = [getattr(i, key) for i in items]
+            if len(set(names)) != len(names):
+                raise ValueError(f"duplicate {key}")
+        return self
+
+
+class IntegrationGrantRequest(BaseModel):
+    delegation: str
+    integration: IntegrationSlug
+
+
+class IntegrationGrantCredential(BaseModel):
+    user_id: UUID | None
+    ciphertext: str
+    status: Literal["connected", "needs_reconnecting"]
+
+
+class IntegrationGatewayView(BaseModel):
+    id: UUID
+    slug: str
+    url: str
+    auth_method: AuthMethod
+    credential_model: CredentialModel
+    cert_fingerprint: str | None
+    private_address: bool
+    protocol_version: str | None
+
+
+class IntegrationGrantOut(BaseModel):
+    user_id: UUID
+    session_id: UUID
+    thread_id: str | None
+    integration: IntegrationGatewayView
+    status: ConnectionStatus
+    credential: IntegrationGrantCredential | None
+    tools: dict[str, ToolPolicyEntry]
+
+
+class CredentialStatusIn(BaseModel):
+    """The gateway found a credential rejected: a user's (`user_id`), or the shared one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID | None = None
+    status: Literal["needs_reconnecting"]

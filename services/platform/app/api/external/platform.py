@@ -2,12 +2,14 @@ from fastapi import APIRouter
 
 from app.api.external import (
     admin,
+    admin_integrations,
     appdata,
     apps,
     audit,
     device_pairs,
     directory,
     files,
+    integrations,
     me,
     media,
     settings,
@@ -30,5 +32,7 @@ router.include_router(files.router)
 router.include_router(media.router)
 router.include_router(settings.router)
 router.include_router(tools.router)
+router.include_router(integrations.router)
 router.include_router(admin.router)
+router.include_router(admin_integrations.router)
 router.include_router(audit.router)

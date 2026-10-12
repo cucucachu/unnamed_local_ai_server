@@ -39,6 +39,7 @@ from app.core.errors import (
 )
 from app.core.events import EventHub
 from app.core.hitl import HitlApprovals
+from app.core.integrations_gateway import HttpGateway
 from app.core.platform_settings import get_public_https
 from app.core.ratelimit import RateLimited, RateLimiter
 from app.core.storage import SpaceStorage, StorageError
@@ -198,6 +199,11 @@ def create_app(
             app.state.events = EventHub()
             app.state.appdata = AppData(pool, storage, app.state.events, s.platform_data_dir)
             app.state.hitl = HitlApprovals()
+            app.state.gateway = HttpGateway(
+                s.integrations_gateway_url,
+                s.integrations_gateway_token,
+                s.integrations_gateway_timeout_s,
+            )
             app.state.limiter = RateLimiter(
                 s.platform_auth_rate_limit, s.platform_auth_rate_window_s
             )

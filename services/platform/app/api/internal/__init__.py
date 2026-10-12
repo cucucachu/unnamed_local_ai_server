@@ -14,6 +14,7 @@ from app.api.internal import (
     exec_grants,
     health,
     hitl,
+    integrations,
     jwks,
     routine_grants,
     space_access,
@@ -31,3 +32,4 @@ router.include_router(hitl.router)
 router.include_router(space_access.router)
 router.include_router(routine_grants.router)
 router.include_router(tool_catalog.router)
+router.include_router(integrations.router)

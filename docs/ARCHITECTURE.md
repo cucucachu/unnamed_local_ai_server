@@ -2031,8 +2031,21 @@ themselves)
 | `GET /api/platform/tools` | human | — | `200 {"tools": [UserTool]}`: each catalog tool (`name`, `label`, `description`, `group`, `read_only`) with the caller's effective `enabled` and `permission` (`ask`\|`allow`) and `enabled_locked` / `permission_locked` (the admin's setting decides) (PLATFORM.md §4 "Agent tool permissions") | — |
 | `PATCH /api/platform/tools` | human | `{"changes": [{"name", "enabled"?, "permission"?}]}` (all or nothing) | `200` same as GET | `422 unknown_tool`, `422 locked_by_admin` (more than the admin allows) |
 | `GET /api/platform/tools/policy` | user | — | `200 {"tools": {name: {"available", "permission", "can_always_allow"}}}`, for agent-server's turns | — |
+| `GET /api/platform/integrations` | user | — | `200 {"integrations": [Integration]}`: those the caller may use (`id`, `slug`, `name`, `description`, `credential_model`, `auth_method`), their `status` (`ready` \| `connected` \| `not_connected` \| `needs_reconnecting`) and `tools` (`name`, `title`, `description`, `annotations`, effective `enabled` / `permission`, `enabled_locked` / `permission_locked`). No credential material. (PLATFORM.md §4 "Integrations") | — |
+| `PATCH /api/platform/integrations/{id}/tools` | human | `{"changes": [{"name", "enabled"?, "permission"?}]}` | `200` same as GET | `404 integration_not_found`, `422 unknown_tool`, `422 locked_by_admin` |
+| `PUT /api/platform/integrations/{id}/connection` | human | `{"secret"}` (a token or API key) | `204`: the gateway encrypts it; only the ciphertext is stored | `422 wrong_credential_model`, `422 auth_method_mismatch` (not a token integration), `503 gateway_unavailable` |
+| `DELETE /api/platform/integrations/{id}/connection` | human | — | `204` (deletes the caller's credential) | `404 integration_not_found` |
 | `GET /api/platform/admin/tools` | admin | — | `200 {"tools": [AdminTool]}`: catalog fields plus `enabled` and `ceiling` (`ask`\|`allow`) | `403 public_origin` |
 | `PATCH /api/platform/admin/tools` | admin | `{"changes": [{"name", "enabled"?, "ceiling"?}]}` | `200` same as GET. Users' own settings are never rewritten. | `403 public_origin`, `422 unknown_tool` |
+| `GET /api/platform/admin/integrations` | admin | — | `200 {"integrations": [AdminIntegration]}`: the user fields plus `url`, `cert_fingerprint`, `private_address`, `server_info`, `protocol_version`, `discovered_at`, `installed_by`, `shared_credential` (status, shared only), `connections` (`user_id`, `username`, `display_name`, `status`), `tools` (with `enabled` and `ceiling`), `resources`, `prompts` | `403 public_origin` |
+| `POST /api/platform/admin/integrations` | admin | `{"slug", "name", "url", "description"?, "credential_model", "auth_method", "cert_fingerprint"?, "private_address"?}` | `201 AdminIntegration`, not yet discovered | `409 slug_taken`, `422 invalid_url` / `https_required` / `private_address_needs_exception` / `loopback_refused` / `mdns_name` / `auth_method_mismatch` |
+| `PATCH /api/platform/admin/integrations/{id}` | admin | any install field | `200 AdminIntegration`. A new `url` or `credential_model` deletes every stored credential; a new `url` clears the pinned certificate unless one is given. | as install, `404 integration_not_found` |
+| `DELETE /api/platform/admin/integrations/{id}` | admin | — | `204`: uninstalls; deletes its admin and user tool settings and every credential | `404 integration_not_found` |
+| `POST /api/platform/admin/integrations/{id}/refresh` | admin | — | `200 AdminIntegration`: discovered again through the gateway, with the admin's own credential (per-user) or the shared one. New tools start off. | `503 gateway_unavailable`, a gateway error code as `422` |
+| `PATCH /api/platform/admin/integrations/{id}/tools` | admin | `{"changes": [{"name", "enabled"?, "ceiling"?}]}` | `200 AdminIntegration` | `422 unknown_tool` |
+| `PUT /api/platform/admin/integrations/{id}/shared-credential` | admin | `{"secret"}` | `204`: the gateway encrypts it; only the ciphertext is stored | `422 wrong_credential_model`, `422 auth_method_mismatch`, `503 gateway_unavailable` |
+| `DELETE /api/platform/admin/integrations/{id}/shared-credential` | admin | — | `204` | `404 integration_not_found` |
+| `DELETE /api/platform/admin/integrations/{id}/connections/{user_id}` | admin | — | `204`: disconnects that user | `404 integration_not_found` |
 | `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | `403 public_origin` |
 | `PATCH /api/platform/admin/settings` | admin | `{"public_https": bool}` | `200` same as GET. Enabling needs an RP ID. Does not punch the host firewall. | `403 public_origin`, `422 domain_required` (enabling with no RP ID) |
 | `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool, "require_passkeys"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). `require_passkeys: true` needs an RP ID. | `403 public_origin`, `404 not_found`, `409 last_admin` (would leave no enabled admin), `422 domain_required` (requiring passkeys with no RP ID) |
@@ -2839,6 +2852,22 @@ credential or an instance id.
   "description", "group", "read_only"}]}` (≤ 200) → `204`; replaces the
   catalog of agent tools, keeping everyone's settings (PLATFORM.md §4
   "Agent tool permissions"). `422 duplicate_tool`.
+- `POST /internal/integration-grants` (M18-03) — service auth with
+  `PLATFORM_GATEWAY_TOKEN`. Body `{"delegation", "integration": slug}` →
+  `200 {"user_id", "session_id", "thread_id", "integration": {"id",
+  "slug", "url", "auth_method", "credential_model", "cert_fingerprint",
+  "private_address", "protocol_version"}, "status", "credential":
+  {"user_id": uuid|null, "ciphertext": base64, "status"}|null, "tools":
+  {name: {"available", "permission", "can_always_allow"}}}`: what one
+  agent call gets, the only place a credential's ciphertext is read.
+  `401` for a bad delegation, `404 integration_not_found`.
+- `PUT /internal/integrations/{id}/discovery` (M18-03) — gateway auth.
+  Body: what the server offers (`protocol_version`, `server`,
+  `instructions`, `tools` with `input_schema` and `annotations`,
+  `resources`, `prompts`) → `204`. New tools start off.
+- `POST /internal/integrations/{id}/credential-status` (M18-03) — gateway
+  auth. Body `{"user_id": uuid|null, "status": "needs_reconnecting"}` →
+  `204`; `404 credential_not_found`.
 
 **Delegation contract** (`app/core/delegations.py`; agent-server side
 `app/core/delegation.py`). A delegation is a platform JWT (format below)

@@ -371,11 +371,63 @@ and unchanged: the agent acts as the user, with their space roles.
   (`/api/platform/tools/policy`) and changes nothing. Both kinds of change
   are audited.
 
+### Integrations
+
+MCP servers an admin installed for the household (M18-03,
+`app/core/integrations.py`; the design is `docs/INTEGRATIONS.md`). The
+platform keeps the registry. The integrations gateway (M18-04) is the only
+component that talks to the servers and the only one holding the
+credential key.
+
+- **Tables** (`0015_integrations.sql`):
+  - `integrations`: `slug` (what the agent names it,
+    `^[a-z][a-z0-9-]{0,39}$`), `name`, `url`, the admin-edited
+    `description` (filled from the server's own on first discovery),
+    `credential_model` (`per_user` | `shared` | `none`), `auth_method`
+    (`token` | `oauth` | `none`; `none` exactly when the model is `none`),
+    `cert_fingerprint` (a pinned SHA-256), `private_address` (the admin's
+    exception), and what discovery found: `server_info`,
+    `protocol_version`, `instructions`, `discovered_at`.
+  - `integration_tools` (with the server's `annotations`, shown and never
+    trusted), `integration_resources`, `integration_prompts`: replaced
+    wholesale by each discovery.
+  - `integration_credentials`: ciphertext only, one row per connected user,
+    plus at most one shared row (`user_id` NULL). `status` is `connected`
+    or `needs_reconnecting`. Deleting a user deletes their rows.
+- **Addresses** (`check_url`): `https://` for a public address; a private
+  address (RFC 1918, link-local, ULA) or plain `http://` only with
+  `private_address`; loopback and `localhost` always refused; `.local`
+  refused (use an IP or DNS name); no userinfo. A name counts as public
+  here; the egress proxy (M18-05) holds names to their address.
+- **Tool settings** live in the agent tool permission tables above, under
+  the key `mcp:<integration id>:<tool name>`, with the same rule. A tool
+  discovery finds for the first time starts off for the admin; a tool that
+  disappears loses its settings, so it starts off again if it comes back.
+  Every user's own setting starts at ask, whatever the annotations.
+  Integration tools never appear in `/api/platform/tools` or its policy.
+- **Who may use one**: `usable_by`, the single check every user path, the
+  grant and connecting go through. Everyone, until #340.
+- **Credentials**: the platform passes a pasted token or key to the
+  gateway's `/encrypt` and stores only the ciphertext it gets back (sealed
+  to the integration and user). No API returns credential material, not
+  even ciphertext, except the gateway's own grant. Admins see connection
+  status only. Uninstalling deletes every credential and the integration's
+  tool settings; a new URL or credential model deletes its credentials.
+- **The gateway's side** (`PLATFORM_GATEWAY_TOKEN`): the grant for a call
+  (the delegation's user, the server, the ciphertext to use, the tools'
+  policy), storing a changed list it discovered, and marking a rejected
+  credential. The platform calls the gateway (`INTEGRATIONS_GATEWAY_URL`
+  with `INTEGRATIONS_GATEWAY_TOKEN`) for `/encrypt` and `/discover`;
+  unset, those answer `503 gateway_unavailable`.
+- Installs, changes, discoveries, connections and disconnections are
+  audited (`integrations.*`), never with a secret.
+
 ### Service-to-service auth
 
 Internal endpoints (`/internal/*` other than `jwks` and `auth/verify`)
 require `Authorization: Bearer <service token>`: `PLATFORM_AGENT_TOKEN`
-(agent-server) and `PLATFORM_EXEC_TOKEN` (code-exec-manager), random secrets
+(agent-server), `PLATFORM_EXEC_TOKEN` (code-exec-manager) and
+`PLATFORM_GATEWAY_TOKEN` (the integrations gateway, M18), random secrets
 in `.env`. Each token only unlocks the internal endpoints that service needs.
 
 ## 5. Spaces and storage
