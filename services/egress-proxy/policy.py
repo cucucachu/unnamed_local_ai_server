@@ -51,7 +51,7 @@ import socket
 import time
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from typing import NamedTuple
 
 from mitmproxy import ctx, http, tls
 
@@ -193,8 +193,7 @@ RULES_TTL_S = 5.0
 RULES_MISS_INTERVAL_S = 1.0
 
 
-@dataclass(frozen=True)
-class Rule:
+class Rule(NamedTuple):
     integration: str
     scheme: str
     host: str

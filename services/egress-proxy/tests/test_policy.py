@@ -325,3 +325,24 @@ class TestResponseHook:
         truncated = policy._truncate_path(long_path, limit=200)
         assert len(truncated) == 200
         assert truncated.endswith("...")
+
+
+def test_loads_the_way_mitmdump_loads_it() -> None:
+    # `-s` scripts aren't registered in sys.modules, which breaks dataclasses.
+    from pathlib import Path
+
+    from mitmproxy.addons import script
+
+    module = script.load_script(str(Path(policy.__file__)))
+    assert module is not None
+    assert (
+        module.Rule(
+            integration="x",
+            scheme="https",
+            host="h",
+            port=1,
+            private_address=False,
+            cert_fingerprint=None,
+        ).port
+        == 1
+    )
