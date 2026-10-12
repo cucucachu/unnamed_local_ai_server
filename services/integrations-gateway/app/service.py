@@ -142,7 +142,7 @@ class Gateway:
         fresh = {**integration, "protocol_version": None}
         async with (
             self.connector.session(fresh, headers, elicitation=False) as session,
-            guarded(session.statuses),
+            guarded(session.statuses, session.denials),
         ):
             with anyio.fail_after(self.settings.call_timeout_s):
                 return await self._discover(session)
@@ -269,7 +269,7 @@ class Gateway:
             async with self.connector.session(
                 grant["integration"], headers, elicitation=elicitation
             ) as session:
-                async with guarded(session.statuses):
+                async with guarded(session.statuses, session.denials):
                     with anyio.fail_after(self.settings.call_timeout_s):
                         body = await op(grant, session, audit)
                 self._after(grant, headers, session)

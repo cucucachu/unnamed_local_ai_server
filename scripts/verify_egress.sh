@@ -5,7 +5,8 @@
 # outbound connectivity — there is no meaningful way to fake "does mitmproxy
 # actually let a real GET through to example.com" without one).
 #
-# 6 checks, run in this order:
+# 18 checks: 1-6 below (M7-02), 7-18 the integrations gateway's rules
+# (M18-05, see check_gateway_rules). In order:
 #   1. GET https://example.com/ through the proxy -> 200 (the happy path:
 #      HTTPS is actually intercepted/decrypted/re-forwarded, not just
 #      tunneled — proves the CA trust + MITM termination works end to end).
@@ -73,6 +74,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=e2e/lib/auth.sh
+source "$SCRIPT_DIR/e2e/lib/auth.sh"
 
 RUNNER_NAME="verify-egress-runner-$$"
 RUNNER_IMAGE="curlimages/curl:latest"
@@ -169,6 +172,7 @@ start_runner() {
 }
 
 cleanup() {
+  unregister_destinations
   if [ "$RUNNER_STARTED" = "1" ]; then
     docker rm -f "$RUNNER_NAME" >/dev/null 2>&1 || true
   fi
@@ -265,6 +269,145 @@ except Exception as e:
   fi
 }
 
+# --- M18-05: the integrations gateway's identity and per-integration rules ----
+#
+# Registers four throwaway destinations as `e2e-egress-*` integrations
+# (straight into the platform's registry; removed in the EXIT trap):
+#   pub   https://example.com/mcp        a public server
+#   lan   http://10.255.255.1:8123/mcp   a private-address exception (nothing listens)
+#   loop  https://localtest.me/mcp       a public name that resolves to 127.0.0.1
+#   pin   https://example.net/mcp        pinned to a certificate it doesn't have
+# The gateway's credential (EGRESS_GATEWAY_TOKEN, read from .env and handed to
+# the runner by name only) is what opens them.
+
+E2E_SLUGS="'e2e-egress-pub','e2e-egress-lan','e2e-egress-loop','e2e-egress-pin'"
+
+register_destinations() {
+  EGRESS_GATEWAY_TOKEN="$(_e2e_env_value EGRESS_GATEWAY_TOKEN "")"
+  export EGRESS_GATEWAY_TOKEN
+  if [ -z "$EGRESS_GATEWAY_TOKEN" ]; then
+    log "ERROR: EGRESS_GATEWAY_TOKEN not set in .env (M18-05)"
+    exit 1
+  fi
+  log "Registering e2e-egress-* destinations ..."
+  _e2e_psql homeai_platform "
+    DELETE FROM integrations WHERE slug IN (${E2E_SLUGS});
+    INSERT INTO integrations (slug, name, url, credential_model, auth_method, private_address, cert_fingerprint) VALUES
+      ('e2e-egress-pub', 'e2e', 'https://example.com/mcp', 'none', 'none', false, NULL),
+      ('e2e-egress-lan', 'e2e', 'http://10.255.255.1:8123/mcp', 'none', 'none', true, NULL),
+      ('e2e-egress-loop', 'e2e', 'https://localtest.me/mcp', 'none', 'none', false, NULL),
+      ('e2e-egress-pin', 'e2e', 'https://example.net/mcp', 'none', 'none', false, repeat('0', 64));
+  " >/dev/null
+  REGISTERED=1
+  # The proxy caches rules for a few seconds and refetches early on a miss.
+  sleep 2
+}
+
+unregister_destinations() {
+  if [ "${REGISTERED:-0}" = "1" ]; then
+    _e2e_psql homeai_platform "DELETE FROM integrations WHERE slug IN (${E2E_SLUGS});" >/dev/null 2>&1 || true
+  fi
+}
+
+# $1: "gateway" (the gateway's credential), "wrong" (a wrong one) or "none";
+# $2: URL. Prints "<http_code> <connect_code> <X-Egress-Denied or ->".
+gateway_probe() {
+  local who="$1" url="$2" auth=""
+  case "$who" in
+    gateway) auth='--proxy-user "gateway:$EGRESS_GATEWAY_TOKEN"' ;;
+    wrong) auth='--proxy-user "gateway:not-the-token"' ;;
+  esac
+  docker exec -e EGRESS_GATEWAY_TOKEN "$RUNNER_NAME" sh -c "
+    out=\$(curl -s -o /dev/null -D /tmp/h -X POST -H 'Content-Type: application/json' -d '{}' \
+      --cacert /ca/mitmproxy-ca-cert.pem --max-time 15 ${auth} \
+      -w '%{http_code} %{http_connect}' '${url}' 2>/dev/null)
+    denied=\$(sed -n 's/^[Xx]-[Ee]gress-[Dd]enied: *\\([a-z_]*\\).*/\\1/p' /tmp/h 2>/dev/null | head -n1)
+    echo \"\${out:-000 000} \${denied:--}\""
+}
+
+# $1 check number, $2 description, $3 who, $4 url, $5 expectation:
+#   passes        reached past the proxy's rules (no X-Egress-Denied, tunnel not refused)
+#   denied:<code> answered 403 with X-Egress-Denied: <code>
+#   connect:<n>   the CONNECT itself answered <n>
+#   status:<n>    answered <n> (today's rules, no gateway header)
+expect_probe() {
+  local n="$1" desc="$2" who="$3" url="$4" want="$5" got code connect denied
+  got="$(gateway_probe "$who" "$url")"
+  read -r code connect denied <<<"$got"
+  local ok=0
+  case "$want" in
+    passes) [ "$denied" = "-" ] && [ "$connect" != "403" ] && [ "$connect" != "407" ] && [ "$code" != "000" ] && ok=1 ;;
+    denied:*) [ "$code" = "403" ] && [ "$denied" = "${want#denied:}" ] && ok=1 ;;
+    connect:*) [ "$connect" = "${want#connect:}" ] && ok=1 ;;
+    status:*) [ "$code" = "${want#status:}" ] && [ "$denied" = "-" ] && ok=1 ;;
+  esac
+  if [ "$ok" = "1" ]; then
+    pass "$n" "$desc ($got)"
+  else
+    fail "$n" "$desc" "expected ${want}, got: http=${code} connect=${connect} denied=${denied}"
+  fi
+}
+
+check_gateway_rules() {
+  expect_probe 7 "gateway POST https://example.com/mcp (registered) passes the proxy" \
+    gateway "https://example.com/mcp" passes
+  expect_probe 8 "gateway POST https://example.org/ (not registered) refused at CONNECT" \
+    gateway "https://example.org/" connect:403
+  expect_probe 9 "gateway POST https://example.com:8443/ (registered host, other port) refused" \
+    gateway "https://example.com:8443/" connect:403
+  expect_probe 10 "gateway POST http://10.255.255.1:8123/mcp (private exception) passes the proxy" \
+    gateway "http://10.255.255.1:8123/mcp" passes
+  expect_probe 11 "gateway POST http://10.255.255.1:8124/mcp (same host, other port) refused" \
+    gateway "http://10.255.255.1:8124/mcp" denied:not_registered
+  expect_probe 12 "gateway POST https://localtest.me/mcp (registered, resolves to loopback) refused" \
+    gateway "https://localtest.me/mcp" connect:403
+  expect_probe 13 "gateway POST https://example.net/mcp (pinned to another certificate) refused" \
+    gateway "https://example.net/mcp" denied:certificate_changed
+  expect_probe 14 "POST https://example.com/mcp without the gateway's credential still refused" \
+    none "https://example.com/mcp" status:403
+  expect_probe 15 "a wrong proxy credential is refused at CONNECT (407)" \
+    wrong "https://example.com/mcp" connect:407
+}
+
+check_services_still_read_only() {
+  local out
+  if out="$(docker compose exec -T web-fetch /app/.venv/bin/python -c "
+import os, httpx
+r = httpx.post('https://example.com/mcp', json={}, proxy=os.environ['EGRESS_PROXY_URL'], verify='/tmp/ca-bundle.pem', timeout=15)
+print(r.status_code, r.headers.get('x-egress-denied', '-'))
+" 2>&1)" && [ "$out" = "403 -" ]; then
+    pass 16 "web-fetch's POST to a registered host is refused (${out})"
+  else
+    fail 16 "web-fetch's POST to a registered host is refused" "$out"
+  fi
+  if out="$(docker compose exec -T agent-server python3 -c "
+import urllib.request, urllib.error
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': 'http://egress-proxy:8080'}))
+try:
+    opener.open(urllib.request.Request('http://10.255.255.1:8123/mcp', data=b'{}', method='POST'), timeout=15)
+    print('allowed')
+except urllib.error.HTTPError as e:
+    print(e.code, e.headers.get('X-Egress-Denied', '-'))
+" 2>&1)" && [ "$out" = "403 -" ]; then
+    pass 17 "agent-server's POST to a registered private address is refused (${out})"
+  else
+    fail 17 "agent-server's POST to a registered private address is refused" "$out"
+  fi
+  if out="$(docker compose exec -T integrations-gateway /app/.venv/bin/python -c "
+import httpx2, ssl
+from app.config import Settings
+from app.connector import proxy_url
+s = Settings()
+r = httpx2.post('https://example.com/mcp', json={}, proxy=proxy_url(s.egress_proxy_url, s.egress_gateway_token),
+                verify=ssl.create_default_context(cafile=s.ca_bundle), timeout=15)
+print(r.status_code, r.headers.get('x-egress-denied', '-'))
+" 2>&1)" && [ "${out##* }" = "-" ]; then
+    pass 18 "the deployed gateway's own credential passes the proxy to a registered host (${out})"
+  else
+    fail 18 "the deployed gateway's own credential passes the proxy to a registered host" "$out"
+  fi
+}
+
 summary() {
   local total=$((PASS_COUNT + FAIL_COUNT))
   echo
@@ -287,6 +430,10 @@ main() {
   check_4
   check_5
   check_6
+
+  register_destinations
+  check_gateway_rules
+  check_services_still_read_only
 
   summary
 }

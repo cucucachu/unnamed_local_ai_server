@@ -578,6 +578,27 @@ def gateway_view(integration: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def egress_rules(conn: AsyncConnection) -> list[dict[str, Any]]:
+    """Where the gateway may go (M18-05): each integration's exact scheme, host and port."""
+    rules = []
+    for row in await _all(conn):
+        try:
+            address = check_url(row["url"], row["private_address"])
+        except InvalidInput:
+            continue
+        rules.append(
+            {
+                "integration": row["slug"],
+                "scheme": address.scheme,
+                "host": address.host,
+                "port": address.port,
+                "private_address": row["private_address"],
+                "cert_fingerprint": row["cert_fingerprint"],
+            }
+        )
+    return rules
+
+
 # --- tool settings ------------------------------------------------------------------------
 
 

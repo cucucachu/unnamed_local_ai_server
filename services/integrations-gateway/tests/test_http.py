@@ -14,7 +14,7 @@ import uvicorn
 from starlette.responses import JSONResponse
 
 from app.config import Settings
-from app.connector import HttpConnector
+from app.connector import HttpConnector, proxy_url
 from app.handles import InputHandles
 from app.main import build
 from app.service import Gateway
@@ -204,3 +204,50 @@ async def test_encrypt_refused_when_token_unset(key):
             headers={"Authorization": "Bearer "},
         )
     assert r.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "headers,code",
+    [
+        ({"X-Egress-Denied": "certificate_changed"}, "certificate_changed"),
+        ({"X-Egress-Denied": "not_registered"}, "unreachable"),
+        ({"X-Egress-Denied": "certificate_untrusted"}, "unreachable"),
+        ({}, "auth_expired"),
+    ],
+)
+async def test_proxy_refusals_are_not_mistaken_for_the_server(key, http_platform, headers, code):
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(403, json={"error": "no"}, headers=headers)
+
+    connector = HttpConnector(
+        None, "", connect_timeout_s=2.0, read_timeout_s=5.0, transport=httpx2.MockTransport(refuse)
+    )
+    gateway = Gateway(Settings(call_timeout_s=5.0), key, http_platform, connector, InputHandles(60))
+    body = await gateway.open(DELEGATION, "home", "chat")
+    assert body["error"]["code"] == code
+    assert http_platform.reconnect == ([(INTEGRATION, USER)] if code == "auth_expired" else [])
+
+
+async def test_proxy_error_page_is_unreachable(key, http_platform):
+    def proxy_502(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(502, text="Cannot connect", headers={"Server": "mitmproxy 12.2.3"})
+
+    connector = HttpConnector(
+        None,
+        "",
+        connect_timeout_s=2.0,
+        read_timeout_s=5.0,
+        transport=httpx2.MockTransport(proxy_502),
+    )
+    gateway = Gateway(Settings(call_timeout_s=5.0), key, http_platform, connector, InputHandles(60))
+    body = await gateway.open(DELEGATION, "home", "chat")
+    assert body["error"]["code"] == "unreachable"
+
+
+def test_proxy_url_carries_the_gateway_credential():
+    assert (
+        proxy_url("http://egress-proxy:8080", "a/b+c")
+        == "http://gateway:a%2Fb%2Bc@egress-proxy:8080"
+    )
+    assert proxy_url("http://egress-proxy:8080", "") == "http://egress-proxy:8080"
+    assert proxy_url("", "t") is None

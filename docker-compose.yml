@@ -133,6 +133,11 @@ services:
       - egress-proxy-ca:/home/mitmproxy/.mitmproxy
     environment:
       EGRESS_MAX_BYTES: ${EGRESS_MAX_BYTES}
+      # M18-05: the integrations gateway's proxy credential, and where the
+      # rules for it come from (installed integrations' exact addresses).
+      EGRESS_GATEWAY_TOKEN: ${EGRESS_GATEWAY_TOKEN:-}
+      PLATFORM_URL: http://platform:8100
+      PLATFORM_EGRESS_TOKEN: ${PLATFORM_EGRESS_TOKEN:-}
 
   # M7-03/M7-04: the only service allowed to talk to `egress-proxy` (spec:
   # "a narrow internal HTTP service is the only thing that talks to the
@@ -182,7 +187,8 @@ services:
         HOMEAI_UID: ${HOMEAI_UID}
         HOMEAI_GID: ${HOMEAI_GID}
     restart: unless-stopped
-    # internal-only: MCP servers are reached only through `egress-proxy`.
+    # internal-only: MCP servers are reached only through `egress-proxy`,
+  # with its own credential there (M18-05).
     networks: [homeai-internal]
     user: "${HOMEAI_UID}:${HOMEAI_GID}"
     read_only: true
@@ -194,6 +200,7 @@ services:
       - egress-proxy-ca:/ca:ro
     environment:
       EGRESS_PROXY_URL: ${EGRESS_PROXY_URL}
+      EGRESS_GATEWAY_TOKEN: ${EGRESS_GATEWAY_TOKEN:-}
       PLATFORM_URL: http://platform:8100
       PLATFORM_GATEWAY_TOKEN: ${PLATFORM_GATEWAY_TOKEN:-}
       INTEGRATIONS_GATEWAY_TOKEN: ${INTEGRATIONS_GATEWAY_TOKEN:-}
@@ -465,6 +472,7 @@ services:
       # M18: the integrations gateway's token on /internal/*, and the
       # platform's own on the gateway. Unset: integrations are unavailable.
       PLATFORM_GATEWAY_TOKEN: ${PLATFORM_GATEWAY_TOKEN:-}
+      PLATFORM_EGRESS_TOKEN: ${PLATFORM_EGRESS_TOKEN:-}
       INTEGRATIONS_GATEWAY_URL: http://integrations-gateway:8000
       INTEGRATIONS_GATEWAY_TOKEN: ${INTEGRATIONS_GATEWAY_TOKEN:-}
       # The host-side path of the /data/spaces mount above: exec grants name

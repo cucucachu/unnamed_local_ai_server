@@ -22,17 +22,38 @@ decision function, unit-tested directly (table-driven) in
 against mitmproxy's own `mitmproxy.test.tflow`/`tutils` helpers in the same
 file, so the 403 paths are tested through the real addon entry points too,
 not just the pure helpers in isolation.
+
+**The integrations gateway (M18-05, docs/INTEGRATIONS.md §3)** is the one
+client with other rules. It identifies itself with a proxy credential
+(`gateway:EGRESS_GATEWAY_TOKEN`, Basic `Proxy-Authorization`); a connection
+that presents it may use the methods MCP needs (`GATEWAY_METHODS`), but only
+to the exact scheme, host and port of an installed integration, from the
+platform's `GET /internal/egress-rules`. Private addresses only where the
+admin made the exception, loopback never, plain http only with the
+exception. A pinned certificate replaces CA and hostname checks with an
+exact SHA-256 match on the server's certificate. Gateway denials carry
+`X-Egress-Denied: <code>` so the gateway can tell them from a server's own
+403. Everyone else's rules are unchanged.
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
 import os
 import socket
+import time
+import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from mitmproxy import http
+from mitmproxy import ctx, http, tls
 
 logger = logging.getLogger("egress_policy")
 
@@ -152,16 +173,280 @@ def resolve_host(host: str) -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
-def _deny(flow: http.HTTPFlow, reason: str) -> None:
-    flow.response = http.Response.make(
-        403,
-        json.dumps({"error": reason}).encode(),
-        {"Content-Type": "application/json"},
+def _deny(flow: http.HTTPFlow, reason: str, code: str | None = None, status: int = 403) -> None:
+    headers = {"Content-Type": "application/json"}
+    if code is not None:
+        headers[DENIED_HEADER] = code
+    flow.response = http.Response.make(status, json.dumps({"error": reason}).encode(), headers)
+
+
+# --- the integrations gateway (M18-05) ------------------------------------------------
+
+GATEWAY_USER = "gateway"
+# Streamable HTTP: POST (messages), GET (the server's stream), DELETE (end a session).
+GATEWAY_METHODS = frozenset({"GET", "HEAD", "POST", "DELETE"})
+DENIED_HEADER = "X-Egress-Denied"
+CERTIFICATE_HEADER = "X-Egress-Certificate"
+RULES_TTL_S = 5.0
+# A destination missing from the cached rules refetches, at most this often:
+# an integration installed a moment ago works on its first call.
+RULES_MISS_INTERVAL_S = 1.0
+
+
+@dataclass(frozen=True)
+class Rule:
+    integration: str
+    scheme: str
+    host: str
+    port: int
+    private_address: bool
+    cert_fingerprint: str | None
+
+
+def gateway_token() -> str:
+    return os.environ.get("EGRESS_GATEWAY_TOKEN", "")
+
+
+def gateway_credential(header: str | None, token: str) -> bool | None:
+    """None: no proxy credential; True: the gateway's; False: presented but wrong."""
+    if not header:
+        return None
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "basic":
+        return False
+    try:
+        user, _, password = base64.b64decode(value.strip(), validate=True).decode().partition(":")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    return bool(token) and user == GATEWAY_USER and hmac.compare_digest(password, token)
+
+
+def _norm_host(host: str) -> str:
+    return host.lower().rstrip(".").strip("[]")
+
+
+def find_rule(rules: list[Rule], scheme: str, host: str, port: int) -> Rule | None:
+    host = _norm_host(host)
+    for rule in rules:
+        if (rule.scheme, rule.host, rule.port) == (scheme, host, port):
+            return rule
+    return None
+
+
+def _never(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return ip.is_loopback or ip.is_unspecified or ip.is_multicast
+
+
+def gateway_denial(
+    rule: Rule | None, scheme: str, resolved_ips: list[str]
+) -> tuple[str, str] | None:
+    """None if the gateway may go there; else (code, reason). Pure, like the guard above."""
+    if rule is None:
+        return "not_registered", "destination is not a registered integration"
+    if not resolved_ips:
+        return "destination", DESTINATION_DENIAL_REASON
+    for raw_ip in resolved_ips:
+        try:
+            ip = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            return "destination", DESTINATION_DENIAL_REASON
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if _never(ip):
+            return "destination", "loopback, unspecified and multicast are never allowed"
+        if _is_disallowed_ip(ip) and not rule.private_address:
+            return "destination", "private address without the admin's exception"
+    if scheme == "http" and not rule.private_address:
+        return "destination", "plain http only to an approved private address"
+    return None
+
+
+def certificate_fingerprint(der: bytes) -> str:
+    return hashlib.sha256(der).hexdigest()
+
+
+def fetch_platform_rules() -> list[Rule]:
+    """The platform's registry, as rules (`GET /internal/egress-rules`)."""
+    url = os.environ.get("PLATFORM_URL", "http://platform:8100").rstrip("/")
+    req = urllib.request.Request(
+        f"{url}/internal/egress-rules",
+        headers={"Authorization": f"Bearer {os.environ.get('PLATFORM_EGRESS_TOKEN', '')}"},
     )
+    # Direct, never through a proxy (this process is the proxy).
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=5) as resp:
+        payload = json.loads(resp.read())
+    return [
+        Rule(
+            integration=str(r["integration"]),
+            scheme=str(r["scheme"]),
+            host=_norm_host(str(r["host"])),
+            port=int(r["port"]),
+            private_address=bool(r["private_address"]),
+            cert_fingerprint=(r.get("cert_fingerprint") or None),
+        )
+        for r in payload["rules"]
+    ]
 
 
-def request(flow: http.HTTPFlow) -> None:
+class RuleSource:
+    """The rules, cached for a few seconds and refetched early for an unknown destination.
+
+    A failed fetch keeps the last rules (nothing new is allowed meanwhile);
+    before the first successful fetch there are none.
+    """
+
+    def __init__(
+        self,
+        fetch: Callable[[], list[Rule]] = fetch_platform_rules,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._fetch = fetch
+        self._clock = clock
+        self._rules: list[Rule] = []
+        self._fetched_at: float | None = None
+        self._lock = asyncio.Lock()
+
+    async def _refresh(self) -> None:
+        self._fetched_at = self._clock()
+        try:
+            self._rules = await asyncio.to_thread(self._fetch)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logger.warning("egress rules not refreshed: %s", type(exc).__name__)
+
+    async def lookup(self, scheme: str, host: str, port: int) -> Rule | None:
+        async with self._lock:
+            age = None if self._fetched_at is None else self._clock() - self._fetched_at
+            missing = find_rule(self._rules, scheme, host, port) is None
+            if age is None or age >= RULES_TTL_S or (missing and age >= RULES_MISS_INTERVAL_S):
+                await self._refresh()
+            return find_rule(self._rules, scheme, host, port)
+
+
+RULES = RuleSource()
+# Per client connection: authenticated as the gateway (by its CONNECT, or its
+# first plain-http request), the rule its CONNECT matched, and a server
+# certificate that failed (the fingerprint it presented).
+GATEWAY_CONNECTIONS: set[str] = set()
+CONNECT_RULES: dict[str, Rule] = {}
+CERTIFICATE_FAILURES: dict[str, tuple[str, str]] = {}
+
+
+async def _gateway_check(flow: http.HTTPFlow, scheme: str) -> Rule | None:
+    """Deny `flow` unless its destination is registered; returns the rule it matched."""
+    host, port = flow.request.host, flow.request.port
+    rule = await RULES.lookup(scheme, host, port)
+    denial = gateway_denial(rule, scheme, await asyncio.to_thread(resolve_host, host))
+    if denial is not None:
+        code, reason = denial
+        _deny(flow, reason, code)
+        logger.info("gateway %s %s:%d denied (%s)", flow.request.method, host, port, code)
+        return None
+    return rule
+
+
+def _authenticate(flow: http.HTTPFlow) -> bool | None:
+    """The gateway's credential on this request, stripped; a wrong one gets 407."""
+    credential = gateway_credential(
+        flow.request.headers.get("Proxy-Authorization"), gateway_token()
+    )
+    if "Proxy-Authorization" in flow.request.headers:
+        del flow.request.headers["Proxy-Authorization"]
+    if credential is False:
+        _deny(flow, "proxy credential not accepted", "proxy_auth", status=407)
+    return credential
+
+
+async def http_connect(flow: http.HTTPFlow) -> None:
+    """mitmproxy `http_connect` hook: the gateway's tunnel, checked before anything connects."""
+    credential = _authenticate(flow)
+    if credential is not True:
+        return
+    client = flow.client_conn.id
+    GATEWAY_CONNECTIONS.add(client)
+    rule = await _gateway_check(flow, "https")
+    if rule is not None:
+        CONNECT_RULES[client] = rule
+
+
+def tls_start_server(data: tls.TlsData) -> None:
+    """mitmproxy `tls_start_server` hook: a pinned certificate for the gateway's servers.
+
+    Script addons run before mitmproxy's own TLS setup, so this runs it first
+    and then replaces the certificate check: with a pin, only the exact
+    certificate passes (no CA or hostname checks: that's what pinning a
+    self-signed server means); without one, the normal checks stand and a
+    failure is remembered so the request gets a clear denial.
+    """
+    client = data.context.client.id
+    if client not in GATEWAY_CONNECTIONS:
+        return
+    ctx.master.addons.get("tlsconfig").tls_start_server(data)
+    rule = CONNECT_RULES.get(client)
+    pin = rule.cert_fingerprint if rule else None
+    install_certificate_check(data.ssl_conn, client, pin)
+
+
+def install_certificate_check(ssl_conn, client: str, pin: str | None) -> None:
+    from OpenSSL import SSL, crypto
+
+    def check(_conn, x509, _errno, depth, ok) -> bool:
+        if depth > 0:
+            return True if pin else bool(ok)
+        der = crypto.dump_certificate(crypto.FILETYPE_ASN1, x509)
+        presented = certificate_fingerprint(der)
+        if pin:
+            if hmac.compare_digest(presented, pin.lower()):
+                return True
+            CERTIFICATE_FAILURES[client] = ("certificate_changed", presented)
+            return False
+        if not ok:
+            CERTIFICATE_FAILURES[client] = ("certificate_untrusted", presented)
+        return bool(ok)
+
+    ssl_conn.set_verify(SSL.VERIFY_PEER, check)
+
+
+def client_disconnected(client) -> None:
+    """mitmproxy hook: forget per-connection state."""
+    GATEWAY_CONNECTIONS.discard(client.id)
+    CONNECT_RULES.pop(client.id, None)
+    CERTIFICATE_FAILURES.pop(client.id, None)
+
+
+async def _gateway_request(flow: http.HTTPFlow) -> None:
+    failure = CERTIFICATE_FAILURES.get(flow.client_conn.id)
+    if failure is not None:
+        code, presented = failure
+        _deny(
+            flow,
+            "the server's certificate doesn't match what the admin approved"
+            if code == "certificate_changed"
+            else "the server's certificate isn't trusted",
+            code,
+        )
+        flow.response.headers[CERTIFICATE_HEADER] = presented
+        return
+    if flow.request.method.upper() not in GATEWAY_METHODS:
+        _deny(flow, METHOD_DENIAL_REASON, "method")
+        return
+    if await _gateway_check(flow, flow.request.scheme) is None:
+        return
+    if "Cookie" in flow.request.headers:
+        del flow.request.headers["Cookie"]
+
+
+async def request(flow: http.HTTPFlow) -> None:
     """mitmproxy `request` event hook."""
+    credential = _authenticate(flow)
+    if credential is False:
+        return
+    if credential is True:
+        GATEWAY_CONNECTIONS.add(flow.client_conn.id)
+    if flow.client_conn.id in GATEWAY_CONNECTIONS:
+        await _gateway_request(flow)
+        return
+
     reason = method_denial_reason(flow.request.method)
     if reason is not None:
         _deny(flow, reason)

@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import httpx2
 import mcp_types as types
@@ -49,6 +50,9 @@ class Session:
 
     client: Client
     statuses: list[int] = field(default_factory=list)
+    # The egress proxy's own refusals (`X-Egress-Denied`), or "proxy_error"
+    # for an error page the proxy made itself.
+    denials: list[str] = field(default_factory=list)
     list_changed: set[str] = field(default_factory=set)
 
 
@@ -65,7 +69,23 @@ def _leaves(exc: BaseException) -> list[BaseException]:
     return [exc]
 
 
-def classify(exc: BaseException, statuses: list[int]) -> GatewayError:
+def _denied(code: str) -> GatewayError:
+    if code == "certificate_changed":
+        return GatewayError("certificate_changed")
+    if code == "certificate_untrusted":
+        return GatewayError(
+            "unreachable",
+            "The server's certificate isn't trusted. An admin can confirm it in "
+            "Settings → Integrations.",
+        )
+    if code == "proxy_error":
+        return GatewayError("unreachable", "The egress proxy couldn't connect to the server.")
+    return GatewayError("unreachable", f"The egress proxy refused the request ({code}).")
+
+
+def classify(
+    exc: BaseException, statuses: list[int], denials: list[str] | None = None
+) -> GatewayError:
     """The standard error for a failure while talking to a server."""
     if isinstance(exc, GatewayError):
         return exc
@@ -73,6 +93,14 @@ def classify(exc: BaseException, statuses: list[int]) -> GatewayError:
     gateway_errors = [e for e in leaves if isinstance(e, GatewayError)]
     if gateway_errors:
         return gateway_errors[0]
+    if denials:
+        return _denied(denials[0])
+    if any(isinstance(e, httpx2.ProxyError) for e in leaves):
+        return GatewayError(
+            "unreachable",
+            "The egress proxy refused the connection: the address isn't an installed "
+            "integration's, or isn't allowed.",
+        )
     if any(s in (401, 403) for s in statuses):
         return GatewayError("auth_expired")
     if any(isinstance(e, (TimeoutError, httpx2.TimeoutException)) for e in leaves):
@@ -94,14 +122,24 @@ def classify(exc: BaseException, statuses: list[int]) -> GatewayError:
 
 
 @asynccontextmanager
-async def guarded(statuses: list[int]) -> AsyncIterator[None]:
+async def guarded(statuses: list[int], denials: list[str] | None = None) -> AsyncIterator[None]:
     """Map anything raised inside to a standard error (cancellation passes through)."""
     try:
         yield
     except GatewayError:
         raise
     except Exception as exc:
-        raise classify(exc, statuses) from exc
+        raise classify(exc, statuses, denials) from exc
+
+
+def proxy_url(url: str, token: str) -> str | None:
+    """The egress proxy, with the gateway's credential (`gateway:<token>`) in it."""
+    if not url:
+        return None
+    if not token:
+        return url
+    scheme, _, rest = url.partition("://")
+    return f"{scheme}://gateway:{quote(token, safe='')}@{rest}"
 
 
 class HttpConnector:
@@ -109,13 +147,13 @@ class HttpConnector:
 
     def __init__(
         self,
-        proxy_url: str,
+        proxy: str | None,
         ca_bundle: str,
         connect_timeout_s: float,
         read_timeout_s: float,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        self._proxy = proxy_url or None
+        self._proxy = proxy or None
         self._verify: ssl.SSLContext | bool = (
             ssl.create_default_context(cafile=ca_bundle) if ca_bundle else True
         )
@@ -127,10 +165,18 @@ class HttpConnector:
         self, integration: dict[str, Any], headers: dict[str, str], *, elicitation: bool
     ) -> AsyncIterator[Session]:
         statuses: list[int] = []
+        denials: list[str] = []
         changed: set[str] = set()
 
         async def record(response: httpx2.Response) -> None:
             statuses.append(response.status_code)
+            denied = response.headers.get("x-egress-denied")
+            if denied:
+                denials.append(denied)
+            elif response.status_code >= 500 and response.headers.get("server", "").startswith(
+                "mitmproxy"
+            ):
+                denials.append("proxy_error")
 
         async def on_message(message: Any) -> None:
             method = getattr(message, "method", "")
@@ -156,5 +202,5 @@ class HttpConnector:
             message_handler=on_message,
             elicitation_callback=_decline if elicitation and mode != "legacy" else None,
         )
-        async with http, guarded(statuses), client:
-            yield Session(client=client, statuses=statuses, list_changed=changed)
+        async with http, guarded(statuses, denials), client:
+            yield Session(client=client, statuses=statuses, denials=denials, list_changed=changed)

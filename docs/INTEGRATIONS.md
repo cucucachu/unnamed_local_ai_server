@@ -3,8 +3,9 @@
 Design for M18 (#259): Model Context Protocol servers as integrations the
 agent can use. **Built so far:** the permissions core (#342, M18-02) and
 the platform's registry (M18-03, `docs/PLATFORM.md` §4 "Integrations"),
-and the integrations gateway (M18-04, `docs/ARCHITECTURE.md` §2
-"`integrations-gateway`"). This is the agreed design,
+the integrations gateway (M18-04, `docs/ARCHITECTURE.md` §2
+"`integrations-gateway`"), and its rules at the egress proxy (M18-05,
+`docs/ARCHITECTURE.md` §5 "Egress proxy"). This is the agreed design,
 written before any implementation issues; as each part lands, its as-built
 description moves into `docs/ARCHITECTURE.md` and this file is trimmed.
 
