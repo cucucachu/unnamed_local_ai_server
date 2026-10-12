@@ -2,8 +2,9 @@
 
 Design for M18 (#259): Model Context Protocol servers as integrations the
 agent can use. **Built so far:** the permissions core (#342, M18-02) and
-the platform's registry (M18-03, `docs/PLATFORM.md` §4 "Integrations").
-This is the agreed design,
+the platform's registry (M18-03, `docs/PLATFORM.md` §4 "Integrations"),
+and the integrations gateway (M18-04, `docs/ARCHITECTURE.md` §2
+"`integrations-gateway`"). This is the agreed design,
 written before any implementation issues; as each part lands, its as-built
 description moves into `docs/ARCHITECTURE.md` and this file is trimmed.
 
@@ -355,6 +356,7 @@ plain sentence telling the model what to do:
 | `not_found` | No such integration, tool, resource or prompt (or the tool is off). |
 | `invalid_arguments` | Arguments don't match the schema; details included; fix and retry. |
 | `refused_by_policy` | The tool was turned off during the thread, or the approval was rejected; don't retry. |
+| `approval_required` | The tool asks first and the call came without a valid approval marker (§7); don't retry without the user's approval. |
 | `needs_input` | Elicitation (§8). |
 | `unreachable` | Network error, DNS failure, connection refused, or the proxy blocked it. |
 | `timeout` | The server didn't answer in time; may retry once. |

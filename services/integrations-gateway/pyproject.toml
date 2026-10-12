@@ -1,0 +1,32 @@
+[project]
+name = "integrations-gateway"
+version = "0.1.0"
+description = "M18-04: the only component that talks to MCP servers and holds the credential key"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=46.0.0",
+    "fastapi>=0.141.1",
+    "jsonschema>=4.26.0",
+    "mcp==2.3.0",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+# app/ is run directly via `uv run uvicorn app.main:app`, like the other services.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+cache_dir = "/tmp/pytest_cache"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.5",
+]

@@ -472,6 +472,50 @@ what another doc says it should be.
   fetch?url=...` (no `curl` in this image — see "e2e gate scripts" below),
   and for `/search` it's `scripts/e2e/web_research_smoke.sh` (M7-04).
 
+### `integrations-gateway`
+
+- **Purpose** (M18-04, docs/INTEGRATIONS.md §3): the only service that
+  talks to MCP servers and the only one that can decrypt integration
+  credentials. It runs the official MCP Python SDK client (2.3.0; spec
+  2026-07-28, with the older handshake for servers discovery recorded as
+  older), checks every agent request against a grant from the platform,
+  enforces tool availability, approval markers and "only the user answers
+  input requests", applies the call timeout and result cap, and records
+  each action in the platform's audit log. API: "integrations-gateway API"
+  under §3.
+- **Image/base**: `python:3.12-slim` + `uv`, like `web-fetch`. Dockerfile:
+  `services/integrations-gateway/Dockerfile`.
+- **Published port**: none. **Internal port**: `8000`.
+- **Network**: `homeai-internal` only; MCP servers are reached only
+  through `egress-proxy` (`EGRESS_PROXY_URL`). Until M18-05 gives the
+  gateway its own identity at the proxy, the proxy's GET/HEAD-only and
+  no-private-address rules refuse its MCP requests (`unreachable`).
+- **Mounts**: named volume `integrations-gateway-keys:/keys` (the
+  credential key, `credentials.key`, 32 random bytes, 0600, made on first
+  start; only this container mounts it, and it's in neither the database
+  nor its backups: losing it means every integration must be reconnected),
+  and `egress-proxy-ca:/ca:ro` (trusted by `entrypoint.sh`, the same recipe
+  as `web-fetch`).
+- **Runs as**: `${HOMEAI_UID}:${HOMEAI_GID}`, read-only root filesystem,
+  `/tmp` tmpfs, all capabilities dropped, `no-new-privileges`.
+- **Credentials**: AES-256-GCM; each ciphertext's associated data is
+  `homeai/integration-credential/v1/{integration_id}/{user_id|shared}`, so
+  a row copied to another user or integration doesn't decrypt. The
+  platform stores only ciphertext. A credential that doesn't open, or a
+  server answering 401/403, gives `auth_expired` and marks the credential
+  "needs reconnecting".
+- **Env vars consumed**: `PLATFORM_URL`, `PLATFORM_GATEWAY_TOKEN` (its
+  bearer on the platform's `/internal/*`), `INTEGRATIONS_GATEWAY_TOKEN`
+  (what the platform presents here), `EGRESS_PROXY_URL`; `CA_BUNDLE` is set
+  by the entrypoint. Either token unset: integrations are unavailable.
+- **Tests**: `services/integrations-gateway/tests/` against a fake MCP
+  server (`tests/fake_server.py`) in both spec versions, in process and
+  over real HTTP (uvicorn): open, call, read, prompt, every standard
+  error, trimming, approval markers (refused without, single use, bound to
+  the arguments), input handles, credential binding, and secrets absent
+  from logs. Run: `cd services/integrations-gateway && uv run ruff check .
+  && uv run pytest`.
+
 ### `searxng`
 
 - **Purpose**: M7-04's self-hosted metasearch engine — runs locally and
@@ -3070,6 +3114,51 @@ judgement call: bounds worst-case latency/memory against a
 multi-thousand-page PDF without a spec-mandated limit to follow; not
 configurable via env, since it's a safety bound rather than a tunable
 like the `FETCH_*` caps).
+
+### `integrations-gateway` API (internal, port 8000)
+
+For the platform, with `INTEGRATIONS_GATEWAY_TOKEN` as the bearer:
+
+- `POST /encrypt` `{"integration_id", "user_id": uuid|null, "secret"}` →
+  `200 {"ciphertext": base64}`, sealed to that integration and user (null:
+  the shared credential).
+- `POST /discover` `{"integration": {id, slug, url, ...}, "credential":
+  {"user_id", "ciphertext"}|null}` → `200` the platform's `DiscoveryIn`
+  (`protocol_version`, `server`, `instructions`, `tools`, `resources`,
+  `prompts`), or `422 {"detail": code}` with a standard error code.
+
+For agent-server, with the user's delegation as the bearer (checked
+through `POST /internal/integration-grants`). `context` is `chat`,
+`routine` or `app` (for the audit log):
+
+- `POST /v1/open` `{"integration": slug, "context"}` → `{"ok": true,
+  "instructions", "tools": [{name, description, input_schema,
+  permission}], "resources": [{uri, name, description}], "prompts":
+  [{name, description, arguments}]}`. Tools that are off for the admin or
+  the user, or that the registry hasn't discovered yet, aren't listed.
+- `POST /v1/call` `{"integration", "tool", "arguments", "context",
+  "approval"?: marker, "input"?: {"handle", "responses": {key: {"action":
+  accept|decline|cancel, "content"?}}}, "latest_user_message"?}` → `{"ok":
+  true, "is_error", "text", "trimmed"}`. Arguments are validated against
+  the server's input schema first (Draft 2020-12). A tool whose permission
+  is ask runs only with an approval marker the platform accepts for these
+  exact arguments; the marker is spent only after validation passes.
+- `POST /v1/read` `{"integration", "uri", "context"}` and `POST
+  /v1/prompt` `{"integration", "name", "arguments", "context"}` → `{"ok":
+  true, "text", "trimmed"}`.
+
+Every failure while serving an agent request is a `200` tool result,
+`{"ok": false, "error": {"code", "message", ...}}`, with the codes of
+docs/INTEGRATIONS.md §9 plus `approval_required` (an ask tool called
+without a valid marker). `invalid_arguments` adds `errors: [{path,
+message}]`; `needs_input` adds `handle` and `requests` ({key: {mode:
+form, message, fields} | {mode: url, message, url, host}}). A handle is
+answered on a later `/v1/call` with `input`; the answer is accepted only
+from the same user and thread, and only if `latest_user_message` differs
+from the one sent when the server asked. Handles last a day and don't
+survive a restart. Results over 20,000 characters are trimmed, keeping
+the head and tail. A bad delegation is `401`, an unreachable platform
+`503`; a caller that disconnects cancels the call.
 
 ### Path-traversal guard
 

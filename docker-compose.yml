@@ -84,6 +84,10 @@ volumes:
   # Derived wg0.conf the platform writes and the wireguard sidecar applies.
   # Server private key is in this file (0600); not in git, not in compose env.
   wireguard-config:
+  # M18-04: the integration credential key (`credentials.key`, 0600), made
+  # on the gateway's first start. Losing it means every integration must be
+  # reconnected; it's deliberately not in the database or its backups.
+  integrations-gateway-keys:
 
 services:
   caddy:
@@ -167,6 +171,41 @@ services:
       FETCH_MAX_TEXT_CHARS: ${FETCH_MAX_TEXT_CHARS}
       FETCH_MAX_REDIRECTS: ${FETCH_MAX_REDIRECTS}
       SEARXNG_URL: ${SEARXNG_URL}
+
+  # M18-04: the only service that talks to MCP servers and the only one that
+  # can decrypt integration credentials (docs/INTEGRATIONS.md §3, §5). Its
+  # key lives in its own volume, outside the database and its backups.
+  integrations-gateway:
+    build:
+      context: ./services/integrations-gateway
+      args:
+        HOMEAI_UID: ${HOMEAI_UID}
+        HOMEAI_GID: ${HOMEAI_GID}
+    restart: unless-stopped
+    # internal-only: MCP servers are reached only through `egress-proxy`.
+    networks: [homeai-internal]
+    user: "${HOMEAI_UID}:${HOMEAI_GID}"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - integrations-gateway-keys:/keys
+      - egress-proxy-ca:/ca:ro
+    environment:
+      EGRESS_PROXY_URL: ${EGRESS_PROXY_URL}
+      PLATFORM_URL: http://platform:8100
+      PLATFORM_GATEWAY_TOKEN: ${PLATFORM_GATEWAY_TOKEN:-}
+      INTEGRATIONS_GATEWAY_TOKEN: ${INTEGRATIONS_GATEWAY_TOKEN:-}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # M7-04: self-hosted metasearch engine - only reachable from `web-fetch`'s
   # `GET /search` above, over `homeai-internal`. NOT routed by Caddy (no
@@ -423,6 +462,11 @@ services:
       PLATFORM_AGENT_TOKEN: ${PLATFORM_AGENT_TOKEN}
       PLATFORM_EXEC_TOKEN: ${PLATFORM_EXEC_TOKEN}
       PLATFORM_BUILD_TOKEN: ${PLATFORM_BUILD_TOKEN}
+      # M18: the integrations gateway's token on /internal/*, and the
+      # platform's own on the gateway. Unset: integrations are unavailable.
+      PLATFORM_GATEWAY_TOKEN: ${PLATFORM_GATEWAY_TOKEN:-}
+      INTEGRATIONS_GATEWAY_URL: http://integrations-gateway:8000
+      INTEGRATIONS_GATEWAY_TOKEN: ${INTEGRATIONS_GATEWAY_TOKEN:-}
       # The host-side path of the /data/spaces mount above: exec grants name
       # bind sources as the Docker daemon sees them.
       SPACES_HOST_DIR: ${SPACES_DIR}
