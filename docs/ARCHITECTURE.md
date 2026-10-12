@@ -2019,6 +2019,11 @@ themselves)
 | `DELETE /api/platform/spaces/{id}/members/{user_id}` | membership `manage` | — | `204`; the user loses access at once | space errors, `409 personal_space`, `404 not_found` (not a member), `409 last_owner` |
 | `GET /api/platform/audit` | space `read` with `space_id`; admin without | query: `space_id`, `target_type`, `target_id`, `actor_user_id`, `kind` (exact or prefix), `before`, `limit` (≤ 200) | `200 {"events": [AuditEvent], "next_before"}`, newest first (PLATFORM.md §4 "Audit log") | space errors, `403 admin_required` |
 | `GET /api/platform/settings` | user | — | `200 {"public_https": bool, "domain_configured": bool}` | — |
+| `GET /api/platform/tools` | human | — | `200 {"tools": [UserTool]}`: each catalog tool (`name`, `label`, `description`, `group`, `read_only`) with the caller's effective `enabled` and `permission` (`ask`\|`allow`) and `enabled_locked` / `permission_locked` (the admin's setting decides) (PLATFORM.md §4 "Agent tool permissions") | — |
+| `PATCH /api/platform/tools` | human | `{"changes": [{"name", "enabled"?, "permission"?}]}` (all or nothing) | `200` same as GET | `422 unknown_tool`, `422 locked_by_admin` (more than the admin allows) |
+| `GET /api/platform/tools/policy` | user | — | `200 {"tools": {name: {"available", "permission", "can_always_allow"}}}`, for agent-server's turns | — |
+| `GET /api/platform/admin/tools` | admin | — | `200 {"tools": [AdminTool]}`: catalog fields plus `enabled` and `ceiling` (`ask`\|`allow`) | `403 public_origin` |
+| `PATCH /api/platform/admin/tools` | admin | `{"changes": [{"name", "enabled"?, "ceiling"?}]}` | `200` same as GET. Users' own settings are never rewritten. | `403 public_origin`, `422 unknown_tool` |
 | `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | `403 public_origin` |
 | `PATCH /api/platform/admin/settings` | admin | `{"public_https": bool}` | `200` same as GET. Enabling needs an RP ID. Does not punch the host firewall. | `403 public_origin`, `422 domain_required` (enabling with no RP ID) |
 | `PATCH /api/platform/admin/users/{id}` | admin | `{"role"?: "admin"\|"member", "disabled"?: bool, "require_passkeys"?: bool}` | `200 User`. Disabling revokes all the user's sessions (re-enabling doesn't restore them). `require_passkeys: true` needs an RP ID. | `403 public_origin`, `404 not_found`, `409 last_admin` (would leave no enabled admin), `422 domain_required` (requiring passkeys with no RP ID) |
@@ -2820,6 +2825,11 @@ credential or an instance id.
   write the instance `403 insufficient_role` / `404 not_found`; unknown
   migration `404`; not pending `409 migration_not_pending`. Held in
   memory: a platform restart invalidates every marker.
+- `PUT /internal/tool-catalog` (#342) — service auth with
+  `PLATFORM_AGENT_TOKEN`. Body `{"tools": [{"name", "label",
+  "description", "group", "read_only"}]}` (≤ 200) → `204`; replaces the
+  catalog of agent tools, keeping everyone's settings (PLATFORM.md §4
+  "Agent tool permissions"). `422 duplicate_tool`.
 
 **Delegation contract** (`app/core/delegations.py`; agent-server side
 `app/core/delegation.py`). A delegation is a platform JWT (format below)

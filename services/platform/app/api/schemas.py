@@ -891,3 +891,83 @@ class SystemActionRequest(BaseModel):
 class SystemActionResult(BaseModel):
     ok: bool = True
     result: dict[str, Any]
+
+
+ToolName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+ToolPermission = Literal["ask", "allow"]
+
+
+class AgentToolIn(BaseModel):
+    name: ToolName
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+    description: Annotated[str, Field(max_length=500)]
+    group: Annotated[str, Field(min_length=1, max_length=40)]
+    read_only: bool
+
+
+class ToolCatalogIn(BaseModel):
+    tools: Annotated[list[AgentToolIn], Field(max_length=200)]
+
+
+class UserToolOut(BaseModel):
+    name: str
+    label: str
+    description: str
+    group: str
+    read_only: bool
+    enabled: bool
+    permission: ToolPermission
+    enabled_locked: bool
+    permission_locked: bool
+
+
+class UserToolList(BaseModel):
+    tools: list[UserToolOut]
+
+
+class UserToolChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: ToolName
+    enabled: bool | None = None
+    permission: ToolPermission | None = None
+
+
+class UserToolChanges(BaseModel):
+    changes: Annotated[list[UserToolChange], Field(min_length=1, max_length=200)]
+
+
+class AdminToolOut(BaseModel):
+    name: str
+    label: str
+    description: str
+    group: str
+    read_only: bool
+    enabled: bool
+    ceiling: ToolPermission
+
+
+class AdminToolList(BaseModel):
+    tools: list[AdminToolOut]
+
+
+class AdminToolChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: ToolName
+    enabled: bool | None = None
+    ceiling: ToolPermission | None = None
+
+
+class AdminToolChanges(BaseModel):
+    changes: Annotated[list[AdminToolChange], Field(min_length=1, max_length=200)]
+
+
+class ToolPolicyEntry(BaseModel):
+    available: bool
+    permission: ToolPermission
+    can_always_allow: bool
+
+
+class ToolPolicyOut(BaseModel):
+    tools: dict[str, ToolPolicyEntry]

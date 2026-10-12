@@ -17,6 +17,7 @@ from app.api.internal import (
     jwks,
     routine_grants,
     space_access,
+    tool_catalog,
 )
 
 router = APIRouter(prefix="/internal")
@@ -29,3 +30,4 @@ router.include_router(exec_grants.router)
 router.include_router(hitl.router)
 router.include_router(space_access.router)
 router.include_router(routine_grants.router)
+router.include_router(tool_catalog.router)

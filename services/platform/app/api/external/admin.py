@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, Request, status
 
 from app.api.external.settings import settings_out
 from app.api.schemas import (
+    AdminToolChanges,
+    AdminToolList,
     AdminUserPatch,
     InviteCreated,
     InviteCreateRequest,
@@ -24,7 +26,7 @@ from app.api.schemas import (
     UserOut,
 )
 from app.api.session_http import is_https
-from app.core import invites, platform_settings, spaces, users, webauthn
+from app.core import invites, platform_settings, spaces, tool_permissions, users, webauthn
 from app.core.errors import InvalidInput
 from app.core.origin import require_privileged_origin
 from app.core.principal import Principal, SteppedUpAdmin, require_admin_stepped_up
@@ -83,6 +85,23 @@ async def patch_settings(body: PlatformSettingsPatch, request: Request) -> Platf
         enabled = await platform_settings.set_public_https(conn, body.public_https)
     request.app.state.public_https = enabled
     return settings_out(request)
+
+
+@router.get("/tools", response_model=AdminToolList)
+async def list_tools(request: Request) -> AdminToolList:
+    async with request.app.state.db_pool.connection() as conn:
+        return AdminToolList(tools=await tool_permissions.admin_view(conn))
+
+
+@router.patch("/tools", response_model=AdminToolList)
+async def change_tools(
+    body: AdminToolChanges, request: Request, principal: SteppedUpAdmin
+) -> AdminToolList:
+    """Availability and the permission ceiling, for everyone (#342). Users' own rows stay as they are."""
+    changes = [c.model_dump(exclude_none=True) for c in body.changes]
+    async with request.app.state.db_pool.connection() as conn:
+        await tool_permissions.change_admin(conn, principal, changes)
+        return AdminToolList(tools=await tool_permissions.admin_view(conn))
 
 
 @router.get("/spaces", response_model=SpaceList)

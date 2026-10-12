@@ -328,6 +328,7 @@ so far:
 | `app_data.migration` | a migration applied, failed, held for approval, approved, rejected or superseded |
 | `app.installed`, `app.uninstalled` | an app installed into or uninstalled from a space |
 | `space.member_added`, `space.member_role_changed`, `space.member_removed` | membership changes |
+| `tools.settings_changed`, `tools.admin_changed` | a user's own agent tool settings, or the admin's for everyone, changed |
 
 App data lives in SQLite, so its event is recorded from inside the SQLite
 write transaction, just before `COMMIT`: if the event can't be stored the
@@ -340,6 +341,35 @@ lists events newest first (`limit` ≤ 200, `next_before` pages back; `kind`
 also matches by prefix, so `app_data` covers both app-data kinds). Members
 of a space (any role, and their agents) read its events; leaving out
 `space_id` (everything, including events with no space) is admin-only.
+
+### Agent tool permissions
+
+What the agent may do without asking (#342, `app/core/tool_permissions.py`).
+Every tool in the catalog has two controls, each set by the admin (for
+everyone) and by each user (for themselves):
+
+- **Availability**, on or off. A tool is available only if both have it on.
+  agent-server doesn't show an unavailable tool to the model at all.
+- **Permission**, ask or allow. The admin's is a ceiling (default allow).
+  The user's defaults to ask, or to allow for a tool the catalog marks
+  read-only. A call runs without asking only if both say allow.
+
+The admin is trusted: no tool has a floor in code. File access is separate
+and unchanged: the agent acts as the user, with their space roles.
+
+- **Catalog** (`agent_tools`): agent-server's built-in tools, sent at its
+  startup with `PUT /internal/tool-catalog` (`PLATFORM_AGENT_TOKEN`).
+  Replacing it never touches anyone's settings.
+- **Settings** (`agent_tool_admin_settings`, `agent_tool_user_settings`):
+  stored apart; a missing row means the defaults. A user's row more
+  permissive than the admin's is valid: it stays when an admin tightens a
+  tool, and the admin's wins when evaluated. Users only ever see, and can
+  only set, what the admin allows (`422 locked_by_admin` otherwise).
+- **Who changes what**: a user in person (`/api/platform/tools`), an admin
+  in person, stepped up, from a privileged origin
+  (`/api/platform/admin/tools`). The agent reads its run's policy
+  (`/api/platform/tools/policy`) and changes nothing. Both kinds of change
+  are audited.
 
 ### Service-to-service auth
 
