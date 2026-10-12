@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent.app_tools import APP_TOOL_NAMES, make_app_tools
+from app.agent.approvals import DEFAULT_POLICY, StaticToolPolicies, ToolPolicy
 from app.core.config import Settings
-from app.db.settings import InMemorySettingsStore
 from app.main import create_app
 from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore, FixedIdentityVerifier
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallsTurn, ToolCallTurn
@@ -27,13 +27,7 @@ TEMPLATES = Path(__file__).resolve().parents[3] / "examples" / "apps"
 PERSONAL = f"personal:{TEST_USER_ID}"
 
 
-async def _settings_store(hitl: bool) -> InMemorySettingsStore:
-    store = InMemorySettingsStore()
-    await store.update_document(TEST_USER_ID, {"hitl_enabled": hitl})
-    return store
-
-
-def _client(fake_model: FakeModel, fake_platform: FakePlatform, store) -> TestClient:
+def _client(fake_model: FakeModel, fake_platform: FakePlatform, policy: ToolPolicy) -> TestClient:
     settings = fake_model.settings(
         platform_url=fake_platform.base_url,
         platform_agent_token=AGENT_TOKEN,
@@ -44,7 +38,7 @@ def _client(fake_model: FakeModel, fake_platform: FakePlatform, store) -> TestCl
             settings,
             checkpointer_override=MemorySaver(),
             thread_store_override=AutoCreateThreadStore(),
-            settings_store_override=store,
+            tool_policies_override=StaticToolPolicies(policy),
             identity_verifier_override=FixedIdentityVerifier(),
             delegation_client_override=fake_platform.client(),
         )
@@ -83,7 +77,7 @@ async def test_list_apps_shows_instances_sources_and_data_paths(fake_model, fake
     _, notes = fake_platform.seed_app(PERSONAL, "notes", built=False)
     fake_model.queue(ToolCallTurn("list_apps", {}), TextTurn("ok"))
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/list") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "what apps do I have?"})
@@ -119,7 +113,7 @@ async def test_app_action_files_move_to_space(fake_model, fake_platform):
         TextTurn("moved"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/files-move") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "move notes into family"})
@@ -142,7 +136,7 @@ async def test_create_app_copies_the_template_registers_and_installs(fake_model,
         TextTurn("created"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/create") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "make me a chore chart"})
@@ -175,7 +169,7 @@ async def test_create_app_copies_a_named_template(fake_model, fake_platform):
         TextTurn("created"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/create-notes") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "make me a journal"})
@@ -206,7 +200,7 @@ async def test_create_app_refuses_bad_input_without_writing(fake_model, fake_pla
         TextTurn("hm"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/create-bad") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "make apps"})
@@ -228,7 +222,7 @@ async def test_build_app_on_hand_written_files_points_to_create_app(fake_model, 
         ToolCallTurn("build_app", {"app": "/personal/Apps/weather"}), TextTurn("no app")
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/build-unregistered") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "build it"})
@@ -250,7 +244,7 @@ async def test_build_app_reports_diagnostics_then_success_with_a_pending_migrati
     ]  # fmt: skip
     fake_model.queue(ToolCallTurn("build_app", {"app": "family/groceries"}), TextTurn("broken"))
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/build") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "build it"})
@@ -276,20 +270,20 @@ async def test_build_app_reports_diagnostics_then_success_with_a_pending_migrati
     assert fake_platform.approvals == [] and fake_platform.hitl_mints == []
 
 
-# --- app_sql / app_action --------------------------------------------------------------------
+# --- app_query / app_update / app_action --------------------------------------------------------------------
 
 
-async def test_reads_never_ask_even_in_a_shared_space(fake_model, fake_platform):
+async def test_queries_dont_ask_by_default_even_in_a_shared_space(fake_model, fake_platform):
     _family(fake_platform)
     _, inst = fake_platform.seed_app("family", "groceries")
     fake_platform.rows[inst["id"]] = [{"id": 1, "name": "Milk"}]
     sql = "SELECT id, name FROM items WHERE name = ?"
     fake_model.queue(
-        ToolCallTurn("app_sql", {"instance": inst["id"], "sql": sql, "params": ["Milk"]}),
+        ToolCallTurn("app_query", {"instance": inst["id"], "sql": sql, "params": ["Milk"]}),
         TextTurn("Milk"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/read") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "what's on the list?"})
@@ -302,17 +296,17 @@ async def test_reads_never_ask_even_in_a_shared_space(fake_model, fake_platform)
     ]
 
 
-async def test_a_shared_write_asks_first_and_runs_once_approved(fake_model, fake_platform):
+async def test_an_update_asks_first_and_runs_once_approved(fake_model, fake_platform):
     _family(fake_platform)
     _, inst = fake_platform.seed_app("family", "groceries")
     sql = "INSERT INTO items (name) VALUES (:name)"
     fake_model.queue(
         ToolCallTurn(
-            "app_sql", {"instance": "family/groceries", "sql": sql, "params": {"name": "Eggs"}}
+            "app_update", {"instance": "family/groceries", "sql": sql, "params": {"name": "Eggs"}}
         )
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/write") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "add eggs"})
@@ -320,7 +314,7 @@ async def test_a_shared_write_asks_first_and_runs_once_approved(fake_model, fake
         _assert_turn_end(frames[-1], "awaiting_approval")
         [approval] = [f for f in frames if f["type"] == "approval_request"]
         [action] = approval["actions"]
-        assert (action["name"], action["category"]) == ("app_sql", "app")
+        assert (action["name"], action["category"]) == ("app_update", "app")
         assert action["args"] == {
             "instance": inst["id"], "space": "/spaces/family", "sql": sql, "params": {"name": "Eggs"},
         }  # fmt: skip
@@ -328,63 +322,86 @@ async def test_a_shared_write_asks_first_and_runs_once_approved(fake_model, fake
             'Change data in Groceries in /spaces/family (shared space "Family"):\n'
             f'{sql}\nparams: {{"name": "Eggs"}}'
         )
-        assert [op for _, op in fake_platform.rpc_calls] == [
-            {"op": "getAll", "sql": sql, "params": {"name": "Eggs"}}
-        ]
+        assert fake_platform.rpc_calls == []
         # The paused call's tool_start has no tool_end; the client drops it on approval_request.
         assert [f["type"] for f in frames if f["type"].startswith("tool_")] == ["tool_start"]
 
         fake_model.queue(TextTurn("added"))
         resumed = _approve(ws, approval)
     _assert_turn_end(resumed[-1], "completed")
-    ops = [body["op"] for _, body in fake_platform.rpc_calls]
-    assert ops == ["getAll", "getAll", "run"]
-    assert fake_platform.rpc_calls[-1] == (
+    assert fake_platform.rpc_calls == [(
         inst["id"], {"op": "run", "sql": sql, "params": {"name": "Eggs"}}
-    )  # fmt: skip
+    )]  # fmt: skip
     end = next(f for f in resumed if f["type"] == "tool_end")
-    assert (end["name"], end["status"]) == ("app_sql", "success")
+    assert (end["name"], end["status"]) == ("app_update", "success")
     assert _tool_results(fake_model) == ["OK: 1 row(s) changed; lastInsertRowId 7."]
 
 
 async def test_a_rejected_write_is_not_run(fake_model, fake_platform):
     _family(fake_platform)
     _, inst = fake_platform.seed_app("family", "groceries")
-    fake_model.queue(ToolCallTurn("app_sql", {"instance": inst["id"], "sql": "DELETE FROM items"}))
+    fake_model.queue(
+        ToolCallTurn("app_update", {"instance": inst["id"], "sql": "DELETE FROM items"})
+    )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/reject") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "clear the list"})
         approval = next(f for f in _drain_turn(ws) if f["type"] == "approval_request")
         fake_model.queue(TextTurn("left it"))
         _assert_turn_end(_approve(ws, approval, "reject")[-1], "completed")
-    assert [body["op"] for _, body in fake_platform.rpc_calls] == ["getAll", "getAll"]
+    assert fake_platform.rpc_calls == []
     [out] = _tool_results(fake_model)
     assert out.startswith("The user rejected this statement; it was not run.")
 
 
-async def test_writes_run_directly_with_hitl_off_or_in_the_personal_space(
-    fake_model, fake_platform
-):
+async def test_updates_follow_the_users_setting_not_the_space(fake_model, fake_platform):
     _family(fake_platform)
     _, shared = fake_platform.seed_app("family", "groceries")
     _, mine = fake_platform.seed_app(PERSONAL, "notes")
-    for hitl, inst in ((False, shared), (True, mine)):
+    allows = ToolPolicy(DEFAULT_POLICY.available, DEFAULT_POLICY.allowed | {"app_update"})
+    for policy, inst, asks in ((allows, shared, False), (DEFAULT_POLICY, mine, True)):
         fake_platform.rpc_calls.clear()
         fake_model.queue(
-            ToolCallTurn("app_sql", {"instance": inst["id"], "sql": "UPDATE items SET done = 1"}),
+            ToolCallTurn(
+                "app_update", {"instance": inst["id"], "sql": "UPDATE items SET done = 1"}
+            ),
             TextTurn("done"),
         )
         with (
-            _client(fake_model, fake_platform, await _settings_store(hitl)) as client,
-            client.websocket_connect(f"/ws/chat/direct-{hitl}") as ws,
+            _client(fake_model, fake_platform, policy) as client,
+            client.websocket_connect(f"/ws/chat/direct-{asks}") as ws,
         ):
             ws.send_json({"type": "user_message", "content": "mark all done"})
             frames = _drain_turn(ws)
-        _assert_turn_end(frames[-1], "completed")
-        assert not any(f["type"] == "approval_request" for f in frames)
-        assert [body["op"] for _, body in fake_platform.rpc_calls] == ["getAll", "run"]
+        asked = any(f["type"] == "approval_request" for f in frames)
+        assert asked is asks
+        assert [body["op"] for _, body in fake_platform.rpc_calls] == ([] if asks else ["run"])
+
+
+async def test_query_and_update_point_to_each_other(fake_model, fake_platform):
+    _family(fake_platform)
+    _, inst = fake_platform.seed_app("family", "groceries")
+    fake_model.queue(
+        ToolCallsTurn(
+            [
+                ("app_query", {"instance": inst["id"], "sql": "DELETE FROM items"}),
+                ("app_update", {"instance": inst["id"], "sql": " select * from items"}),
+            ]
+        ),
+        TextTurn("ok"),
+    )
+    with (
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
+        client.websocket_connect("/ws/chat/point") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "clear it"})
+        _drain_turn(ws)
+    query_out, update_out = _tool_results(fake_model)
+    assert query_out.endswith("app_query only reads. Use app_update.")
+    assert update_out == "Error: this statement only reads; use app_query."
+    assert [body["op"] for _, body in fake_platform.rpc_calls] == ["getAll"]
 
 
 async def test_viewers_cant_write_and_ddl_is_refused(fake_model, fake_platform):
@@ -393,15 +410,15 @@ async def test_viewers_cant_write_and_ddl_is_refused(fake_model, fake_platform):
     fake_model.queue(
         ToolCallsTurn(
             [
-                ("app_sql", {"instance": inst["id"], "sql": "DELETE FROM items"}),
+                ("app_update", {"instance": inst["id"], "sql": "DELETE FROM items"}),
                 ("app_action", {"instance": inst["id"], "name": "addItem"}),
-                ("app_sql", {"instance": inst["id"], "sql": "-- hi\n drop table items"}),
+                ("app_query", {"instance": inst["id"], "sql": "-- hi\n drop table items"}),
             ]
         ),
         TextTurn("can't"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/viewer") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "clear it"})
@@ -412,7 +429,7 @@ async def test_viewers_cant_write_and_ddl_is_refused(fake_model, fake_platform):
     assert "can only view /spaces/family" in sql_out and "this statement writes" in sql_out
     assert "can only view /spaces/family" in action_out
     assert ddl_out.startswith("Error: DROP isn't allowed here.")
-    assert [body["op"] for _, body in fake_platform.rpc_calls] == ["getAll"]
+    assert fake_platform.rpc_calls == []
 
 
 async def test_a_shared_action_shows_its_sql_and_runs_once_approved(fake_model, fake_platform):
@@ -422,7 +439,7 @@ async def test_a_shared_action_shows_its_sql_and_runs_once_approved(fake_model, 
     call = {"instance": inst["id"], "name": "addItem", "params": {"name": "Tea"}}
     fake_model.queue(ToolCallTurn("app_action", call))
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/action") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "add tea"})
@@ -449,14 +466,14 @@ async def test_parallel_writes_are_one_card_and_resume_together(fake_model, fake
     fake_model.queue(
         ToolCallsTurn(
             [
-                ("app_sql", {"instance": inst["id"], "sql": first}),
+                ("app_update", {"instance": inst["id"], "sql": first}),
                 ("list_apps", {}),
-                ("app_sql", {"instance": inst["id"], "sql": second}),
+                ("app_update", {"instance": inst["id"], "sql": second}),
             ]
         )
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/parallel") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "remove both"})
@@ -502,12 +519,12 @@ def _pending(fake_platform: FakePlatform, space_key: str = PERSONAL) -> tuple[di
     return inst, migration
 
 
-async def test_a_migration_always_asks_and_applies_with_a_marker(fake_model, fake_platform):
+async def test_a_migration_asks_and_applies_with_a_marker(fake_model, fake_platform):
     inst, migration = _pending(fake_platform)
     call = {"instance": inst["id"], "migration_id": migration["id"]}
     fake_model.queue(ToolCallTurn("approve_migration", call))
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/migrate") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "drop the done column"})
@@ -538,13 +555,30 @@ async def test_a_migration_always_asks_and_applies_with_a_marker(fake_model, fak
     assert marker not in seen and mint["delegation"] not in seen
 
 
+async def test_an_allowed_migration_applies_unasked_with_a_marker(fake_model, fake_platform):
+    inst, migration = _pending(fake_platform)
+    call = {"instance": inst["id"], "migration_id": migration["id"]}
+    fake_model.queue(ToolCallTurn("approve_migration", call), TextTurn("applied"))
+    with (
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
+        client.websocket_connect("/ws/chat/migrate-allowed") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "drop the done column"})
+        frames = _drain_turn(ws)
+    _assert_turn_end(frames[-1], "completed")
+    assert not any(f["type"] == "approval_request" for f in frames)
+    [(iid, mid, marker)] = fake_platform.approvals
+    assert (iid, mid) == (inst["id"], migration["id"]) and marker.startswith("hitl_fake")
+    assert migration["status"] == "applied"
+
+
 async def test_a_rejected_migration_mints_nothing(fake_model, fake_platform):
     inst, migration = _pending(fake_platform)
     fake_model.queue(
         ToolCallTurn("approve_migration", {"instance": inst["id"], "migration_id": migration["id"]})
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/migrate-no") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "apply it"})
@@ -566,7 +600,7 @@ async def test_a_migration_that_isnt_pending_asks_nothing(fake_model, fake_platf
         TextTurn("nothing to do"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/migrate-old") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "apply it"})
@@ -625,7 +659,7 @@ async def test_create_build_fail_fix_build_ok(fake_model, fake_platform):
         TextTurn("Your to-do app is ready."),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/loop") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "make me a to-do app"})
@@ -658,7 +692,7 @@ async def test_an_edit_that_breaks_syntax_is_reported_on_its_result(fake_model, 
         TextTurn("done"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/syntax") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "make me a to-do app"})
@@ -683,7 +717,7 @@ async def test_outline_and_replace_symbol_edit_a_screen(fake_model, fake_platfor
         TextTurn("done"),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(False)) as client,
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/symbols") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "simplify the screen"})
@@ -701,6 +735,9 @@ async def test_outline_and_replace_symbol_edit_a_screen(fake_model, fake_platfor
     assert screen.startswith("import")
 
 
+CREATES_APPS = ToolPolicy(DEFAULT_POLICY.available, DEFAULT_POLICY.allowed | {"create_app"})
+
+
 async def test_replace_symbol_asks_for_approval(fake_model, fake_platform):
     path = "/personal/Apps/todo/app/index.tsx"
     fake_model.queue(
@@ -711,7 +748,7 @@ async def test_replace_symbol_asks_for_approval(fake_model, fake_platform):
         ),
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, CREATES_APPS) as client,
         client.websocket_connect("/ws/chat/symbols-hitl") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "drop the styles"})
@@ -730,12 +767,12 @@ async def test_a_file_write_and_an_app_write_ask_one_after_the_other(fake_model,
         ToolCallsTurn(
             [
                 ("write_file", {"file_path": "/personal/note.txt", "content": "hi"}),
-                ("app_sql", {"instance": inst["id"], "sql": "DELETE FROM items"}),
+                ("app_update", {"instance": inst["id"], "sql": "DELETE FROM items"}),
             ]
         )
     )
     with (
-        _client(fake_model, fake_platform, await _settings_store(True)) as client,
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
         client.websocket_connect("/ws/chat/mixed") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "note it and clear"})
@@ -744,7 +781,7 @@ async def test_a_file_write_and_an_app_write_ask_one_after_the_other(fake_model,
         frames = _approve(ws, first)
         _assert_turn_end(frames[-1], "awaiting_approval")
         second = next(f for f in frames if f["type"] == "approval_request")
-        assert [a["name"] for a in second["actions"]] == ["app_sql"]
+        assert [a["name"] for a in second["actions"]] == ["app_update"]
         assert fake_platform.personal() == {"note.txt": b"hi"}
         fake_model.queue(TextTurn("done"))
         _assert_turn_end(_approve(ws, second)[-1], "completed")

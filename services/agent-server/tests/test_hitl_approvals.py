@@ -21,25 +21,21 @@ import json
 import anyio
 import pytest
 
-from app.db.settings import InMemorySettingsStore
+from app.agent.approvals import DEFAULT_POLICY, ToolPolicy
+from app.agent.tool_catalog import NAMES
 from app.db.turn_stats import InMemoryTurnStatsStore, TurnStat
-from tests.fake_identity import TEST_USER_ID, AutoCreateThreadStore
+from tests.fake_identity import AutoCreateThreadStore
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallTurn
 from tests.fake_platform.scripting import FakePlatform
+from tests.fake_tool_policies import FakeToolPolicies
 from tests.test_chat_ws import _assert_turn_end, _drain_turn, _make_client
-
-
-async def _hitl_settings_store(enabled: bool) -> InMemorySettingsStore:
-    store = InMemorySettingsStore()
-    await store.update_document(TEST_USER_ID, {"hitl_enabled": enabled})
-    return store
 
 
 async def test_write_file_with_hitl_on_emits_approval_request(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
     fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-on-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -69,7 +65,7 @@ async def test_approve_writes_file_and_completes_turn(fake_model: FakeModel, fak
     fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-approve-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -106,7 +102,7 @@ async def test_reject_does_not_write_file_and_informs_model(fake_model: FakeMode
     fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-reject-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -141,7 +137,7 @@ async def test_cancel_while_awaiting_approval_rejects_all(fake_model: FakeModel,
     fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/x.txt", "content": "y"}))
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-cancel-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -169,7 +165,7 @@ async def test_hitl_off_no_approval_request_at_all(fake_model: FakeModel, fake_p
     )
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(False)
+        fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
     ) as client, client.websocket_connect("/ws/chat/hitl-off-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -193,7 +189,6 @@ async def test_thread_state_reflects_pending_approval_across_reconnect(
         fake_model,
         fake_platform,
         thread_store=thread_store,
-        settings_store=await _hitl_settings_store(True),
     ) as client:
         with client.websocket_connect("/ws/chat/hitl-state-thread") as ws:
             ws.send_json({"type": "user_message", "content": "write a file"})
@@ -220,7 +215,6 @@ async def test_approval_response_resumes_after_reconnect(fake_model: FakeModel, 
         fake_model,
         fake_platform,
         thread_store=thread_store,
-        settings_store=await _hitl_settings_store(True),
     ) as client:
         with client.websocket_connect("/ws/chat/hitl-reconnect-thread") as ws:
             ws.send_json({"type": "user_message", "content": "write a file"})
@@ -290,7 +284,7 @@ async def test_approval_response_sent_before_turn_end_is_applied(
     stats = _GatedTurnStatsStore()
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-race-thread") as ws:
         client.app.state.turn_stats_store = stats
         ws.send_json({"type": "user_message", "content": "write a file"})
@@ -328,7 +322,7 @@ async def test_cancel_before_turn_end_reannounces_pending_approval(
     stats = _GatedTurnStatsStore()
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-cancel-race-thread") as ws:
         client.app.state.turn_stats_store = stats
         ws.send_json({"type": "user_message", "content": "write a file"})
@@ -370,7 +364,7 @@ async def test_cancel_after_approval_response_mid_turn_applies_the_answer(
     stats = _GatedTurnStatsStore()
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-cancel-answered-thread") as ws:
         client.app.state.turn_stats_store = stats
         ws.send_json({"type": "user_message", "content": "write a file"})
@@ -408,7 +402,7 @@ async def test_stale_approval_response_mid_turn_is_still_ignored(
     )
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client, client.websocket_connect("/ws/chat/hitl-stale-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write two files"})
         approval = next(f for f in _drain_turn_within(ws) if f["type"] == "approval_request")
@@ -447,7 +441,7 @@ async def test_thread_state_is_null_when_nothing_pending(fake_model: FakeModel, 
     fake_model.queue(TextTurn("hello"))
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _hitl_settings_store(True)
+        fake_model, fake_platform
     ) as client:
         with client.websocket_connect("/ws/chat/hitl-state-empty-thread") as ws:
             ws.send_json({"type": "user_message", "content": "hi"})
@@ -456,3 +450,221 @@ async def test_thread_state_is_null_when_nothing_pending(fake_model: FakeModel, 
         state_response = client.get("/api/threads/hitl-state-empty-thread/state")
         assert state_response.status_code == 200
         assert state_response.json() == {"pending_approval": None, "running": False}
+
+
+# --- tool permissions (#342) ---------------------------------------------------------
+
+
+def _answer(ws, approval: dict, decision: str) -> list[dict]:
+    ws.send_json(
+        {
+            "type": "approval_response",
+            "interrupt_id": approval["interrupt_id"],
+            "decisions": [
+                {"tool_call_id": a["tool_call_id"], "decision": decision} for a in approval["actions"]
+            ],
+        }
+    )
+    return _drain_turn(ws)
+
+
+def _bound_tools(request: dict) -> set[str]:
+    return {t["function"]["name"] for t in request.get("tools") or []}
+
+
+async def test_read_only_tools_run_without_asking_by_default(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    fake_model.queue(ToolCallTurn(name="ls", args={"path": "/personal"}), TextTurn("done"))
+
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
+        "/ws/chat/perm-read"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "what's there?"})
+        frames = _drain_turn(ws)
+
+    _assert_turn_end(frames[-1], "completed")
+    assert not any(f["type"] == "approval_request" for f in frames)
+
+
+async def test_a_read_only_tool_set_to_ask_asks(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
+    fake_model.queue(ToolCallTurn(name="web_search", args={"query": "weather"}))
+    policies = FakeToolPolicies(ToolPolicy(NAMES, frozenset()))
+
+    with _make_client(fake_model, fake_platform, tool_policies=policies) as client, client.websocket_connect(
+        "/ws/chat/perm-read-ask"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "weather?"})
+        frames = _drain_turn(ws)
+
+    _assert_turn_end(frames[-1], "awaiting_approval")
+    approval = next(f for f in frames if f["type"] == "approval_request")
+    assert approval["actions"][0]["description"] == "Search the web: weather"
+
+
+async def test_always_allow_then_approve_runs_the_rest_of_the_turn_unasked(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    policies = FakeToolPolicies()
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/a.txt", "content": "1"}))
+
+    with _make_client(fake_model, fake_platform, tool_policies=policies) as client, client.websocket_connect(
+        "/ws/chat/perm-always"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "write two files"})
+        approval = next(f for f in _drain_turn(ws) if f["type"] == "approval_request")
+
+        # "Always allow": the app changes the user's settings, then approves.
+        policies.allow("write_file")
+        fake_model.queue(
+            ToolCallTurn(name="write_file", args={"file_path": "/personal/b.txt", "content": "2"}),
+            TextTurn("done"),
+        )
+        resumed = _answer(ws, approval, "approve")
+
+    _assert_turn_end(resumed[-1], "completed")
+    assert not any(f["type"] == "approval_request" for f in resumed)
+    assert fake_platform.personal() == {"a.txt": b"1", "b.txt": b"2"}
+
+
+async def test_a_rejection_holds_even_if_the_tool_was_allowed_meanwhile(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    policies = FakeToolPolicies()
+    fake_model.queue(ToolCallTurn(name="write_file", args={"file_path": "/personal/a.txt", "content": "1"}))
+
+    with _make_client(fake_model, fake_platform, tool_policies=policies) as client, client.websocket_connect(
+        "/ws/chat/perm-reject"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "write it"})
+        approval = next(f for f in _drain_turn(ws) if f["type"] == "approval_request")
+
+        policies.allow("write_file")
+        fake_model.queue(TextTurn("ok, I won't"))
+        resumed = _answer(ws, approval, "reject")
+
+    _assert_turn_end(resumed[-1], "completed")
+    assert fake_platform.personal() == {}
+
+
+async def test_turned_off_tools_are_never_shown_to_the_model(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    policies = FakeToolPolicies(ToolPolicy(NAMES - {"execute_code", "web_fetch"}, DEFAULT_POLICY.allowed))
+    fake_model.queue(TextTurn("hi"))
+
+    with _make_client(fake_model, fake_platform, tool_policies=policies) as client, client.websocket_connect(
+        "/ws/chat/perm-off"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_turn(ws)
+
+    bound = _bound_tools(fake_model.requests[0])
+    assert {"execute_code", "web_fetch", "execute"}.isdisjoint(bound)
+    assert {"write_file", "web_search", "task"} <= bound
+
+
+async def test_the_tool_list_is_fixed_for_the_thread(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    policies = FakeToolPolicies()
+    fake_model.queue(TextTurn("one"))
+
+    with _make_client(fake_model, fake_platform, tool_policies=policies) as client:
+        with client.websocket_connect("/ws/chat/perm-fixed") as ws:
+            ws.send_json({"type": "user_message", "content": "one"})
+            _drain_turn(ws)
+
+            # Turned off mid-thread: still bound (the prompt keeps its start),
+            # but a call is refused without asking.
+            policies.turn_off("write_file")
+            fake_model.queue(
+                ToolCallTurn(name="write_file", args={"file_path": "/personal/a.txt", "content": "1"}),
+                TextTurn("couldn't"),
+            )
+            ws.send_json({"type": "user_message", "content": "two"})
+            frames = _drain_turn(ws)
+
+        with client.websocket_connect("/ws/chat/perm-fresh") as ws:
+            fake_model.queue(TextTurn("three"))
+            ws.send_json({"type": "user_message", "content": "three"})
+            _drain_turn(ws)
+
+    assert _bound_tools(fake_model.requests[0]) == _bound_tools(fake_model.requests[1])
+    assert "write_file" in _bound_tools(fake_model.requests[1])
+    _assert_turn_end(frames[-1], "completed")
+    assert not any(f["type"] == "approval_request" for f in frames)
+    told = [m for m in fake_model.requests[2]["messages"] if m.get("role") == "tool"]
+    assert "turned off" in told[-1]["content"]
+    assert fake_platform.personal() == {}
+    # A new thread doesn't get it.
+    assert "write_file" not in _bound_tools(fake_model.requests[-1])
+
+
+async def test_the_catalog_is_exactly_what_the_model_can_be_given(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    fake_model.queue(TextTurn("hi"))
+
+    with _make_client(fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()) as client, client.websocket_connect(
+        "/ws/chat/perm-catalog"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "hi"})
+        _drain_turn(ws)
+
+    assert _bound_tools(fake_model.requests[0]) == NAMES
+
+
+async def test_the_helper_follows_the_same_settings(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    policies = FakeToolPolicies(ToolPolicy(NAMES - {"web_fetch", "write_file"}, DEFAULT_POLICY.allowed))
+    fake_model.queue(
+        ToolCallTurn(
+            name="task",
+            args={"description": "write the note", "subagent_type": "general-purpose"},
+        ),
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/a.txt", "content": "1"}),
+        TextTurn("couldn't"),
+        TextTurn("the helper couldn't"),
+    )
+
+    with _make_client(fake_model, fake_platform, tool_policies=policies) as client, client.websocket_connect(
+        "/ws/chat/perm-helper"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "have a helper write it"})
+        frames = _drain_turn(ws)
+
+    _assert_turn_end(frames[-1], "completed")
+    helper = _bound_tools(fake_model.requests[1])
+    assert "web_search" in helper and {"web_fetch", "write_file", "task"}.isdisjoint(helper)
+    told = [m for m in fake_model.requests[2]["messages"] if m.get("role") == "tool"]
+    assert "turned off" in told[-1]["content"]
+    assert fake_platform.personal() == {}
+
+
+async def test_the_helpers_calls_ask_like_the_agents(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    fake_model.queue(
+        ToolCallTurn(
+            name="task",
+            args={"description": "write the note", "subagent_type": "general-purpose"},
+        ),
+        ToolCallTurn(name="write_file", args={"file_path": "/personal/a.txt", "content": "1"}),
+    )
+
+    with _make_client(fake_model, fake_platform) as client, client.websocket_connect(
+        "/ws/chat/perm-helper-asks"
+    ) as ws:
+        ws.send_json({"type": "user_message", "content": "have a helper write it"})
+        frames = _drain_turn(ws)
+        _assert_turn_end(frames[-1], "awaiting_approval")
+        approval = next(f for f in frames if f["type"] == "approval_request")
+        assert [a["name"] for a in approval["actions"]] == ["write_file"]
+
+        fake_model.queue(TextTurn("written"), TextTurn("the helper wrote it"))
+        resumed = _answer(ws, approval, "approve")
+
+    _assert_turn_end(resumed[-1], "completed")
+    assert fake_platform.personal() == {"a.txt": b"1"}

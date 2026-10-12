@@ -12,9 +12,9 @@ Saving goes through `app.routines.service` (shared with the agent's
 routine tools), on the caller's identity token: the space check and the
 routine grant (M17-03) an enabled routine holds for its scheduled runs.
 
-Its `approval_mode` (M17-05, `app.agent.approvals`) says what its runs may
-do without asking. A run is a chat: the chats list puts runs that need the
-user first (M17-10, `GET /api/threads`).
+A run follows its owner's tool permissions like any chat (#342,
+`app.agent.approvals`). A run is a chat: the chats list puts runs that need
+the user first (M17-10, `GET /api/threads`).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from app.core.delegation import Caller, Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, CurrentUser
-from app.db.routines import ApprovalMode, RoutineRecord, RoutineStore, RunRecord
+from app.db.routines import RoutineRecord, RoutineStore, RunRecord
 from app.routines import schedule as sched
 from app.routines import service
 from app.routines.runs import create_run_thread
@@ -54,7 +54,8 @@ class RoutineIn(BaseModel):
     schedule: sched.Schedule
     timezone: Annotated[str, Field(max_length=64)]
     enabled: bool = True
-    approval_mode: ApprovalMode = "ask"
+    # Apps built before #342 still send it; ignored.
+    approval_mode: str | None = Field(default=None, exclude=True)
 
     _tz = field_validator("timezone")(_check_timezone)
 
@@ -68,7 +69,8 @@ class RoutinePatch(BaseModel):
     schedule: sched.Schedule | None = None
     timezone: Annotated[str, Field(max_length=64)] | None = None
     enabled: bool | None = None
-    approval_mode: ApprovalMode | None = None
+    # Apps built before #342 still send it; ignored.
+    approval_mode: str | None = Field(default=None, exclude=True)
 
     _tz = field_validator("timezone")(_check_timezone)
 
@@ -88,7 +90,6 @@ class RoutineOut(BaseModel):
     schedule: dict
     timezone: str
     enabled: bool
-    approval_mode: str
     next_run_at: datetime | None
     last_run_at: datetime | None
     created_at: datetime

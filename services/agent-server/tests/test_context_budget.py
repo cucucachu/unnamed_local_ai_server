@@ -9,6 +9,7 @@ from deepagents.middleware.summarization import compute_summarization_defaults
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import HumanMessage
 
+from app.agent.approvals import ToolPolicy
 from app.agent.model_client import build_model
 from app.agent.tool_errors import compact_invocation_error
 from tests.fake_model.scripting import ErrorTurn, FakeModel, TextTurn, ToolCallTurn
@@ -16,7 +17,6 @@ from tests.test_chat_ws import (
     _assert_turn_end,
     _drain_turn,
     _make_client,
-    _no_hitl_settings_store,
 )
 
 LLAMA_OVERFLOW = {
@@ -63,7 +63,7 @@ async def test_an_overflow_retries_instead_of_ending_the_turn(fake_model, fake_p
     fake_model.queue(ErrorTurn(400, LLAMA_OVERFLOW), TextTurn("done"))
     with (
         _make_client(
-            fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
+            fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
         ) as client,
         client.websocket_connect("/ws/chat/overflow-thread") as ws,
     ):
@@ -94,7 +94,7 @@ async def test_invalid_tool_arguments_are_not_echoed_back(fake_model, fake_platf
     )
     with (
         _make_client(
-            fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
+            fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
         ) as client,
         client.websocket_connect("/ws/chat/bad-args-thread") as ws,
     ):
@@ -120,7 +120,7 @@ async def test_scratch_paths_live_in_the_thread_not_the_users_files(
     )
     with (
         _make_client(
-            fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
+            fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
         ) as client,
         client.websocket_connect("/ws/chat/scratch-thread") as ws,
     ):

@@ -1,17 +1,14 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from 'react-native';
 
-import { ActionButton, Card, ErrorText, SectionTitle, Segmented, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Card, ErrorText, SectionTitle, settingsStyles } from '@/components/SettingsUI';
 import type { Space } from '@/lib/platform';
 import {
-  APPROVAL_MODE_HELP,
-  APPROVAL_MODE_LABELS,
   WEEKDAYS,
   deviceTimezone,
   routineSpaces,
   scheduleSummary,
   spacePath,
-  type ApprovalMode,
   type Routine,
   type RoutineInput,
   type Schedule,
@@ -48,7 +45,6 @@ export interface RoutineFormState {
   monthDay: string;
   timezone: string;
   enabled: boolean;
-  approvalMode: ApprovalMode;
 }
 
 function today(): string {
@@ -69,7 +65,6 @@ export function initialForm(routine: Routine | null): RoutineFormState {
     monthDay: '1',
     timezone: deviceTimezone(),
     enabled: true,
-    approvalMode: 'ask',
   };
   if (routine === null) return blank;
   const schedule = routine.schedule;
@@ -81,7 +76,6 @@ export function initialForm(routine: Routine | null): RoutineFormState {
     kind: schedule.kind,
     timezone: routine.timezone,
     enabled: routine.enabled,
-    approvalMode: routine.approval_mode,
   };
   if (schedule.kind === 'once') {
     const [date, time = '00:00'] = schedule.at.split('T');
@@ -134,12 +128,11 @@ export function formToInput(form: RoutineFormState): { input: RoutineInput } | {
       schedule,
       timezone,
       enabled: form.enabled,
-      approval_mode: form.approvalMode,
     },
   };
 }
 
-/** Name, prompt, space, schedule, timezone and approval mode (M17-06). */
+/** Name, prompt, space, schedule and timezone (M17-06). */
 export function RoutineForm({
   routine,
   spaces,
@@ -275,17 +268,9 @@ export function RoutineForm({
         </Text>
       ) : null}
 
-      <SectionTitle>When it wants to change something</SectionTitle>
-      <Segmented
-        value={form.approvalMode}
-        onChange={(mode) => set('approvalMode', mode)}
-        options={(Object.keys(APPROVAL_MODE_LABELS) as ApprovalMode[]).map((mode) => ({
-          value: mode,
-          label: APPROVAL_MODE_LABELS[mode],
-          testID: `routine-approval-${mode}`,
-        }))}
-      />
-      <Text style={settingsStyles.muted}>{APPROVAL_MODE_HELP[form.approvalMode]}</Text>
+      <Text style={settingsStyles.muted} testID="routine-permissions-note">
+        It uses your Agent permissions: anything set to Ask first waits for you in its chat.
+      </Text>
 
       <Card>
         <View style={[settingsStyles.row, settingsStyles.firstRow]}>

@@ -1,4 +1,5 @@
-"""Routine approval modes, paused runs and their expiry (M17-05); runs in the chats list (M17-10)."""
+"""Routine runs and the user's tool settings (#342), paused runs and their expiry (M17-05);
+runs in the chats list (M17-10)."""
 
 from __future__ import annotations
 
@@ -8,15 +9,18 @@ from datetime import timedelta
 import pytest
 
 from app.agent import approvals
+from app.agent.approvals import DEFAULT_POLICY, ToolPolicy
 from app.routines.scheduler import EXPIRED_MESSAGE
 from tests import test_routine_scheduler as scheduler_tests
 from tests.fake_model.scripting import FakeModel, TextTurn, ToolCallsTurn, ToolCallTurn
+from tests.fake_tool_policies import FakeToolPolicies
 from tests.test_chat_ws import _drain_turn
 from tests.test_routine_scheduler import ALICE, HEADERS, _create, _runs
 
 client = scheduler_tests.client
 harness = scheduler_tests.harness
 _fixed_now = scheduler_tests._fixed_now
+tool_policies = scheduler_tests.tool_policies
 
 WRITE = ("write_file", {"file_path": "/personal/brief.md", "content": "today"})
 DELETE = ("delete", {"file_path": "/personal/old.md"})
@@ -59,7 +63,7 @@ def _wait_for_status(client, routine_id: str, status: str) -> dict:
 
 def test_a_routine_asks_by_default(client, harness, fake_model, fake_platform) -> None:
     routine, run = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE))
-    assert routine["approval_mode"] == "ask"
+    assert "approval_mode" not in routine
     assert run["status"] == "waiting_approval"
     assert [a["name"] for a in _pending(client, run["thread_id"])["actions"]] == ["write_file"]
     assert fake_platform.personal(ALICE) == {}
@@ -67,47 +71,41 @@ def test_a_routine_asks_by_default(client, harness, fake_model, fake_platform) -
     assert (thread["id"], thread["needs_approval"]) == (run["thread_id"], True)
 
 
-def test_ask_still_asks_with_approvals_turned_off_in_settings(client, harness, fake_model) -> None:
-    client.put("/api/settings", json={"hitl_enabled": False}, headers=HEADERS)
-    _, run = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE))
-    assert run["status"] == "waiting_approval"
-
-
-def test_allow_writes_runs_writes_unasked(client, harness, fake_model, fake_platform) -> None:
-    _, run = _run_once(
-        client,
-        harness,
-        fake_model,
-        ToolCallTurn(*WRITE),
-        TextTurn("written"),
-        approval_mode="allow_writes",
-    )
+def test_a_run_uses_the_users_tool_settings(
+    client, harness, fake_model, fake_platform, tool_policies: FakeToolPolicies
+) -> None:
+    tool_policies.allow("write_file")
+    _, run = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE), TextTurn("written"))
     assert run["status"] == "succeeded"
     assert fake_platform.personal(ALICE) == {"brief.md": b"today"}
 
 
-def test_allow_writes_still_asks_before_a_delete_and_resumes_in_that_mode(
-    client, harness, fake_model, fake_platform
+def _approve_all(pending: dict) -> dict:
+    return {
+        "type": "approval_response",
+        "interrupt_id": pending["interrupt_id"],
+        "decisions": [
+            {"tool_call_id": a["tool_call_id"], "decision": "approve"} for a in pending["actions"]
+        ],
+    }
+
+
+def test_a_run_asks_only_for_what_isnt_allowed_and_resumes(
+    client, harness, fake_model, fake_platform, tool_policies: FakeToolPolicies
 ) -> None:
     fake_platform.personal(ALICE)["old.md"] = b"stale"
-    routine, run = _run_once(
-        client, harness, fake_model, ToolCallsTurn([WRITE, DELETE]), approval_mode="allow_writes"
-    )
+    tool_policies.allow("write_file")
+    routine, run = _run_once(client, harness, fake_model, ToolCallsTurn([WRITE, DELETE]))
     assert run["status"] == "waiting_approval"
     pending = _pending(client, run["thread_id"])
     (action,) = pending["actions"]
     assert action["name"] == "delete"
+    assert "can_allow_writes" not in pending
     assert fake_platform.personal(ALICE) == {"old.md": b"stale"}  # nothing ran yet
 
     fake_model.queue(TextTurn("tidied"))
     with client.websocket_connect(f"/ws/chat/{run['thread_id']}", headers=HEADERS) as ws:
-        ws.send_json(
-            {
-                "type": "approval_response",
-                "interrupt_id": pending["interrupt_id"],
-                "decisions": [{"tool_call_id": action["tool_call_id"], "decision": "approve"}],
-            }
-        )
+        ws.send_json(_approve_all(pending))
         frames = _drain_turn(ws)
     assert frames[-1]["status"] == "completed"
     assert fake_platform.personal(ALICE) == {"brief.md": b"today"}
@@ -116,85 +114,40 @@ def test_allow_writes_still_asks_before_a_delete_and_resumes_in_that_mode(
     assert client.get("/api/threads", headers=HEADERS).json()[0]["needs_approval"] is False
 
 
-def _approve_all(pending: dict, **extra) -> dict:
-    return {
-        "type": "approval_response",
-        "interrupt_id": pending["interrupt_id"],
-        "decisions": [
-            {"tool_call_id": a["tool_call_id"], "decision": "approve"} for a in pending["actions"]
-        ],
-        **extra,
-    }
-
-
-def test_approving_with_allow_writes_switches_the_routine_and_finishes_the_run(
-    client, harness, fake_model, fake_platform
+def test_always_allow_on_a_paused_run_finishes_it_unasked(
+    client, harness, fake_model, fake_platform, tool_policies: FakeToolPolicies
 ) -> None:
     routine, run = _run_once(client, harness, fake_model, ToolCallTurn(*WRITE))
     pending = _pending(client, run["thread_id"])
-    assert pending["can_allow_writes"] is True
 
+    tool_policies.allow("write_file")
     fake_model.queue(
         ToolCallTurn("write_file", {"file_path": "/personal/second.md", "content": "more"}),
         TextTurn("both written"),
     )
     with client.websocket_connect(f"/ws/chat/{run['thread_id']}", headers=HEADERS) as ws:
-        ws.send_json(_approve_all(pending, allow_writes=True))
+        # An app from before #342 may still send `allow_writes`; it's ignored.
+        ws.send_json(_approve_all(pending) | {"allow_writes": True})
         frames = _drain_turn(ws)
     assert frames[-1]["status"] == "completed"
     assert not any(f["type"] == "approval_request" for f in frames)
     assert fake_platform.personal(ALICE) == {"brief.md": b"today", "second.md": b"more"}
     assert _wait_for_status(client, routine["id"], "succeeded")["status"] == "succeeded"
-    updated = client.get(f"/api/routines/{routine['id']}", headers=HEADERS).json()
-    assert updated["approval_mode"] == "allow_writes"
 
 
-def test_allow_writes_is_not_offered_for_a_delete_or_outside_ask_mode(
-    client, harness, fake_model, fake_platform
+def test_a_turned_off_tool_is_refused_in_a_run(
+    client, harness, fake_model, fake_platform, tool_policies: FakeToolPolicies
 ) -> None:
-    fake_platform.personal(ALICE)["old.md"] = b"stale"
-    _, ask_run = _run_once(client, harness, fake_model, ToolCallTurn(*DELETE))
-    assert "can_allow_writes" not in _pending(client, ask_run["thread_id"])
-
-    _, writes_run = _run_once(
-        client, harness, fake_model, ToolCallTurn(*DELETE), approval_mode="allow_writes"
-    )
-    assert "can_allow_writes" not in _pending(client, writes_run["thread_id"])
-
-
-@pytest.mark.parametrize("case", ["delete pending", "rejected"])
-def test_allow_writes_is_refused_where_it_was_not_offered(
-    case, client, harness, fake_model, fake_platform
-) -> None:
-    fake_platform.personal(ALICE)["old.md"] = b"stale"
-    turn = ToolCallTurn(*DELETE) if case == "delete pending" else ToolCallTurn(*WRITE)
-    routine, run = _run_once(client, harness, fake_model, turn)
-    pending = _pending(client, run["thread_id"])
-    frame = _approve_all(pending, allow_writes=True)
-    if case == "rejected":
-        frame["decisions"][0]["decision"] = "reject"
-    with client.websocket_connect(f"/ws/chat/{run['thread_id']}", headers=HEADERS) as ws:
-        ws.send_json(frame)
-        error = ws.receive_json()
-    assert error["type"] == "error" and "allow_writes" in error["message"]
-    unchanged = client.get(f"/api/routines/{routine['id']}", headers=HEADERS).json()
-    assert unchanged["approval_mode"] == "ask"
-    assert _pending(client, run["thread_id"]) is not None
-
-
-def test_read_only_refuses_writes(client, harness, fake_model, fake_platform) -> None:
+    tool_policies.turn_off("write_file")
     _, run = _run_once(
-        client,
-        harness,
-        fake_model,
-        ToolCallTurn(*WRITE),
-        TextTurn("couldn't write"),
-        approval_mode="read_only",
+        client, harness, fake_model, ToolCallTurn(*WRITE), TextTurn("couldn't write")
     )
     assert run["status"] == "succeeded"
     assert fake_platform.personal(ALICE) == {}
     (result,) = _tool_results(fake_model)
-    assert "read-only" in result
+    assert "turned off" in result
+    tools = {t["function"]["name"] for t in fake_model.requests[0].get("tools") or []}
+    assert "write_file" not in tools
 
 
 def test_an_unanswered_approval_expires_rejected(
@@ -238,26 +191,31 @@ def test_a_routine_run_is_an_unread_chat_until_opened(client, harness, fake_mode
     assert [t["unread"] for t in listed] == [True, False]
 
 
-def test_a_routines_approval_mode_can_be_changed(client) -> None:
-    routine = _create(client)
+def test_approval_mode_from_an_older_app_is_ignored(client) -> None:
+    routine = _create(client, approval_mode="read_only")
+    assert "approval_mode" not in routine
     url = f"/api/routines/{routine['id']}"
-    changed = client.patch(url, json={"approval_mode": "read_only"}, headers=HEADERS)
-    assert changed.json()["approval_mode"] == "read_only"
-    bad = client.patch(url, json={"approval_mode": "anything"}, headers=HEADERS)
-    assert bad.status_code == 422
+    changed = client.patch(url, json={"approval_mode": "allow_writes"}, headers=HEADERS)
+    assert changed.status_code == 200
+    assert "approval_mode" not in changed.json()
+
+
+ALLOWS_WRITES = ToolPolicy(DEFAULT_POLICY.available, DEFAULT_POLICY.allowed | {"write_file"})
 
 
 @pytest.mark.parametrize(
-    ("config", "tool", "asks"),
+    ("configurable", "tool", "asks"),
     [
-        ({}, "write_file", True),
-        ({"hitl_enabled": False}, "write_file", False),
-        ({"approval_mode": "ask", "hitl_enabled": False}, "write_file", True),
-        ({"approval_mode": "allow_writes"}, "write_file", False),
-        ({"approval_mode": "allow_writes"}, "execute_code", False),
-        ({"approval_mode": "allow_writes"}, "delete", True),
-        ({"approval_mode": "allow_writes"}, "approve_migration", True),
+        ({}, "ls", True),
+        ({"tool_policy": DEFAULT_POLICY}, "ls", False),
+        ({"tool_policy": DEFAULT_POLICY}, "write_file", True),
+        ({"tool_policy": DEFAULT_POLICY}, "execute_code", True),
+        ({"tool_policy": ALLOWS_WRITES}, "write_file", False),
+        ({"tool_policy": ALLOWS_WRITES, "pinned_approvals": {"c1": True}}, "write_file", True),
+        ({"tool_policy": DEFAULT_POLICY, "pinned_approvals": {"c1": False}}, "write_file", False),
+        ({"tool_policy": DEFAULT_POLICY, "pinned_approvals": {"c2": False}}, "write_file", True),
+        ({"tool_policy": ToolPolicy.allow_all()}, "approve_migration", False),
     ],
 )
-def test_which_calls_need_approval(config, tool, asks) -> None:
-    assert approvals.needs_approval({"configurable": config}, tool) is asks
+def test_which_calls_need_approval(configurable, tool, asks) -> None:
+    assert approvals.needs_approval({"configurable": configurable}, tool, "c1") is asks

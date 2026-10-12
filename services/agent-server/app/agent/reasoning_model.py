@@ -89,7 +89,7 @@ class ReasoningChatOpenAI(ChatOpenAI):
 
     Per-turn thinking (M8-07): `_default_params` reads
     `configurable["thinking_enabled"]` from the in-flight `RunnableConfig`
-    (the same dict `chat_ws.py` already uses for `hitl_enabled`) and merges
+    (the same dict `chat_ws.py` fills per turn) and merges
     `extra_body={"chat_template_kwargs": {"enable_thinking": <bool>}}` into
     the OpenAI request. Default is `False` when the key is absent, matching
     `SettingsDocument.thinking_enabled`.

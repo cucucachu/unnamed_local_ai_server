@@ -41,14 +41,15 @@ class SettingsUpdateBody(BaseModel):
 
     `strict=True`: pydantic's default ("lax") mode coerces some non-bool
     JSON values (e.g. the string `"yes"`) into `bool` rather than rejecting
-    them — not what the ticket's "422 on wrong type (e.g. `hitl_enabled:
+    them — not what the ticket's "422 on wrong type (e.g. `thinking_enabled:
     "yes"`)" spec wants. Strict mode requires an actual JSON `true`/`false`
     for a `bool` field, which is what a real client sends anyway.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    hitl_enabled: bool | None = None
+    # Apps built before #342 still send it; ignored.
+    hitl_enabled: bool | None = Field(default=None, exclude=True)
     thinking_enabled: bool | None = None
     edit_mode_default: Literal["truncate", "fork"] | None = None
     timezone: Annotated[str, Field(max_length=64)] | None = None

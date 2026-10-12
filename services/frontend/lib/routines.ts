@@ -29,7 +29,6 @@ export type Schedule =
   | { kind: 'monthly'; day: number; time: string };
 
 export type ScheduleKind = Schedule['kind'];
-export type ApprovalMode = 'ask' | 'allow_writes' | 'read_only';
 
 export interface LastRun {
   id: string;
@@ -47,7 +46,6 @@ export interface Routine {
   schedule: Schedule;
   timezone: string;
   enabled: boolean;
-  approval_mode: ApprovalMode;
   next_run_at: string | null;
   last_run_at: string | null;
   created_at: string;
@@ -74,7 +72,6 @@ export interface RoutineInput {
   schedule: Schedule;
   timezone: string;
   enabled: boolean;
-  approval_mode: ApprovalMode;
 }
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
@@ -194,18 +191,6 @@ export function nextRunLabel(routine: Pick<Routine, 'next_run_at' | 'timezone' |
     return new Date(routine.next_run_at).toISOString();
   }
 }
-
-export const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
-  ask: 'Ask me',
-  allow_writes: 'Allow writes',
-  read_only: 'Read-only',
-};
-
-export const APPROVAL_MODE_HELP: Record<ApprovalMode, string> = {
-  ask: 'Pauses at anything that changes files or data, until you approve it in its chat.',
-  allow_writes: 'Writes in its space go ahead; deleting still asks.',
-  read_only: "Can read and report, but can't change anything.",
-};
 
 // --- spaces --------------------------------------------------------------------
 

@@ -90,10 +90,9 @@ async def launch_run(
             thread_id=thread.id,
             user_id=routine.owner_user_id,
             run_input={"messages": [HumanMessage(content=run_message(routine, datetime.now(UTC)))]},
-            hitl_enabled=document.hitl_enabled,
             thinking_enabled=document.thinking_enabled,
             delegation=delegation,
-            approval_mode=routine.approval_mode,
+            routine_run=True,
         )
     )
     turn.detach(queue)

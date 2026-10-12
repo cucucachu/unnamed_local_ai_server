@@ -39,12 +39,11 @@ from app.db.rls import system_transaction
 class SettingsDocument(BaseModel):
     """The whole settings document. Defaults apply to any key missing from storage.
 
-    `hitl_enabled` defaults to **on**: the feature exists to guard file
-    writes and code execution, so opting in to unattended mode is the
-    explicit choice (per the ticket).
+    What the agent may do without asking isn't here: it's the user's tool
+    permissions on the platform (#342). Stored `hitl_enabled` rows from
+    before that are ignored.
     """
 
-    hitl_enabled: bool = True
     thinking_enabled: bool = False
     edit_mode_default: Literal["truncate", "fork"] = "truncate"
     # The user's IANA zone, which the app keeps in step with the device; the

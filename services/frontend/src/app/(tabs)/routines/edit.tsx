@@ -11,7 +11,7 @@ import { useLoad } from '@/lib/useAsync';
 /** Only what changed, so an unchanged space isn't checked (or moved) again. */
 function changes(routine: Routine, input: RoutineInput): Partial<RoutineInput> {
   const changed: Partial<RoutineInput> = { schedule: input.schedule };
-  for (const key of ['name', 'prompt', 'space', 'timezone', 'enabled', 'approval_mode'] as const) {
+  for (const key of ['name', 'prompt', 'space', 'timezone', 'enabled'] as const) {
     if (input[key] !== routine[key]) (changed as Record<string, unknown>)[key] = input[key];
   }
   return changed;

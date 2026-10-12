@@ -13,13 +13,13 @@ describe('lib/settings', () => {
       ok: true,
       status: 200,
       statusText: 'OK',
-      json: async () => ({ hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate' }),
+      json: async () => ({ thinking_enabled: false, edit_mode_default: 'truncate' }),
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await getSettings();
 
-    expect(result).toEqual({ hitl_enabled: true, thinking_enabled: false, edit_mode_default: 'truncate' });
+    expect(result).toEqual({ thinking_enabled: false, edit_mode_default: 'truncate' });
     const [calledPath, calledInit] = fetchMock.mock.calls[0];
     expect(calledPath).toContain('/api/settings');
     expect(calledInit.method).toBeUndefined();
@@ -30,17 +30,17 @@ describe('lib/settings', () => {
       ok: true,
       status: 200,
       statusText: 'OK',
-      json: async () => ({ hitl_enabled: false, thinking_enabled: false, edit_mode_default: 'truncate' }),
+      json: async () => ({ thinking_enabled: true, edit_mode_default: 'truncate' }),
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const result = await updateSettings({ hitl_enabled: false });
+    const result = await updateSettings({ thinking_enabled: true });
 
-    expect(result).toEqual({ hitl_enabled: false, thinking_enabled: false, edit_mode_default: 'truncate' });
+    expect(result).toEqual({ thinking_enabled: true, edit_mode_default: 'truncate' });
     const [calledPath, calledInit] = fetchMock.mock.calls[0];
     expect(calledPath).toContain('/api/settings');
     expect(calledInit).toMatchObject({ method: 'PUT' });
-    expect(JSON.parse(calledInit.body as string)).toEqual({ hitl_enabled: false });
+    expect(JSON.parse(calledInit.body as string)).toEqual({ thinking_enabled: true });
   });
 
   it('updateSettings() rejects with ApiError on a 422', async () => {
@@ -52,7 +52,7 @@ describe('lib/settings', () => {
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const error = await updateSettings({ hitl_enabled: false }).catch((e) => e);
+    const error = await updateSettings({ thinking_enabled: true }).catch((e) => e);
 
     expect(error).toMatchObject({ status: 422, detail: 'validation error' });
   });

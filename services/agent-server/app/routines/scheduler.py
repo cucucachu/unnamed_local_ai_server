@@ -303,11 +303,11 @@ class RoutineScheduler:
                 thread_id=thread_id,
                 user_id=owner,
                 run_input=ws._resume_command(pending, decisions),
-                hitl_enabled=document.hitl_enabled,
                 thinking_enabled=document.thinking_enabled,
                 checkpoint_id=tip,
                 delegation=delegation,
-                approval_mode=(paused.metadata or {}).get("approval_mode"),
+                routine_run=True,
+                pinned_approvals=ws.pinned_approvals(paused, pending),
             ),
             lock_held=True,
         )

@@ -17,7 +17,6 @@ import { showPage } from '@/lib/currentPage';
 import { listSpaces, type Space } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import {
-  APPROVAL_MODE_LABELS,
   deleteRoutine,
   getRoutine,
   listRoutineRuns,
@@ -109,8 +108,7 @@ export default function RoutineDetailScreen() {
                   {scheduleSummary(routine.schedule)}
                 </Text>
                 <Text style={settingsStyles.muted}>
-                  {routine.timezone} · {spaceLabel(routine.space, data.spaces)} ·{' '}
-                  {APPROVAL_MODE_LABELS[routine.approval_mode]}
+                  {routine.timezone} · {spaceLabel(routine.space, data.spaces)}
                 </Text>
                 <Text style={settingsStyles.muted} testID="routine-detail-next">
                   Next: {nextRunLabel(routine)}

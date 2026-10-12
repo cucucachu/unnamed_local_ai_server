@@ -52,10 +52,8 @@ ROUTINES_DDL = (
     "CREATE INDEX IF NOT EXISTS routines_owner_idx ON routines (owner_user_id)",
     "CREATE INDEX IF NOT EXISTS routines_due_idx ON routines (next_run_at) WHERE enabled",
     "ALTER TABLE routines ADD COLUMN IF NOT EXISTS grant_token TEXT",
-    (
-        "ALTER TABLE routines ADD COLUMN IF NOT EXISTS approval_mode TEXT NOT NULL DEFAULT 'ask' "
-        "CHECK (approval_mode IN ('ask', 'allow_writes', 'read_only'))"
-    ),
+    # Runs follow the user's tool permissions (#342); routines had their own mode before.
+    "ALTER TABLE routines DROP COLUMN IF EXISTS approval_mode",
     (
         "ALTER TABLE threads ADD COLUMN IF NOT EXISTS routine_id UUID "
         "REFERENCES routines (id) ON DELETE SET NULL"
@@ -114,7 +112,6 @@ RunStatus = Literal[
     "waiting_approval",
     "expired",
 ]
-ApprovalMode = Literal["ask", "allow_writes", "read_only"]
 Trigger = Literal["schedule", "manual"]
 INTERRUPTED = "interrupted by a server restart"
 
@@ -130,7 +127,6 @@ EDITABLE = frozenset(
         "next_run_at",
         "last_run_at",
         "grant_token",
-        "approval_mode",
     }
 )
 
@@ -150,7 +146,6 @@ class RoutineRecord:
     created_at: datetime
     updated_at: datetime
     grant_token: str | None = None
-    approval_mode: ApprovalMode = "ask"
 
 
 @dataclass(frozen=True)
@@ -162,7 +157,6 @@ class NewRoutine:
     timezone: str
     enabled: bool = True
     next_run_at: datetime | None = None
-    approval_mode: ApprovalMode = "ask"
 
 
 @dataclass(frozen=True)
@@ -305,9 +299,8 @@ class PgRoutineStore:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "INSERT INTO routines "
-                "(owner_user_id, space, name, prompt, schedule, timezone, enabled, next_run_at,"
-                " approval_mode) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+                "(owner_user_id, space, name, prompt, schedule, timezone, enabled, next_run_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
                 (
                     owner_user_id,
                     routine.space,
@@ -317,7 +310,6 @@ class PgRoutineStore:
                     routine.timezone,
                     routine.enabled,
                     routine.next_run_at,
-                    routine.approval_mode,
                 ),
             )
             row = await cur.fetchone()
@@ -542,7 +534,6 @@ class InMemoryRoutineStore:
             timezone=routine.timezone,
             enabled=routine.enabled,
             next_run_at=routine.next_run_at,
-            approval_mode=routine.approval_mode,
             last_run_at=None,
             created_at=now,
             updated_at=now,

@@ -601,7 +601,7 @@ describe('useChat — branches (M8-05)', () => {
 describe('useChat — app tool approvals (M13-02)', () => {
   const action = {
     tool_call_id: 'call-sql',
-    name: 'app_sql',
+    name: 'app_update',
     category: 'app' as const,
     args: { instance: 'i-1', space: '/spaces/family', sql: 'DELETE FROM items' },
     description: 'Change data in Groceries in /spaces/family',
@@ -609,7 +609,7 @@ describe('useChat — app tool approvals (M13-02)', () => {
   const toolStart = {
     type: 'tool_start' as const,
     tool_call_id: 'call-sql',
-    name: 'app_sql',
+    name: 'app_update',
     category: 'app' as const,
     args: action.args,
   };
@@ -634,7 +634,7 @@ describe('useChat — app tool approvals (M13-02)', () => {
       hook.current().respondToApproval([{ tool_call_id: 'call-sql', decision: 'approve' }]);
       latestSocket().emit({ type: 'turn_start' });
       latestSocket().emit(toolStart);
-      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-sql', name: 'app_sql', status: 'success', result_preview: 'OK' });
+      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-sql', name: 'app_update', status: 'success', result_preview: 'OK' });
     });
     expect(toolItems(hook).map((item) => [item.toolCallId, item.status, item.category])).toEqual([
       ['call-list', 'success', 'app'],
@@ -654,7 +654,7 @@ describe('useChat — app tool approvals (M13-02)', () => {
       hook.current().respondToApproval([{ tool_call_id: 'call-sql', decision: 'reject' }]);
       latestSocket().emit({ type: 'turn_start' });
       latestSocket().emit(toolStart);
-      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-sql', name: 'app_sql', status: 'success', result_preview: 'The user rejected this statement' });
+      latestSocket().emit({ type: 'tool_end', tool_call_id: 'call-sql', name: 'app_update', status: 'success', result_preview: 'The user rejected this statement' });
     });
     const tools = toolItems(hook);
     expect(tools).toHaveLength(1);
@@ -724,34 +724,6 @@ describe('useChat — HITL approvals (M8-03)', () => {
         type: 'approval_response',
         interrupt_id: 'int-1',
         decisions: [{ tool_call_id: 'call-1', decision: 'approve' }],
-      }),
-    );
-  });
-
-  it('carries can_allow_writes through and sends allow_writes when asked (#326)', async () => {
-    const hook = await renderUseChat();
-    act(() => latestSocket().onopen?.({}));
-
-    act(() => {
-      latestSocket().emit({
-        type: 'approval_request',
-        interrupt_id: 'int-aw',
-        actions: [action],
-        can_allow_writes: true,
-      });
-      latestSocket().emit({ type: 'turn_end', status: 'awaiting_approval' });
-    });
-    expect(hook.current().pendingApproval?.canAllowWrites).toBe(true);
-
-    act(() => {
-      hook.current().respondToApproval([{ tool_call_id: 'call-1', decision: 'approve' }], true);
-    });
-    expect(latestSocket().sent).toContain(
-      JSON.stringify({
-        type: 'approval_response',
-        interrupt_id: 'int-aw',
-        decisions: [{ tool_call_id: 'call-1', decision: 'approve' }],
-        allow_writes: true,
       }),
     );
   });

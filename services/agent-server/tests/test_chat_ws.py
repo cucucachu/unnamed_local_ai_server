@@ -19,6 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.agent.approvals import StaticToolPolicies, ToolPolicies, ToolPolicy
 from app.db.settings import InMemorySettingsStore, SettingsStore
 from app.db.threads import ThreadStore
 from app.main import create_app
@@ -34,6 +35,8 @@ def _make_client(
     fake_platform: FakePlatform,
     thread_store: ThreadStore | None = None,
     settings_store: SettingsStore | None = None,
+    tool_policy: ToolPolicy | None = None,
+    tool_policies: ToolPolicies | None = None,
 ) -> TestClient:
     settings = fake_model.settings(platform_url=fake_platform.base_url)
     # `checkpointer_override`/`thread_store_override` keep this on
@@ -42,10 +45,8 @@ def _make_client(
     # `app.main.create_app`'s docstring. Callers that want to assert on
     # `ThreadStore` state (M3-02) pass their own `thread_store` instance in;
     # everyone else gets a private, unobservable one (unchanged behavior).
-    # `settings_store` (M8-03): most pre-HITL tests here are about tool
-    # execution mechanics, not the approval flow, so they pass one
-    # pre-seeded with `hitl_enabled: False` (see `_no_hitl_settings_store`)
-    # to keep exercising direct tool execution like before this ticket.
+    # `tool_policy` (#342): tests about tool execution mechanics, not the
+    # approval flow, pass `ToolPolicy.allow_all()` so nothing asks.
     app = create_app(
         settings,
         checkpointer_override=MemorySaver(),
@@ -53,20 +54,16 @@ def _make_client(
         settings_store_override=settings_store or InMemorySettingsStore(),
         identity_verifier_override=FixedIdentityVerifier(),
         delegation_client_override=fake_platform.client(),
+        tool_policies_override=tool_policies
+        or (StaticToolPolicies(tool_policy) if tool_policy else None),
     )
     return TestClient(app)
-
-
-async def _no_hitl_settings_store() -> InMemorySettingsStore:
-    store = InMemorySettingsStore()
-    await store.update_document(TEST_USER_ID, {"hitl_enabled": False})
-    return store
 
 
 async def _thinking_settings_store(*, thinking_enabled: bool) -> InMemorySettingsStore:
     store = InMemorySettingsStore()
     await store.update_document(
-        TEST_USER_ID, {"hitl_enabled": False, "thinking_enabled": thinking_enabled}
+        TEST_USER_ID, {"thinking_enabled": thinking_enabled}
     )
     return store
 
@@ -182,7 +179,7 @@ async def test_no_reasoning_frames_when_thinking_off(fake_model: FakeModel, fake
 
 
 async def test_tool_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> None:
-    """`hitl_enabled: False` (M8-03): this test is about the `write_file`
+    """Nothing asks (#342): this test is about the `write_file`
     tool-call wire format, not the approval flow — see `test_hitl_*` below
     for HITL coverage of the exact same tool."""
     fake_model.queue(
@@ -191,7 +188,7 @@ async def test_tool_turn(fake_model: FakeModel, fake_platform: FakePlatform) -> 
     )
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
+        fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
     ) as client, client.websocket_connect("/ws/chat/tool-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write a file"})
         frames = _drain_turn(ws)
@@ -241,7 +238,7 @@ async def test_long_tool_turn_is_not_cut_at_langgraph_default(
     )
 
     with _make_client(
-        fake_model, fake_platform, settings_store=await _no_hitl_settings_store()
+        fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
     ) as client, client.websocket_connect("/ws/chat/long-thread") as ws:
         ws.send_json({"type": "user_message", "content": "write many files"})
         frames = _drain_turn(ws)
@@ -267,9 +264,9 @@ async def test_execute_code_tool_turn(
         settings,
         checkpointer_override=MemorySaver(),
         thread_store_override=AutoCreateThreadStore(),
-        # `hitl_enabled: False` (M8-03): this test is about `execute_code`'s
-        # wire format, not the approval flow.
-        settings_store_override=await _no_hitl_settings_store(),
+        # Nothing asks (#342): this test is about `execute_code`'s wire
+        # format, not the approval flow.
+        tool_policies_override=StaticToolPolicies(ToolPolicy.allow_all()),
         identity_verifier_override=FixedIdentityVerifier(),
         delegation_client_override=fake_platform.client(),
     )

@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from langgraph.checkpoint.memory import MemorySaver
 
+from app.agent.approvals import ToolPolicy
 from app.core.delegation import Delegation
 from app.db.threads import InMemoryThreadStore
 from app.main import create_app
@@ -191,15 +192,14 @@ async def test_get_messages_normalizes_tool_call_turn(
     # app uses (`rest_app.state.agent`), rather than through the WS endpoint
     # — this test is about `GET .../messages` normalization, not the WS
     # wire format (already covered by `test_chat_ws.py`).
-    # `hitl_enabled: False` — this test is about `GET .../messages`
-    # normalization, not M8-03's approval flow; disabling HITL here keeps it
-    # exercising direct tool execution like it always has.
+    # Nothing asks (#342): this test is about `GET .../messages`
+    # normalization, not the approval flow.
     await rest_app.state.agent.ainvoke(
         {"messages": [{"role": "user", "content": "write a file"}]},
         config={
             "configurable": {
                 "thread_id": thread_id,
-                "hitl_enabled": False,
+                "tool_policy": ToolPolicy.allow_all(),
                 "delegation": await Delegation.obtain(
                     rest_app.state.delegation_client, "identity", thread_id
                 ),
@@ -265,7 +265,7 @@ async def test_get_messages_attaches_turn_metadata_on_final_assistant(
     fake_model.queue(TextTurn("plain reply"))
     await rest_app.state.agent.ainvoke(
         {"messages": [{"role": "user", "content": "hi"}]},
-        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+        config={"configurable": {"thread_id": thread_id, "tool_policy": ToolPolicy.allow_all()}},
     )
 
     state = await rest_app.state.agent.aget_state({"configurable": {"thread_id": thread_id}})
@@ -300,11 +300,11 @@ async def test_branches_empty_without_fork_and_put_rejects_non_tip(
     fake_model.queue(TextTurn("one"), TextTurn("two"))
     await rest_app.state.agent.ainvoke(
         {"messages": [{"role": "user", "content": "turn one"}]},
-        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+        config={"configurable": {"thread_id": thread_id, "tool_policy": ToolPolicy.allow_all()}},
     )
     await rest_app.state.agent.ainvoke(
         {"messages": [{"role": "user", "content": "turn two"}]},
-        config={"configurable": {"thread_id": thread_id, "hitl_enabled": False}},
+        config={"configurable": {"thread_id": thread_id, "tool_policy": ToolPolicy.allow_all()}},
     )
 
     empty = await rest_client.get(f"/api/threads/{thread_id}/branches")

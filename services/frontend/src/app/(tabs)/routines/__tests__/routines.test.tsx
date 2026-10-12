@@ -45,7 +45,6 @@ function routine(overrides: Partial<Routine> = {}): Routine {
     schedule: { kind: 'weekdays', time: '07:00:00' },
     timezone: 'America/Los_Angeles',
     enabled: true,
-    approval_mode: 'ask',
     next_run_at: '2026-10-06T14:00:00Z',
     last_run_at: null,
     created_at: '2026-10-01T00:00:00Z',
@@ -161,8 +160,8 @@ describe('RoutineEditScreen', () => {
     await press(renderer, 'routine-day-mon');
     await type(renderer, 'routine-time', '17:30');
     await type(renderer, 'routine-timezone', 'Europe/Berlin');
-    await press(renderer, 'routine-approval-allow_writes');
     expect(textOf(renderer)).toContain('Sundays at 17:30');
+    expect(textOf(renderer)).toContain('It uses your Agent permissions');
 
     await press(renderer, 'routine-save');
 
@@ -174,7 +173,6 @@ describe('RoutineEditScreen', () => {
         schedule: { kind: 'weekly', days: ['sun'], time: '17:30' },
         timezone: 'Europe/Berlin',
         enabled: true,
-        approval_mode: 'allow_writes',
       },
     ]);
     expect(mockReplace).toHaveBeenCalledWith({ pathname: '/routines/[routineId]', params: { routineId: 'new' } });
@@ -203,11 +201,10 @@ describe('RoutineEditScreen', () => {
     renderer = await render(RoutineEditScreen);
 
     await type(renderer, 'routine-name', 'Brief');
-    await press(renderer, 'routine-approval-read_only');
     await press(renderer, 'routine-save');
 
     expect(requestsTo(fetchMock, 'PATCH', '/api/routines/r1')).toEqual([
-      { schedule: { kind: 'weekdays', time: '07:00' }, name: 'Brief', approval_mode: 'read_only' },
+      { schedule: { kind: 'weekdays', time: '07:00' }, name: 'Brief' },
     ]);
     expect(mockBack).toHaveBeenCalled();
   });
@@ -255,7 +252,6 @@ describe('RoutineDetailScreen', () => {
     const text = textOf(renderer);
     expect(text).toContain('Weekdays at 7:00');
     expect(text).toContain('Family');
-    expect(text).toContain('Ask me');
     expect(text).toContain('Summarize my notes.');
     expect(text).toContain('Needs approval');
     expect(text).toContain('Missed');
