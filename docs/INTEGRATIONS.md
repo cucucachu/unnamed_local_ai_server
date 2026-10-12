@@ -47,7 +47,8 @@ In v1:
 - The full current spec (**2026-07-28**) server features the agent needs:
   **tools, resources and prompts**. Elicitation is handled in plain chat
   (§8).
-- Installed by admins only; each tool set to Off / Always ask / Users choose.
+- Installed by admins only; every tool follows the permissions model (#342):
+  on or off, then ask or allow.
 - Per-user credentials or one shared household credential, chosen by the
   admin per integration. Long-lived tokens/API keys and OAuth.
 - Progressive disclosure: the model sees one line per integration and opens
@@ -70,10 +71,12 @@ household's external service.
 
 - **Integration**: one installed MCP server, with a name, URL, auth setup
   and per-tool settings. Installed household-wide by an admin.
-- **Tool setting** (per tool, admin): **Off**, **Always ask** or **Users
-  choose**. New tools discovered later start **Off**.
-- **User choice** (per tool, per user, for "Users choose" tools): **ask** or
-  **allow**. Read-only tools start as allow; everything else starts as ask.
+- **Availability** (per tool; the admin's for everyone, and each user's for
+  themselves): **on** or **off**. A tool is available only if both are on.
+  New tools discovered later start off for the admin.
+- **Permission** (per tool): the admin's **ceiling** (ask or allow, default
+  allow) and each user's own setting (ask or allow, default ask for every
+  MCP tool). A call runs without asking only if both say allow.
 - **Credential model** (per integration, admin): **each user connects**
   (per-user credential) or **shared** (one household credential). No auth is
   also possible.
@@ -102,8 +105,8 @@ flowchart LR
     proxy --> mcp
 ```
 
-- **platform** owns the registry (integrations, discovered tools, tool
-  settings, user choices), the permissions policy (#342), and stores
+- **platform** owns the registry (integrations, discovered tools, admin and
+  user tool settings), the permissions policy (#342), and stores
   credentials as ciphertext. It never decrypts them.
 - **integrations-gateway** (new service) is the only component that holds
   the credential encryption key and the only one that calls MCP servers. It
@@ -120,7 +123,7 @@ flowchart LR
 - **agent-server** gets four fixed tools (§6) that call the gateway with the
   user's delegation, the same pattern as `code-exec-manager`'s exec grants.
 - **frontend**: Settings → Integrations. Admins install and configure;
-  users connect or disconnect, and see and change their per-tool choices.
+  users connect or disconnect, and see and change their own tool settings.
 
 The agent's own web tools stay read-only. Only the gateway can write to the
 outside world, and only to servers an admin installed.
@@ -155,17 +158,17 @@ Admin flow (Settings → Integrations → Add):
    connects their own account (per-user) or uses the shared credential. The
    gateway lists tools, resources and prompts and stores them in the
    registry.
-5. **Tool settings.** Each tool starts from the server's annotations
-   (read-only → Users choose with allow as the starting choice; otherwise
-   Users choose with ask; `destructiveHint` → suggested Always ask). The
-   admin can change each to Off / Always ask / Users choose. Annotations are
-   only suggestions: the spec says to treat them as untrusted.
+5. **Tool settings.** The admin picks which tools are on and sets each
+   one's ceiling (ask or allow; default allow). The server's annotations
+   (`readOnlyHint`, `destructiveHint`) are shown next to each tool as
+   information only: the spec says to treat them as untrusted, so they never
+   change a default. Every user's own setting starts at ask.
 6. **Description.** The one-line description the model sees starts from
    the server's own and can be edited by the admin.
 
 Rediscovery runs on demand (admin "Refresh") and when the server reports a
-changed list. New tools start Off. Uninstalling deletes the integration,
-its tool settings, every user's choices and every stored credential.
+changed list. New tools start off. Uninstalling deletes the integration,
+its admin and user tool settings and every stored credential.
 
 ## 5. Credentials
 
@@ -229,9 +232,11 @@ credential.
 
 ## 6. What the agent sees
 
-The layout follows #341: the tool list and static system prompt are the
-same for every user and turn; per-user context is frozen when a thread
-starts; everything else is appended.
+The layout follows #341: the static system prompt is the same for every
+user and turn; the tool list and per-user context are frozen when a thread
+starts; everything else is appended. The tool list differs between users
+only when someone has turned a built-in tool off (#342); integrations never
+change it.
 
 **Integrations list** (per user, frozen at thread start, after the static
 system prompt): one line per integration this user can use now (connected,
@@ -243,7 +248,7 @@ the user to Settings.
 
 | Tool | Does |
 | --- | --- |
-| `open_integration(name)` | Returns the server's instructions, its enabled tools (name, description, input schema), resources (URI, name, description) and prompts (name, description, arguments). Off tools are not listed. |
+| `open_integration(name)` | Returns the server's instructions, the tools available to this user (name, description, input schema), resources (URI, name, description) and prompts (name, description, arguments). Tools that are off, for the admin or this user, are not listed. |
 | `use_integration(integration, tool, arguments)` | Calls a tool. The gateway validates `arguments` against the tool's schema first and returns a precise error if they don't match. |
 | `read_integration_resource(integration, uri)` | Reads a resource. |
 | `get_integration_prompt(integration, name, arguments)` | Returns a prompt's messages as text for the agent to follow. |
@@ -269,21 +274,31 @@ the same as other large tool results.
 
 ## 7. Permissions and approvals
 
-Integrations follow the permissions model (#342) exactly:
+Integrations follow the permissions model (#342) exactly; each MCP tool is
+a tool like any built-in one:
 
-- Off is off: Off tools aren't listed and calls are refused.
-- Always ask always asks, for every user, in chats and routines.
-- Otherwise a chat follows the user's choice for that tool (ask or allow),
-  and a routine follows its mode: read-only refuses, ask asks,
-  allow-writes runs everything except Always ask tools.
-- `read_integration_resource`, `get_integration_prompt` and
-  `open_integration` are reads.
-- Truly destructive actions in HomeAI itself stay on the fixed always-ask
-  list; for integrations, the admin's Always ask is that control.
+- **Availability:** a tool is available only if the admin and the user both
+  have it on. Unavailable tools aren't listed by `open_integration`, and
+  calls to them are refused.
+- **Permission:** a call runs without a card only if the admin's ceiling
+  and the user's own setting are both allow. Defaults: ceiling allow, user
+  ask. Annotations never change this.
+- **Routines** follow the same rules: a run stops at a tool that asks and
+  waits in its run chat.
+- `open_integration`, `read_integration_resource` and
+  `get_integration_prompt` are reads (built-in, default allow).
+  `use_integration` takes the setting of the MCP tool it calls.
+- The admin is trusted: there's no hard-coded always-ask list.
+
+Admin and user settings are stored separately. An admin tightening a tool
+later doesn't change users' settings; the admin's wins when a call is
+evaluated, and the user's screen shows the effective setting, locked and
+labelled.
 
 **Approval cards** show the integration, tool and arguments in readable
-form, with approve, reject and "Always allow this for me" (only for Users
-choose tools). In a routine's run chat, "Allow for this routine".
+form, with approve, reject and "Always allow this" (sets the user's own
+setting; hidden when the ceiling is ask). A routine's run chat also offers
+"Always allow the tools this run asked for".
 
 **Enforcement is in the gateway**, not only in agent-server: a call that
 needs approval runs only with a one-time approval marker bound to the
@@ -335,9 +350,9 @@ plain sentence telling the model what to do:
 | --- | --- |
 | `not_connected` | This user hasn't connected; tell them to connect in Settings → Integrations. |
 | `auth_expired` | Credential rejected or refresh failed; the user (or admin, if shared) must reconnect. |
-| `not_found` | No such integration, tool, resource or prompt (or it's Off). |
+| `not_found` | No such integration, tool, resource or prompt (or the tool is off). |
 | `invalid_arguments` | Arguments don't match the schema; details included; fix and retry. |
-| `refused_by_policy` | Read-only routine, Off tool, or approval rejected; don't retry. |
+| `refused_by_policy` | The tool was turned off during the thread, or the approval was rejected; don't retry. |
 | `needs_input` | Elicitation (§8). |
 | `unreachable` | Network error, DNS failure, connection refused, or the proxy blocked it. |
 | `timeout` | The server didn't answer in time; may retry once. |
@@ -372,7 +387,7 @@ results, marked as the server's.
 
 Every gateway call is logged: time, user, integration, tool/resource/prompt,
 arguments (secrets never logged), the context (chat, routine, app agent),
-the approval (who and how: user's choice, card, routine mode), and the
+the approval (who and how: allowed by settings, or approved on a card), and the
 result status and error code. Admins see all of it through the audit viewer
 (#311); users see their own in Settings.
 
@@ -388,8 +403,8 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
 - **Prompt injection with an exit.** Private data, untrusted content (web
   pages, shared files, integration results) and a way to send data out
   (any integration tool's arguments) can now meet in one turn. Mitigations:
-  results marked untrusted; approvals on everything that isn't read-only by
-  default; the audit log. Admins choose which servers are worth that risk.
+  results marked untrusted; every MCP tool asks by default; the audit log.
+  Admins choose which servers are worth that risk.
 - **The proxy exception is the sharpest edge.** A private-address exception
   is scoped to one host and port and shown to the admin explicitly. The
   DNS-rebinding gap documented for the egress proxy applies to registered
@@ -397,7 +412,7 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
 - **Credentials**: §5, including the host-root trust boundary.
 - **Malicious or compromised servers** can return misleading results or
   change tool descriptions. v1 accepts this (the admin decides whom to
-  trust); new tools still start Off.
+  trust); new tools still start off.
 
 ## 13. Testing
 
@@ -408,8 +423,10 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
   server, an oversized result, a private-address server, a changed
   certificate.
 - **Gate (`gate_m18.sh`)**: install the fake server; agent opens it and uses
-  a tool; Off tools invisible; Always ask stops in a chat and in an
-  allow-writes routine; user's "allow" runs without a card; another user
+  a tool; tools off for the admin or the user are invisible; a tool that
+  asks stops in a chat and in a routine run; an admin ceiling of ask
+  overrides a user's stored allow; "allow" on both runs without a card;
+  another user
   without a connection gets `not_connected`; the gateway refuses a call
   without a marker; credentials never appear in any API response or log;
   the proxy refuses the gateway's POST to an unregistered host and refuses
@@ -442,10 +459,13 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
 
 Proposed issues, filed once this design is agreed:
 
-1. **Permissions model (#342) core**: policy storage and the rule, the
-   generalized approval marker, Settings lists. Prerequisite for 5.
+1. **Permissions model (#342) core**: availability and permission storage
+   (admin and user), the rule, the per-user frozen tool list, the
+   generalized approval marker, Settings lists; removes routine modes and
+   `hitl_enabled`. Prerequisite for 5.
 2. **Registry**: platform tables for integrations, tools/resources/prompts,
-   tool settings, user choices, credential ciphertext; admin and user APIs.
+   credential ciphertext (tool settings live in 1's tables); admin and user
+   APIs.
 3. **Gateway service**: SDK client, encryption, delegation grants,
    timeouts/limits, standard errors, audit log.
 4. **Egress**: gateway identity at the proxy; per-integration rules from
@@ -455,6 +475,6 @@ Proposed issues, filed once this design is agreed:
 6. **Auth**: token/API key and shared credentials; then OAuth (app
    return address first), plus the canonical server address setting.
 7. **Settings UI**: Integrations for admins (install, tools, shared
-   credential) and users (connect, choices). Phone-first.
+   credential) and users (connect, tool settings). Phone-first.
 8. **Fake MCP server, eval, gate** (`gate_m18.sh`), HOST-CHECKS § M18 with
    the Home Assistant Tier B steps.
