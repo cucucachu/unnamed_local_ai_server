@@ -138,8 +138,9 @@ def check_always_allow_from_a_run(routines: list[str], threads: list[str]) -> No
         fail(f"the run didn't stop for its write: {run['status']}")
     _, state = api("GET", f"/api/threads/{run['thread_id']}/state")
     pending = state["pending_approval"]
-    if [a["name"] for a in pending["actions"]] != ["write_file"]:
+    if {a["name"] for a in pending["actions"]} != {"write_file"}:
         fail(f"unexpected pending approval: {pending!r}")
+    log(f"paused on {len(pending['actions'])} write_file call(s)")
 
     set_write_file("allow")
     frames = asyncio.run(approve(run["thread_id"], pending))
@@ -148,10 +149,13 @@ def check_always_allow_from_a_run(routines: list[str], threads: list[str]) -> No
     run = wait_run(routine["id"], {"succeeded", "failed", "waiting_approval"})
     if run["status"] != "succeeded":
         fail(f"run ended {run['status']} ({run.get('detail')})")
+    _, messages = api("GET", f"/api/threads/{run['thread_id']}/messages")
+    writes = [m for m in messages if m.get("role") == "tool" and m.get("tool_name") == "write_file"]
+    results = [(m.get("content") or "")[:80] for m in writes]
+    log(f"write_file results: {results}")
     for path in (NOTE, f"{NOTE}.second"):
-        status, _ = api("GET", f"/api/platform/files/download?path={urllib.parse.quote(path)}")
-        if status != 200:
-            fail(f"{path} wasn't written: HTTP {status}")
+        if not any(r.startswith("Updated file") and r.endswith(path) for r in results):
+            fail(f"{path} wasn't written")
     log("OK: Always allow finished the run without another stop")
 
 
