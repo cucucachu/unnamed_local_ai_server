@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal, NotRequired
 
@@ -360,19 +361,53 @@ _STATUS_NOTE = {
 }
 
 
+INTEGRATIONS_HEADER = (
+    "This user's integrations: services they already use. When a request is about something "
+    "an integration handles (its devices, lists or data), use the integration, not HomeAI's "
+    "own apps or files. Open one before using it:"
+)
+_LISTED_TOOLS = 40
+_TOOL_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,128}")
+
+
 def integrations_block(integrations: list[dict[str, Any]]) -> str:
     """The per-user block after the static prompt; empty when the user has none."""
     if not integrations:
         return ""
-    lines = ["## Integrations", "This user's integrations (open one before using it):"]
+    lines = ["## Integrations", INTEGRATIONS_HEADER]
     for i in integrations:
         line = f"- {i['slug']} ({i['name']})"
         if i.get("description"):
             line += f": {i['description']}"
+        if tools := _short_names(i.get("tools") or []):
+            more = len(tools) - _LISTED_TOOLS
+            line += f" Tools: {', '.join(tools[:_LISTED_TOOLS])}"
+            line += f", and {more} more." if more > 0 else "."
         if note := _STATUS_NOTE.get(i.get("status", "")):
             line += f" [{note}]"
         lines.append(line)
     return "\n".join(lines)
+
+
+def _short_names(names: list[str]) -> list[str]:
+    """Names past any `group__` prefix, for the model to spot what an integration does.
+
+    Only a hint; open_integration gives the exact names use_integration takes.
+    """
+    return list(dict.fromkeys(n.rsplit("__", 1)[-1] or n for n in names))
+
+
+def _enabled_tools(listed: Any) -> list[str]:
+    if not isinstance(listed, list):
+        return []
+    return [
+        t["name"]
+        for t in listed
+        if isinstance(t, dict)
+        and t.get("enabled") is True
+        and isinstance(t.get("name"), str)
+        and _TOOL_NAME.fullmatch(t["name"])
+    ]
 
 
 async def fetch_integrations(platform_url: str, token: str) -> list[dict[str, Any]] | None:
@@ -395,6 +430,7 @@ async def fetch_integrations(platform_url: str, token: str) -> list[dict[str, An
             "name": str(i.get("name") or i.get("slug"))[:80],
             "description": " ".join(str(i.get("description") or "").split())[:500],
             "status": i.get("status"),
+            "tools": _enabled_tools(i.get("tools")),
         }
         for i in listed
         if isinstance(i, dict) and i.get("slug")
