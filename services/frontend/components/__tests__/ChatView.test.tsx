@@ -60,11 +60,14 @@ jest.mock('@/lib/speech', () => ({
 
 const mockListMyTools = jest.fn<Promise<MyTool[]>, []>();
 const mockChangeMyTools = jest.fn<Promise<MyTool[]>, unknown[]>();
-const mockChangeMyIntegrationTools = jest.fn<Promise<void>, unknown[]>();
+const mockChangeMyIntegrationTools = jest.fn<Promise<unknown>, unknown[]>();
 jest.mock('@/lib/platform', () => ({
   ...jest.requireActual('@/lib/platform'),
   listMyTools: () => mockListMyTools(),
   changeMyTools: (...args: unknown[]) => mockChangeMyTools(...args),
+}));
+jest.mock('@/lib/integrations', () => ({
+  ...jest.requireActual('@/lib/integrations'),
   changeMyIntegrationTools: (...args: unknown[]) => mockChangeMyIntegrationTools(...args),
 }));
 

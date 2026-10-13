@@ -339,14 +339,6 @@ export function toolGroups<T extends { group: string }>(tools: T[]): [string, T[
   return [...byGroup.entries()];
 }
 
-/** Change the user's own settings for an integration's tools (M18-03). */
-export async function changeMyIntegrationTools(
-  integrationId: string,
-  changes: { name: string; enabled?: boolean; permission?: ToolPermission }[],
-): Promise<void> {
-  await send('PATCH', `/api/platform/integrations/${encodeURIComponent(integrationId)}/tools`, { changes });
-}
-
 /** The tools in `names` the user could switch from asking to allowed. */
 export function alwaysAllowable(tools: MyTool[], names: string[]): MyTool[] {
   const wanted = new Set(names);
@@ -444,7 +436,32 @@ const MESSAGES: Record<string, string> = {
   invalid_pairing_qr: "That pairing code isn't valid.",
   locked_by_admin: 'An admin has set this for everyone.',
   unknown_tool: 'That tool is no longer available. Reload and try again.',
+  invalid_url: 'Enter the full address, like https://192.168.0.20:8123/api/mcp.',
+  https_required: 'A server on the internet needs an https:// address.',
+  private_address_needs_exception: 'This is a home-network address. Allow it below to continue.',
+  loopback_refused: "That address points to this server itself, which integrations can't use.",
+  mdns_name:
+    "Names ending in .local usually don't work from inside HomeAI. Use the device's IP address or a DNS name instead.",
+  auth_method_mismatch: "That sign-in type doesn't match how this integration is set up.",
+  token_header_needs_token_auth: 'A header name only applies to token sign-in.',
+  reserved_header: "That header can't carry a token. Leave it empty for Authorization: Bearer.",
+  credential_rejected: 'The server turned that token down. Check it and try again.',
+  wrong_credential_model: 'This integration is set up differently now. Reload and try again.',
+  integration_not_found: 'That integration was removed.',
+  gateway_unavailable: "The integrations service isn't available right now. Try again in a minute.",
+  unreachable: "The server couldn't be reached.",
+  timeout: "The server didn't answer in time.",
+  certificate_changed: "The server's certificate changed since it was confirmed. Check it again before trusting it.",
+  protocol_error: "The server didn't answer as an MCP server. Check the address points to its MCP endpoint.",
+  server_error: 'The server returned an error.',
+  auth_expired: 'The server turned the stored token down. Connect again with a new one.',
+  not_connected: 'Connect first.',
 };
+
+/** Human-readable text for a platform error code that came in a response body. */
+export function errorCodeMessage(code: string): string {
+  return MESSAGES[code] ?? `Something went wrong (${code}).`;
+}
 
 /** Human-readable text for a failed platform call. */
 export function platformErrorMessage(error: unknown): string {

@@ -142,6 +142,13 @@ export default function SettingsScreen() {
           onPress={() => router.push('/settings/permissions')}
           testID="settings-nav-permissions"
         />
+        <NavRow
+          icon="extension-puzzle-outline"
+          title="Integrations"
+          description="Services the agent can use for you, like Home Assistant"
+          onPress={() => router.push('/settings/integrations')}
+          testID="settings-nav-integrations"
+        />
         {loading || settings === null ? (
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={theme.accent} />

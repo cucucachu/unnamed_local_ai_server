@@ -1822,6 +1822,29 @@ to Ask first. `approval_request` is **always** immediately followed by
   answers only after a new one.
 - Tests: `tests/test_integration_tools.py` and
   `tests/test_integration_routines.py`, against `tests/fake_gateway.py`.
+- Frontend (M18-08, `settings/integrations/`, client `lib/integrations.ts`):
+  - **Settings → Integrations** (everyone): each integration with its
+    status. Its page connects a per-user token (sent once, then cleared;
+    nothing is ever shown back), disconnects, and sets each tool on/off and
+    Ask first / Allow. What the admin decided is locked and labelled; tools
+    the admin turned off are counted, not listed. "Allow all" allows every
+    tool that still asks.
+  - **Manage** (admins, step-up): the list, Add, and a page per
+    integration. Add installs with no sign-in before checking, since the
+    proxy only reaches registered servers. It then runs `.../check`:
+    - a `.local` name, loopback, or a public `http://` address is refused
+      as typed;
+    - a home-network IP (or an `http://` name) needs the exception
+      ("Allow host:port");
+    - a refused certificate shows its SHA-256 fingerprint to trust
+      (`cert_fingerprint`);
+    - a detected token or OAuth sign-in leads to "Each person" or "One for
+      everyone" plus the token (an optional header name), then refresh.
+
+    Cancel uninstalls. The integration page edits the description, sets the
+    household token or disconnects users (status only), turns tools on with
+    their ceiling, shows the server's annotations as information, refreshes,
+    and uninstalls after a confirm.
 
 App tools (M13-02, category `app`) raise their own interrupts from inside
 the call, after its `tool_start` (and no `tool_end` for the paused call);

@@ -19,6 +19,8 @@ export default function SettingsLayout() {
         <Stack.Screen name="sessions" />
         <Stack.Screen name="remote" />
         <Stack.Screen name="permissions" />
+        <Stack.Screen name="integrations/index" />
+        <Stack.Screen name="integrations/[integrationId]" />
         <Stack.Screen name="spaces/index" />
         <Stack.Screen name="spaces/[spaceId]" />
         <Stack.Screen name="routines/index" />
@@ -28,6 +30,9 @@ export default function SettingsLayout() {
           <Stack.Screen name="users" />
           <Stack.Screen name="invites" />
           <Stack.Screen name="agent-tools" />
+          <Stack.Screen name="integrations/manage/index" />
+          <Stack.Screen name="integrations/manage/add" />
+          <Stack.Screen name="integrations/manage/[integrationId]" />
         </Stack.Protected>
       </Stack>
     </StepUpProvider>

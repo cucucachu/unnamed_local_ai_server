@@ -32,14 +32,8 @@ import { isSpeechSupported, startListening, stopListening } from '@/lib/speech';
 import { useKeyboardVisible } from '@/lib/useKeyboardVisible';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import type { ApprovalDecision, ApprovalIntegration, EditMode } from '@/lib/chatSocket';
-import {
-  alwaysAllowable,
-  changeMyIntegrationTools,
-  changeMyTools,
-  listMyTools,
-  platformErrorMessage,
-  type MyTool,
-} from '@/lib/platform';
+import { changeMyIntegrationTools } from '@/lib/integrations';
+import { alwaysAllowable, changeMyTools, listMyTools, platformErrorMessage, type MyTool } from '@/lib/platform';
 import type { ThreadBranchPoint } from '@/lib/threads';
 import {
   useChat,
