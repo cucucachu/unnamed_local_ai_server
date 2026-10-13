@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { Linking } from 'react-native';
-import { act, create } from 'react-test-renderer';
+import { act, create as createRenderer, type ReactTestRenderer } from 'react-test-renderer';
 
 import { groupItemsIntoTurns } from '@/lib/chatTurns';
 import type { EditMode } from '@/lib/chatSocket';
@@ -90,6 +90,21 @@ beforeEach(() => {
   mockListMyTools.mockReset().mockResolvedValue([]);
   mockChangeMyTools.mockReset().mockResolvedValue([]);
   mockChangeMyIntegrationTools.mockReset().mockResolvedValue(undefined);
+});
+
+// Unmounted after each test: a screen left mounted keeps rendering after Jest tears the
+// environment down, which fails the run when this file runs on its own.
+const mounted: ReactTestRenderer[] = [];
+function create(element: Parameters<typeof createRenderer>[0]): ReactTestRenderer {
+  const renderer = createRenderer(element);
+  mounted.push(renderer);
+  return renderer;
+}
+
+afterEach(() => {
+  act(() => {
+    for (const renderer of mounted.splice(0)) renderer.unmount();
+  });
 });
 
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above

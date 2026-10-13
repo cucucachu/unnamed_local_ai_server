@@ -96,19 +96,34 @@ function renderUseChatSync(threadId = 'default'): {
     return null;
   }
 
-  let renderer: ReactTestRenderer;
+  let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(createElement(Harness));
   });
+  mounted.add(renderer);
 
   return {
     current: () => {
       if (!latest) throw new Error('useChat never rendered');
       return latest;
     },
-    unmount: () => act(() => renderer.unmount()),
+    unmount: () => {
+      mounted.delete(renderer);
+      act(() => renderer.unmount());
+    },
   };
 }
+
+// Unmounted after each test: a hook left mounted keeps its socket and timers going after
+// Jest tears the environment down, which fails the run when this file runs on its own.
+const mounted = new Set<ReactTestRenderer>();
+
+afterEach(() => {
+  act(() => {
+    for (const renderer of mounted) renderer.unmount();
+  });
+  mounted.clear();
+});
 
 /** Flushes the microtask queue via a zero-delay macrotask boundary, letting
  * the hydration fetch's `.then()`/`.catch()` chain (and the state updates
@@ -1171,7 +1186,7 @@ describe('useChat — new chat (M19-02)', () => {
       return null;
     }
     act(() => {
-      create(createElement(Harness));
+      mounted.add(create(createElement(Harness)));
     });
     return { current: () => latest as UseChatResult, created, fetchMock };
   }
