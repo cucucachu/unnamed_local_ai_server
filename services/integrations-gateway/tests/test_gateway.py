@@ -50,6 +50,14 @@ async def test_open_lists_only_available_tools(gateway, platform: FakePlatform):
     }
 
 
+async def test_check_a_server_that_needs_no_sign_in(gateway, connector):
+    body = await gateway.check({"id": str(INTEGRATION), "url": "unused"})
+    assert body["reachable"] and body["auth"] == "none" and body["problem"] is None
+    assert body["protocol_version"] == "2026-07-28"
+    assert body["server"]["name"]
+    assert connector.headers == [{}]
+
+
 async def test_tools_the_registry_doesnt_know_stay_hidden(gateway, platform: FakePlatform):
     del platform.tools["big"]
     body = await gateway.open(DELEGATION, "home", "chat")

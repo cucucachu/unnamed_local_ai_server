@@ -88,6 +88,26 @@ def _validation_errors(schema: dict[str, Any], arguments: dict[str, Any]) -> lis
     ]
 
 
+def _checked(
+    *,
+    auth: str | None = None,
+    problem: str | None = None,
+    detail: str | None = None,
+    certificate: str | None = None,
+    protocol_version: str | None = None,
+    server: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "reachable": problem is None,
+        "auth": auth,
+        "problem": problem,
+        "detail": detail,
+        "certificate": certificate,
+        "protocol_version": protocol_version,
+        "server": server,
+    }
+
+
 def _needs_input_detail(request: Any) -> dict[str, Any]:
     if not isinstance(request, types.ElicitRequest):
         raise GatewayError(
@@ -150,6 +170,45 @@ class Gateway:
         ):
             with anyio.fail_after(self.settings.call_timeout_s):
                 return await self._discover(session)
+
+    async def check(self, integration: dict[str, Any]) -> dict[str, Any]:
+        """Before an admin sets up credentials: is the server there, and what sign-in does it want.
+
+        Connects without a credential. A server that answers needs none; one
+        that answers 401 wants a token, or OAuth if its challenge points to
+        protected-resource metadata. A certificate the proxy refused comes
+        back with its fingerprint, for the admin to confirm.
+        """
+        fresh = {**integration, "protocol_version": None}
+        try:
+            with anyio.fail_after(self.settings.call_timeout_s):
+                return await self._check(fresh)
+        except TimeoutError:
+            return _checked(problem="timeout")
+
+    async def _check(self, integration: dict[str, Any]) -> dict[str, Any]:
+        try:
+            async with (
+                self.connector.session(integration, {}, elicitation=False) as session,
+                guarded(session.statuses, session.denials, session.seen),
+            ):
+                client = session.client
+                server = client.server_info
+                return _checked(
+                    auth="none",
+                    protocol_version=client.protocol_version,
+                    server=_dump(server) if server else {},
+                )
+        except GatewayError as exc:
+            if exc.code == "auth_expired":
+                challenge = exc.seen.get("challenge", "").lower()
+                return _checked(auth="oauth" if "resource_metadata" in challenge else "token")
+            denial = exc.seen.get("denial")
+            if denial in ("certificate_untrusted", "certificate_changed"):
+                return _checked(problem=denial, certificate=exc.seen.get("certificate"))
+            if denial == "destination":
+                return _checked(problem="address_refused")
+            return _checked(problem=exc.code, detail=exc.detail)
 
     async def _discover(self, session: Session) -> dict[str, Any]:
         client = session.client

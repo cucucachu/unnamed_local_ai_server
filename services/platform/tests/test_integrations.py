@@ -53,7 +53,13 @@ class FakeGateway:
         self.discovery = DISCOVERY
         self.encrypted: list[tuple] = []
         self.discovered: list[tuple] = []
+        self.checked: list[dict] = []
+        self.check_result: dict = {"reachable": True, "auth": "token"}
         self.fails: Exception | None = None
+
+    async def check(self, integration):
+        self.checked.append(integration)
+        return self.check_result
 
     async def encrypt(self, integration_id, user_id, secret) -> bytes:
         self.encrypted.append((integration_id, user_id, secret))
@@ -206,6 +212,7 @@ async def test_members_cant_install_or_change_settings(platform, people):
         ("PATCH", f"{ADMIN}/{iid}", {"name": "Mine"}),
         ("DELETE", f"{ADMIN}/{iid}", None),
         ("POST", f"{ADMIN}/{iid}/refresh", None),
+        ("POST", f"{ADMIN}/{iid}/check", None),
         ("PATCH", f"{ADMIN}/{iid}/tools", {"changes": [{"name": "turn_on", "enabled": True}]}),
         ("PUT", f"{ADMIN}/{iid}/shared-credential", {"secret": SECRET}),
         ("DELETE", f"{ADMIN}/{iid}/shared-credential", None),
@@ -375,6 +382,35 @@ async def test_refresh_without_a_gateway_is_unavailable(platform, people):
     response = await platform.client.post(f"{ADMIN}/{iid}/refresh", headers=people["admin"])
     assert response.status_code == 503
     assert response.json()["detail"] == "gateway_unavailable"
+
+
+async def test_check_asks_the_gateway_without_a_credential(platform, people):
+    iid = (
+        await _install(platform, people, url="https://192.168.0.20:8123/mcp", private_address=True)
+    )["id"]
+    gateway = platform.app.state.gateway
+    gateway.check_result = {
+        "reachable": False,
+        "problem": "certificate_untrusted",
+        "certificate": "ab" * 32,
+        "detail": "x" * 5000,
+    }
+    response = await platform.client.post(f"{ADMIN}/{iid}/check", headers=people["admin"])
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["reachable"], body["problem"], body["certificate"]) == (
+        False,
+        "certificate_untrusted",
+        "ab" * 32,
+    )
+    assert len(body["detail"]) == 1000
+    sent = gateway.checked[-1]
+    assert (sent["url"], sent["private_address"]) == ("https://192.168.0.20:8123/mcp", True)
+    assert "ciphertext" not in json.dumps(sent, default=str)
+
+    gateway.check_result = {"reachable": True, "auth": "sso"}
+    response = await platform.client.post(f"{ADMIN}/{iid}/check", headers=people["admin"])
+    assert response.status_code == 503
 
 
 def integrations_gateway_unconfigured():

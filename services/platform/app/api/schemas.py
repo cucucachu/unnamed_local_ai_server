@@ -1111,6 +1111,26 @@ class ConnectionOut(BaseModel):
     problem: str | None = None
 
 
+class IntegrationCheckOut(BaseModel):
+    """The gateway's look at a server, without a credential (Settings → Add integration).
+
+    `auth` is what it wants (`none`: it answered; `token`/`oauth`: it asked
+    for sign-in). Otherwise `problem` says why it couldn't be reached:
+    `certificate_untrusted` / `certificate_changed` (with the `certificate`
+    it presented, to confirm), `address_refused` (a name that points to a
+    private address needs the exception), `unreachable`, `timeout`,
+    `server_error`, `protocol_error`.
+    """
+
+    reachable: bool
+    auth: AuthMethod | None = None
+    problem: Annotated[str, Field(max_length=40)] | None = None
+    detail: Annotated[str, Field(max_length=1000)] | None = None
+    certificate: Fingerprint | None = None
+    protocol_version: Annotated[str, Field(max_length=40)] | None = None
+    server: SmallJson | None = None
+
+
 class AdminIntegrationToolOut(BaseModel):
     name: str
     title: str | None

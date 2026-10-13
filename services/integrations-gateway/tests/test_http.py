@@ -255,6 +255,92 @@ async def test_proxy_error_page_is_unreachable(key, http_platform):
     assert body["error"]["code"] == "unreachable"
 
 
+def _mock_gateway(key, http_platform, handler) -> Gateway:
+    connector = HttpConnector(
+        None, "", connect_timeout_s=2.0, read_timeout_s=5.0, transport=httpx2.MockTransport(handler)
+    )
+    return Gateway(Settings(call_timeout_s=5.0), key, http_platform, connector, InputHandles(60))
+
+
+async def test_check_finds_a_token_server_without_sending_a_credential(api, server_url):
+    integration = {"id": str(INTEGRATION), "slug": "home", "url": server_url}
+    async with api:
+        denied = await api.post("/check", json={"integration": integration}, headers=agent())
+        assert denied.status_code == 401
+        r = await api.post("/check", json={"integration": integration}, headers=platform_auth())
+    assert r.status_code == 200
+    assert r.json() == {
+        "reachable": True,
+        "auth": "token",
+        "problem": None,
+        "detail": None,
+        "certificate": None,
+        "protocol_version": None,
+        "server": None,
+    }
+
+
+async def test_check_detects_oauth_from_the_challenge(key, http_platform):
+    seen: list[httpx2.Request] = []
+
+    def challenge(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(
+            401,
+            headers={
+                "WWW-Authenticate": 'Bearer resource_metadata="https://ha.example/.well-known/'
+                'oauth-protected-resource"'
+            },
+        )
+
+    body = await _mock_gateway(key, http_platform, challenge).check(
+        {"id": str(INTEGRATION), "url": "https://ha.example/mcp"}
+    )
+    assert (body["reachable"], body["auth"]) == (True, "oauth")
+    assert all("authorization" not in r.headers for r in seen)
+
+
+async def test_check_returns_the_certificate_to_confirm(key, http_platform):
+    fingerprint = "ab" * 32
+
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            403,
+            headers={
+                "X-Egress-Denied": "certificate_untrusted",
+                "X-Egress-Certificate": fingerprint,
+            },
+        )
+
+    body = await _mock_gateway(key, http_platform, refuse).check(
+        {"id": str(INTEGRATION), "url": "https://192.168.0.20:8123/mcp"}
+    )
+    assert body["reachable"] is False
+    assert body["problem"] == "certificate_untrusted"
+    assert body["certificate"] == fingerprint
+
+
+@pytest.mark.parametrize(
+    "denial,problem",
+    [("destination", "address_refused"), ("not_registered", "unreachable")],
+)
+async def test_check_reports_proxy_refusals(key, http_platform, denial, problem):
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(403, headers={"X-Egress-Denied": denial})
+
+    body = await _mock_gateway(key, http_platform, refuse).check(
+        {"id": str(INTEGRATION), "url": "https://ha.example/mcp"}
+    )
+    assert (body["reachable"], body["problem"], body["certificate"]) == (False, problem, None)
+
+
+async def test_check_unreachable_server(api):
+    integration = {"id": str(INTEGRATION), "url": f"http://127.0.0.1:{_free_port()}/mcp"}
+    async with api:
+        r = await api.post("/check", json={"integration": integration}, headers=platform_auth())
+    assert (r.json()["reachable"], r.json()["problem"]) == (False, "unreachable")
+
+
 def test_proxy_url_carries_the_gateway_credential():
     assert (
         proxy_url("http://egress-proxy:8080", "a/b+c")
