@@ -25,6 +25,8 @@ import {
   connectIntegration,
   formatFingerprint,
   needsException,
+  sameMachineFirewallCommand,
+  type AddressFacts,
   type AdminIntegration,
   type ServerCheck,
 } from '@/lib/integrations';
@@ -222,7 +224,7 @@ export default function AddIntegrationScreen() {
         </View>
       </Card>
 
-      {check ? <CheckResult check={check} busy={busy} onTrust={handleTrust} /> : null}
+      {check ? <CheckResult check={check} facts={facts} busy={busy} onTrust={handleTrust} /> : null}
 
       {reachable ? (
         <>
@@ -309,10 +311,12 @@ function AddressHints({ facts, url }: { facts: ReturnType<typeof addressFacts>; 
 
 function CheckResult({
   check,
+  facts,
   busy,
   onTrust,
 }: {
   check: ServerCheck;
+  facts: AddressFacts;
   busy: string | null;
   onTrust: (fingerprint: string) => void;
 }) {
@@ -358,10 +362,28 @@ function CheckResult({
     check.problem === 'address_refused'
       ? 'That name points to an address on your home network. Allow it above, then check again.'
       : errorCodeMessage(check.problem ?? 'unreachable');
+  const blockedHere =
+    (check.problem === 'unreachable' || check.problem === 'timeout') &&
+    check.this_machine !== false &&
+    (facts.kind === 'private' || check.this_machine === true);
   return (
     <Notice testID="add-integration-check-failed">
       <Text style={noticeTextStyle}>{message}</Text>
       {check.detail ? <Text style={settingsStyles.muted}>{check.detail}</Text> : null}
+      {blockedHere ? (
+        <View style={styles.sameMachine} testID="add-integration-same-machine">
+          <Text style={noticeTextStyle}>
+            {check.this_machine
+              ? `${facts.host} is this HomeAI machine, and its firewall`
+              : 'If this server runs on the HomeAI machine itself, that machine’s firewall'}{' '}
+            stops HomeAI from reaching other services on it until you allow the port. Run this on the HomeAI
+            machine, then check again:
+          </Text>
+          <Text style={integrationStyles.mono} selectable testID="add-integration-firewall-command">
+            {sameMachineFirewallCommand(facts.host, facts.port)}
+          </Text>
+        </View>
+      ) : null}
     </Notice>
   );
 }
@@ -374,5 +396,8 @@ const styles = StyleSheet.create({
   },
   switchLabel: {
     flex: 1,
+  },
+  sameMachine: {
+    gap: 8,
   },
 });

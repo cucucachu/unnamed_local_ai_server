@@ -150,6 +150,23 @@ Admin flow (Settings → Integrations → Add):
      whole host, because the host may be this machine (allowing
      `192.168.0.108` alone would let the gateway reach HomeAI's own
      services).
+   - **A server on the HomeAI machine itself** (e.g. Home Assistant in a
+     container next to HomeAI) also needs a host firewall rule. Traffic
+     from HomeAI's containers to another device on the LAN is forwarded and
+     needs nothing, but traffic to this machine's own address goes through
+     its input chain, which ufw denies by default, so the check times out.
+     Allow just HomeAI's Docker network to that one port:
+
+     ```bash
+     sudo ufw allow from "$(docker network inspect homeai_homeai-net -f '{{(index .IPAM.Config 0).Subnet}}')" \
+       to <host> port <port> proto tcp comment 'HomeAI to <host>:<port>'
+     ```
+
+     When the check comes back unreachable or timed out for a private
+     address, the Add screen shows this command with the real host and
+     port. It says so definitely when the address is one of
+     `HOMEAI_LAN_ADDRESSES` (this machine's own LAN addresses, optional;
+     update it if the machine's address changes), and as an "if" otherwise.
    - **Plain `http://`**: only for private addresses, with a warning that
      credentials cross the LAN unencrypted.
    - **Self-signed certificates**: accepted by pinning the certificate's

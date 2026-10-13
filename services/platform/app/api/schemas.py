@@ -1119,10 +1119,12 @@ class IntegrationCheckOut(BaseModel):
     `certificate_untrusted` / `certificate_changed` (with the `certificate`
     it presented, to confirm), `address_refused` (a name that points to a
     private address needs the exception), `unreachable`, `timeout`,
-    `server_error`, `protocol_error`.
+    `server_error`, `protocol_error`. `this_machine`: the address is one of
+    `HOMEAI_LAN_ADDRESSES` (None: unknown, e.g. not configured or a name).
     """
 
     reachable: bool
+    this_machine: bool | None = None
     auth: AuthMethod | None = None
     problem: Annotated[str, Field(max_length=40)] | None = None
     detail: Annotated[str, Field(max_length=1000)] | None = None
