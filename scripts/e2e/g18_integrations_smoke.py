@@ -337,6 +337,11 @@ def integration_calls(result: dict) -> list[str]:
     return [t.get("result_preview", "") for t in result["tools"] if t["name"] == "use_integration"]
 
 
+def summary(result: dict) -> str:
+    tools = [(t["name"], (t.get("result_preview") or "")[:160]) for t in result["tools"]]
+    return f"tools {tools!r}; reply {result['reply'][-300:]!r}"
+
+
 def agent_phase(integration: dict) -> None:
     slug, name = integration["slug"], integration["name"]
     thread = new_thread(USER)
@@ -361,15 +366,14 @@ def agent_phase(integration: dict) -> None:
             fail(f"approved, but the kitchen is still on ({integration_calls(result)})")
         log("OK: an ask tool stopped with a card in chat; approved, it ran")
 
-        result = asyncio.run(turn(thread, f"Set the movie scene with {name}.", slug))
-        previews = " ".join(integration_calls(result))
-        if "Which room" not in previews and "Which room" not in result["reply"]:
+        asked = asyncio.run(turn(thread, f"Set the movie scene with {name}.", slug))
+        if not any("needs input from the user" in p for p in integration_calls(asked)):
+            fail(f"set_scene should come back needing input: {summary(asked)}")
+        answered = asyncio.run(turn(thread, "The office.", slug))
+        if not any("scene movie in office" in p for p in integration_calls(answered)):
             fail(
-                f"the server's question should reach the user: {previews!r} / {result['reply'][-300:]!r}"
+                f"the answer should finish the call.\nasked: {summary(asked)}\nanswered: {summary(answered)}"
             )
-        result = asyncio.run(turn(thread, "The den.", slug))
-        if not any("scene movie in den" in p for p in integration_calls(result)):
-            fail(f"the answer should finish the call: {integration_calls(result)!r}")
         log("OK: the server's request for input went to the user and back")
 
         routine = ok(USER, "POST", "/api/routines", {

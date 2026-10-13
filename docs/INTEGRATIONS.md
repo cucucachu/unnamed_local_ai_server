@@ -269,9 +269,13 @@ change it.
 
 **Integrations list** (per user, frozen at thread start, after the static
 system prompt): one line per integration this user can use now (connected,
-shared, or no auth), with its admin-edited description. Integrations the
-user hasn't connected are listed as "not connected" so the agent can point
-the user to Settings.
+shared, or no auth), with its admin-edited description and the names of the
+tools on for this user (at most 40, shown past any `group__` prefix:
+`HassListAddItem`, not `todo__HassListAddItem`; `open_integration` gives the
+exact names). A line above the list says requests about an integration's
+devices, lists or data go to the integration rather than HomeAI's own apps
+or files. Integrations the user hasn't connected are listed as "not
+connected" so the agent can point the user to Settings.
 
 **Four fixed tools**, in the deployment-wide tool list (working names):
 
@@ -287,10 +291,30 @@ conversation, so opening an integration never changes the cached start of
 the prompt. Tools are not bound as native tools mid-thread: on Ornith,
 whose chat template renders tool definitions before the system prompt, that
 would reprocess the whole conversation each time (#341 measured a full miss
-of the ~8k-token start at 33 s). #341's experiment 4 compares this against
-native binding on Ornith; if a heavily used integration needs native tools,
-the option is an admin setting that adds its tools to the fixed tool list for
-everyone (#341, option c).
+of the ~8k-token start at 33 s). If a heavily used integration ever needs
+native tools, the option is an admin setting that adds its tools to the fixed
+tool list for everyone (#341, option c).
+
+**Measured** (#341 experiment 4, `scripts/eval/integrations/`, Ornith 1.5
+35B, Home Assistant's real tool definitions):
+
+- The request right after opening an integration processes 1,985 of ~11k
+  prompt tokens with the fixed tools (~10 s), against all of them with native
+  binding mid-chat (~50 s).
+- Calls through the fixed tools are as accurate as native ones: lights,
+  floors, questions, the TV, an out-of-range value and two-part requests all
+  passed in every run, with almost no `invalid_arguments`. Native turns take
+  fewer model calls, since there is no opening step.
+- The one gap was routing. "Add milk to my shopping list" went to HomeAI's
+  own apps (offering to create a grocery-list app) in all but 1 of 13 runs
+  with only names and descriptions in the list. Native binding passed every
+  time, because `HassListAddItem` is a visible tool. Tool names in the list
+  plus the routing line closed it: 16 of 16 with short names, against 4 of 8
+  with full `group__name` names. A HomeAI task (saving a note in personal
+  files) never touched Home Assistant in any style. As shipped, the fixed
+  tools passed all 27 runs (9 cases, 3 each).
+
+So the fixed tools stay, and integrations are not bound natively.
 
 **Results are untrusted content**, like web pages: the system prompt tells
 the model never to follow instructions found in integration results or

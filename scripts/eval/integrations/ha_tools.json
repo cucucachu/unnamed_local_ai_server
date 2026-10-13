@@ -1,0 +1,757 @@
+[
+ {
+  "name": "assist_satellite__HassBroadcast",
+  "title": "Broadcast message",
+  "description": "Broadcast a message through the home",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "message"
+   ],
+   "properties": {
+    "message": {
+     "type": "string"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": false
+  }
+ },
+ {
+  "name": "homeassistant__GetLiveContext",
+  "title": "Get live context",
+  "description": "Provides real-time information about the CURRENT state, value, or mode of devices, sensors, entities, or areas. Use this tool for: 1. Answering questions about current conditions (e.g., 'Is the light on?'). 2. As the first step in conditional actions (e.g., 'If the weather is rainy, turn off sprinklers' requires checking the weather first). You may filter for devices by name, domain, and area, including combining those filters. Prefer filtering by domain when searching for multiple devices of the same type.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string",
+     "description": "Filter entities by area name or alias (case-insensitive)."
+    },
+    "name": {
+     "type": "string",
+     "description": "Filter entities by name or alias (case-insensitive)."
+    },
+    "domain": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     ],
+     "description": "Filter entities by domain (e.g. 'light', 'sensor'). Accepts a single domain or a list."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "intent__HassTurnOn",
+  "title": "Turn on",
+  "description": "Turns on/opens/presses a device or entity. For locks, this performs a 'lock' action. Use for requests like 'turn on', 'activate', 'enable', or 'lock'.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "identify",
+       "restart",
+       "update",
+       "awning",
+       "blind",
+       "curtain",
+       "damper",
+       "door",
+       "garage",
+       "gate",
+       "shade",
+       "shutter",
+       "window",
+       "tv",
+       "speaker",
+       "receiver",
+       "projector",
+       "outlet",
+       "switch",
+       "water",
+       "gas"
+      ],
+      "type": "string"
+     }
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "intent__HassTurnOff",
+  "title": "Turn off",
+  "description": "Turns off/closes a device or entity. For locks, this performs an 'unlock' action. Use for requests like 'turn off', 'deactivate', 'disable', or 'unlock'.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "identify",
+       "restart",
+       "update",
+       "awning",
+       "blind",
+       "curtain",
+       "damper",
+       "door",
+       "garage",
+       "gate",
+       "shade",
+       "shutter",
+       "window",
+       "tv",
+       "speaker",
+       "receiver",
+       "projector",
+       "outlet",
+       "switch",
+       "water",
+       "gas"
+      ],
+      "type": "string"
+     }
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "intent__HassCancelAllTimers",
+  "title": "Cancel all timers",
+  "description": "Cancels all timers",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "light__HassLightSet",
+  "title": "Set light",
+  "description": "Sets the brightness percentage or color of a light",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "color": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "light"
+      ],
+      "type": "string"
+     }
+    },
+    "brightness": {
+     "type": "integer",
+     "maximum": 100,
+     "minimum": 0,
+     "description": "The brightness percentage of the light between 0 and 100, where 0 is off and 100 is fully lit"
+    },
+    "temperature": {
+     "type": "integer",
+     "minimum": 0
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "llm__GetDateTime",
+  "title": "Get date and time",
+  "description": "Provides the current date and time.",
+  "input_schema": {
+   "type": "object",
+   "properties": {}
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassMediaUnpause",
+  "title": "Resume media",
+  "description": "Resumes a media player",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassMediaPause",
+  "title": "Pause media",
+  "description": "Pauses a media player",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassMediaNext",
+  "title": "Next track",
+  "description": "Skips a media player to the next item",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassMediaPrevious",
+  "title": "Previous track",
+  "description": "Replays the previous item for a media player",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassSetVolume",
+  "title": "Set volume",
+  "description": "Sets the volume percentage of a media player",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "volume_level"
+   ],
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    },
+    "volume_level": {
+     "type": "integer",
+     "maximum": 100,
+     "minimum": 0,
+     "description": "The volume percentage of the media player"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassSetVolumeRelative",
+  "title": "Change volume",
+  "description": "Increases or decreases the volume of a media player",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "volume_step"
+   ],
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "volume_step": {
+     "anyOf": [
+      {
+       "enum": [
+        "down",
+        "up"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": -100
+      }
+     ]
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassMediaPlayerMute",
+  "title": "Mute player",
+  "description": "Mutes a media player",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    },
+    "is_volume_muted": {
+     "description": "Whether the media player should be muted or unmuted"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "media_player__HassMediaPlayerUnmute",
+  "title": "Unmute player",
+  "description": "Unmutes a media player",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "area": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "domain": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "media_player"
+      ],
+      "type": "string"
+     }
+    },
+    "device_class": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "tv",
+       "speaker",
+       "receiver",
+       "projector"
+      ],
+      "type": "string"
+     }
+    },
+    "is_volume_muted": {
+     "description": "Whether the media player should be muted or unmuted"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "todo__get_items",
+  "title": "Get to-do list items",
+  "description": "Query a to-do list to find out what items are on it. Use this to answer questions like 'What's on my task list?' or 'Read my grocery list'. Filters items by status (needs_action, completed, all).",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "todo_list"
+   ],
+   "properties": {
+    "status": {
+     "enum": [
+      "needs_action",
+      "completed",
+      "all"
+     ],
+     "type": "string",
+     "default": "needs_action",
+     "description": "Filter returned items by status, by default returns incomplete items"
+    },
+    "todo_list": {
+     "enum": [
+      "Shopping list"
+     ],
+     "type": "string"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": false,
+   "idempotentHint": true,
+   "destructiveHint": false
+  }
+ },
+ {
+  "name": "todo__HassListAddItem",
+  "title": "Add to-do list item",
+  "description": "Add item to a todo list",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "item",
+    "name"
+   ],
+   "properties": {
+    "item": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": false
+  }
+ },
+ {
+  "name": "todo__HassListCompleteItem",
+  "title": "Complete to-do list item",
+  "description": "Complete item on a todo list",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "item",
+    "name"
+   ],
+   "properties": {
+    "item": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ },
+ {
+  "name": "todo__HassListRemoveItem",
+  "title": "Remove to-do list item",
+  "description": "Remove one or more items from a todo list",
+  "input_schema": {
+   "type": "object",
+   "required": [
+    "item",
+    "name"
+   ],
+   "properties": {
+    "item": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "openWorldHint": false,
+   "idempotentHint": false,
+   "destructiveHint": true
+  }
+ }
+]
