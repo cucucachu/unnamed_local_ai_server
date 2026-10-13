@@ -193,6 +193,15 @@ def test_addresses_that_are_refused(url, private, code):
     assert exc.value.code == code
 
 
+def test_on_this_machine():
+    here = frozenset({"192.168.0.108", "fd00::8"})
+    assert integrations.on_this_machine("http://192.168.0.108:8123/api/mcp", here) is True
+    assert integrations.on_this_machine("https://[fd00::8]/mcp", here) is True
+    assert integrations.on_this_machine("http://192.168.0.20:8123/api/mcp", here) is False
+    assert integrations.on_this_machine("https://ha.lan/mcp", here) is None
+    assert integrations.on_this_machine("http://192.168.0.108:8123/api/mcp", frozenset()) is None
+
+
 def test_addresses_that_are_accepted():
     assert check_url("https://ha.example.com/mcp", False).port == 443
     exception = check_url("http://192.168.0.20:8123/mcp", True)
@@ -407,6 +416,18 @@ async def test_check_asks_the_gateway_without_a_credential(platform, people):
     sent = gateway.checked[-1]
     assert (sent["url"], sent["private_address"]) == ("https://192.168.0.20:8123/mcp", True)
     assert "ciphertext" not in json.dumps(sent, default=str)
+
+    assert body["this_machine"] is None
+
+    settings = platform.app.state.settings
+    platform.app.state.settings = settings.model_copy(
+        update={"homeai_lan_addresses": "192.168.0.20, 10.0.0.2"}
+    )
+    try:
+        response = await platform.client.post(f"{ADMIN}/{iid}/check", headers=people["admin"])
+    finally:
+        platform.app.state.settings = settings
+    assert response.json()["this_machine"] is True
 
     gateway.check_result = {"reachable": True, "auth": "sso"}
     response = await platform.client.post(f"{ADMIN}/{iid}/check", headers=people["admin"])

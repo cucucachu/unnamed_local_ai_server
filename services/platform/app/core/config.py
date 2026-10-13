@@ -3,7 +3,7 @@
 Variable names match `.env.example`, lower-cased and unprefixed.
 """
 
-from ipaddress import ip_network
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 
 from psycopg.conninfo import make_conninfo
@@ -93,6 +93,11 @@ class Settings(BaseSettings):
         "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1,fc00::/7,fe80::/10"
     )
 
+    # M18: this machine's own LAN addresses, comma-separated. An integration
+    # at one of them runs on this machine, and the host firewall blocks it
+    # until allowed (docs/INTEGRATIONS.md §4). Empty: not known.
+    homeai_lan_addresses: str = ""
+
     # M15-04: WebAuthn RP ID. `WEBAUTHN_RP_ID` wins if set, else
     # `HOMEAI_DOMAIN`. Both empty (or `homeai.local`) → passkeys off.
     # Tests may set `WEBAUTHN_RP_ID=localhost` without a domain. Never a secret.
@@ -107,6 +112,20 @@ class Settings(BaseSettings):
             if part:
                 ip_network(part, strict=False)
         return value
+
+    @field_validator("homeai_lan_addresses")
+    @classmethod
+    def _lan_addresses(cls, value: str) -> str:
+        for part in value.split(","):
+            if part.strip():
+                ip_address(part.strip())
+        return value
+
+    @property
+    def lan_addresses(self) -> frozenset[str]:
+        return frozenset(
+            str(ip_address(p.strip())) for p in self.homeai_lan_addresses.split(",") if p.strip()
+        )
 
     @property
     def keys_dir(self) -> Path:

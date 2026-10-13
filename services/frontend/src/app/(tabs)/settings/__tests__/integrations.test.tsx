@@ -386,6 +386,36 @@ describe('AddIntegrationScreen', () => {
     expect(textOf(renderer)).toContain('points to an address on your home network');
     expect(exists(renderer, 'add-integration-allow-private')).toBe(true);
   });
+
+  it("an unreachable server on this machine gets the firewall command with its own host and port", async () => {
+    let thisMachine: boolean | null = true;
+    const installed = adminView({ url: 'http://192.168.0.108:8123/api/mcp', private_address: true });
+    mockFetchRoutes({
+      [`POST ${ADMIN}`]: { status: 201, body: installed },
+      [`PATCH ${ADMIN}/int-1`]: (body) => ({ body: { ...installed, ...(body as Partial<AdminIntegration>) } }),
+      [`POST ${ADMIN}/int-1/check`]: () => ({
+        body: { reachable: false, this_machine: thisMachine, auth: null, problem: 'timeout', detail: null, certificate: null, protocol_version: null, server: null },
+      }),
+    });
+    renderer = await render(AddIntegrationScreen);
+    await type(renderer, 'add-integration-name', 'Home Assistant');
+    await type(renderer, 'add-integration-url', 'http://192.168.0.108:8123/api/mcp');
+    await toggle(renderer, 'add-integration-allow-private', true);
+    await press(renderer, 'add-integration-check');
+    expect(textOf(renderer)).toContain('192.168.0.108 is this HomeAI machine');
+    const command = textOf(renderer);
+    expect(command).toContain('docker network inspect homeai_homeai-net');
+    expect(command).toContain('to 192.168.0.108 port 8123 proto tcp');
+
+    thisMachine = null;
+    await press(renderer, 'add-integration-check');
+    expect(textOf(renderer)).toContain('If this server runs on the HomeAI machine itself');
+
+    thisMachine = false;
+    await press(renderer, 'add-integration-check');
+    expect(exists(renderer, 'add-integration-check-failed')).toBe(true);
+    expect(exists(renderer, 'add-integration-same-machine')).toBe(false);
+  });
 });
 
 describe('ManageIntegrationScreen', () => {

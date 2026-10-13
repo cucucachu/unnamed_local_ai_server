@@ -134,6 +134,21 @@ def check_token_header(name: str | None) -> str | None:
     return name
 
 
+def on_this_machine(url: str, lan_addresses: frozenset[str]) -> bool | None:
+    """Whether the server is this machine (by its configured LAN addresses); None if unknown.
+
+    Such a server is reached through the host firewall, which blocks it
+    until the admin allows that port from the egress proxy's network.
+    """
+    if not lan_addresses:
+        return None
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    try:
+        return str(ipaddress.ip_address(host)) in lan_addresses
+    except ValueError:
+        return None
+
+
 def plain_http(url: str) -> bool:
     """Whether a credential for this server would cross the network unencrypted."""
     return urlsplit(url).scheme == "http"

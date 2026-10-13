@@ -100,9 +100,13 @@ async def check(
     if isinstance(found.get("detail"), str):
         found["detail"] = found["detail"][:1000]
     try:
-        return IntegrationCheckOut.model_validate(found)
+        out = IntegrationCheckOut.model_validate(found)
     except ValidationError as exc:
         raise Unavailable("gateway_unavailable") from exc
+    out.this_machine = integrations.on_this_machine(
+        integration["url"], state.settings.lan_addresses
+    )
+    return out
 
 
 @router.patch("/{integration_id}/tools", response_model=AdminIntegrationOut)

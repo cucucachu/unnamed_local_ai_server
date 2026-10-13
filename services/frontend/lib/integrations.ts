@@ -82,6 +82,8 @@ export interface AdminIntegration {
 /** The gateway's look at a server, without a credential. */
 export interface ServerCheck {
   reachable: boolean;
+  /** The address is this HomeAI machine's own (null: unknown). */
+  this_machine?: boolean | null;
   auth: AuthMethod | null;
   problem: string | null;
   detail: string | null;
@@ -245,6 +247,14 @@ export function addressFacts(url: string): AddressFacts {
 /** Whether this address can only be used with the admin's private-address exception. */
 export function needsException(facts: AddressFacts): boolean {
   return facts.refused === null && (facts.kind === 'private' || (facts.kind === 'name' && facts.scheme === 'http'));
+}
+
+/** The host firewall rule that lets HomeAI's egress proxy reach a server on this
+ * same machine (docs/INTEGRATIONS.md §4). The proxy's Docker network is looked
+ * up when it's run, so the rule names exactly that network. */
+export function sameMachineFirewallCommand(host: string, port: number): string {
+  const subnet = `"$(docker network inspect homeai_homeai-net -f '{{(index .IPAM.Config 0).Subnet}}')"`;
+  return `sudo ufw allow from ${subnet} to ${host} port ${port} proto tcp comment 'HomeAI to ${host}:${port}'`;
 }
 
 /** `ab12…` as `AB:12:…`, the way certificate viewers show it. */
