@@ -302,6 +302,18 @@ async def test_needs_input_answered_after_a_new_user_message(gateway, platform: 
     )
     assert code(same_turn) == "refused_by_policy"
 
+    malformed = await gateway.call(
+        DELEGATION,
+        "home",
+        "set_scene",
+        {},
+        "chat",
+        input_handle=handle,
+        input_responses={"room": {"content": {"room": "office"}}},
+        latest_user_message="m2",
+    )
+    assert code(malformed) == "invalid_arguments"
+
     later = await gateway.call(
         DELEGATION,
         "home",
@@ -390,7 +402,7 @@ def test_handles_expire():
     )
     now[0] = 11
     with pytest.raises(Exception) as err:
-        handles.take(h, USER, "t", INTEGRATION, "x", "m2")
+        handles.answerable(h, USER, "t", INTEGRATION, "x", "m2")
     assert err.value.code == "not_found"
 
 

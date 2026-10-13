@@ -461,7 +461,7 @@ class Gateway:
             request_state = None
             args = arguments
             if input_handle is not None:
-                pending = self.handles.take(
+                pending = self.handles.answerable(
                     input_handle,
                     user_id,
                     grant["thread_id"],
@@ -474,6 +474,7 @@ class Gateway:
                 audit["approval"] = pending.approval
                 request_state = pending.request_state
                 responses = self._responses(pending.requests, input_responses or {})
+                self.handles.spend(input_handle)
 
             live = (await self._live_tools(session)).get(tool)
             if live is None:
@@ -522,7 +523,9 @@ class Gateway:
             ):
                 raise GatewayError(
                     "invalid_arguments",
-                    f"Answer every request ({', '.join(requests)}) with accept, decline or cancel.",
+                    f"Answer every request ({', '.join(requests)}) as "
+                    '{"action": "accept", "content": {...fields...}}, or {"action": "decline"} '
+                    'or {"action": "cancel"}. The same handle still works.',
                 )
             content = answer.get("content") if answer["action"] == "accept" else None
             if content is not None and not isinstance(content, dict):
