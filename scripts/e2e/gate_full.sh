@@ -83,6 +83,11 @@
 #   -> gate_m17.sh (M17-08: routine pytest in agent-server and platform,
 #      then the G17 scenario: a routine due in a minute runs headlessly;
 #      disabling or revoking its grant stops it — one short GPU turn)
+#   -> gate_m18.sh (M18-09: gateway/agent-server/platform pytest and jest
+#      for integrations, verify_egress, then the G18 scenario with the fake
+#      MCP server: visibility, ceilings, markers, not_connected, no token
+#      anywhere; the agent uses a tool, asks in chat and in a routine, and
+#      the server's request for input round-trips — a few short GPU turns)
 #   -> gate_m19.sh (M19-06: frontend jest, chats-list pytest, then the G19
 #      app-shell scenario — empty chat on a cold launch, the history
 #      drawer's "needs you" order, + for a new chat, the Apps grid, a swipe
@@ -317,6 +322,10 @@ main() {
   # M17-08: gate_m17.sh runs the routine pytest and the G17 live scenario
   # (one short GPU turn); same idempotent reasoning.
   run_step "gate_m17.sh"             bash "${SCRIPT_DIR}/gate_m17.sh"
+  # M18-09: gate_m18.sh runs the M18 pytest/jest, verify_egress and the G18
+  # scenario against the fake MCP server (a few short GPU turns); its own
+  # users and integration, so the same idempotent reasoning.
+  run_step "gate_m18.sh"             bash "${SCRIPT_DIR}/gate_m18.sh"
   # M19-06: gate_m19.sh re-runs home_launcher, app_runner and chat browser
   # smokes above, plus frontend jest and the G19 shell scenario; same
   # idempotent reasoning.

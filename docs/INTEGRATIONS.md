@@ -361,7 +361,9 @@ answer. v1 handles this in plain chat:
 5. **Routines:** the run ends with the question in its run chat; the user
    can answer there later (run chats are ordinary chats).
 6. Handles expire (e.g. after a day); an expired handle returns a standard
-   error and the agent starts the call again.
+   error and the agent starts the call again. A handle is spent only when
+   the answer goes to the server: a malformed answer (`invalid_arguments`)
+   leaves it usable, so the agent can correct it without asking again.
 
 Sensitive data stays in URL mode only, as the spec requires (form mode must
 not ask for secrets). For servers on the older spec (2025-11-25 and

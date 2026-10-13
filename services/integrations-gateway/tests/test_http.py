@@ -11,7 +11,6 @@ from collections.abc import Iterator
 import httpx2
 import pytest
 import uvicorn
-from starlette.responses import JSONResponse
 
 from app.config import Settings
 from app.connector import HttpConnector, proxy_url
@@ -32,16 +31,7 @@ def _free_port() -> int:
 
 @pytest.fixture(scope="module")
 def server_url() -> Iterator[str]:
-    inner = fake_server.build().streamable_http_app(streamable_http_path="/mcp")
-
-    async def app(scope, receive, send):
-        if scope["type"] == "http":
-            auth = dict(scope["headers"]).get(b"authorization")
-            if auth != f"Bearer {TOKEN}".encode():
-                await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
-                return
-        await inner(scope, receive, send)
-
+    app = fake_server.http_app({TOKEN})
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, port=port, log_level="error", lifespan="on"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -120,6 +110,13 @@ async def test_open_and_call_over_http(api, http_platform):
             "text": "office on at 100%",
             "trimmed": False,
         }
+
+
+async def test_fake_server_state_needs_no_token(server_url):
+    async with httpx2.AsyncClient() as client:
+        r = await client.get(server_url.removesuffix("/mcp") + "/state")
+    assert r.status_code == 200
+    assert isinstance(r.json(), dict)
 
 
 async def test_rejected_credential_marks_needs_reconnecting(api, http_platform, key):

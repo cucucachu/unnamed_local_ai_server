@@ -297,6 +297,40 @@ default), the app updated, signed in as yourself.
 - [ ] (M17-09) A routine with more than 5 runs shows the last 5 and
       **More…**, which lists them all; tapping a run opens its chat.
 
+## M18
+
+Web G18 is `scripts/e2e/gate_m18.sh` (stack health, the gateway's whole
+pytest suite, the agent-server, platform and frontend integration tests,
+`verify_egress.sh`, then `g18_integrations_smoke.sh` against the fake MCP
+server in a `homeai.test` container: the gateway phase checks visibility,
+ceilings, markers, `not_connected` and that no token shows up in responses,
+the audit log or logs; the agent phase has the real model use a tool, stop
+for an ask tool in chat and in a routine run, and pass the server's
+question to the user and back). Setup: stack up from `main`, the new
+`HomeAI.apk` installed (Files → Personal), and Home Assistant running with
+the MCP Server integration and its lights exposed to Assist (HA's own
+Settings → Voice assistants → Expose). Each person makes their own token in
+Home Assistant (profile → Security → Long-lived access tokens). If Home
+Assistant runs on the HomeAI machine itself, add the firewall rule from
+docs/INTEGRATIONS.md §4 first.
+
+- [ ] (M18-08) As admin on the phone: Settings → Integrations → Manage →
+      Add, paste `http://<HA address>:8123/api/mcp`, allow the private
+      address, Check. It finds a server that asks for a token; pick **Each
+      person connects**, sign in with your own token, and the tools are
+      listed, all off. Turn on the light tools (e.g. `HassTurnOn`,
+      `HassTurnOff`, `GetLiveContext`).
+- [ ] (M18-06) In a chat: "what lights are on?" answers from the real
+      house; "turn on the living room light" shows a card (your setting
+      starts at ask), and approving turns the real light on. **Always
+      allow** on the next card means the one after runs with no card.
+- [ ] (M18-02, M18-06) A routine that turns a light on: once you've
+      allowed that tool, "Run now" turns it on with no stop.
+- [ ] (M18-08) A second household member connects with their own token
+      from their phone and can turn lights on. A third who hasn't
+      connected asks the agent to, and is told to connect in Settings →
+      Integrations.
+
 ## M19
 
 Web G19 is `scripts/e2e/gate_m19.sh` (stack health, frontend jest, the

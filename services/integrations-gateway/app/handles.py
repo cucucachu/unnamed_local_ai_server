@@ -58,7 +58,7 @@ class InputHandles:
         self._pending[handle] = Pending(**fields, expires_at=self._clock() + self._ttl_s)
         return handle
 
-    def take(
+    def answerable(
         self,
         handle: str,
         user_id: UUID,
@@ -67,7 +67,11 @@ class InputHandles:
         tool: str,
         latest_user_message: str | None,
     ) -> Pending:
-        """The pending call behind `handle`, if this caller may answer it now; it's spent."""
+        """The pending call behind `handle`, if this caller may answer it now.
+
+        Not spent yet: a malformed answer can be corrected. `spend` it once the answer is
+        going to the server.
+        """
         self._prune()
         pending = self._pending.get(handle)
         if (
@@ -85,5 +89,7 @@ class InputHandles:
                 "refused_by_policy",
                 "Only the user can answer: ask them and wait for their reply.",
             )
-        del self._pending[handle]
         return pending
+
+    def spend(self, handle: str) -> None:
+        self._pending.pop(handle, None)
