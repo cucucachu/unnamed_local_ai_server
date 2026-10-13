@@ -9,6 +9,7 @@ deals only in `GatewayError`.
 from __future__ import annotations
 
 import logging
+import re
 import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 MODERN = "2026-07-28"
 CLIENT_INFO = types.Implementation(name="homeai-integrations-gateway", version="1")
+# The egress proxy's header for a server certificate it refused (SHA-256 of the DER, hex).
+CERTIFICATE_HEADER = "x-egress-certificate"
+CERTIFICATE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def connect_mode(protocol_version: str | None) -> str:
@@ -54,6 +58,9 @@ class Session:
     # for an error page the proxy made itself.
     denials: list[str] = field(default_factory=list)
     list_changed: set[str] = field(default_factory=set)
+    # The first proxy denial, the certificate the proxy was shown, and a 401's
+    # `WWW-Authenticate` (see `GatewayError.seen`).
+    seen: dict[str, str] = field(default_factory=dict)
 
 
 class Connector(Protocol):
@@ -84,9 +91,19 @@ def _denied(code: str) -> GatewayError:
 
 
 def classify(
-    exc: BaseException, statuses: list[int], denials: list[str] | None = None
+    exc: BaseException,
+    statuses: list[int],
+    denials: list[str] | None = None,
+    seen: dict[str, str] | None = None,
 ) -> GatewayError:
-    """The standard error for a failure while talking to a server."""
+    """The standard error for a failure while talking to a server, with what was `seen`."""
+    error = _classify(exc, statuses, denials)
+    if seen and not error.seen:
+        error.seen = dict(seen)
+    return error
+
+
+def _classify(exc: BaseException, statuses: list[int], denials: list[str] | None) -> GatewayError:
     if isinstance(exc, GatewayError):
         return exc
     leaves = _leaves(exc)
@@ -122,14 +139,18 @@ def classify(
 
 
 @asynccontextmanager
-async def guarded(statuses: list[int], denials: list[str] | None = None) -> AsyncIterator[None]:
+async def guarded(
+    statuses: list[int], denials: list[str] | None = None, seen: dict[str, str] | None = None
+) -> AsyncIterator[None]:
     """Map anything raised inside to a standard error (cancellation passes through)."""
     try:
         yield
-    except GatewayError:
+    except GatewayError as exc:
+        if seen and not exc.seen:
+            exc.seen = dict(seen)
         raise
     except Exception as exc:
-        raise classify(exc, statuses, denials) from exc
+        raise classify(exc, statuses, denials, seen) from exc
 
 
 def proxy_url(url: str, token: str) -> str | None:
@@ -167,12 +188,19 @@ class HttpConnector:
         statuses: list[int] = []
         denials: list[str] = []
         changed: set[str] = set()
+        seen: dict[str, str] = {}
 
         async def record(response: httpx2.Response) -> None:
             statuses.append(response.status_code)
             denied = response.headers.get("x-egress-denied")
             if denied:
                 denials.append(denied)
+                seen.setdefault("denial", denied)
+                certificate = response.headers.get(CERTIFICATE_HEADER, "")
+                if CERTIFICATE.match(certificate):
+                    seen.setdefault("certificate", certificate)
+            elif response.status_code == 401:
+                seen.setdefault("challenge", response.headers.get("www-authenticate", "")[:2000])
             elif response.status_code >= 500 and response.headers.get("server", "").startswith(
                 "mitmproxy"
             ):
@@ -202,5 +230,11 @@ class HttpConnector:
             message_handler=on_message,
             elicitation_callback=_decline if elicitation and mode != "legacy" else None,
         )
-        async with http, guarded(statuses, denials), client:
-            yield Session(client=client, statuses=statuses, denials=denials, list_changed=changed)
+        async with http, guarded(statuses, denials, seen), client:
+            yield Session(
+                client=client,
+                statuses=statuses,
+                denials=denials,
+                list_changed=changed,
+                seen=seen,
+            )

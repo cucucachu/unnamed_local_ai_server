@@ -9,6 +9,8 @@ servers. The platform asks it for two things, with
   user (null: the shared one). The secret is never stored or logged here.
 - `POST /discover` `{"integration": {...}, "credential": {"user_id",
   "ciphertext"}|null}` → what the server offers (`schemas.DiscoveryIn`).
+- `POST /check` `{"integration": {...}}` → whether the server answers without
+  a credential and what sign-in it wants (`schemas.IntegrationCheckOut`).
 
 Unconfigured or unreachable is `503 gateway_unavailable`; an error the
 gateway reports (`{"detail": code}` with a 4xx) is passed on as a 422 with
@@ -38,6 +40,8 @@ class Gateway(Protocol):
     async def discover(
         self, integration: dict[str, Any], credential: dict[str, Any] | None
     ) -> dict[str, Any]: ...
+
+    async def check(self, integration: dict[str, Any]) -> dict[str, Any]: ...
 
 
 def _jsonable(value: Any) -> Any:
@@ -99,6 +103,9 @@ class HttpGateway:
         self, integration: dict[str, Any], credential: dict[str, Any] | None
     ) -> dict[str, Any]:
         return await self._post("/discover", {"integration": integration, "credential": credential})
+
+    async def check(self, integration: dict[str, Any]) -> dict[str, Any]:
+        return await self._post("/check", {"integration": integration})
 
 
 def decode_ciphertext(value: Any, error: Exception | None = None) -> bytes:

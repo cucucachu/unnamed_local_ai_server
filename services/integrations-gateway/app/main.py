@@ -2,7 +2,8 @@
 
 Two callers, each with its own credential:
 
-- the platform (`INTEGRATIONS_GATEWAY_TOKEN`): `POST /encrypt`, `POST /discover`;
+- the platform (`INTEGRATIONS_GATEWAY_TOKEN`): `POST /encrypt`, `POST /discover`,
+  `POST /check` (before credentials: reachable, which sign-in, a certificate to confirm);
 - agent-server, with the user's delegation as the bearer: `POST /v1/open`,
   `/v1/call`, `/v1/read`, `/v1/prompt`. Results and standard errors are both
   `200` (`{"ok": true, ...}` / `{"ok": false, "error": {"code", "message"}}`);
@@ -179,6 +180,10 @@ def build(settings: Settings, gateway: Gateway | None = None) -> FastAPI:
             return await g.discover(body.integration, body.credential)
         except GatewayError as exc:
             return JSONResponse({"detail": exc.code}, status_code=422)
+
+    @app.post("/check", dependencies=[Depends(platform_caller)])
+    async def check(body: DiscoverIn, g: GatewayDep) -> dict[str, Any]:
+        return await g.check(body.integration)
 
     @app.post("/v1/open")
     async def open_(body: OpenIn, request: Request, g: GatewayDep):

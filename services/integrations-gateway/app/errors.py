@@ -41,6 +41,9 @@ class GatewayError(Exception):
         self.code = code
         self.detail = detail
         self.extra = extra
+        # What the HTTP layer saw (proxy denial, presented certificate, auth
+        # challenge), for the admin's server check; never part of `body()`.
+        self.seen: dict[str, str] = {}
 
     def body(self) -> dict[str, Any]:
         message = MESSAGES[self.code]

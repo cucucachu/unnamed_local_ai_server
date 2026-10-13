@@ -2137,8 +2137,9 @@ themselves)
 | `PATCH /api/platform/admin/integrations/{id}` | admin | any install field | `200 AdminIntegration`. A new `url` or `credential_model` deletes every stored credential; a new `url` clears the pinned certificate unless one is given. | as install, `404 integration_not_found` |
 | `DELETE /api/platform/admin/integrations/{id}` | admin | — | `204`: uninstalls; deletes its admin and user tool settings and every credential | `404 integration_not_found` |
 | `POST /api/platform/admin/integrations/{id}/refresh` | admin | — | `200 AdminIntegration`: discovered again through the gateway, with the admin's own credential (per-user) or the shared one. New tools start off. | `503 gateway_unavailable`, a gateway error code as `422` |
+| `POST /api/platform/admin/integrations/{id}/check` | admin | — | `200 {"reachable", "auth": "none"\|"token"\|"oauth"\|null, "problem", "detail", "certificate", "protocol_version", "server"}`: the gateway asks the server without a credential. `problem` is `certificate_untrusted` / `certificate_changed` (with the presented `certificate` fingerprint to confirm), `address_refused` (a name pointing to a private address needs the exception), `unreachable`, `timeout`, `server_error` or `protocol_error`. | `404 integration_not_found`, `503 gateway_unavailable` |
 | `PATCH /api/platform/admin/integrations/{id}/tools` | admin | `{"changes": [{"name", "enabled"?, "ceiling"?}]}` | `200 AdminIntegration` | `422 unknown_tool` |
-| `PUT /api/platform/admin/integrations/{id}/shared-credential` | admin | `{"secret"}` | `204`: the gateway encrypts it; only the ciphertext is stored | `422 wrong_credential_model`, `422 auth_method_mismatch`, `503 gateway_unavailable` |
+| `PUT /api/platform/admin/integrations/{id}/shared-credential` | admin | `{"secret"}` | `200 {"status", "checked", "problem"}`: the server is asked first, then the gateway encrypts it; only the ciphertext is stored | `422 credential_rejected` (not stored), `422 wrong_credential_model`, `422 auth_method_mismatch`, `503 gateway_unavailable` |
 | `DELETE /api/platform/admin/integrations/{id}/shared-credential` | admin | — | `204` | `404 integration_not_found` |
 | `DELETE /api/platform/admin/integrations/{id}/connections/{user_id}` | admin | — | `204`: disconnects that user | `404 integration_not_found` |
 | `GET /api/platform/admin/users` | admin | — | `200 {"users": [User]}` (oldest first) | `403 public_origin` |
@@ -3181,6 +3182,12 @@ For the platform, with `INTEGRATIONS_GATEWAY_TOKEN` as the bearer:
   {"user_id", "ciphertext"}|null}` → `200` the platform's `DiscoveryIn`
   (`protocol_version`, `server`, `instructions`, `tools`, `resources`,
   `prompts`), or `422 {"detail": code}` with a standard error code.
+- `POST /check` `{"integration": {...}}` → `200` the platform's
+  `IntegrationCheckOut`: connects with no credential. An answer means `auth:
+  none`; a 401 means `token`, or `oauth` when its `WWW-Authenticate` names
+  `resource_metadata`. Proxy refusals are told apart from the server's
+  (`X-Egress-Denied`); for a refused certificate the fingerprint the proxy
+  saw (`X-Egress-Certificate`) comes back as `certificate`.
 
 For agent-server, with the user's delegation as the bearer (checked
 through `POST /internal/integration-grants`). `context` is `chat`,

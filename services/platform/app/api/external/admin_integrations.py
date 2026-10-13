@@ -8,6 +8,7 @@ status only.
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
+from pydantic import ValidationError
 
 from app.api.external.admin import require_admin_from_privileged_origin
 from app.api.schemas import (
@@ -17,11 +18,12 @@ from app.api.schemas import (
     ConnectionOut,
     CredentialIn,
     DiscoveryIn,
+    IntegrationCheckOut,
     IntegrationInstall,
     IntegrationPatch,
 )
 from app.core import integrations
-from app.core.errors import InvalidInput
+from app.core.errors import InvalidInput, Unavailable
 from app.core.principal import SteppedUpAdmin
 
 router = APIRouter(
@@ -84,6 +86,23 @@ async def refresh(
     async with state.db_pool.connection() as conn:
         await integrations.store_discovery(conn, principal, integration_id, discovery)
         return await _one(conn, integration_id)
+
+
+@router.post("/{integration_id}/check", response_model=IntegrationCheckOut)
+async def check(
+    integration_id: UUID, request: Request, principal: SteppedUpAdmin
+) -> IntegrationCheckOut:
+    """Ask the server without a credential: is it there, what sign-in it wants, which certificate."""
+    state = request.app.state
+    async with state.db_pool.connection() as conn:
+        integration = await integrations.get(conn, integration_id)
+    found = await state.gateway.check(integrations.gateway_view(integration))
+    if isinstance(found.get("detail"), str):
+        found["detail"] = found["detail"][:1000]
+    try:
+        return IntegrationCheckOut.model_validate(found)
+    except ValidationError as exc:
+        raise Unavailable("gateway_unavailable") from exc
 
 
 @router.patch("/{integration_id}/tools", response_model=AdminIntegrationOut)
