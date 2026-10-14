@@ -16,7 +16,8 @@
 #   3. agent-server pytest: tool policy, the integration tools and list,
 #      integration calls in routines, approvals, prompt prefix stability.
 #   4. Platform pytest: the integrations registry and admin/user APIs,
-#      tool permissions.
+#      OAuth sign-in (start, the return and client ID pages, write-backs,
+#      egress rules, revoking), tool permissions.
 #   5. Frontend jest: Settings → Integrations and Permissions, the chat's
 #      integration card.
 #   6. `verify_egress.sh`: the proxy refuses the gateway's POST to an
@@ -25,7 +26,11 @@
 #   7. `g18_integrations_smoke.sh` gateway phase (no model): the fake MCP
 #      server installed by an admin; visibility, ceilings, markers,
 #      not_connected, no token in responses, audit or logs.
-#   8. `g18_integrations_smoke.sh` agent phase (real model): the agent
+#   8. `g18_integrations_smoke.sh` OAuth phase (no model): a live fake OAuth
+#      provider; the check finds it, a sign-in from the LAN address returns
+#      to the page with no session, a call works, an expired token is
+#      refreshed and written back, disconnecting revokes, no token leaks.
+#   9. `g18_integrations_smoke.sh` agent phase (real model): the agent
 #      uses a tool, an ask tool stops in chat and in a routine run, the
 #      server's request for input round-trips through the user.
 #
@@ -56,11 +61,11 @@ fi
 API_BASE="http://localhost/api"
 HEALTHY_TIMEOUT_S=600
 API_HEALTH_TIMEOUT_S=120
-STEPS=8
+STEPS=9
 AGENT_TESTS=(tests/test_tool_policy.py tests/test_integration_tools.py
   tests/test_integration_routines.py tests/test_hitl_approvals.py
   tests/test_routine_approvals.py tests/test_prompt_prefix.py tests/test_agent_build.py)
-PLATFORM_TESTS=(tests/test_integrations.py tests/test_tool_permissions.py)
+PLATFORM_TESTS=(tests/test_integrations.py tests/test_integration_oauth.py tests/test_tool_permissions.py)
 FRONTEND_TESTS=('settings/__tests__/integrations' 'settings/__tests__/permissions'
   'components/__tests__/ChatView')
 
@@ -185,6 +190,7 @@ main() {
   step "frontend M18 jest"              frontend_tests
   step "verify_egress.sh"               bash "${REPO_ROOT}/scripts/verify_egress.sh"
   step "g18 smoke: gateway (no model)"  env G18_PHASE=gateway bash "${SCRIPT_DIR}/g18_integrations_smoke.sh"
+  step "g18 smoke: OAuth (no model)"    env G18_PHASE=oauth bash "${SCRIPT_DIR}/g18_integrations_smoke.sh"
   step "g18 smoke: agent (real model)"  env G18_PHASE=agent bash "${SCRIPT_DIR}/g18_integrations_smoke.sh"
 
   pg_after="$(cid_of postgres)"
