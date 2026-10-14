@@ -126,8 +126,9 @@ flowchart LR
   no private addresses, ports 80/443 only). The gateway gets its own
   identity at the proxy (a separate listener or proxy credential), and for
   that identity only the proxy allows the methods MCP needs, and only to the
-  exact scheme, host and port of registered integrations. The rule list comes
-  from the registry.
+  exact scheme, host and port of registered integrations, plus the OAuth
+  endpoints their own metadata names (§5.1). The rule list comes from the
+  registry.
 - **agent-server** gets four fixed tools (§6) that call the gateway with the
   user's delegation, the same pattern as `code-exec-manager`'s exec grants.
 - **frontend**: Settings → Integrations. Admins install and configure;
@@ -216,23 +217,105 @@ its admin and user tool settings and every stored credential.
   server before it's stored: one the server refuses is turned away on the
   spot; one that couldn't be checked (server down) is kept with a note.
   Connecting to a plain `http://` server shows a warning first.
-- **OAuth 2.1** as MCP specifies, with PKCE. The gateway handles discovery,
-  client registration (Client ID Metadata Documents, dynamic registration,
-  or a client ID/secret the admin registered with the provider), the code
-  exchange, refresh and revocation. The phone or browser only ever sees the
-  sign-in page and passes the code back; tokens never leave the gateway.
-  - **Return address.** The provider never contacts the return address;
-    the user's browser visits it. So a public domain isn't needed for
-    reachability, only when a provider insists on one. Options, in order:
-    `homeai://` through the Android app (opened with `expo-web-browser`); a
-    page on the server's own address (required by providers like Home
-    Assistant, whose client ID URL must share the return address's host,
-    and which must be able to fetch that client ID URL); and, for strict
-    providers, a static forwarding page on a domain the household owns.
-  - Needs a canonical "this server's address" setting, which doesn't exist
-    yet (the app knows a list of addresses).
-  - Signing in through the app only is acceptable for v1. OAuth is optional
-    where the setup allows it; tokens are the fallback that always works.
+- **OAuth 2.1** as MCP specifies, with PKCE. The gateway does all of it
+  (§5.1). The browser only ever sees the provider's sign-in page and
+  HomeAI's return page; tokens never leave the gateway. Optional where the
+  setup allows it; tokens are the fallback that always works.
+
+### 5.1 OAuth
+
+Designed against two real providers (metadata read 2026-10-13):
+
+| | Robinhood Trading | Home Assistant 2026.10 |
+| --- | --- | --- |
+| Client registration | dynamic (`registration_endpoint`), public client | a client ID URL; return address on the same scheme and host needs no fetch |
+| Endpoints | sign-in on `robinhood.com`, tokens on `api.robinhood.com`: not the MCP host | all on the MCP host and port |
+| Other | sends `iss` with the code; no revocation endpoint | revocation endpoint; access tokens last 30 minutes |
+
+**Discovery** (at the admin's check, and again on each connect): an
+unauthenticated MCP request answers 401 with `resource_metadata` (RFC 9728);
+that document names the authorization server, whose metadata comes from
+`/.well-known/oauth-authorization-server` with the path inserted, then
+without it (RFC 8414), then OpenID configuration. Refused unless it offers
+`S256` PKCE and the authorization code grant. The check shows the admin the
+hosts sign-in and tokens use ("Signs in on robinhood.com; tokens from
+api.robinhood.com").
+
+**Egress.** The gateway may also POST to the OAuth endpoints the registered
+server's own metadata names (token, registration, revocation; never the
+sign-in page, which only the browser visits), and GET the metadata
+documents. The platform stores them on the integration at the check, and
+`/internal/egress-rules` lists them: `https://` and public only, except an
+endpoint on the integration's own host and port, which keeps its private
+exception (Home Assistant). A server could name any host this way; it can
+only send that host OAuth form fields the gateway writes, and the admin
+sees the hosts before installing.
+
+**Client registration**, per integration and return address, made once and
+reused:
+
+1. **Dynamic registration** when the server offers it (Robinhood): public
+   client, `token_endpoint_auth_method: none`, the one return address.
+2. **A client ID URL** on HomeAI's own address otherwise, when the server
+   supports client ID metadata documents (Home Assistant): HomeAI serves it
+   (`/api/integrations/oauth/client`, a page with a `redirect_uri` link and
+   the JSON document's fields), and the return address shares its host.
+3. A client ID and secret the admin registered with the provider: later
+   (#372), for providers that offer neither.
+
+The client ID is public; anything secret a registration returns is sealed
+like a credential.
+
+**Return address**: `<this server>/api/integrations/oauth/return`, where
+"this server" is the address the user's app is using (the `Host` of the
+request that started the sign-in), accepted only if it's one of the
+server's own addresses (`HOMEAI_LAN_ADDRESSES`, the VPN address,
+`HOMEAI_DOMAIN`). No new setting. The provider never contacts it; the
+browser does, so it must be reachable from that browser (Robinhood's
+sign-in is desktop-only; Home Assistant's sign-in page must be reachable
+too, so sign in at home). The client ID is stored with the credential, so
+refreshes work from anywhere.
+
+**Signing in:**
+
+1. Connect (the user, or the admin for shared) asks the platform, which
+   asks the gateway to start. The gateway makes a PKCE verifier and a
+   random `state`, kept in memory for 10 minutes, single use, bound to the
+   integration, the owner, the client and the issuer, and returns the
+   provider's sign-in URL (`response_type=code`, `code_challenge` S256,
+   `scope` from the metadata, `resource` = the MCP URL per RFC 8707).
+2. The app opens it: a new tab on the web, the system browser on Android.
+3. The provider sends the browser to the return page with `code` and
+   `state` (and `iss`). The page needs no HomeAI session: an Android
+   browser has none, and `state` is the binding. The platform passes them
+   to the gateway, which checks `state`, checks `iss` against the issuer
+   when present (required if the metadata says it's sent), exchanges the
+   code with the verifier, tries the token against the MCP server, and
+   seals `{access_token, refresh_token, expires_at, client_id, issuer,
+   token_endpoint, revocation_endpoint, resource}` for that owner. A
+   provider error, a used or expired `state`, or a mismatched `iss` shows
+   a plain message and stores nothing.
+4. The page says connected (or why not) with a link back into HomeAI
+   (`homeai://` on Android). The app refreshes the integration when it
+   comes back to the foreground.
+
+**Using and refreshing:** a call carries `Authorization: Bearer
+<access_token>`. Within a minute of expiry, or after a 401 from the server
+(which ran nothing), the gateway refreshes once under a lock per credential,
+re-reading the credential first in case another call already did, and
+writes the new ciphertext back to the platform (refresh tokens may rotate).
+A refused refresh (`invalid_grant`) marks the credential needs reconnecting
+and the call fails `auth_expired`; a network failure is just a failed call.
+
+**Disconnecting** revokes the refresh token where the server has a
+revocation endpoint, best effort, then deletes the credential. Where it
+doesn't (Robinhood), the screen says to remove HomeAI in the provider's own
+settings too.
+
+**Money and other high-stakes servers.** Nothing special in code; the
+existing controls are the safeguards. Install per-user (never shared), and
+leave every tool that isn't read-only at an **ask** ceiling, locked, so
+each trade or payment needs its own approval card (§7).
 
 **Storage:**
 
@@ -474,7 +557,9 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
 
 - **Fake MCP server** we control (a small test service, 2026-07-28 plus an
   older-handshake mode), used by unit tests and the gate: tokens, OAuth with
-  a fake provider, shared vs per-user credentials, tools with annotations,
+  a fake provider (both registration paths of §5.1, a token host other than
+  the MCP host, `iss`, rotating refresh tokens, revocation, a refused
+  refresh), shared vs per-user credentials, tools with annotations,
   resources, prompts, elicitation (form, URL, decline, expiry), a slow
   server, an oversized result, a private-address server, a changed
   certificate.
@@ -528,8 +613,9 @@ Proposed issues, filed once this design is agreed:
    the registry; private-address and port scoping; certificate pinning.
 5. **Agent tools**: the four fixed tools, the frozen integrations list,
    approval cards for integration calls, elicitation in chat.
-6. **Auth**: token/API key and shared credentials; then OAuth (app
-   return address first), plus the canonical server address setting.
+6. **Auth**: token/API key and shared credentials; then OAuth (§5.1:
+   dynamic registration and client ID URLs, return page on the server's own
+   address).
 7. **Settings UI**: Integrations for admins (install, tools, shared
    credential) and users (connect, tool settings). Phone-first.
 8. **Fake MCP server, eval, gate** (`gate_m18.sh`), HOST-CHECKS § M18 with
