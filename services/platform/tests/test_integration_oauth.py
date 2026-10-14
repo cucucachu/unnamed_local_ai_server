@@ -350,6 +350,12 @@ def test_return_addresses():
         "https://[fd00::8]:8443/api/platform/integrations/oauth/return"
     )
     assert integration_oauth.return_url(s, f"{LAN}, evil.example", False) == RETURN
+    assert integration_oauth.return_url(s, "localhost", False) == (
+        "http://localhost/api/platform/integrations/oauth/return"
+    )
+    assert integration_oauth.return_url(s, "[::1]:8080", False) == (
+        "http://[::1]:8080/api/platform/integrations/oauth/return"
+    )
     with pytest.raises(InvalidInput):
         integration_oauth.return_url(s, "evil.example", True)
 

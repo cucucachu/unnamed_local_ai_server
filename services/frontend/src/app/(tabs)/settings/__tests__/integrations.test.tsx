@@ -605,6 +605,7 @@ describe('OAuth sign-in', () => {
     renderer = await render(ManageIntegrationScreen);
     expect(textOf(renderer)).toContain('One household sign-in, used for everyone.');
     expect(textOf(renderer)).toContain('Disconnecting signs HomeAI out there too.');
+    expect(textOf(renderer)).toContain('with HomeAI open at http://localhost');
     expect(exists(renderer, 'manage-integration-shared-input')).toBe(false);
     await press(renderer, 'manage-integration-shared-sign-in');
     expect(requestsTo(fetchMock, 'POST', `${ADMIN}/int-1/oauth/start`)).toHaveLength(1);
