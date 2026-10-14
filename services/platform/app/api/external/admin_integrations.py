@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import ValidationError
 
+from app.api.external import integration_oauth as oauth_pages
 from app.api.external.admin import require_admin_from_privileged_origin
 from app.api.schemas import (
     AdminIntegrationList,
@@ -21,8 +22,9 @@ from app.api.schemas import (
     IntegrationCheckOut,
     IntegrationInstall,
     IntegrationPatch,
+    OAuthStartOut,
 )
-from app.core import integrations
+from app.core import integration_oauth, integrations
 from app.core.errors import InvalidInput, Unavailable
 from app.core.principal import SteppedUpAdmin
 
@@ -144,11 +146,25 @@ async def set_shared_credential(
     return ConnectionOut(status="connected", **check)
 
 
+@router.post("/{integration_id}/oauth/start", response_model=OAuthStartOut)
+async def start_shared_sign_in(
+    integration_id: UUID, request: Request, principal: SteppedUpAdmin
+) -> OAuthStartOut:
+    """The household's sign-in: open `authorize_url`; the return page stores it as shared."""
+    async with request.app.state.db_pool.connection() as conn:
+        integration = await integrations.get(conn, integration_id)
+    if integration["credential_model"] != "shared":
+        raise InvalidInput("wrong_credential_model")
+    return await oauth_pages.start(request, principal, integration_id, None)
+
+
 @router.delete("/{integration_id}/shared-credential", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_shared_credential(
     integration_id: UUID, request: Request, principal: SteppedUpAdmin
 ) -> None:
     async with request.app.state.db_pool.connection() as conn:
+        integration = await integrations.get(conn, integration_id)
+        await integration_oauth.revoke(conn, request.app.state.gateway, integration, None)
         await integrations.delete_credential(conn, principal, integration_id, None)
 
 
@@ -157,4 +173,6 @@ async def disconnect_user(
     integration_id: UUID, user_id: UUID, request: Request, principal: SteppedUpAdmin
 ) -> None:
     async with request.app.state.db_pool.connection() as conn:
+        integration = await integrations.get(conn, integration_id)
+        await integration_oauth.revoke(conn, request.app.state.gateway, integration, user_id)
         await integrations.delete_credential(conn, principal, integration_id, user_id)

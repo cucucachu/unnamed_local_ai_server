@@ -42,7 +42,7 @@ KEY_PREFIX = "mcp"
 _COLUMNS = (
     "id, slug, name, url, description, credential_model, auth_method, cert_fingerprint, "
     "private_address, token_header, server_info, protocol_version, instructions, discovered_at, "
-    "installed_by, created_at, updated_at"
+    "installed_by, created_at, updated_at, oauth"
 )
 
 
@@ -132,6 +132,36 @@ def check_token_header(name: str | None) -> str | None:
     if lowered in RESERVED_HEADERS or lowered.startswith(("proxy-", "sec-")):
         raise InvalidInput("reserved_header")
     return name
+
+
+def origin_of(url: str) -> tuple[str, str, int]:
+    parts = urlsplit(url)
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return parts.scheme, (parts.hostname or "").lower().rstrip("."), port
+
+
+def oauth_summary(integration: dict[str, Any]) -> dict[str, Any] | None:
+    """What an OAuth server's metadata said (issuer, sign-in and token hosts, revocable)."""
+    if integration["auth_method"] != "oauth" or not integration.get("oauth"):
+        return None
+    return integration["oauth"].get("summary")
+
+
+def oauth_egress(integration: dict[str, Any]) -> list[tuple[str, str, int]]:
+    """The scheme, host and port of each public OAuth endpoint off the server's own address."""
+    if integration["auth_method"] != "oauth" or not integration.get("oauth"):
+        return []
+    own = origin_of(integration["url"])
+    out: list[tuple[str, str, int]] = []
+    for url in integration["oauth"].get("endpoints") or []:
+        try:
+            origin = origin_of(url)
+            check_url(url, private_address=False)
+        except (InvalidInput, ValueError):
+            continue
+        if origin != own and origin not in out:
+            out.append(origin)
+    return out
 
 
 def on_this_machine(url: str, lan_addresses: frozenset[str]) -> bool | None:
@@ -263,6 +293,7 @@ def _summary_out(integration: dict[str, Any]) -> dict[str, Any]:
         "credential_model": integration["credential_model"],
         "auth_method": integration["auth_method"],
         "plain_http": plain_http(integration["url"]),
+        "oauth": oauth_summary(integration),
     }
 
 
@@ -449,6 +480,7 @@ async def edit(
         wipe = (
             merged["url"] != current["url"]
             or merged["credential_model"] != current["credential_model"]
+            or merged["auth_method"] != current["auth_method"]
         )
         await conn.execute(
             "UPDATE integrations SET slug = %s, name = %s, url = %s, description = %s, "
@@ -470,6 +502,14 @@ async def edit(
         if wipe:
             await conn.execute(
                 "DELETE FROM integration_credentials WHERE integration_id = %s", (integration_id,)
+            )
+        if merged["url"] != current["url"] or merged["auth_method"] != current["auth_method"]:
+            await conn.execute(
+                "UPDATE integrations SET oauth = NULL WHERE id = %s", (integration_id,)
+            )
+            await conn.execute(
+                "DELETE FROM integration_oauth_clients WHERE integration_id = %s",
+                (integration_id,),
             )
         await audit.record(
             conn,
@@ -646,9 +686,15 @@ def gateway_view(integration: dict[str, Any]) -> dict[str, Any]:
 
 
 async def egress_rules(conn: AsyncConnection) -> list[dict[str, Any]]:
-    """Where the gateway may go (M18-05): each integration's exact scheme, host and port."""
+    """Where the gateway may go (M18-05): each integration's exact scheme, host and port.
+
+    Then the OAuth endpoints an OAuth server's metadata named (§5.1),
+    public `https://` only, after every integration's own address so the
+    proxy (first match wins) keeps a pinned certificate.
+    """
     rules = []
-    for row in await _all(conn):
+    rows = await _all(conn)
+    for row in rows:
         try:
             address = check_url(row["url"], row["private_address"])
         except InvalidInput:
@@ -663,6 +709,22 @@ async def egress_rules(conn: AsyncConnection) -> list[dict[str, Any]]:
                 "cert_fingerprint": row["cert_fingerprint"],
             }
         )
+    seen = {(r["scheme"], r["host"], r["port"]) for r in rules}
+    for row in rows:
+        for scheme, host, port in oauth_egress(row):
+            if (scheme, host, port) in seen:
+                continue
+            seen.add((scheme, host, port))
+            rules.append(
+                {
+                    "integration": row["slug"],
+                    "scheme": scheme,
+                    "host": host,
+                    "port": port,
+                    "private_address": False,
+                    "cert_fingerprint": None,
+                }
+            )
     return rules
 
 
@@ -734,7 +796,7 @@ async def check_credential(
 
 async def store_credential(
     conn: AsyncConnection,
-    principal: Principal,
+    principal: Principal | audit.Actor,
     integration_id: UUID,
     user_id: UUID | None,
     ciphertext: bytes,

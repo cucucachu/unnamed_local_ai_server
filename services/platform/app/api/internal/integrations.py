@@ -10,9 +10,12 @@ from app.api.schemas import (
     DiscoveryIn,
     IntegrationGrantOut,
     IntegrationGrantRequest,
+    OAuthDiscoveredIn,
+    RefreshedCredentialIn,
 )
-from app.core import integrations
+from app.core import integration_oauth, integrations
 from app.core import principal as principals
+from app.core.integrations_gateway import decode_ciphertext
 
 router = APIRouter(dependencies=[Depends(require_service(GATEWAY))])
 
@@ -43,3 +46,21 @@ async def credential_status(
 ) -> None:
     async with request.app.state.db_pool.connection() as conn:
         await integrations.mark_needs_reconnecting(conn, integration_id, body.user_id)
+
+
+@router.put("/integrations/{integration_id}/oauth", status_code=status.HTTP_204_NO_CONTENT)
+async def store_oauth(integration_id: UUID, body: OAuthDiscoveredIn, request: Request) -> None:
+    """A server's OAuth metadata, read by the gateway: its endpoints join the egress rules."""
+    summary = body.summary.model_dump() if body.summary else None
+    async with request.app.state.db_pool.connection() as conn:
+        await integration_oauth.store_discovered(conn, integration_id, summary, body.endpoints)
+
+
+@router.put("/integrations/{integration_id}/credential", status_code=status.HTTP_204_NO_CONTENT)
+async def store_refreshed(
+    integration_id: UUID, body: RefreshedCredentialIn, request: Request
+) -> None:
+    """The gateway refreshed an OAuth token (refresh tokens may rotate). Replaces, never adds."""
+    ciphertext = decode_ciphertext(body.ciphertext)
+    async with request.app.state.db_pool.connection() as conn:
+        await integration_oauth.store_refreshed(conn, integration_id, body.user_id, ciphertext)

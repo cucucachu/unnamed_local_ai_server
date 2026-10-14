@@ -258,19 +258,19 @@ reused:
    client, `token_endpoint_auth_method: none`, the one return address.
 2. **A client ID URL** on HomeAI's own address otherwise, when the server
    supports client ID metadata documents (Home Assistant): HomeAI serves it
-   (`/api/integrations/oauth/client`, a page with a `redirect_uri` link and
+   (`/api/platform/integrations/oauth/client`, a page with a `redirect_uri` link and
    the JSON document's fields), and the return address shares its host.
 3. A client ID and secret the admin registered with the provider: later
    (#372), for providers that offer neither.
 
-The client ID is public; anything secret a registration returns is sealed
-like a credential.
+The client ID is public. A registration that comes back as a confidential
+client (with a secret) is refused for now (#372).
 
-**Return address**: `<this server>/api/integrations/oauth/return`, where
+**Return address**: `<this server>/api/platform/integrations/oauth/return`, where
 "this server" is the address the user's app is using (the `Host` of the
 request that started the sign-in), accepted only if it's one of the
 server's own addresses (`HOMEAI_LAN_ADDRESSES`, the VPN address,
-`HOMEAI_DOMAIN`). No new setting. The provider never contacts it; the
+`homeai.local`, `HOMEAI_DOMAIN`). No new setting. The provider never contacts it; the
 browser does, so it must be reachable from that browser (Robinhood's
 sign-in is desktop-only; Home Assistant's sign-in page must be reachable
 too, so sign in at home). The client ID is stored with the credential, so

@@ -3,7 +3,8 @@
 Two callers, each with its own credential:
 
 - the platform (`INTEGRATIONS_GATEWAY_TOKEN`): `POST /encrypt`, `POST /discover`,
-  `POST /check` (before credentials: reachable, which sign-in, a certificate to confirm);
+  `POST /check` (before credentials: reachable, which sign-in, a certificate to confirm),
+  and the OAuth sign-in (§5.1): `POST /oauth/start`, `/oauth/finish`, `/oauth/revoke`;
 - agent-server, with the user's delegation as the bearer: `POST /v1/open`,
   `/v1/call`, `/v1/read`, `/v1/prompt`. Results and standard errors are both
   `200` (`{"ok": true, ...}` / `{"ok": false, "error": {"code", "message"}}`);
@@ -31,6 +32,7 @@ from app.connector import HttpConnector, proxy_url
 from app.crypto import CredentialKey
 from app.errors import GatewayError, PlatformUnavailable, Unauthorized
 from app.handles import InputHandles
+from app.oauth import OAuth, OAuthError, OAuthHttp
 from app.platform import HttpPlatform
 from app.service import Gateway
 
@@ -55,6 +57,26 @@ class EncryptIn(BaseModel):
 class DiscoverIn(BaseModel):
     integration: dict[str, Any]
     credential: dict[str, Any] | None = None
+
+
+class OAuthStartIn(BaseModel):
+    integration: dict[str, Any]
+    owner: UUID | None
+    started_by: dict[str, Any]
+    return_url: Annotated[str, Field(pattern=r"^https?://[^\s#]+$", max_length=500)]
+    client: dict[str, Any] | None = None
+
+
+class OAuthFinishIn(BaseModel):
+    state: Annotated[str, Field(min_length=1, max_length=200)]
+    code: Annotated[str, Field(max_length=4096)] | None = None
+    iss: Annotated[str, Field(max_length=2000)] | None = None
+    error: Annotated[str, Field(max_length=200)] | None = None
+
+
+class OAuthRevokeIn(BaseModel):
+    integration: dict[str, Any]
+    credential: dict[str, Any]
 
 
 class OpenIn(BaseModel):
@@ -101,17 +123,17 @@ def build(settings: Settings, gateway: Gateway | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if app.state.gateway is None:
+            proxy = proxy_url(settings.egress_proxy_url, settings.egress_gateway_token)
+            platform = HttpPlatform(settings.platform_url, settings.platform_gateway_token)
             app.state.gateway = Gateway(
                 settings,
                 CredentialKey.load_or_create(settings.key_file),
-                HttpPlatform(settings.platform_url, settings.platform_gateway_token),
+                platform,
                 HttpConnector(
-                    proxy_url(settings.egress_proxy_url, settings.egress_gateway_token),
-                    settings.ca_bundle,
-                    settings.connect_timeout_s,
-                    settings.call_timeout_s,
+                    proxy, settings.ca_bundle, settings.connect_timeout_s, settings.call_timeout_s
                 ),
                 InputHandles(settings.input_handle_ttl_s),
+                OAuth(OAuthHttp(proxy, settings.ca_bundle, settings.connect_timeout_s), platform),
             )
         yield
 
@@ -184,6 +206,32 @@ def build(settings: Settings, gateway: Gateway | None = None) -> FastAPI:
     @app.post("/check", dependencies=[Depends(platform_caller)])
     async def check(body: DiscoverIn, g: GatewayDep) -> dict[str, Any]:
         return await g.check(body.integration)
+
+    async def oauth_op(run: Callable[[], Awaitable[dict[str, Any]]]):
+        try:
+            return await run()
+        except OAuthError as exc:
+            return JSONResponse({"detail": exc.code, "message": exc.detail}, status_code=422)
+        except TimeoutError:
+            return JSONResponse({"detail": "timeout"}, status_code=422)
+        except PlatformUnavailable:
+            raise HTTPException(503, "platform_unavailable") from None
+
+    @app.post("/oauth/start", dependencies=[Depends(platform_caller)])
+    async def oauth_start(body: OAuthStartIn, g: GatewayDep):
+        return await oauth_op(
+            lambda: g.oauth_start(
+                body.integration, body.owner, body.started_by, body.return_url, body.client
+            )
+        )
+
+    @app.post("/oauth/finish", dependencies=[Depends(platform_caller)])
+    async def oauth_finish(body: OAuthFinishIn, g: GatewayDep):
+        return await oauth_op(lambda: g.oauth_finish(body.state, body.code, body.iss, body.error))
+
+    @app.post("/oauth/revoke", dependencies=[Depends(platform_caller)])
+    async def oauth_revoke(body: OAuthRevokeIn, g: GatewayDep):
+        return await oauth_op(lambda: g.oauth_revoke(body.integration, body.credential))
 
     @app.post("/v1/open")
     async def open_(body: OpenIn, request: Request, g: GatewayDep):

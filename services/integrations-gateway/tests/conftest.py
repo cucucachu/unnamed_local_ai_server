@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -35,12 +35,16 @@ class InProcessConnector:
         self.headers: list[dict[str, str]] = []
         self.versions: list[str] = []
         self.capabilities: list[Any] = []
+        # Set to refuse some credentials, as a server answering 401 would.
+        self.accept: Callable[[dict[str, str]], bool] | None = None
 
     @asynccontextmanager
     async def session(
         self, integration: dict[str, Any], headers: dict[str, str], *, elicitation: bool
     ) -> AsyncIterator[Session]:
         self.headers.append(headers)
+        if self.accept is not None and not self.accept(headers):
+            raise GatewayError("auth_expired")
         mode = connect_mode(integration.get("protocol_version"))
         client = Client(
             self.server,
@@ -89,6 +93,11 @@ class FakePlatform:
         self.reconnect: list[tuple[UUID, UUID | None]] = []
         self.discoveries: list[dict[str, Any]] = []
         self.token_header: str | None = None
+        self.url = "http://fake/mcp"
+        self.auth_method = "token"
+        self.oauth_summary: dict[str, Any] | None = None
+        self.oauth_endpoints: list[str] = []
+        self.stored: list[tuple[UUID | None, str]] = []
 
     def mint(self, tool: str, arguments: dict[str, Any]) -> str:
         token = f"marker-{uuid4().hex}"
@@ -108,8 +117,8 @@ class FakePlatform:
             "integration": {
                 "id": str(INTEGRATION),
                 "slug": "home",
-                "url": "http://fake/mcp",
-                "auth_method": "token",
+                "url": self.url,
+                "auth_method": self.auth_method,
                 "credential_model": self.credential_model,
                 "cert_fingerprint": None,
                 "private_address": True,
@@ -139,6 +148,18 @@ class FakePlatform:
 
     async def mark_needs_reconnecting(self, integration_id: UUID, user_id: UUID | None) -> None:
         self.reconnect.append((integration_id, user_id))
+
+    async def store_oauth(
+        self, integration_id: UUID, summary: dict[str, Any] | None, endpoints: list[str]
+    ) -> None:
+        self.oauth_summary = summary or self.oauth_summary
+        self.oauth_endpoints = list(endpoints)
+
+    async def store_credential(
+        self, integration_id: UUID, user_id: UUID | None, ciphertext: str
+    ) -> None:
+        self.stored.append((user_id, ciphertext))
+        self.ciphertext = ciphertext
 
 
 @pytest.fixture

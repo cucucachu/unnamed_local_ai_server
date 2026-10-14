@@ -23,6 +23,7 @@ SHIPPED = [
     (14, "agent_tools"),
     (15, "integrations"),
     (16, "integration_token_header"),
+    (17, "integration_oauth"),
 ]
 
 
@@ -76,6 +77,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0014_agent_tools.sql",
             "0015_integrations.sql",
             "0016_integration_token_header.sql",
+            "0017_integration_oauth.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
@@ -89,6 +91,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "integration_resources",
             "integration_prompts",
             "integration_credentials",
+            "integration_oauth_clients",
         }
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED

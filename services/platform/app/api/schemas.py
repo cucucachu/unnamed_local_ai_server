@@ -1042,6 +1042,51 @@ class IntegrationToolOut(BaseModel):
     permission_locked: bool
 
 
+class OAuthSummary(BaseModel):
+    """What an OAuth server's metadata said (docs/INTEGRATIONS.md §5.1).
+
+    Not `revocable`: disconnecting can't sign HomeAI out at the provider;
+    the user removes it in the provider's own settings too.
+    """
+
+    issuer: Annotated[str, Field(max_length=2000)] | None = None
+    sign_in_host: Annotated[str, Field(max_length=253)] | None = None
+    token_host: Annotated[str, Field(max_length=253)] | None = None
+    registration: Literal["dynamic", "client_id_url", "unsupported"] | None = None
+    revocable: bool = False
+
+
+class OAuthCheck(OAuthSummary):
+    """The check's look at the sign-in; `problem` when it can't be used (`oauth_unsupported`, ...)."""
+
+    problem: Annotated[str, Field(max_length=40)] | None = None
+    detail: Annotated[str, Field(max_length=1000)] | None = None
+
+
+class OAuthStartOut(BaseModel):
+    """The provider's sign-in page, to open in a browser."""
+
+    authorize_url: str
+
+
+class OAuthDiscoveredIn(BaseModel):
+    """The gateway read a server's OAuth metadata: its summary and the endpoints it uses."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: OAuthSummary | None = None
+    endpoints: Annotated[list[Annotated[str, Field(max_length=2000)]], Field(max_length=8)]
+
+
+class RefreshedCredentialIn(BaseModel):
+    """The gateway refreshed an OAuth token; the new ciphertext replaces the stored one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID | None = None
+    ciphertext: Annotated[str, Field(min_length=1, max_length=32_000)]
+
+
 class IntegrationOut(BaseModel):
     id: UUID
     slug: str
@@ -1051,6 +1096,7 @@ class IntegrationOut(BaseModel):
     auth_method: AuthMethod
     # A credential for it would cross the network unencrypted: warn before connecting.
     plain_http: bool
+    oauth: OAuthSummary | None = None
     status: ConnectionStatus
     tools: list[IntegrationToolOut]
 
@@ -1131,6 +1177,7 @@ class IntegrationCheckOut(BaseModel):
     certificate: Fingerprint | None = None
     protocol_version: Annotated[str, Field(max_length=40)] | None = None
     server: SmallJson | None = None
+    oauth: OAuthCheck | None = None
 
 
 class AdminIntegrationToolOut(BaseModel):
@@ -1174,6 +1221,7 @@ class AdminIntegrationOut(BaseModel):
     auth_method: AuthMethod
     url: str
     plain_http: bool
+    oauth: OAuthSummary | None = None
     cert_fingerprint: str | None
     private_address: bool
     token_header: str | None

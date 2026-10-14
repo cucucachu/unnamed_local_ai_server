@@ -476,7 +476,8 @@ services:
       INTEGRATIONS_GATEWAY_URL: http://integrations-gateway:8000
       INTEGRATIONS_GATEWAY_TOKEN: ${INTEGRATIONS_GATEWAY_TOKEN:-}
       # This machine's own LAN addresses (comma-separated), so Settings can
-      # tell when an integration runs here too, which needs a firewall rule.
+      # tell when an integration runs here too, which needs a firewall rule,
+      # and an OAuth sign-in may return to them (docs/INTEGRATIONS.md §5.1).
       HOMEAI_LAN_ADDRESSES: ${HOMEAI_LAN_ADDRESSES:-}
       # The host-side path of the /data/spaces mount above: exec grants name
       # bind sources as the Docker daemon sees them.
