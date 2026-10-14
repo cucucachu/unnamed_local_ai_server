@@ -14,12 +14,19 @@
 #     stored allow, an ask call without a marker is refused, allow runs, the
 #     unconnected user gets `not_connected`, and no token appears in any API
 #     response, the audit log or a service's logs.
+#   oauth phase (no model): a second fake, an OAuth provider in front of the
+#     same server (the Home Assistant shape: a client ID URL, everything on
+#     its own address). The check says OAuth; the admin signs in from this
+#     server's LAN address, the browser's part played against the fake; the
+#     return page (no session) stores it and finds the tools; a call works;
+#     an expired token is refreshed and written back; disconnecting revokes
+#     it; no issued token appears anywhere.
 #   agent phase (the real model): the agent opens the integration and turns
 #     a light on with no card; an ask tool stops with a card in chat (approved,
 #     the light goes off) and in a routine run; the server's request for
 #     input (which room?) goes to the user and back.
 #
-# G18_PHASE=gateway|agent|all (default all). Never completes bootstrap.
+# G18_PHASE=gateway|oauth|agent|all (default all). Never completes bootstrap.
 # Never recreates model-runner or postgres. Never touches other
 # integrations: only `e2e-` ones are installed, and only their cards are
 # approved. Removes the integration, the users, the container and the
@@ -50,6 +57,7 @@ source "$SCRIPT_DIR/lib/auth.sh"
 source "$SCRIPT_DIR/lib/internal.sh"
 
 FAKE="e2e-g18-fake-mcp-$$"
+OAUTH_FAKE="e2e-g18-fake-oauth-$$"
 RUNNER="e2e-g18-runner-$$"
 GATEWAY_IMAGE="${G18_GATEWAY_IMAGE:-homeai-integrations-gateway}"
 
@@ -62,7 +70,7 @@ cleanup() {
   _e2e_psql homeai_platform "DELETE FROM integrations WHERE slug LIKE 'e2e-g18-%'" >/dev/null 2>&1
   e2e_auth_end
   internal_runner_stop
-  docker rm -f "$FAKE" >/dev/null 2>&1
+  docker rm -f "$FAKE" "$OAUTH_FAKE" >/dev/null 2>&1
 }
 trap cleanup EXIT
 
@@ -83,6 +91,15 @@ docker run -d --rm --name "$FAKE" --label homeai.test=g18 --network "$(net_name 
 G18_FAKE_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$FAKE")"
 export G18_FAKE="$FAKE" G18_FAKE_IP
 echo "[g18] fake MCP server $FAKE at $G18_FAKE_IP:8000"
+
+docker run -d --rm --name "$OAUTH_FAKE" --label homeai.test=g18 --network "$(net_name homeai-net)" \
+  -e FAKE_OAUTH=ha -v "$REPO_ROOT/services/integrations-gateway/tests:/app/tests:ro" -w /app \
+  --entrypoint /app/.venv/bin/python "$GATEWAY_IMAGE" -m tests.fake_server >/dev/null
+G18_OAUTH_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$OAUTH_FAKE")"
+# A sign-in returns to one of this server's own addresses; the first LAN one.
+G18_LAN="$(_e2e_env_value HOMEAI_LAN_ADDRESSES "" | cut -d, -f1 | tr -d ' ')"
+export G18_OAUTH_FAKE="$OAUTH_FAKE" G18_OAUTH_IP G18_LAN
+echo "[g18] fake OAuth provider $OAUTH_FAKE at $G18_OAUTH_IP:8000; sign-ins return to $G18_LAN"
 
 internal_runner_start "$RUNNER" || { echo "[g18] FAIL: runner didn't start" >&2; exit 1; }
 export G18_RUNNER="$RUNNER"

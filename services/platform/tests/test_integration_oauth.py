@@ -191,6 +191,35 @@ async def test_sign_in_then_the_return_page_stores_it(platform, people):
     assert [str(e["actor_user_id"]) for e in events] == [bob_id]
 
 
+async def test_the_first_sign_in_finds_the_tools(platform, people):
+    iid = await _oauth_installed(platform, people)
+    await _start(platform, people["admin"], iid)
+    page = await _return(platform, state="s1", code="c1")
+    assert page.status_code == 200
+    assert "found 2 tools" in page.text
+    assert f"homeai://settings/integrations/manage/{iid}" in page.text
+    discovered = _gateway(platform).discovered
+    assert len(discovered) == 1 and discovered[0][1]["ciphertext"]
+    names = sql(platform, "SELECT name FROM integration_tools ORDER BY position")
+    assert [n["name"] for n in names] == ["get_state", "turn_on"]
+
+    await _start(platform, people["bob"], iid)
+    page = await _return(platform, state="s1", code="c1")
+    assert "found" not in page.text
+    assert f"homeai://settings/integrations/{iid}" in page.text
+    assert len(_gateway(platform).discovered) == 1
+
+
+async def test_a_failed_first_discovery_still_connects(platform, people):
+    iid = await _oauth_installed(platform, people)
+    _gateway(platform).fails = Unavailable("gateway_unavailable")
+    await _start(platform, people["admin"], iid)
+    page = await _return(platform, state="s1", code="c1")
+    assert page.status_code == 200
+    assert "Connected to Trading." in page.text
+    assert len(sql(platform, "SELECT 1 FROM integration_credentials")) == 1
+
+
 async def test_a_registered_client_is_kept_and_reused(platform, people):
     iid = await _oauth_installed(platform, people)
     await _start(platform, people["bob"], iid)
