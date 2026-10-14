@@ -28,6 +28,7 @@ from app.connector import Connector, Session, guarded
 from app.crypto import CredentialError, CredentialKey, auth_headers
 from app.errors import GatewayError
 from app.handles import InputHandles
+from app.oauth import OAuth, OAuthError, RefreshRefused
 from app.platform import Platform
 
 logger = logging.getLogger(__name__)
@@ -128,12 +129,14 @@ class Gateway:
         platform: Platform,
         connector: Connector,
         handles: InputHandles,
+        oauth: OAuth | None = None,
     ) -> None:
         self.settings = settings
         self.key = key
         self.platform = platform
         self.connector = connector
         self.handles = handles
+        self.oauth = oauth
         self._background: set[asyncio.Task[None]] = set()
 
     # --- for the platform -----------------------------------------------------------------
@@ -142,27 +145,66 @@ class Gateway:
         sealed = self.key.seal(integration_id, user_id, {"kind": "token", "value": secret})
         return base64.b64encode(sealed).decode()
 
-    def _headers(
-        self, integration: dict[str, Any], credential: dict[str, Any] | None
-    ) -> dict[str, str]:
-        if credential is None:
-            return {}
-        integration_id = UUID(str(integration["id"]))
+    def _open(
+        self, integration_id: UUID, credential: dict[str, Any]
+    ) -> tuple[UUID | None, dict[str, Any]]:
         try:
             raw = base64.b64decode(credential["ciphertext"], validate=True)
             owner = UUID(str(credential["user_id"])) if credential.get("user_id") else None
-            return auth_headers(
-                self.key.open(raw, integration_id, owner), integration.get("token_header")
-            )
+            return owner, self.key.open(raw, integration_id, owner)
         except (CredentialError, binascii.Error, ValueError, KeyError) as exc:
             logger.warning("stored credential for %s doesn't open", integration_id)
             raise GatewayError("auth_expired") from exc
+
+    async def _headers(
+        self,
+        integration: dict[str, Any],
+        credential: dict[str, Any] | None,
+        stale: str | None = None,
+    ) -> dict[str, str]:
+        """The credential's headers; an OAuth one refreshed if expiring, or if `stale` was refused."""
+        if credential is None:
+            return {}
+        integration_id = UUID(str(integration["id"]))
+        owner, secret = self._open(integration_id, credential)
+        if secret.get("kind") == "oauth":
+            secret = await self._fresh_oauth(integration_id, owner, secret, stale)
+            return {"Authorization": f"Bearer {secret['access_token']}"}
+        try:
+            return auth_headers(secret, integration.get("token_header"))
+        except CredentialError as exc:
+            raise GatewayError("auth_expired") from exc
+
+    async def _fresh_oauth(
+        self,
+        integration_id: UUID,
+        owner: UUID | None,
+        secret: dict[str, Any],
+        stale: str | None,
+    ) -> dict[str, Any]:
+        if self.oauth is None or not isinstance(secret.get("access_token"), str):
+            raise GatewayError("auth_expired")
+        try:
+            fresh = await self.oauth.refreshed(integration_id, owner, secret, stale)
+        except RefreshRefused as exc:
+            raise GatewayError("auth_expired") from exc
+        except OAuthError as exc:
+            code = "timeout" if exc.code == "timeout" else "unreachable"
+            raise GatewayError(code, "Couldn't renew the sign-in.") from exc
+        if fresh.get("generation", 0) > secret.get("generation", 0):
+            sealed = base64.b64encode(self.key.seal(integration_id, owner, fresh)).decode()
+            await self.platform.store_credential(integration_id, owner, sealed)
+        return fresh
 
     async def discover(
         self, integration: dict[str, Any], credential: dict[str, Any] | None
     ) -> dict[str, Any]:
         """What a server offers, in the platform's `DiscoveryIn` shape."""
-        headers = self._headers(integration, credential)
+        return await self._discover_with(integration, await self._headers(integration, credential))
+
+    async def _discover_with(
+        self, integration: dict[str, Any], headers: dict[str, str]
+    ) -> dict[str, Any]:
         fresh = {**integration, "protocol_version": None}
         async with (
             self.connector.session(fresh, headers, elicitation=False) as session,
@@ -182,9 +224,76 @@ class Gateway:
         fresh = {**integration, "protocol_version": None}
         try:
             with anyio.fail_after(self.settings.call_timeout_s):
-                return await self._check(fresh)
+                checked = await self._check(fresh)
+                if checked["auth"] == "oauth" and self.oauth is not None:
+                    try:
+                        checked["oauth"] = (await self.oauth.discover(fresh)).summary()
+                    except OAuthError as exc:
+                        checked["oauth"] = {"problem": exc.code, "detail": exc.detail}
+                return checked
         except TimeoutError:
             return _checked(problem="timeout")
+
+    def _oauth(self) -> OAuth:
+        if self.oauth is None:
+            raise OAuthError("oauth_unsupported")
+        return self.oauth
+
+    async def oauth_start(
+        self,
+        integration: dict[str, Any],
+        owner: UUID | None,
+        started_by: dict[str, Any],
+        return_url: str,
+        client: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        fresh = {**integration, "protocol_version": None}
+        with anyio.fail_after(self.settings.call_timeout_s):
+            return await self._oauth().start(fresh, owner, started_by, return_url, client)
+
+    async def oauth_finish(
+        self, state: str, code: str | None, iss: str | None, error: str | None
+    ) -> dict[str, Any]:
+        """Exchange the code; the sealed credential for the platform to store, tried first."""
+        with anyio.fail_after(self.settings.call_timeout_s):
+            pending, secret = await self._oauth().finish(state, code, iss, error)
+        integration_id = UUID(str(pending.integration["id"]))
+        owner = pending.owner
+        self._oauth().forget(integration_id, owner)
+        sealed = base64.b64encode(self.key.seal(integration_id, owner, secret)).decode()
+        checked, problem = True, None
+        try:
+            headers = {"Authorization": f"Bearer {secret['access_token']}"}
+            await self._discover_with(pending.integration, headers)
+        except GatewayError as exc:
+            if exc.code == "auth_expired":
+                raise OAuthError("credential_rejected") from exc
+            checked, problem = False, exc.code
+        return {
+            "integration_id": integration_id,
+            "owner": owner,
+            "started_by": pending.started_by,
+            "ciphertext": sealed,
+            "checked": checked,
+            "problem": problem,
+        }
+
+    async def oauth_revoke(
+        self, integration: dict[str, Any], credential: dict[str, Any]
+    ) -> dict[str, bool]:
+        """Best effort, before the platform deletes an OAuth credential."""
+        integration_id = UUID(str(integration["id"]))
+        try:
+            owner, secret = self._open(integration_id, credential)
+        except GatewayError:
+            return {"revoked": False}
+        if secret.get("kind") != "oauth" or self.oauth is None:
+            return {"revoked": False}
+        secret = self.oauth.freshest(integration_id, owner, secret)
+        self.oauth.forget(integration_id, owner)
+        with anyio.move_on_after(self.settings.call_timeout_s):
+            return {"revoked": await self.oauth.revoke(secret)}
+        return {"revoked": False}
 
     async def _check(self, integration: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -273,9 +382,10 @@ class Gateway:
         if grant["status"] == "needs_reconnecting":
             raise GatewayError("auth_expired")
         try:
-            headers = self._headers(grant["integration"], grant["credential"])
-        except GatewayError:
-            await self._needs_reconnecting(grant)
+            headers = await self._headers(grant["integration"], grant["credential"])
+        except GatewayError as exc:
+            if exc.code == "auth_expired":
+                await self._needs_reconnecting(grant)
             raise
         return grant, headers
 
@@ -328,13 +438,15 @@ class Gateway:
         try:
             grant, headers = await self._granted(delegation, slug)
             elicitation = action == "call"
-            async with self.connector.session(
-                grant["integration"], headers, elicitation=elicitation
-            ) as session:
-                async with guarded(session.statuses, session.denials):
-                    with anyio.fail_after(self.settings.call_timeout_s):
-                        body = await op(grant, session, audit)
-                self._after(grant, headers, session)
+            try:
+                body = await self._session_op(grant, headers, elicitation, op, audit)
+            except GatewayError as exc:
+                # A server refusing an OAuth access token ran nothing: renew it, try once more.
+                if exc.code != "auth_expired" or grant["integration"]["auth_method"] != "oauth":
+                    raise
+                stale = headers.get("Authorization", "").removeprefix("Bearer ")
+                headers = await self._headers(grant["integration"], grant["credential"], stale)
+                body = await self._session_op(grant, headers, elicitation, op, audit)
         except GatewayError as exc:
             if exc.code == "auth_expired" and grant is not None:
                 await self._needs_reconnecting(grant)
@@ -367,6 +479,23 @@ class Gateway:
             delegation, slug, action, target, audit["arguments"], context, audit["approval"], None
         )
         return {"ok": True, **body}
+
+    async def _session_op(
+        self,
+        grant: dict[str, Any],
+        headers: dict[str, str],
+        elicitation: bool,
+        op: Any,
+        audit: dict[str, Any],
+    ) -> dict[str, Any]:
+        async with self.connector.session(
+            grant["integration"], headers, elicitation=elicitation
+        ) as session:
+            async with guarded(session.statuses, session.denials):
+                with anyio.fail_after(self.settings.call_timeout_s):
+                    body = await op(grant, session, audit)
+            self._after(grant, headers, session)
+        return body
 
     def _after(self, grant: dict[str, Any], headers: dict[str, str], session: Session) -> None:
         """A server that said its lists changed gets rediscovered, if one credential sees it all."""

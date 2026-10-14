@@ -9,6 +9,7 @@ from uuid import UUID
 import httpx2
 
 from app.errors import GatewayError, PlatformUnavailable, Unauthorized
+from app.oauth import OAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,14 @@ class Platform(Protocol):
     async def store_discovery(self, integration_id: UUID, discovery: dict[str, Any]) -> None: ...
 
     async def mark_needs_reconnecting(self, integration_id: UUID, user_id: UUID | None) -> None: ...
+
+    async def store_oauth(
+        self, integration_id: UUID, summary: dict[str, Any] | None, endpoints: list[str]
+    ) -> None: ...
+
+    async def store_credential(
+        self, integration_id: UUID, user_id: UUID | None, ciphertext: str
+    ) -> None: ...
 
 
 class HttpPlatform:
@@ -120,4 +129,35 @@ class HttpPlatform:
         if response.status_code != 204:
             logger.warning(
                 "credential status not stored: platform answered %d", response.status_code
+            )
+
+    async def store_oauth(
+        self, integration_id: UUID, summary: dict[str, Any] | None, endpoints: list[str]
+    ) -> None:
+        """The OAuth hosts a server's metadata named; the egress rules follow. Must succeed."""
+        response = await self._post(
+            "PUT",
+            f"/internal/integrations/{integration_id}/oauth",
+            {"summary": summary, "endpoints": endpoints},
+        )
+        if response.status_code != 204:
+            logger.warning("oauth endpoints not stored: platform answered %d", response.status_code)
+            raise OAuthError("oauth_discovery_failed", "The platform refused the OAuth endpoints.")
+
+    async def store_credential(
+        self, integration_id: UUID, user_id: UUID | None, ciphertext: str
+    ) -> None:
+        """Best effort: a refreshed credential. Until it's stored, the gateway keeps the newest."""
+        try:
+            response = await self._post(
+                "PUT",
+                f"/internal/integrations/{integration_id}/credential",
+                {"user_id": str(user_id) if user_id else None, "ciphertext": ciphertext},
+            )
+        except PlatformUnavailable:
+            logger.error("refreshed credential not stored: platform unavailable")
+            return
+        if response.status_code != 204:
+            logger.error(
+                "refreshed credential not stored: platform answered %d", response.status_code
             )

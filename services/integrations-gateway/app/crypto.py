@@ -6,8 +6,8 @@ row copied to another user or integration doesn't decrypt. The platform
 stores the ciphertext and can never open it.
 
 Format: one version byte, a 12-byte random nonce, then the AEAD output. The
-plaintext is a small JSON object (`{"kind": "token", "value": ...}`), so
-other kinds (OAuth tokens, M18-07) fit later.
+plaintext is a small JSON object: `{"kind": "token", "value": ...}`, or
+`{"kind": "oauth", ...}` with the tokens and endpoints (app/oauth.py).
 """
 
 from __future__ import annotations

@@ -51,6 +51,16 @@
 	handle /api/health {
 		reverse_proxy agent-server:8000
 	}
+	# An integration's OAuth sign-in returns here from the provider, and a
+	# server reads HomeAI's client ID page here (docs/INTEGRATIONS.md
+	# §5.1): no session, by design (`state` is the binding). Exact paths
+	# only; Caddy tries them before the authenticated prefix below.
+	handle /api/platform/integrations/oauth/return {
+		reverse_proxy platform:8100
+	}
+	handle /api/platform/integrations/oauth/client {
+		reverse_proxy platform:8100
+	}
 	handle /api/platform/* {
 		import authenticated
 		reverse_proxy platform:8100

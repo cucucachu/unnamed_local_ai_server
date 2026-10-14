@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 
 from app.api.schemas import ConnectionOut, CredentialIn, IntegrationList, IntegrationToolChanges
-from app.core import integrations
+from app.core import integration_oauth, integrations
 from app.core.errors import InvalidInput, NotFound
 from app.core.principal import CurrentUser, HumanUser
 
@@ -62,5 +62,10 @@ async def connect(
 
 @router.delete("/{integration_id}/connection", status_code=status.HTTP_204_NO_CONTENT)
 async def disconnect(integration_id: UUID, request: Request, principal: HumanUser) -> None:
+    """An OAuth sign-in is revoked at the provider first, where it can be."""
     async with request.app.state.db_pool.connection() as conn:
+        integration = await integrations.get(conn, integration_id)
+        await integration_oauth.revoke(
+            conn, request.app.state.gateway, integration, principal.user_id
+        )
         await integrations.delete_credential(conn, principal, integration_id, principal.user_id)

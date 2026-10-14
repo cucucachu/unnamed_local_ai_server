@@ -11,6 +11,12 @@ servers. The platform asks it for two things, with
   "ciphertext"}|null}` → what the server offers (`schemas.DiscoveryIn`).
 - `POST /check` `{"integration": {...}}` → whether the server answers without
   a credential and what sign-in it wants (`schemas.IntegrationCheckOut`).
+- OAuth sign-in (docs/INTEGRATIONS.md §5.1): `POST /oauth/start`
+  `{"integration", "owner", "started_by", "return_url", "client"}` →
+  `{"authorize_url", "client": new registration|null, "oauth": summary}`;
+  `POST /oauth/finish` `{"state", "code", "iss", "error"}` → the sealed
+  credential and who it's for; `POST /oauth/revoke` `{"integration",
+  "credential"}` → `{"revoked": bool}`, best effort.
 
 Unconfigured or unreachable is `503 gateway_unavailable`; an error the
 gateway reports (`{"detail": code}` with a 4xx) is passed on as a 422 with
@@ -42,6 +48,23 @@ class Gateway(Protocol):
     ) -> dict[str, Any]: ...
 
     async def check(self, integration: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def oauth_start(
+        self,
+        integration: dict[str, Any],
+        owner: UUID | None,
+        started_by: dict[str, Any],
+        return_url: str,
+        client: dict[str, Any] | None,
+    ) -> dict[str, Any]: ...
+
+    async def oauth_finish(
+        self, state: str, code: str | None, iss: str | None, error: str | None
+    ) -> dict[str, Any]: ...
+
+    async def oauth_revoke(
+        self, integration: dict[str, Any], credential: dict[str, Any]
+    ) -> dict[str, Any]: ...
 
 
 def _jsonable(value: Any) -> Any:
@@ -106,6 +129,39 @@ class HttpGateway:
 
     async def check(self, integration: dict[str, Any]) -> dict[str, Any]:
         return await self._post("/check", {"integration": integration})
+
+    async def oauth_start(
+        self,
+        integration: dict[str, Any],
+        owner: UUID | None,
+        started_by: dict[str, Any],
+        return_url: str,
+        client: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/oauth/start",
+            {
+                "integration": integration,
+                "owner": owner,
+                "started_by": started_by,
+                "return_url": return_url,
+                "client": client,
+            },
+        )
+
+    async def oauth_finish(
+        self, state: str, code: str | None, iss: str | None, error: str | None
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/oauth/finish", {"state": state, "code": code, "iss": iss, "error": error}
+        )
+
+    async def oauth_revoke(
+        self, integration: dict[str, Any], credential: dict[str, Any]
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/oauth/revoke", {"integration": integration, "credential": credential}
+        )
 
 
 def decode_ciphertext(value: Any, error: Exception | None = None) -> bytes:

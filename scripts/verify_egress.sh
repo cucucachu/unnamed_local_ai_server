@@ -5,8 +5,8 @@
 # outbound connectivity — there is no meaningful way to fake "does mitmproxy
 # actually let a real GET through to example.com" without one).
 #
-# 18 checks: 1-6 below (M7-02), 7-18 the integrations gateway's rules
-# (M18-05, see check_gateway_rules). In order:
+# 19 checks: 1-6 below (M7-02), 7-19 the integrations gateway's rules
+# (M18-05 and the OAuth endpoints of §5.1, see check_gateway_rules). In order:
 #   1. GET https://example.com/ through the proxy -> 200 (the happy path:
 #      HTTPS is actually intercepted/decrypted/re-forwarded, not just
 #      tunneled — proves the CA trust + MITM termination works end to end).
@@ -278,10 +278,12 @@ except Exception as e:
 #         (a private address that answers, so passing is visible: 405 to POST)
 #   loop  https://localtest.me/mcp       a public name that resolves to 127.0.0.1
 #   pin   https://example.net/mcp        pinned to a certificate it doesn't have
+#   oauth https://example.com/oauth/mcp  an OAuth server whose metadata named a
+#         token endpoint on another host (https://www.iana.org/oauth/token)
 # The gateway's credential (EGRESS_GATEWAY_TOKEN, read from .env and handed to
 # the runner by name only) is what opens them.
 
-E2E_SLUGS="'e2e-egress-pub','e2e-egress-lan','e2e-egress-loop','e2e-egress-pin'"
+E2E_SLUGS="'e2e-egress-pub','e2e-egress-lan','e2e-egress-loop','e2e-egress-pin','e2e-egress-oauth'"
 
 register_destinations() {
   EGRESS_GATEWAY_TOKEN="$(_e2e_env_value EGRESS_GATEWAY_TOKEN "")"
@@ -305,6 +307,9 @@ register_destinations() {
       ('e2e-egress-lan', 'e2e', 'http://${LAN_IP}:8000/health', 'none', 'none', true, NULL),
       ('e2e-egress-loop', 'e2e', 'https://localtest.me/mcp', 'none', 'none', false, NULL),
       ('e2e-egress-pin', 'e2e', 'https://example.net/mcp', 'none', 'none', false, repeat('0', 64));
+    INSERT INTO integrations (slug, name, url, credential_model, auth_method, oauth) VALUES
+      ('e2e-egress-oauth', 'e2e', 'https://example.com/oauth/mcp', 'per_user', 'oauth',
+       '{\"summary\": null, \"endpoints\": [\"https://www.iana.org/oauth/token\"]}');
   " >/dev/null
   REGISTERED=1
   # The proxy caches rules for a few seconds and refetches early on a miss.
@@ -375,6 +380,8 @@ check_gateway_rules() {
     none "https://example.com/mcp" status:403
   expect_probe 15 "a wrong proxy credential is refused at CONNECT (407)" \
     wrong "https://example.com/mcp" connect:407
+  expect_probe 19 "gateway POST https://www.iana.org/oauth/token (an OAuth server's token endpoint) passes" \
+    gateway "https://www.iana.org/oauth/token" passes
 }
 
 check_services_still_read_only() {
