@@ -1,3 +1,4 @@
+import { AppState, Linking } from 'react-native';
 import { act, type ReactTestRenderer } from 'react-test-renderer';
 
 import { addressFacts, needsException, type AdminIntegration, type Integration, type IntegrationTool } from '@/lib/integrations';
@@ -483,5 +484,131 @@ describe('ManageIntegrationScreen', () => {
     expect(requestsTo(fetchMock, 'PUT', `${ADMIN}/int-1/shared-credential`)).toEqual([{ secret: TOKEN }]);
     expect(exists(renderer, 'manage-integration-shared-clear')).toBe(true);
     expect(everything(renderer)).not.toContain(TOKEN);
+  });
+});
+
+describe('OAuth sign-in', () => {
+  const OAUTH = {
+    issuer: 'https://agent.example/mcp/trading',
+    sign_in_host: 'example.com',
+    token_host: 'api.example.com',
+    registration: 'dynamic' as const,
+    revocable: false,
+  };
+  const AUTHORIZE = 'https://example.com/oauth?state=s1';
+  let openURL: jest.SpyInstance;
+  let appState: jest.SpyInstance;
+  let listeners: ((state: string) => void)[] = [];
+
+  beforeEach(() => {
+    openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+    listeners = [];
+    appState = jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
+      listeners.push(listener as (state: string) => void);
+      return { remove: jest.fn() } as unknown as ReturnType<typeof AppState.addEventListener>;
+    });
+  });
+
+  afterEach(() => {
+    openURL.mockRestore();
+    appState.mockRestore();
+  });
+
+  it('signs in at the provider, and says disconnecting leaves HomeAI signed in there', async () => {
+    let integration = mine({ auth_method: 'oauth', oauth: OAUTH, slug: 'trading', name: 'Trading' });
+    const fetchMock = mockFetchRoutes({
+      [`GET ${MINE}`]: () => ({ body: { integrations: [integration] } }),
+      [`POST ${MINE}/int-1/oauth/start`]: { body: { authorize_url: AUTHORIZE } },
+      [`DELETE ${MINE}/int-1/connection`]: { status: 204 },
+    });
+    renderer = await render(IntegrationScreen);
+    expect(exists(renderer, 'integration-token-input')).toBe(false);
+    expect(textOf(renderer)).toContain('Signs in on example.com; tokens from api.example.com.');
+    expect(textOf(renderer)).toContain('also remove HomeAI in your example.com settings');
+    await press(renderer, 'integration-sign-in');
+    expect(requestsTo(fetchMock, 'POST', `${MINE}/int-1/oauth/start`)).toHaveLength(1);
+    expect(openURL).toHaveBeenCalledWith(AUTHORIZE);
+
+    integration = { ...integration, status: 'connected' };
+    await act(async () => listeners.forEach((listener) => listener('active')));
+    expect(textOf(renderer)).toContain('Signed in with your account');
+    await press(renderer, 'integration-disconnect');
+    expect(requestsTo(fetchMock, 'DELETE', `${MINE}/int-1/connection`)).toHaveLength(1);
+  });
+
+  it('the admin adds an OAuth server: sign in, then the manage screen', async () => {
+    const installed = adminView({ url: 'https://agent.example/mcp/trading', private_address: false, plain_http: false });
+    const fetchMock = mockFetchRoutes({
+      [`POST ${ADMIN}`]: { status: 201, body: installed },
+      [`PATCH ${ADMIN}/int-1`]: (body) => ({ body: { ...installed, ...(body as Partial<AdminIntegration>) } }),
+      [`POST ${ADMIN}/int-1/check`]: {
+        body: { reachable: true, auth: 'oauth', problem: null, detail: null, certificate: null, protocol_version: null, server: null, oauth: OAUTH },
+      },
+      [`POST ${MINE}/int-1/oauth/start`]: { body: { authorize_url: AUTHORIZE } },
+    });
+    renderer = await render(AddIntegrationScreen);
+    await type(renderer, 'add-integration-name', 'Trading');
+    await type(renderer, 'add-integration-url', 'https://agent.example/mcp/trading');
+    await press(renderer, 'add-integration-check');
+    expect(textOf(renderer)).toContain('It signs in with OAuth. Signs in on example.com');
+    expect(exists(renderer, 'add-integration-secret')).toBe(false);
+    expect(exists(renderer, 'add-integration-no-signin')).toBe(false);
+    expect(isDisabled(renderer, 'add-integration-finish')).toBe(false);
+    await press(renderer, 'add-integration-finish');
+    expect(requestsTo(fetchMock, 'PATCH', `${ADMIN}/int-1`)).toEqual([
+      { credential_model: 'per_user', auth_method: 'oauth', token_header: null },
+    ]);
+    expect(requestsTo(fetchMock, 'POST', `${ADMIN}/int-1/refresh`)).toHaveLength(0);
+    expect(mockReplace).toHaveBeenCalledWith({
+      pathname: '/settings/integrations/manage/[integrationId]',
+      params: { integrationId: 'int-1' },
+    });
+    expect(openURL).toHaveBeenCalledWith(AUTHORIZE);
+  });
+
+  it("the admin can still use a token, and an OAuth sign-in HomeAI can't use says why", async () => {
+    let oauth: Record<string, unknown> = OAUTH;
+    const installed = adminView({ url: 'https://ha.example.com/mcp', private_address: false });
+    mockFetchRoutes({
+      [`POST ${ADMIN}`]: { status: 201, body: installed },
+      [`PATCH ${ADMIN}/int-1`]: (body) => ({ body: { ...installed, ...(body as Partial<AdminIntegration>) } }),
+      [`POST ${ADMIN}/int-1/check`]: () => ({
+        body: { reachable: true, auth: 'oauth', problem: null, detail: null, certificate: null, protocol_version: null, server: null, oauth },
+      }),
+    });
+    renderer = await render(AddIntegrationScreen);
+    await type(renderer, 'add-integration-name', 'Home Assistant');
+    await type(renderer, 'add-integration-url', 'https://ha.example.com/mcp');
+    await press(renderer, 'add-integration-check');
+    await press(renderer, 'add-integration-method-token');
+    expect(exists(renderer, 'add-integration-secret')).toBe(true);
+    expect(isDisabled(renderer, 'add-integration-finish')).toBe(true);
+
+    oauth = { problem: 'oauth_unsupported', detail: 'No PKCE.' };
+    await press(renderer, 'add-integration-check');
+    expect(textOf(renderer)).toContain("It offers OAuth sign-in, but HomeAI can't use it");
+    expect(exists(renderer, 'add-integration-method-oauth')).toBe(false);
+    expect(exists(renderer, 'add-integration-secret')).toBe(true);
+  });
+
+  it('the household sign-in is started by the admin', async () => {
+    const fetchMock = mockFetchRoutes({
+      [`GET ${ADMIN}`]: {
+        body: {
+          integrations: [
+            adminView({ credential_model: 'shared', auth_method: 'oauth', shared_credential: 'not_connected', oauth: { ...OAUTH, revocable: true } }),
+          ],
+        },
+      },
+      [`POST ${ADMIN}/int-1/oauth/start`]: { body: { authorize_url: AUTHORIZE } },
+    });
+    renderer = await render(ManageIntegrationScreen);
+    expect(textOf(renderer)).toContain('One household sign-in, used for everyone.');
+    expect(textOf(renderer)).toContain('Disconnecting signs HomeAI out there too.');
+    expect(exists(renderer, 'manage-integration-shared-input')).toBe(false);
+    await press(renderer, 'manage-integration-shared-sign-in');
+    expect(requestsTo(fetchMock, 'POST', `${ADMIN}/int-1/oauth/start`)).toHaveLength(1);
+    expect(mockWithStepUp).toHaveBeenCalled();
+    expect(openURL).toHaveBeenCalledWith(AUTHORIZE);
   });
 });

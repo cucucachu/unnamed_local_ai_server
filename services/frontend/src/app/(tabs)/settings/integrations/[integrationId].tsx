@@ -5,9 +5,11 @@ import { StyleSheet, Switch, Text, View } from 'react-native';
 import {
   ExposedEntitiesNote,
   PlainHttpWarning,
+  SignInNote,
   TokenEntry,
   connectionNote,
   integrationStyles,
+  useReloadOnReturn,
 } from '@/components/IntegrationParts';
 import {
   ActionButton,
@@ -26,6 +28,8 @@ import {
   connectIntegration,
   disconnectIntegration,
   listMyIntegrations,
+  openSignIn,
+  startMySignIn,
   statusLabel,
   toolTitle,
   type Integration,
@@ -35,7 +39,8 @@ import { errorCodeMessage, type ToolPermission } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
-/** Settings → Integrations → one: connect it (per-user token), disconnect,
+/** Settings → Integrations → one: connect it (a per-user token, or signing in
+ * at the provider), disconnect,
  * and the user's own setting for each tool. What an admin decided shows
  * locked and labelled. */
 export default function IntegrationScreen() {
@@ -44,6 +49,7 @@ export default function IntegrationScreen() {
   const { busyKey, run } = useAction(showToast);
   const { data: integrations, error, reload, setData } = useLoad(listMyIntegrations);
   const integration = integrations?.find((i) => i.id === integrationId) ?? null;
+  useReloadOnReturn(reload);
 
   const changeTools = useCallback(
     async (key: string, changes: { name: string; enabled?: boolean; permission?: ToolPermission }[]) => {
@@ -63,6 +69,10 @@ export default function IntegrationScreen() {
       reload();
     }
     return ok;
+  }
+
+  async function handleSignIn() {
+    await run('sign-in', async () => openSignIn((await startMySignIn(integrationId)).authorize_url));
   }
 
   async function handleDisconnect() {
@@ -87,6 +97,7 @@ export default function IntegrationScreen() {
               integration={integration}
               busyKey={busyKey}
               onConnect={handleConnect}
+              onSignIn={handleSignIn}
               onDisconnect={handleDisconnect}
             />
             <ToolsSection integration={integration} busy={busyKey !== null} onChange={changeTools} />
@@ -103,11 +114,13 @@ function ConnectionCard({
   integration,
   busyKey,
   onConnect,
+  onSignIn,
   onDisconnect,
 }: {
   integration: Integration;
   busyKey: string | null;
   onConnect: (secret: string) => Promise<boolean>;
+  onSignIn: () => void;
   onDisconnect: () => void;
 }) {
   const perUser = integration.credential_model === 'per_user';
@@ -119,7 +132,11 @@ function ConnectionCard({
       ? 'Set up by an admin for everyone in the household.'
       : 'An admin needs to finish setting it up.';
   else if (integration.auth_method === 'oauth')
-    explanation = "This integration signs in with OAuth, which HomeAI can't do yet. Ask an admin to set it up with a token.";
+    explanation = connected
+      ? 'Signed in with your account. The agent acts as you there.'
+      : integration.status === 'needs_reconnecting'
+        ? 'The sign-in expired or was withdrawn. Sign in again.'
+        : 'Sign in with your account on that service. The agent will act as you there.';
   else if (connected) explanation = 'Connected with your token. The agent acts as you there.';
   else if (integration.status === 'needs_reconnecting')
     explanation = 'The server turned your token down. Connect again with a new one.';
@@ -146,6 +163,29 @@ function ConnectionCard({
               busy={busyKey === 'connect'}
               onSubmit={onConnect}
               testID="integration-token"
+            />
+            {connected || integration.status === 'needs_reconnecting' ? (
+              <ActionButton
+                label="Disconnect"
+                variant="danger"
+                busy={busyKey === 'disconnect'}
+                disabled={busyKey !== null}
+                onPress={onDisconnect}
+                testID="integration-disconnect"
+              />
+            ) : null}
+          </>
+        ) : null}
+        {perUser && integration.auth_method === 'oauth' ? (
+          <>
+            <SignInNote oauth={integration.oauth} testID="integration-signin-note" />
+            <ActionButton
+              label={connected ? 'Sign in again' : 'Sign in'}
+              variant={connected ? 'secondary' : 'primary'}
+              busy={busyKey === 'sign-in'}
+              disabled={busyKey !== null}
+              onPress={onSignIn}
+              testID="integration-sign-in"
             />
             {connected || integration.status === 'needs_reconnecting' ? (
               <ActionButton

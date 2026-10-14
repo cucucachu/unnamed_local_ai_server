@@ -21,11 +21,15 @@ import {
   adminInstallIntegration,
   adminRefreshIntegration,
   adminSetSharedCredential,
+  adminStartSharedSignIn,
   adminUninstallIntegration,
   connectIntegration,
   formatFingerprint,
   needsException,
+  oauthHostsLine,
+  openSignIn,
   sameMachineFirewallCommand,
+  startMySignIn,
   type AddressFacts,
   type AdminIntegration,
   type ServerCheck,
@@ -34,6 +38,12 @@ import { errorCodeMessage, platformErrorMessage, slugify } from '@/lib/platform'
 import { StepUpCancelledError } from '@/lib/stepUp';
 
 type SignIn = 'per_user' | 'shared';
+type Method = 'oauth' | 'token';
+
+/** The check found an OAuth sign-in HomeAI can use. */
+function oauthUsable(check: ServerCheck | null): boolean {
+  return check?.auth === 'oauth' && !!check.oauth && !check.oauth.problem;
+}
 
 /** Settings → Integrations → Manage → Add (docs/INTEGRATIONS.md §4).
  *
@@ -52,6 +62,7 @@ export default function AddIntegrationScreen() {
   const [installed, setInstalled] = useState<AdminIntegration | null>(null);
   const [check, setCheck] = useState<ServerCheck | null>(null);
   const [signIn, setSignIn] = useState<SignIn>('per_user');
+  const [method, setMethod] = useState<Method>('oauth');
   const [header, setHeader] = useState('');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -79,7 +90,9 @@ export default function AddIntegrationScreen() {
 
   async function runCheck(target: AdminIntegration) {
     setCheck(null);
-    setCheck(await withStepUp(() => adminCheckIntegration(target.id)));
+    const found = await withStepUp(() => adminCheckIntegration(target.id));
+    setMethod(oauthUsable(found) ? 'oauth' : 'token');
+    setCheck(found);
   }
 
   function handleCheck() {
@@ -117,6 +130,18 @@ export default function AddIntegrationScreen() {
   async function handleFinish() {
     if (installed === null || check === null) return;
     const id = installed.id;
+    if (check.auth !== 'none' && method === 'oauth') {
+      await step('finish', async () => {
+        await withStepUp(() =>
+          adminEditIntegration(id, { credential_model: signIn, auth_method: 'oauth', token_header: null }),
+        );
+        const { authorize_url } =
+          signIn === 'shared' ? await withStepUp(() => adminStartSharedSignIn(id)) : await startMySignIn(id);
+        router.replace({ pathname: '/settings/integrations/manage/[integrationId]', params: { integrationId: id } });
+        await openSignIn(authorize_url);
+      });
+      return;
+    }
     const ok = await step('finish', async () => {
       if (check.auth !== 'none') {
         await withStepUp(() =>
@@ -146,7 +171,9 @@ export default function AddIntegrationScreen() {
   }
 
   const reachable = check?.reachable === true;
-  const needsToken = reachable && check.auth !== 'none';
+  const needsSignIn = reachable && check.auth !== 'none';
+  const signsIn = needsSignIn && method === 'oauth';
+  const needsToken = needsSignIn && !signsIn;
 
   return (
     <SettingsFrame title="Add integration" backTo="/settings/integrations/manage" testID="settings-add-integration-screen">
@@ -231,8 +258,18 @@ export default function AddIntegrationScreen() {
           <SectionTitle>Sign-in</SectionTitle>
           <Card>
             <View style={settingsStyles.cardBody}>
-              {needsToken ? (
+              {needsSignIn ? (
                 <>
+                  {oauthUsable(check) ? (
+                    <Segmented<Method>
+                      value={method}
+                      onChange={setMethod}
+                      options={[
+                        { value: 'oauth', label: 'Sign in', testID: 'add-integration-method-oauth' },
+                        { value: 'token', label: 'Token', testID: 'add-integration-method-token' },
+                      ]}
+                    />
+                  ) : null}
                   <Text style={settingsStyles.muted}>Who signs in to {name.trim() || 'it'}?</Text>
                   <Segmented<SignIn>
                     value={signIn}
@@ -244,9 +281,21 @@ export default function AddIntegrationScreen() {
                   />
                   <Text style={settingsStyles.muted}>
                     {signIn === 'per_user'
-                      ? "Everyone connects their own account, so the server's own permissions apply to each person. Enter yours now so HomeAI can find the tools."
-                      : 'One household token, used for everyone. The server sees every request as the same account.'}
+                      ? `Everyone connects their own account, so the server's own permissions apply to each person. ${signsIn ? 'Sign in with yours now' : 'Enter yours now'} so HomeAI can find the tools.`
+                      : signsIn
+                        ? 'One household sign-in, used for everyone. The server sees every request as the same account.'
+                        : 'One household token, used for everyone. The server sees every request as the same account.'}
                   </Text>
+                  {signsIn ? (
+                    <Text style={settingsStyles.muted} testID="add-integration-oauth-next">
+                      {oauthHostsLine(check.oauth ?? {})} The sign-in page opens next; when you come back, HomeAI has
+                      found the tools.
+                    </Text>
+                  ) : null}
+                </>
+              ) : null}
+              {needsToken ? (
+                <>
                   <AuthField
                     label={signIn === 'per_user' ? 'Your token' : 'Household token'}
                     value={secret}
@@ -268,13 +317,13 @@ export default function AddIntegrationScreen() {
                     Leave the header empty unless the server wants the key somewhere else, such as X-Api-Key.
                   </Text>
                 </>
-              ) : (
+              ) : needsSignIn ? null : (
                 <Text style={settingsStyles.muted} testID="add-integration-no-signin">
                   This server answers without signing in, so anyone here can use it.
                 </Text>
               )}
               <ActionButton
-                label="Find tools"
+                label={signsIn ? 'Sign in' : 'Find tools'}
                 variant="primary"
                 busy={busy === 'finish'}
                 disabled={busy !== null || (needsToken && !secret.trim())}
@@ -330,7 +379,9 @@ function CheckResult({
           {check.auth === 'none'
             ? 'It needs no sign-in.'
             : check.auth === 'oauth'
-              ? "It offers OAuth sign-in, which HomeAI can't do yet. If it also takes a token or API key (Home Assistant: a long-lived access token from your profile page), use that below."
+              ? oauthUsable(check)
+                ? `It signs in with OAuth. ${oauthHostsLine(check.oauth ?? {})} If it also takes a token or API key (Home Assistant: a long-lived access token from your profile page), you can use that instead.`
+                : `It offers OAuth sign-in, but HomeAI can't use it${check.oauth?.problem ? ` (${errorCodeMessage(check.oauth.problem)})` : ''}. If it also takes a token or API key (Home Assistant: a long-lived access token from your profile page), use that below.`
               : 'It asks for a token or API key (Home Assistant: a long-lived access token from your profile page).'}
         </Text>
       </Notice>

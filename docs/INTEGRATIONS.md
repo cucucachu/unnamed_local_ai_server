@@ -571,7 +571,11 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
   without a connection gets `not_connected`; the gateway refuses a call
   without a marker; credentials never appear in any API response or log;
   the proxy refuses the gateway's POST to an unregistered host and refuses
-  POST from every other service.
+  POST from every other service. OAuth, against a live fake provider (the
+  Home Assistant shape): the check finds it, a sign-in from this server's
+  LAN address returns to a page with no session that stores it and finds
+  the tools, a call works, an expired token is refreshed and written back,
+  disconnecting revokes it, and no issued token appears anywhere.
 - **Prefix stability** (#341): opening and using an integration keeps each
   model request starting with exactly the previous one.
 - **Eval on Ornith**: Home Assistant–style tasks through the fixed tools
@@ -580,6 +584,7 @@ Additions to the threat model (`docs/ARCHITECTURE.md` §5):
 - **Tier B (manual)**: a real Home Assistant, installed with its own
   instructions outside this repo, controlling real Hue lights; added through
   the admin screen by URL, with each household member's own token.
+  OAuth: a real Robinhood sign-in from a desktop browser on the LAN.
 
 ## 14. Later
 

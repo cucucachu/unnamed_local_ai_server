@@ -546,7 +546,7 @@ async def uninstall(conn: AsyncConnection, principal: Principal, integration_id:
 
 async def store_discovery(
     conn: AsyncConnection,
-    actor: Principal | None,
+    actor: Principal | audit.Actor | None,
     integration_id: UUID,
     discovery: dict[str, Any],
 ) -> list[str]:

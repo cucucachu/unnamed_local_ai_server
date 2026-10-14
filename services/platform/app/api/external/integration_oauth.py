@@ -17,8 +17,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import ValidationError
 
-from app.api.schemas import OAuthStartOut
+from app.api.schemas import DiscoveryIn, OAuthStartOut
 from app.api.session_http import is_https
 from app.core import audit, integration_oauth, integrations
 from app.core.errors import InvalidInput, NotFound, PlatformError, Unavailable
@@ -114,10 +115,10 @@ def _page(title: str, message: str, links: list[tuple[str, str]], status: int) -
     return HTMLResponse(body, status_code=status, headers=PAGE_HEADERS)
 
 
-def _back_links(integration_id: UUID | None, shared: bool) -> list[tuple[str, str]]:
+def _back_links(integration_id: UUID | None, manage: bool) -> list[tuple[str, str]]:
     if integration_id is None:
         path = "settings/integrations"
-    elif shared:
+    elif manage:
         path = f"settings/integrations/manage/{integration_id}"
     else:
         path = f"settings/integrations/{integration_id}"
@@ -169,6 +170,15 @@ async def finish(
     except (PlatformError, KeyError, ValueError) as exc:
         logger.warning("oauth sign-in not stored: %s", getattr(exc, "code", type(exc).__name__))
         return _page("Sign-in not finished", FAILURE, _back_links(None, False), 400)
+    found = integration["discovered_at"] is None and await _first_discovery(
+        request, actor, integration, owner, done["ciphertext"]
+    )
+    if found:
+        message = (
+            f"Connected to {integration['name']} and found {found['tools']} tools. "
+            "They start off: choose which to turn on in HomeAI."
+        )
+        return _page("Connected", message, _back_links(integration_id, found["admin"]), 200)
     if done.get("checked") is False:
         message = (
             f"Connected to {integration['name']}, but it couldn't be tried just now. "
@@ -177,6 +187,30 @@ async def finish(
     else:
         message = f"Connected to {integration['name']}. You can close this page."
     return _page("Connected", message, _back_links(integration_id, owner is None), 200)
+
+
+async def _first_discovery(
+    request: Request,
+    actor: audit.Actor,
+    integration: dict[str, Any],
+    owner: UUID | None,
+    ciphertext: str,
+) -> dict[str, Any] | None:
+    """An integration's first sign-in (the admin adding it): find its tools now. Best effort."""
+    state = request.app.state
+    try:
+        found = await state.gateway.discover(
+            integrations.gateway_view(integration), {"user_id": owner, "ciphertext": ciphertext}
+        )
+        discovery = DiscoveryIn.model_validate(found).model_dump()
+        async with state.db_pool.connection() as conn:
+            await integrations.store_discovery(conn, actor, integration["id"], discovery)
+            cur = await conn.execute("SELECT role FROM users WHERE id = %s", (actor.user_id,))
+            row = await cur.fetchone()
+    except (PlatformError, ValidationError) as exc:
+        logger.warning("first discovery after sign-in failed: %s", getattr(exc, "code", "invalid"))
+        return None
+    return {"tools": len(discovery["tools"]), "admin": bool(row and row["role"] == "admin")}
 
 
 @router.get("/oauth/client")

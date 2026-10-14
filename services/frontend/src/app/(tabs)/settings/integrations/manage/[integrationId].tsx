@@ -6,10 +6,12 @@ import {
   ExposedEntitiesNote,
   Notice,
   PlainHttpWarning,
+  SignInNote,
   TokenEntry,
   connectionNote,
   integrationStyles,
   noticeTextStyle,
+  useReloadOnReturn,
 } from '@/components/IntegrationParts';
 import {
   ActionButton,
@@ -31,9 +33,11 @@ import {
   adminListIntegrations,
   adminRefreshIntegration,
   adminSetSharedCredential,
+  adminStartSharedSignIn,
   adminUninstallIntegration,
   annotationLabels,
   formatFingerprint,
+  openSignIn,
   toolTitle,
   type AdminIntegration,
   type AdminIntegrationTool,
@@ -58,6 +62,7 @@ export default function ManageIntegrationScreen() {
   const { data, error, reload, setData: setLoaded } = useLoad(load);
   const setData = useCallback((found: AdminIntegration) => setLoaded({ found }), [setLoaded]);
   const integration = data?.found ?? null;
+  useReloadOnReturn(reload);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
 
   const changeTool = useCallback(
@@ -89,6 +94,12 @@ export default function ManageIntegrationScreen() {
       reload();
     }
     return ok;
+  }
+
+  async function handleSharedSignIn() {
+    await run('shared', async () =>
+      openSignIn((await withStepUp(() => adminStartSharedSignIn(integrationId))).authorize_url),
+    );
   }
 
   async function handleClearShared() {
@@ -131,6 +142,7 @@ export default function ManageIntegrationScreen() {
               integration={integration}
               busyKey={busyKey}
               onSharedToken={handleSharedToken}
+              onSharedSignIn={handleSharedSignIn}
               onClearShared={handleClearShared}
               onDisconnect={handleDisconnect}
             />
@@ -280,16 +292,20 @@ function SignInSection({
   integration,
   busyKey,
   onSharedToken,
+  onSharedSignIn,
   onClearShared,
   onDisconnect,
 }: {
   integration: AdminIntegration;
   busyKey: string | null;
   onSharedToken: (secret: string) => Promise<boolean>;
+  onSharedSignIn: () => void;
   onClearShared: () => void;
   onDisconnect: (userId: string) => void;
 }) {
   const header = integration.token_header ? ` in the ${integration.token_header} header` : '';
+  const oauth = integration.auth_method === 'oauth';
+  const shared = integration.shared_credential;
   return (
     <>
       <SectionTitle>Sign-in</SectionTitle>
@@ -300,7 +316,9 @@ function SignInSection({
           ) : integration.credential_model === 'shared' ? (
             <>
               <View style={styles.statusRow}>
-                <Text style={settingsStyles.muted}>One household token{header}, used for everyone.</Text>
+                <Text style={settingsStyles.muted}>
+                  {oauth ? 'One household sign-in, used for everyone.' : `One household token${header}, used for everyone.`}
+                </Text>
                 <Badge
                   label={
                     integration.shared_credential === 'connected'
@@ -313,16 +331,30 @@ function SignInSection({
                   testID="manage-integration-shared-status"
                 />
               </View>
-              <TokenEntry
-                label={integration.shared_credential === 'not_connected' ? 'Household token' : 'Replace household token'}
-                submitLabel="Save token"
-                busy={busyKey === 'shared'}
-                onSubmit={onSharedToken}
-                testID="manage-integration-shared"
-              />
-              {integration.shared_credential !== 'not_connected' ? (
+              {oauth ? (
+                <>
+                  <SignInNote oauth={integration.oauth} testID="manage-integration-signin-note" />
+                  <ActionButton
+                    label={shared === 'not_connected' ? 'Sign in for the household' : 'Sign in again'}
+                    variant={shared === 'connected' ? 'secondary' : 'primary'}
+                    busy={busyKey === 'shared'}
+                    disabled={busyKey !== null}
+                    onPress={onSharedSignIn}
+                    testID="manage-integration-shared-sign-in"
+                  />
+                </>
+              ) : (
+                <TokenEntry
+                  label={shared === 'not_connected' ? 'Household token' : 'Replace household token'}
+                  submitLabel="Save token"
+                  busy={busyKey === 'shared'}
+                  onSubmit={onSharedToken}
+                  testID="manage-integration-shared"
+                />
+              )}
+              {shared !== 'not_connected' ? (
                 <ActionButton
-                  label="Remove token"
+                  label={oauth ? 'Sign out' : 'Remove token'}
                   variant="danger"
                   busy={busyKey === 'clear-shared'}
                   disabled={busyKey !== null}
@@ -334,8 +366,11 @@ function SignInSection({
           ) : (
             <>
               <Text style={settingsStyles.muted}>
-                Each person connects their own token{header} in Settings → Integrations, yours included.
+                {oauth
+                  ? 'Each person signs in with their own account in Settings → Integrations, yours included.'
+                  : `Each person connects their own token${header} in Settings → Integrations, yours included.`}
               </Text>
+              {oauth ? <SignInNote oauth={integration.oauth} testID="manage-integration-signin-note" /> : null}
               {integration.connections.length === 0 ? (
                 <Text style={settingsStyles.muted} testID="manage-integration-no-connections">
                   Nobody has connected yet.

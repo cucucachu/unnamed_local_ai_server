@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """M18-09 (GATE G18): an MCP integration on the live stack. See g18_integrations_smoke.sh.
 
-argv[1]: gateway | agent | all | cleanup.
+argv[1]: gateway | oauth | agent | all | cleanup.
 
 Env (from the .sh): E2E_BASE; G18_ADMIN_COOKIE / G18_ADMIN_PASSWORD (an admin),
 G18_USER_COOKIE (connected), G18_OTHER_COOKIE (never connected); G18_TOKENS (the
 fake server's two tokens: the admin's, the user's); G18_FAKE (its container) and
 G18_FAKE_IP; G18_RUNNER (a container on homeai-internal) and PLATFORM_AGENT_TOKEN
-(for delegations); G18_SINCE (for the log and audit checks); G18_PG_USER.
+(for delegations); G18_SINCE (for the log and audit checks); G18_PG_USER; G18_OAUTH_FAKE
+and G18_OAUTH_IP (the fake OAuth provider), G18_LAN (this server's LAN address).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
 
 from websockets.asyncio.client import connect
 
@@ -37,6 +39,8 @@ SERVICES = ["platform", "integrations-gateway", "agent-server", "egress-proxy", 
 
 # Every response body the users saw, checked for the tokens at the end.
 SEEN: list[str] = []
+# Tokens the fake OAuth provider issued: never in a response, a log or the audit log.
+ISSUED: list[str] = []
 
 # Runs in the runner (homeai-internal): mints the cookie holder's delegation for a
 # thread the way agent-server does, then calls the gateway's agent API with it.
@@ -71,12 +75,17 @@ def fail(msg: str) -> None:
     raise SystemExit(1)
 
 
-def api(cookie: str, method: str, path: str, body: Any = None) -> tuple[int, Any]:
+def api(
+    cookie: str, method: str, path: str, body: Any = None, host: str | None = None
+) -> tuple[int, Any]:
+    headers = {"Cookie": cookie, "Content-Type": "application/json"}
+    if host:
+        headers["Host"] = host
     req = urllib.request.Request(
         f"{BASE}{path}",
         data=None if body is None else json.dumps(body).encode(),
         method=method,
-        headers={"Cookie": cookie, "Content-Type": "application/json"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
@@ -92,8 +101,10 @@ def api(cookie: str, method: str, path: str, body: Any = None) -> tuple[int, Any
         return status, raw
 
 
-def ok(cookie: str, method: str, path: str, body: Any = None, want: int = 200) -> Any:
-    status, out = api(cookie, method, path, body)
+def ok(
+    cookie: str, method: str, path: str, body: Any = None, want: int = 200, host: str | None = None
+) -> Any:
+    status, out = api(cookie, method, path, body, host)
     if status != want:
         fail(f"{method} {path}: HTTP {status} {out!r}")
     return out
@@ -268,7 +279,7 @@ def gateway_phase(integration: dict) -> None:
 
 
 def no_secrets() -> None:
-    tokens = [ADMIN_TOKEN, USER_TOKEN]
+    tokens = [ADMIN_TOKEN, USER_TOKEN, *ISSUED]
     if any(t in raw for raw in SEEN for t in tokens):
         fail("a token appeared in an API response")
     logs = subprocess.run(
@@ -289,6 +300,153 @@ def no_secrets() -> None:
         fail("a token appeared in the audit log")
     log(f"OK: no token in {len(SEEN)} responses, {len(logs.splitlines())} log lines or "
         f"{len(audit.splitlines())} audit events")  # fmt: skip
+
+
+# --- oauth phase -------------------------------------------------------------------------
+
+# Runs in the fake OAuth provider's container: one request to it, redirects not followed.
+FAKE_OAUTH_PY = r"""
+import http.client, json, sys
+conn = http.client.HTTPConnection("127.0.0.1", 8000, timeout=30)
+conn.request(sys.argv[1], sys.argv[2], headers={"Host": sys.argv[3]})
+r = conn.getresponse()
+print(json.dumps({"status": r.status, "location": r.getheader("location"), "body": r.read().decode()}))
+"""
+
+
+def fake_oauth(method: str, path: str) -> dict:
+    """Ask the fake provider as the gateway's address for it (the browser's part, or its state)."""
+    done = subprocess.run(
+        ["docker", "exec", os.environ["G18_OAUTH_FAKE"], "/app/.venv/bin/python", "-c",
+         FAKE_OAUTH_PY, method, path, f"{os.environ['G18_OAUTH_IP']}:8000"],
+        capture_output=True, text=True, timeout=60, check=True,
+    )  # fmt: skip
+    return json.loads(done.stdout)
+
+
+def provider_state() -> dict:
+    state = json.loads(fake_oauth("GET", "/oauth-state")["body"])
+    ISSUED[:] = state["issued"]
+    return state
+
+
+def browse(path: str) -> tuple[int, str]:
+    """A browser with no HomeAI session, on this server's LAN address."""
+    req = urllib.request.Request(f"{BASE}{path}", headers={"Host": os.environ["G18_LAN"]})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            raw = resp.read().decode()
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        raw, status = e.read().decode("utf-8", "replace"), e.code
+    SEEN.append(raw)
+    return status, raw
+
+
+def ciphertext_digest(iid: str) -> str:
+    return subprocess.run(
+        ["docker", "compose", "-p", "homeai", "exec", "-T", "postgres", "psql", "-qtA",
+         "-U", os.environ.get("G18_PG_USER", "homeai"), "-d", "homeai_platform", "-c",
+         f"SELECT md5(ciphertext) FROM integration_credentials WHERE integration_id = '{iid}'"],
+        capture_output=True, text=True, timeout=60, check=True,
+    ).stdout.strip()  # fmt: skip
+
+
+def oauth_phase() -> None:
+    lan = os.environ["G18_LAN"]
+    if not lan:
+        fail("HOMEAI_LAN_ADDRESSES isn't set: a sign-in has nowhere to return to")
+    step_up()
+    slug = f"e2e-g18-o{secrets.token_hex(3)}"
+    fields = {
+        "slug": slug,
+        "name": f"E2E OAuth {slug[-6:]}",
+        "url": f"http://{os.environ['G18_OAUTH_IP']}:8000/mcp",
+        "private_address": True,
+    }
+    iid = ok(
+        ADMIN, "POST", ADMIN_API, fields | {"credential_model": "none", "auth_method": "none"}, 201
+    )["id"]
+    check = ok(ADMIN, "POST", f"{ADMIN_API}/{iid}/check")
+    oauth = check.get("oauth") or {}
+    if (
+        check["auth"] != "oauth"
+        or oauth.get("registration") != "client_id_url"
+        or oauth.get("revocable") is not True
+    ):
+        fail(f"check: expected OAuth with a client ID URL and revocation, got {check!r}")
+    log("OK: the check finds OAuth sign-in (a client ID URL, revocable)")
+    ok(
+        ADMIN,
+        "PATCH",
+        f"{ADMIN_API}/{iid}",
+        {"credential_model": "per_user", "auth_method": "oauth"},
+    )
+
+    refused = api(ADMIN, "POST", f"{MINE}/{iid}/oauth/start", host="elsewhere.example")
+    if refused[0] != 422 or "unknown_address" not in json.dumps(refused[1]):
+        fail(f"a sign-in from an address that isn't this server's must be refused: {refused!r}")
+    started = ok(ADMIN, "POST", f"{MINE}/{iid}/oauth/start", host=lan)
+    authorize = urlsplit(started["authorize_url"])
+    if authorize.netloc != f"{os.environ['G18_OAUTH_IP']}:8000":
+        fail(f"sign-in URL on the wrong host: {started!r}")
+    answered = fake_oauth("GET", f"{authorize.path}?{authorize.query}")
+    back = urlsplit(answered.get("location") or "")
+    if (
+        answered["status"] != 302
+        or back.netloc != lan
+        or back.path != "/api/platform/integrations/oauth/return"
+    ):
+        fail(f"the provider should send the browser back to {lan}: {answered!r}")
+    status, page = browse(f"{back.path}?{back.query}")
+    if status != 200 or "found" not in page or f"settings/integrations/manage/{iid}" not in page:
+        fail(f"the return page should store it and find the tools: {status} {page[:500]!r}")
+    log(
+        "OK: signed in from the LAN address; the return page (no session) stored it and found the tools"
+    )
+    status, page = browse(f"{back.path}?{back.query}")
+    if status != 400 or "already used" not in page:
+        fail(f"a used sign-in must not work twice: {status} {page[:300]!r}")
+    log("OK: the same return link refused a second time")
+
+    found = next(i for i in ok(ADMIN, "GET", ADMIN_API)["integrations"] if i["id"] == iid)
+    if "list_lights" not in {t["name"] for t in found["tools"]} or len(found["connections"]) != 1:
+        fail(f"discovery or the admin's connection missing: {found!r}")
+    ok(ADMIN, "PATCH", f"{ADMIN_API}/{iid}/tools",
+       {"changes": [{"name": "list_lights", "enabled": True, "ceiling": "allow"}]})  # fmt: skip
+    ok(ADMIN, "PATCH", f"{MINE}/{iid}/tools",
+       {"changes": [{"name": "list_lights", "permission": "allow"}]})  # fmt: skip
+
+    thread = new_thread(ADMIN)
+    try:
+        call = {"integration": slug, "context": "chat", "tool": "list_lights", "arguments": {}}
+        ran = gateway(ADMIN, thread, "/v1/call", call)
+        if not ran.get("ok"):
+            fail(f"a call with the signed-in token should run: {ran!r}")
+        log("OK: a call runs with the signed-in token")
+        before = ciphertext_digest(iid)
+        fake_oauth("POST", "/expire")
+        ran = gateway(ADMIN, thread, "/v1/call", call)
+        state = provider_state()
+        if not ran.get("ok") or state["refreshes"] < 1:
+            fail(f"an expired token should be refreshed and the call retried: {ran!r} {state!r}")
+        if ciphertext_digest(iid) == before:
+            fail("the refreshed credential wasn't written back to the platform")
+        log(
+            f"OK: an expired token was refreshed ({state['refreshes']}x), the call retried, the new one stored"
+        )
+    finally:
+        api(ADMIN, "DELETE", f"/api/threads/{thread}")
+
+    ok(ADMIN, "DELETE", f"{MINE}/{iid}/connection", want=204)
+    state = provider_state()
+    if state["revoked"] < 1:
+        fail(f"disconnecting should revoke at the provider: {state!r}")
+    mine = next(i for i in ok(ADMIN, "GET", MINE)["integrations"] if i["id"] == iid)
+    if mine["status"] != "not_connected":
+        fail(f"still connected after disconnecting: {mine!r}")
+    log("OK: disconnecting revoked the token at the provider and deleted it")
+    no_secrets()
 
 
 # --- agent phase -------------------------------------------------------------------------
@@ -424,9 +582,15 @@ def main() -> None:
     if phase == "cleanup":
         cleanup()
         return
+    if phase == "oauth":
+        oauth_phase()
+        log("PASS")
+        return
     integration = install()
     if phase in ("gateway", "all"):
         gateway_phase(integration)
+    if phase == "all":
+        oauth_phase()
     if phase in ("agent", "all"):
         agent_phase(integration)
     log("PASS")

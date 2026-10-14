@@ -13,6 +13,11 @@ designed against:
 real provider checks and returns where the provider sends the browser. In
 live mode, `GET /authorize` does the same with a redirect.
 
+Live (`tests.fake_server` with `FAKE_OAUTH=ha`), `mcp` is empty and becomes
+the origin the first request names (the container's address), and
+`GET /oauth-state` / `POST /expire` let the gate see and force what
+happened.
+
 `allowed(host)` stands in for the egress proxy: a host it refuses gets the
 proxy's own `403` with `X-Egress-Denied: not_registered`.
 """
@@ -51,6 +56,7 @@ class FakeProvider:
     refresh: dict[str, str] = field(default_factory=dict)
     revoked: list[str] = field(default_factory=list)
     token_requests: list[dict[str, str]] = field(default_factory=list)
+    issued: set[str] = field(default_factory=set)
 
     @property
     def issuer(self) -> str:
@@ -114,6 +120,7 @@ class FakeProvider:
         refresh = "rt-" + secrets.token_urlsafe(16)
         self.access.add(access)
         self.refresh[refresh] = client_id
+        self.issued |= {access, refresh}
         return {
             "access_token": access,
             "token_type": "Bearer",
@@ -150,6 +157,16 @@ class FakeProvider:
     def expire_access(self) -> None:
         self.access.clear()
 
+    def state(self) -> dict[str, Any]:
+        """For the live gate: what was asked for, and every token issued (to look for leaks)."""
+        grants = [r.get("grant_type") for r in self.token_requests]
+        return {
+            "codes": grants.count("authorization_code"),
+            "refreshes": grants.count("refresh_token"),
+            "revoked": len(self.revoked),
+            "issued": sorted(self.issued),
+        }
+
     # --- HTTP -----------------------------------------------------------------------------
 
     async def __call__(self, scope, receive, send) -> None:
@@ -166,7 +183,9 @@ class FakeProvider:
         if not self.allowed(host):
             await _send(send, 403, {"error": "denied"}, {"x-egress-denied": "not_registered"})
             return
-        origin = f"https://{host}"
+        if not self.mcp:
+            self.mcp = f"http://{host}"
+        origin = f"{urlsplit(self.mcp).scheme}://{host}"
         if origin == self.mcp:
             await self._mcp_host(send, method, path, headers, body, scope)
         elif origin == self.tokens_host and path == "/oauth2/token/" and method == "POST":
@@ -181,11 +200,11 @@ class FakeProvider:
             if bearer in self.access:
                 await _send(send, 200, {"jsonrpc": "2.0", "id": 1, "result": {}})
                 return
-            challenge = 'Bearer error="invalid_token"'
-            if self.mode == "robinhood":
-                challenge += (
-                    f', resource_metadata="{self.mcp}/.well-known/oauth-protected-resource/mcp"'
-                )
+            path_part = "/mcp" if self.mode == "robinhood" else ""
+            challenge = (
+                'Bearer error="invalid_token", resource_metadata='
+                f'"{self.mcp}/.well-known/oauth-protected-resource{path_part}"'
+            )
             await _send(send, 401, {"error": "unauthorized"}, {"www-authenticate": challenge})
             return
         if method == "GET" and path in (
@@ -233,6 +252,13 @@ class FakeProvider:
             token = _form(body).get("token", "")
             self.revoked.append(token)
             self.refresh.pop(token, None)
+            await _send(send, 200, {})
+            return
+        if method == "GET" and path == "/oauth-state":
+            await _send(send, 200, self.state())
+            return
+        if method == "POST" and path == "/expire":
+            self.expire_access()
             await _send(send, 200, {})
             return
         if method == "GET" and path == "/authorize":

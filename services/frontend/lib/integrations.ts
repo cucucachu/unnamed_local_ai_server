@@ -1,3 +1,5 @@
+import { Linking, Platform } from 'react-native';
+
 import { apiFetch } from './api';
 import type { ToolPermission } from './platform';
 
@@ -23,6 +25,16 @@ export interface IntegrationTool {
   permission_locked: boolean;
 }
 
+/** What an OAuth server's metadata said (docs/INTEGRATIONS.md §5.1). */
+export interface OAuthSummary {
+  issuer: string | null;
+  sign_in_host: string | null;
+  token_host: string | null;
+  registration: 'dynamic' | 'client_id_url' | 'unsupported' | null;
+  /** false: disconnecting can't sign HomeAI out there; remove it in the provider's settings too. */
+  revocable: boolean;
+}
+
 export interface Integration {
   id: string;
   slug: string;
@@ -32,6 +44,7 @@ export interface Integration {
   auth_method: AuthMethod;
   /** A credential for it would cross the network unencrypted. */
   plain_http: boolean;
+  oauth?: OAuthSummary | null;
   status: ConnectionStatus;
   tools: IntegrationTool[];
 }
@@ -63,6 +76,7 @@ export interface AdminIntegration {
   auth_method: AuthMethod;
   url: string;
   plain_http: boolean;
+  oauth?: OAuthSummary | null;
   cert_fingerprint: string | null;
   private_address: boolean;
   token_header: string | null;
@@ -91,6 +105,8 @@ export interface ServerCheck {
   certificate: string | null;
   protocol_version: string | null;
   server: Record<string, unknown> | null;
+  /** When `auth` is `oauth`: the sign-in it offers, or `problem` if HomeAI can't use it. */
+  oauth?: (Partial<OAuthSummary> & { problem?: string | null; detail?: string | null }) | null;
 }
 
 /** A credential was stored; `checked` false means the server couldn't be asked. */
@@ -142,6 +158,27 @@ export function connectIntegration(integrationId: string, secret: string): Promi
   return send<Connection>('PUT', `${MINE}/${id(integrationId)}/connection`, { secret });
 }
 
+/** The provider's sign-in page for the user's own connection; open it with `openSignIn`. */
+export function startMySignIn(integrationId: string): Promise<{ authorize_url: string }> {
+  return send<{ authorize_url: string }>('POST', `${MINE}/${id(integrationId)}/oauth/start`);
+}
+
+/** Go to a provider's sign-in page. Its return page links back into HomeAI.
+ * The web goes in this tab (no popup to block); Android opens the browser. */
+export async function openSignIn(url: string): Promise<void> {
+  if (Platform.OS === 'web') window.location.assign(url);
+  else await Linking.openURL(url);
+}
+
+/** "Signs in on robinhood.com; tokens from api.robinhood.com." */
+export function oauthHostsLine(summary: Partial<OAuthSummary>): string {
+  const signIn = summary.sign_in_host;
+  const tokens = summary.token_host;
+  if (!signIn) return '';
+  if (!tokens || tokens === signIn) return `Signs in on ${signIn}.`;
+  return `Signs in on ${signIn}; tokens from ${tokens}.`;
+}
+
 export function disconnectIntegration(integrationId: string): Promise<void> {
   return send<void>('DELETE', `${MINE}/${id(integrationId)}/connection`);
 }
@@ -182,6 +219,11 @@ export function adminChangeIntegrationTools(
 
 export function adminSetSharedCredential(integrationId: string, secret: string): Promise<Connection> {
   return send<Connection>('PUT', `${ADMIN}/${id(integrationId)}/shared-credential`, { secret });
+}
+
+/** The provider's sign-in page for the household's shared connection. */
+export function adminStartSharedSignIn(integrationId: string): Promise<{ authorize_url: string }> {
+  return send<{ authorize_url: string }>('POST', `${ADMIN}/${id(integrationId)}/oauth/start`);
 }
 
 export function adminClearSharedCredential(integrationId: string): Promise<void> {

@@ -4,6 +4,10 @@ The gateway's unit tests use it in-process. `python -m tests.fake_server` serves
 Streamable HTTP at `/mcp` for the live gate (scripts/e2e/g18_*): each request needs
 `Authorization: Bearer <one of FAKE_MCP_TOKENS>` (comma-separated, from the environment),
 and `GET /state` returns the lights without a token, so the gate can see what a call did.
+
+`FAKE_OAUTH=ha` puts a fake OAuth provider in front (`tests.fake_oauth`, the Home
+Assistant shape: everything on this origin): a token it issued opens `/mcp` too, and
+anything else goes to it (a request without a token gets its 401 challenge).
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ import os
 import anyio
 import mcp_types as types
 from mcp.server.mcpserver import Context, MCPServer
+
+from tests.fake_oauth import FakeProvider
 
 LIGHTS: dict[str, bool] = {}
 
@@ -95,7 +101,7 @@ def build(big_size: int = 50_000) -> MCPServer:
     return srv
 
 
-def http_app(tokens: set[str], host: str = "127.0.0.1"):
+def http_app(tokens: set[str], host: str = "127.0.0.1", oauth: FakeProvider | None = None):
     # On 127.0.0.1 the SDK only accepts `Host: localhost`-style headers (DNS rebinding
     # protection); the live gate reaches it by container IP, so it serves on 0.0.0.0.
     inner = build().streamable_http_app(streamable_http_path="/mcp", host=host)
@@ -106,7 +112,12 @@ def http_app(tokens: set[str], host: str = "127.0.0.1"):
             if scope["path"] == "/state" and scope["method"] == "GET":
                 await _send_json(send, 200, LIGHTS)
                 return
-            if dict(scope["headers"]).get(b"authorization") not in allowed:
+            auth = dict(scope["headers"]).get(b"authorization") or b""
+            issued = oauth is not None and auth.decode().removeprefix("Bearer ") in oauth.access
+            if oauth is not None and not issued and auth not in allowed:
+                await oauth(scope, receive, send)
+                return
+            if auth not in allowed and not issued:
                 await _send_json(send, 401, {"error": "unauthorized"})
                 return
         await inner(scope, receive, send)
@@ -125,6 +136,12 @@ if __name__ == "__main__":
     import uvicorn
 
     tokens = set(os.environ.get("FAKE_MCP_TOKENS", "").split(","))
+    mode = os.environ.get("FAKE_OAUTH", "")
+    oauth = FakeProvider(mode=mode, mcp="") if mode else None
     uvicorn.run(
-        http_app(tokens, host="0.0.0.0"), host="0.0.0.0", port=8000, log_level="warning", lifespan="on"
+        http_app(tokens, host="0.0.0.0", oauth=oauth),
+        host="0.0.0.0",
+        port=8000,
+        log_level="warning",
+        lifespan="on",
     )
