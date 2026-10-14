@@ -175,8 +175,12 @@ def _split_host(raw: str) -> tuple[str, int | None]:
 
 
 def own_hosts(settings: Settings) -> set[str]:
-    """This server's own names: LAN addresses, VPN address, Caddy's local name, domain."""
-    hosts = set(settings.lan_addresses) | {"homeai.local"}
+    """This server's own names: LAN addresses, VPN address, Caddy's local name, domain.
+
+    Loopback names too: a browser on this machine reaches HomeAI there, and
+    some providers only send the browser back to a loopback address.
+    """
+    hosts = set(settings.lan_addresses) | {"homeai.local", "localhost", "127.0.0.1", "::1"}
     for part in settings.origin_vpn_subnets.split(","):
         if part.strip():
             network = ipaddress.ip_network(part.strip(), strict=False)

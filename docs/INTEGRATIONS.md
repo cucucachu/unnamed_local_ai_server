@@ -270,11 +270,20 @@ client (with a secret) is refused for now (#372).
 "this server" is the address the user's app is using (the `Host` of the
 request that started the sign-in), accepted only if it's one of the
 server's own addresses (`HOMEAI_LAN_ADDRESSES`, the VPN address,
-`homeai.local`, `HOMEAI_DOMAIN`). No new setting. The provider never contacts it; the
-browser does, so it must be reachable from that browser (Robinhood's
-sign-in is desktop-only; Home Assistant's sign-in page must be reachable
-too, so sign in at home). The client ID is stored with the credential, so
-refreshes work from anywhere.
+`homeai.local`, `HOMEAI_DOMAIN`, and on the HomeAI computer itself
+`localhost`, `127.0.0.1`, `::1`). No new setting. The provider never contacts it; the
+browser does, so it must be reachable from that browser (Home Assistant's
+sign-in page must be reachable too, so sign in at home). The client ID is
+stored with the credential, so refreshes work from anywhere.
+
+Some providers only send the browser back to a loopback address, whatever
+registration said. Robinhood does: dynamic registration answers every
+client with the same client ID and echoes the return address, and its
+sign-in then refuses anything but a loopback one (`robinhood.com/oauth/error`).
+For those, sign in from a browser on the HomeAI computer, with HomeAI open
+at `http://localhost`. Robinhood's sign-in is desktop-only anyway. Signing
+in from the phone app is a follow-up (the app catches the return on the
+phone's own loopback address).
 
 **Signing in:**
 

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { AppState, StyleSheet, Text, View } from 'react-native';
+import { AppState, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { AuthField } from '@/components/AuthForm';
 import { ActionButton, settingsStyles } from '@/components/SettingsUI';
@@ -74,8 +74,17 @@ export function SignInNote({ oauth, testID }: { oauth: OAuthSummary | null | und
       {oauth.revocable
         ? 'Disconnecting signs HomeAI out there too.'
         : `Disconnecting can't sign HomeAI out there: also remove HomeAI in your ${oauth.sign_in_host ?? 'account'} settings.`}
+      {onLoopback() ? '' : LOOPBACK_HINT}
     </Text>
   );
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+export const LOOPBACK_HINT =
+  ' If the sign-in ends on an error page there, sign in from the HomeAI computer, with HomeAI open at http://localhost: some services only allow that.';
+
+function onLoopback(): boolean {
+  return Platform.OS === 'web' && typeof window !== 'undefined' && LOOPBACK_HOSTS.has(window.location.hostname);
 }
 
 /** A token field that's never filled from the server: what's typed is sent
