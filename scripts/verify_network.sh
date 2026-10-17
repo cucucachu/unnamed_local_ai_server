@@ -44,7 +44,8 @@
 #      full explanation of why check 4 alone is not sufficient).
 #   6. M7-01 no-egress: for each of `agent-server`, `model-runner`,
 #      `code-exec-manager`, `postgres` (every service moved onto the
-#      `homeai-internal` network, `internal: true`), a real outbound TCP
+#      `homeai-internal` network, `internal: true`) and `embeddings`
+#      (M21-02), a real outbound TCP
 #      connect attempt from inside that container to a public IP
 #      (`1.1.1.1:443`, 3s timeout) is asserted to FAIL. Confirms `internal:
 #      true` is actually enforced by the live Docker network, not just
@@ -384,7 +385,8 @@ check_5() {
 # ---- check 6: M7-01 no-egress ----------------------------------------------
 #
 # `agent-server`, `model-runner`, `code-exec-manager`, and `postgres` were
-# all moved onto `homeai-internal` (`internal: true`) by M7-01. This probes
+# all moved onto `homeai-internal` (`internal: true`) by M7-01; `embeddings`
+# (M21-02) started there. This probes
 # each one for real, from inside the container, rather than trusting the
 # compose file's declared intent.
 
@@ -441,7 +443,7 @@ except Exception:
 
 check_6() {
   local svc cid rc
-  for svc in agent-server model-runner code-exec-manager postgres; do
+  for svc in agent-server model-runner code-exec-manager postgres embeddings; do
     cid="$(docker compose ps -q "$svc" 2>/dev/null)"
     if [ -z "$cid" ]; then
       fail 6 "no-egress: ${svc} (homeai-internal) cannot reach 1.1.1.1:443" \

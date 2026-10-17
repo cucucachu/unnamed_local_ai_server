@@ -747,7 +747,7 @@ what another doc says it should be.
   FixedIdentityVerifier()` on `create_app`, a fixed test user).
   Run: `cd services/agent-server && uv run ruff check . && uv run pytest`.
   The Postgres-backed tests (marker `integration`) start a throwaway
-  `postgres:17` with the host's `docker` CLI, run
+  Postgres in the live image (pgvector on `postgres:17`) with the host's `docker` CLI, run
   `infra/postgres/db-init.sh` against it, and connect as `agent` like the
   live stack (`tests/conftest.py`'s `pg_server`); without `docker` they
   skip. Select them alone with `uv run pytest -m integration`.
@@ -780,6 +780,41 @@ what another doc says it should be.
   `llama-bench` procedure documented in "Model operations" below, and
   exercised live end-to-end by the `scripts/e2e/gate_m*.sh` chain (which
   drives real chat completions through `agent-server`).
+
+### `embeddings`
+
+- **Purpose** (M21-02): text embeddings for the platform's file search
+  (docs/MEMORY.md §5), served by `llama-server --embedding`
+  (`POST /v1/embeddings`). Only the platform calls it
+  (`EMBEDDINGS_URL`). On the CPU: the GPU belongs to `model-runner`.
+- **Model**: EmbeddingGemma 300M, Q8_0 (768 dimensions, ~330 MB), fetched
+  and sha256-checked by `services/embeddings/fetch-model.sh`. Chosen in
+  #389 by `scripts/eval/embeddings/` (40 notes and code files, 50 queries:
+  paraphrases, harder paraphrases with no words in common, and exact
+  names), against nomic-embed-text v1.5, Qwen3-Embedding 0.6B and
+  bge-small v1.5. It ranked the right note first for 19 of 20 hard
+  paraphrases (the others 14–16), at ~7,800 characters/s on 8 threads
+  (about half an hour for a first index of 10,000 chunks) and ~394 MiB
+  resident; Qwen3 was 3× slower and 4× bigger without doing better. Three
+  of the four left an exact name (Leadville, Dr. Alvarez) out of the top
+  5, which is why search adds full-text matching. Its prompts: queries `task: search result | query: <text>`,
+  documents `title: none | text: <text>`. EmbeddingGemma is under the
+  Gemma terms of use.
+- **Image/base**: `ghcr.io/ggml-org/llama.cpp` `server` (the CPU build)
+  pinned by digest. Dockerfile: `services/embeddings/Dockerfile`.
+- **Published port**: none.
+- **Internal port**: `8080`.
+- **Network**: `homeai-internal` only — no route to the public internet
+  (`verify_network.sh` check 6).
+- **Mounts**: `./services/embeddings/models:/models:ro` (ro bind).
+- **Runs as**: `${HOMEAI_UID}:${HOMEAI_GID}`, `read_only: true` with a
+  `/tmp` tmpfs, `cap_drop: [ALL]`, `no-new-privileges`.
+- **Env vars consumed**: none inside the container: `EMBEDDINGS_MODEL_FILE`
+  (default `embeddinggemma-300M-Q8_0.gguf`) and `EMBEDDINGS_THREADS`
+  (default 6) are substituted into the compose `command:`. Two slots of
+  2,048 tokens (`--ctx-size 4096 --parallel 2`).
+- **Tests**: none of its own (a pinned upstream binary); the model
+  comparison is `python3 scripts/eval/embeddings/run.py`.
 
 ### `code-exec-manager`
 
@@ -940,7 +975,15 @@ what another doc says it should be.
   `homeai_platform` (owned by role `platform` — M10-02). Both roles are
   created by `db-init` below; the superuser `POSTGRES_USER` is used only by
   `db-init`, backups, and the e2e scripts' cleanup.
-- **Image/base**: `postgres:17`, official/unmodified.
+- **Image/base**: `pgvector/pgvector:0.8.7-pg17-trixie` pinned by digest
+  (M21-02): the official `postgres:17` (17.11) plus the pgvector extension,
+  for the platform's file search index (docs/MEMORY.md §5). It's the
+  trixie build on purpose: the same Debian and glibc (2.41) as the
+  `postgres:17` image it replaced, so the existing `pgdata` started
+  unchanged and text collations (`datcollversion` 2.41) keep their order.
+  Before switching, a `pg_basebackup` copy of the live volume was started
+  on it and `db-init` run twice; on the live stack, a `pg_dumpall` was
+  taken to `/srv/homeai/backups/` first.
 - **Published port**: none.
 - **Internal port**: `5432`.
 - **Network (M7-01)**: `homeai-internal` only — no route to the public
@@ -952,7 +995,7 @@ what another doc says it should be.
   `postgres.environment` block.
 - **Tests**: no tests of its own; exercised via `agent-server`'s
   `test_checkpointer_pg.py` / `test_threads_pg.py` / `test_rls_pg.py`
-  (`-m integration`, a throwaway `postgres:17`) and the
+  (`-m integration`, a throwaway container of the same image) and the
   `scripts/e2e/gate_m3.sh` / `persistence_smoke.sh`
   scripts.
 
@@ -985,8 +1028,11 @@ what another doc says it should be.
   `template1`, so `agent` and `platform` each reach only their own
   database. The ownership changes wait at most 60 s for a lock
   (`lock_timeout`), so a stuck lock fails the run instead of hanging it.
-- **Image/base**: `postgres:17` (same as `postgres`, so `psql` matches the
-  server), entrypoint overridden to `bash /db-init.sh`. Script:
+  Since M21-02 it also creates the `vector` extension in
+  `homeai_platform` if missing (only a superuser can); `platform` uses its
+  types without owning it.
+- **Image/base**: the same pinned image as `postgres` (so `psql` matches
+  the server), entrypoint overridden to `bash /db-init.sh`. Script:
   `infra/postgres/db-init.sh`, bind-mounted read-only.
 - **Lifecycle**: `restart: "no"`; `depends_on: postgres (service_healthy)`.
   Runs (and exits 0) on every `docker compose up`; `platform` and (M11-04)
@@ -1307,7 +1353,7 @@ what another doc says it should be.
   `scripts/e2e/platform_app_data_smoke.sh`.
   Run: `cd services/platform && uv run ruff check . && uv run pytest`.
   Needs a reachable Docker daemon: `tests/conftest.py` starts one
-  `postgres:17` container per session on a random loopback port (removed
+  Postgres container (the live image) per session on a random loopback port (removed
   afterwards) and gives each test a fresh database. The host has no
   `ffmpeg`, so the 7 tests that need a real one skip there; run them with
   `scripts/platform_image_tests.sh` (the Dockerfile's `base` stage, your

@@ -182,7 +182,7 @@ def fake_gateway(fake_platform: FakePlatform) -> Iterator[FakeGateway]:
 
 # --- a throwaway Postgres, initialized like the live one ---------------------
 
-PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "postgres:17")
+PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "pgvector/pgvector:0.8.7-pg17-trixie")
 PG_SUPERUSER = "homeai"
 PG_SUPERUSER_PASSWORD = "test-superuser-password"
 PG_AGENT_PASSWORD = "test-agent-password"
@@ -216,7 +216,7 @@ def _docker(*args: str) -> str:
 
 @pytest.fixture(scope="session")
 def pg_server() -> Iterator[PgServer]:
-    """`postgres:17` on a random loopback port, after `infra/postgres/db-init.sh`.
+    """The live Postgres image on a random loopback port, after `infra/postgres/db-init.sh`.
 
     Superuser `homeai` and database `homeai` like the live volume, so db-init
     creates `agent` and `agent_rls_bypass` exactly as compose runs it. Skips

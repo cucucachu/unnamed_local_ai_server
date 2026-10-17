@@ -113,8 +113,10 @@ def test_a_value_an_insert_supplies_is_overwritten(con) -> None:
     [
         "UPDATE messages SET _created_by = 'alice-id'",
         "UPDATE messages SET body = 'x', _updated_at = '2000-01-01'",
-        "INSERT INTO messages (id, body) VALUES (1, 'x') "
-        "ON CONFLICT (id) DO UPDATE SET _created_by = 'alice-id'",
+        (
+            "INSERT INTO messages (id, body) VALUES (1, 'x') "
+            "ON CONFLICT (id) DO UPDATE SET _created_by = 'alice-id'"
+        ),
     ],
 )
 def test_the_columns_cannot_be_written(con, sql) -> None:

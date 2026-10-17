@@ -375,8 +375,9 @@ calls it.
 
 ### 5.5 Postgres
 
-Compose moves to the `pgvector/pgvector:pg17` image, which uses the same
-data directory as `postgres:17`. `db-init` creates the `vector` extension
+Compose moves to the `pgvector/pgvector:0.8.7-pg17-trixie` image (done in
+M21-02): the same PostgreSQL and Debian as `postgres:17`, so the data
+directory and collations are unchanged. `db-init` creates the `vector` extension
 in `homeai_platform`, which needs the superuser, and `db-init` already has
 it.
 

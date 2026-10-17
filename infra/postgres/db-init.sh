@@ -4,7 +4,7 @@
 # on an EMPTY data volume, and the live `pgdata` volume was initialized long
 # before the platform service existed (docs/PLATFORM.md §3, `db-init`).
 #
-# Run by the one-shot `db-init` compose service (postgres:17 image, so psql
+# Run by the one-shot `db-init` compose service (the postgres image, so psql
 # matches the server) on every `docker compose up`; safe to re-run any
 # number of times against an already-initialized volume:
 #   - role `platform` (LOGIN, no other attributes) is created if missing,
@@ -30,6 +30,9 @@
 #     BYPASSRLS role, hence here.
 #   - PUBLIC loses CONNECT on both application databases and on `postgres`
 #     and `template1`, so each role reaches only its own database.
+#   - extension `vector` (M21-02; pgvector, shipped in the postgres image)
+#     exists in `homeai_platform`, for the platform's file search index.
+#     Creating it needs the superuser; `platform` only uses its types.
 #
 # Env (set by docker-compose.yml): PGHOST, PGUSER, PGPASSWORD, PGDATABASE —
 # the existing superuser from POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB —
@@ -136,5 +139,7 @@ BEGIN
 END
 $$;
 SQL
+
+psql -X -q -v ON_ERROR_STOP=1 -d homeai_platform -c 'CREATE EXTENSION IF NOT EXISTS vector'
 
 echo "db-init: roles 'platform', 'agent' and 'agent_rls_bypass', databases 'homeai_platform' and '${AGENT_DB}' are in place"
