@@ -52,18 +52,22 @@ def _host(request: Request) -> str:
     return request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
 
 
-def _started_by(principal: Principal) -> dict[str, Any]:
+def _started_by(principal: Principal, app: bool) -> dict[str, Any]:
     return {
         "user_id": str(principal.user_id),
         "name": principal.display_name or principal.username,
         "session_id": str(principal.session_id),
+        "app": app,
     }
 
 
 async def start(
-    request: Request, principal: Principal, integration_id: UUID, owner: UUID | None
+    request: Request, principal: Principal, integration_id: UUID, owner: UUID | None, app: bool
 ) -> OAuthStartOut:
-    """Ask the gateway for the provider's sign-in URL; keep a new client registration."""
+    """Ask the gateway for the provider's sign-in URL; keep a new client registration.
+
+    `app`: started from the phone app, so the return page links back into it.
+    """
     state = request.app.state
     return_url = integration_oauth.return_url(state.settings, _host(request), is_https(request))
     async with state.db_pool.connection() as conn:
@@ -74,7 +78,7 @@ async def start(
     started = await state.gateway.oauth_start(
         integrations.gateway_view(integration),
         owner,
-        _started_by(principal),
+        _started_by(principal, app),
         return_url,
         dict(client) if client else None,
     )
@@ -88,7 +92,9 @@ async def start(
 
 
 @router.post("/{integration_id}/oauth/start", response_model=OAuthStartOut)
-async def start_mine(integration_id: UUID, request: Request, principal: HumanUser) -> OAuthStartOut:
+async def start_mine(
+    integration_id: UUID, request: Request, principal: HumanUser, app: bool = False
+) -> OAuthStartOut:
     """Connect with sign-in: open `authorize_url` in a browser; the return page finishes it."""
     async with request.app.state.db_pool.connection() as conn:
         integration = await integrations.get(conn, integration_id)
@@ -96,7 +102,7 @@ async def start_mine(integration_id: UUID, request: Request, principal: HumanUse
         raise NotFound("integration_not_found")
     if integration["credential_model"] != "per_user":
         raise InvalidInput("wrong_credential_model")
-    return await start(request, principal, integration_id, principal.user_id)
+    return await start(request, principal, integration_id, principal.user_id, app)
 
 
 def _page(title: str, message: str, links: list[tuple[str, str]], status: int) -> HTMLResponse:
@@ -115,14 +121,19 @@ def _page(title: str, message: str, links: list[tuple[str, str]], status: int) -
     return HTMLResponse(body, status_code=status, headers=PAGE_HEADERS)
 
 
-def _back_links(integration_id: UUID | None, manage: bool) -> list[tuple[str, str]]:
+def _back_links(
+    integration_id: UUID | None, manage: bool, app: bool | None
+) -> list[tuple[str, str]]:
+    """`app` None: not known who started it, so both ways back."""
     if integration_id is None:
         path = "settings/integrations"
     elif manage:
         path = f"settings/integrations/manage/{integration_id}"
     else:
         path = f"settings/integrations/{integration_id}"
-    return [("Back to HomeAI", f"/{path}"), ("Open the HomeAI app", f"homeai://{path}")]
+    if app is None:
+        return [("Back to HomeAI", f"/{path}"), ("Open the HomeAI app", f"homeai://{path}")]
+    return [("Back to HomeAI", f"homeai://{path}" if app else f"/{path}")]
 
 
 def _actor(started_by: Any) -> audit.Actor:
@@ -152,13 +163,15 @@ async def finish(
         done = await app_state.gateway.oauth_finish(state, code, iss, error)
     except InvalidInput as exc:
         message = FAILURES.get(exc.code, FAILURE)
-        return _page("Sign-in not finished", message, _back_links(None, False), 400)
+        return _page("Sign-in not finished", message, _back_links(None, False, None), 400)
     except Unavailable:
-        return _page("Sign-in not finished", FAILURE, _back_links(None, False), 503)
+        return _page("Sign-in not finished", FAILURE, _back_links(None, False, None), 503)
+    started_by = done.get("started_by")
+    app = bool(started_by.get("app")) if isinstance(started_by, dict) else None
     try:
         integration_id = UUID(str(done["integration_id"]))
         owner = UUID(str(done["owner"])) if done.get("owner") else None
-        actor = _actor(done.get("started_by"))
+        actor = _actor(started_by)
         ciphertext = decode_ciphertext(done.get("ciphertext"))
         async with app_state.db_pool.connection() as conn:
             integration = await integrations.get(conn, integration_id)
@@ -169,7 +182,7 @@ async def finish(
             await integrations.store_credential(conn, actor, integration_id, owner, ciphertext)
     except (PlatformError, KeyError, ValueError) as exc:
         logger.warning("oauth sign-in not stored: %s", getattr(exc, "code", type(exc).__name__))
-        return _page("Sign-in not finished", FAILURE, _back_links(None, False), 400)
+        return _page("Sign-in not finished", FAILURE, _back_links(None, False, app), 400)
     found = integration["discovered_at"] is None and await _first_discovery(
         request, actor, integration, owner, done["ciphertext"]
     )
@@ -178,7 +191,7 @@ async def finish(
             f"Connected to {integration['name']} and found {found['tools']} tools. "
             "They start off: choose which to turn on in HomeAI."
         )
-        return _page("Connected", message, _back_links(integration_id, found["admin"]), 200)
+        return _page("Connected", message, _back_links(integration_id, found["admin"], app), 200)
     if done.get("checked") is False:
         message = (
             f"Connected to {integration['name']}, but it couldn't be tried just now. "
@@ -186,7 +199,7 @@ async def finish(
         )
     else:
         message = f"Connected to {integration['name']}. You can close this page."
-    return _page("Connected", message, _back_links(integration_id, owner is None), 200)
+    return _page("Connected", message, _back_links(integration_id, owner is None, app), 200)
 
 
 async def _first_discovery(

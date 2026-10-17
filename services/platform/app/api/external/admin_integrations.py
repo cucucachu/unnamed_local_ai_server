@@ -148,14 +148,14 @@ async def set_shared_credential(
 
 @router.post("/{integration_id}/oauth/start", response_model=OAuthStartOut)
 async def start_shared_sign_in(
-    integration_id: UUID, request: Request, principal: SteppedUpAdmin
+    integration_id: UUID, request: Request, principal: SteppedUpAdmin, app: bool = False
 ) -> OAuthStartOut:
     """The household's sign-in: open `authorize_url`; the return page stores it as shared."""
     async with request.app.state.db_pool.connection() as conn:
         integration = await integrations.get(conn, integration_id)
     if integration["credential_model"] != "shared":
         raise InvalidInput("wrong_credential_model")
-    return await oauth_pages.start(request, principal, integration_id, None)
+    return await oauth_pages.start(request, principal, integration_id, None, app)
 
 
 @router.delete("/{integration_id}/shared-credential", status_code=status.HTTP_204_NO_CONTENT)

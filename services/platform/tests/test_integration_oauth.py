@@ -144,9 +144,9 @@ async def _oauth_installed(platform, people, **overrides) -> str:
     return iid
 
 
-async def _start(platform, headers, iid, admin=False):
+async def _start(platform, headers, iid, admin=False, app=False):
     path = f"{ADMIN}/{iid}/oauth/start" if admin else f"{API}/integrations/{iid}/oauth/start"
-    return await platform.client.post(path, headers=headers)
+    return await platform.client.post(path, headers=headers, params={"app": "true"} if app else {})
 
 
 async def _return(platform, **query):
@@ -176,7 +176,8 @@ async def test_sign_in_then_the_return_page_stores_it(platform, people):
     page = await _return(platform, state="s1", code="c1", iss=OAUTH["summary"]["issuer"])
     assert page.status_code == 200, page.text
     assert "Connected to Trading" in page.text
-    assert f"homeai://settings/integrations/{iid}" in page.text
+    assert f'href="/settings/integrations/{iid}"' in page.text
+    assert "homeai://" not in page.text
     assert page.headers["cache-control"] == "no-store"
     rows = sql(platform, "SELECT user_id, ciphertext, set_by, status FROM integration_credentials")
     assert [(str(r["user_id"]), bytes(r["ciphertext"]), str(r["set_by"])) for r in rows] == [
@@ -193,11 +194,12 @@ async def test_sign_in_then_the_return_page_stores_it(platform, people):
 
 async def test_the_first_sign_in_finds_the_tools(platform, people):
     iid = await _oauth_installed(platform, people)
-    await _start(platform, people["admin"], iid)
+    await _start(platform, people["admin"], iid, app=True)
     page = await _return(platform, state="s1", code="c1")
     assert page.status_code == 200
     assert "found 2 tools" in page.text
-    assert f"homeai://settings/integrations/manage/{iid}" in page.text
+    assert f'href="homeai://settings/integrations/manage/{iid}"' in page.text
+    assert 'href="/settings' not in page.text
     discovered = _gateway(platform).discovered
     assert len(discovered) == 1 and discovered[0][1]["ciphertext"]
     names = sql(platform, "SELECT name FROM integration_tools ORDER BY position")
@@ -206,7 +208,7 @@ async def test_the_first_sign_in_finds_the_tools(platform, people):
     await _start(platform, people["bob"], iid)
     page = await _return(platform, state="s1", code="c1")
     assert "found" not in page.text
-    assert f"homeai://settings/integrations/{iid}" in page.text
+    assert f'href="/settings/integrations/{iid}"' in page.text
     assert len(_gateway(platform).discovered) == 1
 
 

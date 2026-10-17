@@ -518,7 +518,7 @@ describe('OAuth sign-in', () => {
     let integration = mine({ auth_method: 'oauth', oauth: OAUTH, slug: 'trading', name: 'Trading' });
     const fetchMock = mockFetchRoutes({
       [`GET ${MINE}`]: () => ({ body: { integrations: [integration] } }),
-      [`POST ${MINE}/int-1/oauth/start`]: { body: { authorize_url: AUTHORIZE } },
+      [`POST ${MINE}/int-1/oauth/start?app=true`]: { body: { authorize_url: AUTHORIZE } },
       [`DELETE ${MINE}/int-1/connection`]: { status: 204 },
     });
     renderer = await render(IntegrationScreen);
@@ -526,7 +526,7 @@ describe('OAuth sign-in', () => {
     expect(textOf(renderer)).toContain('Signs in on example.com; tokens from api.example.com.');
     expect(textOf(renderer)).toContain('also remove HomeAI in your example.com settings');
     await press(renderer, 'integration-sign-in');
-    expect(requestsTo(fetchMock, 'POST', `${MINE}/int-1/oauth/start`)).toHaveLength(1);
+    expect(requestsTo(fetchMock, 'POST', `${MINE}/int-1/oauth/start?app=true`)).toHaveLength(1);
     expect(openURL).toHaveBeenCalledWith(AUTHORIZE);
 
     integration = { ...integration, status: 'connected' };
@@ -544,7 +544,7 @@ describe('OAuth sign-in', () => {
       [`POST ${ADMIN}/int-1/check`]: {
         body: { reachable: true, auth: 'oauth', problem: null, detail: null, certificate: null, protocol_version: null, server: null, oauth: OAUTH },
       },
-      [`POST ${MINE}/int-1/oauth/start`]: { body: { authorize_url: AUTHORIZE } },
+      [`POST ${MINE}/int-1/oauth/start?app=true`]: { body: { authorize_url: AUTHORIZE } },
     });
     renderer = await render(AddIntegrationScreen);
     await type(renderer, 'add-integration-name', 'Trading');
@@ -600,7 +600,7 @@ describe('OAuth sign-in', () => {
           ],
         },
       },
-      [`POST ${ADMIN}/int-1/oauth/start`]: { body: { authorize_url: AUTHORIZE } },
+      [`POST ${ADMIN}/int-1/oauth/start?app=true`]: { body: { authorize_url: AUTHORIZE } },
     });
     renderer = await render(ManageIntegrationScreen);
     expect(textOf(renderer)).toContain('One household sign-in, used for everyone.');
@@ -608,7 +608,7 @@ describe('OAuth sign-in', () => {
     expect(textOf(renderer)).toContain('with HomeAI open at http://localhost');
     expect(exists(renderer, 'manage-integration-shared-input')).toBe(false);
     await press(renderer, 'manage-integration-shared-sign-in');
-    expect(requestsTo(fetchMock, 'POST', `${ADMIN}/int-1/oauth/start`)).toHaveLength(1);
+    expect(requestsTo(fetchMock, 'POST', `${ADMIN}/int-1/oauth/start?app=true`)).toHaveLength(1);
     expect(mockWithStepUp).toHaveBeenCalled();
     expect(openURL).toHaveBeenCalledWith(AUTHORIZE);
   });
