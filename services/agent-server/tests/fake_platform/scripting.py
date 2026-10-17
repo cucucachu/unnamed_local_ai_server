@@ -132,14 +132,18 @@ class FakePlatform:
     routine_grants: dict[str, RoutineGrant] = field(default_factory=dict)
     grant_exchanges: list[tuple[str, str]] = field(default_factory=list)
     refreshes: list[str] = field(default_factory=list)
-    # (method, path, bearer) for every files API request
+    # (method, path, bearer) for every files API request but the memory core's
     file_requests: list[tuple[str, str, str | None]] = field(default_factory=list)
+    # bearer per read of /personal/Memory/memory.md by `MemoryCoreMiddleware` (M21-06)
+    memory_core_reads: list[str | None] = field(default_factory=list)
     # `POST /files/search` (M21-04): (bearer, body) per call, and what it answers.
     search_requests: list[tuple[str | None, dict]] = field(default_factory=list)
     search_results: list[dict] = field(default_factory=list)
     search_semantic: bool = True
     # (status, detail) to fail the next searches with instead.
     search_error: tuple[int, str] | None = None
+    # (status, detail) to fail the next downloads with instead (M21-06).
+    download_error: tuple[int, str] | None = None
     # --- apps ---
     apps: list[dict] = field(default_factory=list)
     instances: list[dict] = field(default_factory=list)

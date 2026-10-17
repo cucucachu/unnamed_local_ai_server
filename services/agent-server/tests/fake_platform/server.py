@@ -15,6 +15,7 @@ from pathlib import PurePosixPath
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from app.agent.memory_core import MEMORY_PATH
 from app.core.delegation import DelegationDenied, DelegationUnavailable, Grant
 
 from .scripting import AGENT_TOKEN, FakePlatform, Minted
@@ -100,7 +101,10 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
 
     def _place(request: Request, path: str) -> _Place:
         bearer = _bearer(request)
-        fake.file_requests.append((request.method, request.url.path, bearer))
+        if request.url.path.endswith("/download") and path == MEMORY_PATH:
+            fake.memory_core_reads.append(bearer)
+        else:
+            fake.file_requests.append((request.method, request.url.path, bearer))
         who = fake.principal(bearer)
         if who is None:
             raise _error(401, "unauthenticated")
@@ -205,6 +209,8 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
     @app.get("/api/platform/files/download")
     async def download(request: Request, path: str) -> Response:
         place = _place(request, path)
+        if fake.download_error is not None:
+            raise _error(*fake.download_error)
         if not place.is_file():
             raise _error(404, "not_found")
         return Response(place.tree[place.rel], media_type="application/octet-stream")

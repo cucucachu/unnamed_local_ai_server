@@ -92,9 +92,10 @@ important ones.
 
 A new middleware (`MemoryCoreMiddleware`, modeled on
 `IntegrationsListMiddleware`) reads `/personal/Memory/memory.md` when a
-thread's first turn starts. It reads through `PlatformFilesBackend` with
-the turn's delegation, so the read is always as the user the turn runs
-as. The text goes into the thread's state (`memory_core`) and is appended
+thread's first turn starts. It reads through the platform's files API
+(`GET /files/download`, so a missing note can be told apart from an
+error) with the turn's delegation, so the read is always as the user the
+turn runs as. The text goes into the thread's state (`memory_core`) and is appended
 to the system message, after the integrations list, on every model call
 in that thread:
 
