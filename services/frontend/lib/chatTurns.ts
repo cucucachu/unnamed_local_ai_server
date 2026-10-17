@@ -52,6 +52,8 @@ function statusForTool(name: string, args: Record<string, unknown>): string {
       return file ? `Editing \`${file}\`` : 'Editing…';
     case 'execute_code':
       return 'Running command…';
+    case 'search_files':
+      return 'Searching files…';
     case 'web_search':
       return 'Searching the web…';
     case 'web_fetch': {

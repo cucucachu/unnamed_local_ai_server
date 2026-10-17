@@ -233,6 +233,16 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         ]
         return JSONResponse({"matches": matches, "truncated": False, "truncation_reason": None})
 
+    @app.post("/api/platform/files/search")
+    async def search(request: Request) -> JSONResponse:
+        body = await request.json()
+        if fake.principal(_bearer(request)) is None:
+            raise _error(401, "unauthenticated")
+        fake.search_requests.append((_bearer(request), body))
+        if fake.search_error is not None:
+            raise _error(*fake.search_error)
+        return JSONResponse({"results": fake.search_results, "semantic": fake.search_semantic})
+
     # --- apps (M13-02) ---------------------------------------------------------------
 
     def _who(request: Request) -> Minted:

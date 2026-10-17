@@ -89,6 +89,7 @@ from app.agent.prompts import (
 )
 from app.agent.repeat_guard import RepeatGuardMiddleware
 from app.agent.routine_tools import make_routine_tools
+from app.agent.search_tool import make_search_files_tool
 from app.agent.symbol_tools import make_symbol_tools
 from app.agent.syntax_check import SyntaxCheckMiddleware
 from app.agent.tool_catalog import CATALOG
@@ -141,6 +142,8 @@ def _describe(tool_call: ToolCall, _state: Any, _runtime: Any) -> str:
         return f"{_LABELS[name]} `{_virtual_path(args.get('path', args.get('file_path')))}`"
     if name in ("glob", "grep"):
         return f"{_LABELS[name]}: `{args.get('pattern', '?')}`"
+    if name == "search_files":
+        return f"Search files: {args.get('query', '?')}"
     if name == "web_search":
         return f"Search the web: {args.get('query', '?')}"
     if name == "web_fetch":
@@ -208,6 +211,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
             make_web_search_tool(settings),
             make_web_fetch_tool(settings),
             *make_symbol_tools(backend),
+            make_search_files_tool(settings),
             *make_app_tools(settings),
             *routine_tools,
             *make_integration_tools(settings),
