@@ -68,6 +68,9 @@ describe('runningStatusLine', () => {
       runningStatusLine([tool('t4', 'web_search', { category: 'web', status: 'running', args: {} })]),
     ).toBe('Searching the web…');
     expect(
+      runningStatusLine([tool('t6', 'search_files', { status: 'running', args: { query: 'maria', path: '/' } })]),
+    ).toBe('Searching files…');
+    expect(
       runningStatusLine([
         tool('t5', 'web_fetch', { category: 'web', status: 'running', args: { url: 'https://example.com/docs' } }),
       ]),

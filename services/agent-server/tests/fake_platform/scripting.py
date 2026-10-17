@@ -134,6 +134,12 @@ class FakePlatform:
     refreshes: list[str] = field(default_factory=list)
     # (method, path, bearer) for every files API request
     file_requests: list[tuple[str, str, str | None]] = field(default_factory=list)
+    # `POST /files/search` (M21-04): (bearer, body) per call, and what it answers.
+    search_requests: list[tuple[str | None, dict]] = field(default_factory=list)
+    search_results: list[dict] = field(default_factory=list)
+    search_semantic: bool = True
+    # (status, detail) to fail the next searches with instead.
+    search_error: tuple[int, str] | None = None
     # --- apps ---
     apps: list[dict] = field(default_factory=list)
     instances: list[dict] = field(default_factory=list)

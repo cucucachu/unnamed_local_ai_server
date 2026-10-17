@@ -43,6 +43,12 @@ CATALOG: tuple[CatalogTool, ...] = (
         ("read_file", "Read files", True, "Open and read a file."),
         ("glob", "Find files", True, "Find files by name."),
         ("grep", "Search in files", True, "Search for text inside files."),
+        (
+            "search_files",
+            "Search files by meaning",
+            True,
+            "Find passages in your files by what they mean, not just their exact words.",
+        ),
         ("outline", "Outline code", True, "List the functions and components in a code file."),
         ("write_file", "Write files", False, "Create a file, or replace one's contents."),
         ("edit_file", "Edit files", False, "Change part of a file."),

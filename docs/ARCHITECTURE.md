@@ -662,6 +662,17 @@ what another doc says it should be.
   permission and "not a space" wording added; no delegation means no
   request at all (fail closed). See "Delegation contract" under Platform
   API for how the socket obtains and refreshes the token.
+- **`search_files` (M21-04)**: `search_files(query, path="/", limit=10)`
+  (`app/agent/search_tool.py`) calls `POST /api/platform/files/search`
+  with the same delegation. It finds text files by meaning and by words,
+  through the platform's file index (docs/PLATFORM.md §5 "File search").
+  - The model gets one block per hit: the virtual path, the line range,
+    and the snippet indented under them.
+  - When the embeddings service was down, a note says the matching was by
+    words only.
+  - Platform failures are short `Error: ...` results, never a failed turn.
+  - Catalog: group Files, "Search files by meaning", read-only, so allowed
+    by default. Approval card: "Search files: <query>".
 - **System prompt** (`app/agent/prompts.py`): paths start with
   `/personal/` or `/spaces/<slug>/` (`ls /spaces` lists the user's
   shared spaces); each write/edit/delete targets exactly one space, and a

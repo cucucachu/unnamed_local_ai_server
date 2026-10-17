@@ -347,6 +347,7 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "replace_symbol": "file",
     "glob": "file",
     "grep": "file",
+    "search_files": "file",
     "delete": "file",
     "execute_code": "exec",
     "write_todos": "plan",
