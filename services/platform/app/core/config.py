@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # The embeddings service file search uses (M21, docs/MEMORY.md §5).
     # Unset: search uses full-text matching only.
     embeddings_url: str = ""
+    # The file index (`app/core/fileindex.py`): off, writes aren't indexed and
+    # search answers from whatever is already in it.
+    file_index_enabled: bool = True
+    file_index_scan_interval_s: float = 300.0
 
     # Failed credential attempts allowed per bucket (username, client IP)
     # per window on login/setup/step-up/invite accept. LAN/VPN keep 5/60;

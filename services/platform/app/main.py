@@ -38,6 +38,7 @@ from app.core.errors import (
     UnsupportedMedia,
 )
 from app.core.events import EventHub
+from app.core.fileindex import Embedder, FileIndex, HttpEmbedder
 from app.core.hitl import HitlApprovals
 from app.core.integrations_gateway import HttpGateway
 from app.core.platform_settings import get_public_https
@@ -132,6 +133,7 @@ def create_app(
     settings: Settings | None = None,
     db_pool_override: AsyncConnectionPool | None = None,
     token_service_override: TokenService | None = None,
+    embedder_override: Embedder | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -145,12 +147,14 @@ def create_app(
     the app builds staging root (unusable: logged, builds disabled), prepare
     the app history root (unusable or no git: logged, history disabled), and
     (until the first admin exists) prepare the bootstrap setup code, then
-    run the legacy files migration if it's enabled (logged, never fatal). A
-    failure in any other step fails startup; compose restarts it.
+    run the legacy files migration if it's enabled (logged, never fatal), and
+    start the file indexer (its failures are logged and retried). A failure
+    in any other step fails startup; compose restarts it.
 
     `db_pool_override` is an already-open pool the caller owns (the app
     migrates it but never closes it). `token_service_override` skips key
-    loading from `settings.keys_dir`.
+    loading from `settings.keys_dir`. `embedder_override` stands in for the
+    embeddings service.
     """
     settings = settings or Settings()
 
@@ -213,8 +217,18 @@ def create_app(
             async with pool.connection() as conn:
                 app.state.public_https = await get_public_https(conn)
             await legacy.maybe_migrate(app)
+            embedder = embedder_override
+            if embedder is None and s.embeddings_url:
+                embedder = HttpEmbedder(s.embeddings_url)
+            app.state.file_index = FileIndex(
+                pool, storage, embedder,
+                scan_interval_s=s.file_index_scan_interval_s, enabled=s.file_index_enabled,
+            )  # fmt: skip
+            app.state.file_index.start()
             yield
         finally:
+            if hasattr(app.state, "file_index"):
+                await app.state.file_index.aclose()
             if hasattr(app.state, "appdata"):
                 await app.state.appdata.aclose()
             if db_pool_override is None:

@@ -12,8 +12,9 @@ Two groups of routes, one contract (docs/ARCHITECTURE.md §3 "Files"):
 the file manager's (list, stat, upload, download, mkdir, move, copy,
 rename, delete - the shapes of agent-server's old `/api/files*`), and the
 agent file tools' (`read`, `write`, `edit`, `grep`, `glob`, `content`),
-which mirror deepagents' `FilesystemBackend` via `app.core.agentfs`.
-Blocking filesystem work runs in a worker thread.
+which mirror deepagents' `FilesystemBackend` via `app.core.agentfs`, plus
+`search` over the file index (`app.core.fileindex`), which every route that
+changes a file feeds. Blocking filesystem work runs in a worker thread.
 """
 
 from __future__ import annotations
@@ -49,10 +50,13 @@ from app.api.schemas import (
     ReadBody,
     ReadOut,
     RenameBody,
+    SearchBody,
+    SearchHitOut,
+    SearchOut,
     UploadOut,
     WriteBody,
 )
-from app.core import agentfs, beneath, fsops, spaces, vfs
+from app.core import agentfs, beneath, fileindex, fsops, spaces, vfs
 from app.core.agentfs import AgentFsError
 from app.core.beneath import Root
 from app.core.errors import Conflict, Forbidden, InvalidInput, NotFound
@@ -94,6 +98,11 @@ async def open_file(
 def fd_path(f: BinaryIO) -> str:
     """A path that reopens exactly the file `f` has open, whatever its name now points at."""
     return f"/proc/self/fd/{f.fileno()}"
+
+
+def _reindex(request: Request, r: vfs.Resolved, rel: tuple[str, ...] | None = None) -> None:
+    """Queue what a route changed for the file index (never waits on it)."""
+    request.app.state.file_index.changed(r.space["id"], r.rel if rel is None else rel)
 
 
 def _owner(principal: Principal, r: vfs.Resolved) -> fsops.Owner:
@@ -273,6 +282,7 @@ async def upload(
             with _fs_errors(), fsops.open_for_write(root, (*r.rel, name), owner) as f:
                 while chunk := await part.read(_CHUNK_SIZE):
                     f.write(chunk)
+            _reindex(request, r, (*r.rel, name))
             uploaded.append(r.child(name))
     return UploadOut(uploaded=uploaded)
 
@@ -348,6 +358,8 @@ async def _move(request: Request, principal: Principal, src_path: str, dst_path:
                 raise
 
     await anyio.to_thread.run_sync(_run)
+    _reindex(request, src)
+    _reindex(request, dst)
     return MoveCopyOut(src=src.vpath, dst=dst.vpath)
 
 
@@ -378,6 +390,7 @@ async def copy(body: MoveCopyBody, request: Request, principal: CurrentUser) -> 
             fsops.copy(src_root, src.rel, dst_root, dst.rel, _owner(principal, dst))
 
     await anyio.to_thread.run_sync(_run)
+    _reindex(request, dst)
     return MoveCopyOut(src=src.vpath, dst=dst.vpath)
 
 
@@ -398,6 +411,7 @@ async def delete(request: Request, principal: CurrentUser, path: str) -> None:
                 raise NotFound("not_found") from exc
 
     await anyio.to_thread.run_sync(_run)
+    _reindex(request, r)
 
 
 # --- agent file tools ----------------------------------------------------------------
@@ -429,6 +443,7 @@ async def write(body: WriteBody, request: Request, principal: CurrentUser) -> Pa
     await anyio.to_thread.run_sync(
         _write_text, r, _owner(principal, r), body.content.encode("utf-8")
     )
+    _reindex(request, r)
     return PathOut(path=r.vpath)
 
 
@@ -444,6 +459,7 @@ async def put_content(request: Request, principal: CurrentUser, path: str) -> Pa
         with fsops.open_for_write(root, r.rel, owner) as f:
             async for chunk in request.stream():
                 f.write(chunk)
+    _reindex(request, r)
     return PathOut(path=r.vpath)
 
 
@@ -466,6 +482,7 @@ async def edit(body: EditBody, request: Request, principal: CurrentUser) -> Edit
     r, f = await open_file(request, principal, body.path, writable=True)
     with _fs_errors():
         result = await anyio.to_thread.run_sync(_edit, r, f, body)
+    _reindex(request, r)
     return EditOut(path=r.vpath, occurrences=result.occurrences, note=result.note)
 
 
@@ -501,4 +518,44 @@ async def glob(body: GlobBody, request: Request, principal: CurrentUser) -> Glob
     matches, truncated = await anyio.to_thread.run_sync(agentfs.glob, trees, base, body.pattern)
     return GlobOut(
         matches=matches, truncated=truncated, truncation_reason="budget" if truncated else None
+    )
+
+
+@router.post("/search", response_model=SearchOut)
+async def search(body: SearchBody, request: Request, principal: CurrentUser) -> SearchOut:
+    """Text files under `path` the caller can read, by meaning and by words (docs/MEMORY.md §5)."""
+    query = body.query.strip()
+    if not query:
+        raise InvalidInput("invalid_query")
+    r = await resolve(request, principal, body.path, "read")
+    if r.kind == "space":
+        rows, prefix = [r.space], "/".join(r.rel)
+    else:
+        async with request.app.state.db_pool.connection() as conn:
+            rows = await spaces.list_user_spaces(
+                conn, principal.user_id, only=principal.space_scope
+            )
+        rows = [row for row in rows if r.kind != "spaces" or row["kind"] == "shared"]
+        prefix = ""
+    prefixes = {row["id"]: vfs.space_prefix(row) for row in rows}
+    hits, semantic = await fileindex.search(
+        request.app.state.db_pool,
+        request.app.state.file_index.embedder,
+        list(prefixes),
+        prefix,
+        query,
+        body.limit,
+    )
+    return SearchOut(
+        results=[
+            SearchHitOut(
+                path=vfs.join(prefixes[hit.space_id], hit.path),
+                line_start=hit.line_start,
+                line_end=hit.line_end,
+                snippet=hit.snippet,
+                score=hit.score,
+            )
+            for hit in hits
+        ],
+        semantic=semantic,
     )

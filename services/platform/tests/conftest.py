@@ -136,9 +136,13 @@ def pg_database(pg_server: PgServer) -> Iterator[PgDatabase]:
 
 
 def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
-    """`data_dir` also holds the spaces root, at `data_dir/spaces`, and the builds root."""
+    """`data_dir` also holds the spaces root, at `data_dir/spaces`, and the builds root.
+
+    The file indexer is off unless a test turns it on (`tests/test_file_search.py`).
+    """
     spaces_dir = data_dir / "spaces"
     spaces_dir.mkdir(parents=True, exist_ok=True)
+    overrides.setdefault("file_index_enabled", False)
     return Settings(
         platform_db_host=db.host,
         platform_db_port=db.port,
