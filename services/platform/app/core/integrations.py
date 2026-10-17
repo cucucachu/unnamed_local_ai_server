@@ -42,7 +42,7 @@ KEY_PREFIX = "mcp"
 _COLUMNS = (
     "id, slug, name, url, description, credential_model, auth_method, cert_fingerprint, "
     "private_address, token_header, server_info, protocol_version, instructions, discovered_at, "
-    "installed_by, created_at, updated_at, oauth"
+    "installed_by, created_at, updated_at, oauth, turned_off_at"
 )
 
 
@@ -294,6 +294,7 @@ def _summary_out(integration: dict[str, Any]) -> dict[str, Any]:
         "auth_method": integration["auth_method"],
         "plain_http": plain_http(integration["url"]),
         "oauth": oauth_summary(integration),
+        "turned_off": integration["turned_off_at"] is not None,
     }
 
 
@@ -449,15 +450,21 @@ async def install(conn: AsyncConnection, principal: Principal, fields: dict[str,
 async def edit(
     conn: AsyncConnection, principal: Principal, integration_id: UUID, changes: dict[str, Any]
 ) -> None:
-    """Change an integration's settings.
+    """Change an integration's settings, or turn it off or on (`turned_off`).
 
     A new URL, or a new credential model, deletes every stored credential:
     a credential is only ever sent to the server it was entered for, and
     only under the model it was entered for. A new URL also clears the
     pinned certificate unless the change sets one.
     """
+    changes = dict(changes)
+    turned_off = changes.pop("turned_off", None)
     async with conn.transaction():
         current = await get(conn, integration_id)
+        if turned_off is not None:
+            await _turn(conn, principal, current, turned_off)
+        if not changes:
+            return
         merged = {**current, **changes}
         if (
             "url" in changes
@@ -521,6 +528,26 @@ async def edit(
             target_id=integration_id,
             detail={"changes": changes, "credentials_deleted": wipe},
         )
+
+
+async def _turn(
+    conn: AsyncConnection, principal: Principal, integration: dict[str, Any], off: bool
+) -> None:
+    if (integration["turned_off_at"] is not None) == off:
+        return
+    await conn.execute(
+        "UPDATE integrations SET turned_off_at = CASE WHEN %s THEN now() END, "
+        "updated_at = now() WHERE id = %s",
+        (off, integration["id"]),
+    )
+    await audit.record(
+        conn,
+        principal,
+        "integrations.turned_off" if off else "integrations.turned_on",
+        f"Turned {'off' if off else 'on'} integration {integration['name']}",
+        target_type="integration",
+        target_id=integration["id"],
+    )
 
 
 async def uninstall(conn: AsyncConnection, principal: Principal, integration_id: UUID) -> None:
@@ -903,6 +930,7 @@ async def grant(conn: AsyncConnection, agent: Principal, slug: str) -> dict[str,
         "session_id": agent.session_id,
         "thread_id": agent.thread_id,
         "integration": gateway_view(integration),
+        "turned_off": integration["turned_off_at"] is not None,
         "status": _status(integration, credential),
         "credential": (
             None

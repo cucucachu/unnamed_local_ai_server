@@ -196,6 +196,20 @@ Rediscovery runs on demand (admin "Refresh") and when the server reports a
 changed list. New tools start off. Uninstalling deletes the integration,
 its admin and user tool settings and every stored credential.
 
+**Turning off** (#379) is the reversible alternative: the admin's Turn off
+keeps everything (connections and sign-ins, admin and user tool settings,
+OAuth client registrations, egress rules) but nobody can use it. The
+agent's list leaves it out and the gateway refuses every call, open, read
+and prompt with `turned_off`; members see "Turned off" on it. Turn on
+restores it as it was (an expired access token refreshes on first use, as
+usual). Both are stepped up and audited (`integrations.turned_off`,
+`integrations.turned_on`).
+
+The tool lists have bulk actions (#380), one request each: the admin's
+Turn all on / off, Always ask for all, Each person chooses for all; a
+member's Turn all on / off and Ask first for all (beside Allow all), which
+skip tools an admin locked.
+
 ## 5. Credentials
 
 **Two models, chosen per integration by the admin:**
@@ -495,6 +509,7 @@ plain sentence telling the model what to do:
 
 | Code | Meaning / what the agent should do |
 | --- | --- |
+| `turned_off` | An admin turned the integration off; tell the user, don't retry. |
 | `not_connected` | This user hasn't connected; tell them to connect in Settings → Integrations. |
 | `auth_expired` | Credential rejected or refresh failed; the user (or admin, if shared) must reconnect. |
 | `not_found` | No such integration, tool, resource or prompt (or the tool is off). |

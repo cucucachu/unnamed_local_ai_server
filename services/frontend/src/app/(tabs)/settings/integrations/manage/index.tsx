@@ -74,6 +74,7 @@ export default function ManageIntegrationsScreen() {
 }
 
 function summary(integration: AdminIntegration): string {
+  if (integration.turned_off) return 'Turned off';
   if (integration.discovered_at === null) return 'Not set up';
   const on = integration.tools.filter((t) => t.enabled).length;
   return `${on} of ${integration.tools.length} tools on`;

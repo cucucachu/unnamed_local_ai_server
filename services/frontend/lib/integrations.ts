@@ -45,6 +45,8 @@ export interface Integration {
   /** A credential for it would cross the network unencrypted. */
   plain_http: boolean;
   oauth?: OAuthSummary | null;
+  /** An admin turned it off: everything is kept, but nobody can use it. */
+  turned_off?: boolean;
   status: ConnectionStatus;
   tools: IntegrationTool[];
 }
@@ -77,6 +79,7 @@ export interface AdminIntegration {
   url: string;
   plain_http: boolean;
   oauth?: OAuthSummary | null;
+  turned_off?: boolean;
   cert_fingerprint: string | null;
   private_address: boolean;
   token_header: string | null;
@@ -196,7 +199,7 @@ export function adminInstallIntegration(fields: InstallFields): Promise<AdminInt
 
 export function adminEditIntegration(
   integrationId: string,
-  changes: Partial<InstallFields>,
+  changes: Partial<InstallFields> & { turned_off?: boolean },
 ): Promise<AdminIntegration> {
   return send<AdminIntegration>('PATCH', `${ADMIN}/${id(integrationId)}`, changes);
 }
@@ -307,7 +310,8 @@ export function formatFingerprint(hex: string): string {
   return (hex.toUpperCase().match(/.{2}/g) ?? []).join(':');
 }
 
-export function statusLabel(integration: Pick<Integration, 'status' | 'credential_model'>): string {
+export function statusLabel(integration: Pick<Integration, 'status' | 'credential_model' | 'turned_off'>): string {
+  if (integration.turned_off) return 'Turned off';
   switch (integration.status) {
     case 'ready':
       return 'Ready';

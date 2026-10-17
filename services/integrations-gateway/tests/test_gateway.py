@@ -199,6 +199,15 @@ async def test_not_connected(gateway, platform: FakePlatform, connector):
     assert platform.audits[-1]["error_code"] == "not_connected"
 
 
+async def test_turned_off(gateway, platform: FakePlatform, connector):
+    platform.turned_off = True
+    body = await gateway.call(DELEGATION, "home", "list_lights", {}, "chat")
+    assert code(body) == "turned_off"
+    assert "turned this integration off" in body["error"]["message"]
+    assert connector.headers == []
+    assert code(await gateway.open(DELEGATION, "home", "chat")) == "turned_off"
+
+
 async def test_needs_reconnecting(gateway, platform: FakePlatform):
     platform.status = "needs_reconnecting"
     assert code(await gateway.open(DELEGATION, "home", "chat")) == "auth_expired"

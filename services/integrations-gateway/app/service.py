@@ -377,6 +377,8 @@ class Gateway:
 
     async def _granted(self, delegation: str, slug: str) -> tuple[dict[str, Any], dict[str, str]]:
         grant = await self.platform.grant(delegation, slug)
+        if grant.get("turned_off"):
+            raise GatewayError("turned_off")
         if grant["status"] == "not_connected":
             raise GatewayError("not_connected")
         if grant["status"] == "needs_reconnecting":

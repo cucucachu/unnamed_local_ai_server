@@ -72,6 +72,7 @@ class FakePlatform:
     def __init__(self, key: CredentialKey, protocol_version: str | None) -> None:
         self.key = key
         self.status = "connected"
+        self.turned_off = False
         self.credential_status = "connected"
         self.credential_model = "per_user"
         self.protocol_version = protocol_version
@@ -126,6 +127,7 @@ class FakePlatform:
                 "token_header": self.token_header,
             },
             "status": self.status,
+            "turned_off": self.turned_off,
             "credential": {
                 "user_id": str(credential_user) if credential_user else None,
                 "ciphertext": self.ciphertext,

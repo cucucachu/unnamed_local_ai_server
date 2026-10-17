@@ -85,6 +85,7 @@ export default function IntegrationsScreen() {
 }
 
 function badgeTone(integration: Integration): 'muted' | 'accent' | 'danger' {
+  if (integration.turned_off) return 'muted';
   if (integration.status === 'needs_reconnecting') return 'danger';
   if (integration.status === 'connected' || integration.status === 'ready') return 'accent';
   return 'muted';
