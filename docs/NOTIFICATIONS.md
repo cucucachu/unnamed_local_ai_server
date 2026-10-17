@@ -54,13 +54,24 @@ token another user had moves it to the caller (a phone changed hands).
   (updates `last_seen_at`) and when FCM rotates the token.
 - `DELETE /api/platform/me/push-devices/{token}`: on sign-out, before the
   session ends.
-- Revoking a session (Settings → Sessions, a password change, a deleted
-  user) deletes its devices in the same transaction.
 - `POST /internal/notify {user_id, kind, thread_id}`, agent-server's
   service token like its other `/internal` calls: sends to each of that
   user's devices and answers `204` whatever happened (the caller never
   waits on Google). With no credential configured it does nothing and logs
   that once.
+
+**Only devices with a live session get a notification.** The send query
+joins `push_devices` to `sessions` and `users` with the same test as
+signing in: not revoked, not expired, user not disabled. A session ends in
+many places (sign-out, Settings → Sessions, a password change, disabling a
+user, removing a WireGuard device, re-pairing a device, the 30-day expiry)
+and the app may drop a session on a `401` without calling `DELETE`, so
+that check is what's relied on, not each of those paths. Deleting the
+devices is cleanup: every place that sets `sessions.revoked_at`
+(`core/sessions.py`, `core/wireguard.py`, `core/device_pairs.py`) deletes
+that session's devices in the same transaction, and notify deletes the
+devices of any session it finds dead. (Routine grants are sessions too,
+but never have devices: registering needs a human session.)
 
 **Sending** (FCM HTTP v1): a JWT signed with the service account's key is
 exchanged at `https://oauth2.googleapis.com/token` for an access token,
@@ -101,21 +112,45 @@ state:
 - it ended on an approval with no client attached: `needs_approval`;
 - it ended any other way with no client attached (the chat becomes
   unread): `unread`. This covers routine runs, a reply that finished after
-  you left, and a run that failed or timed out (its chat changed);
+  you left, and a run that failed, timed out or was stopped by the
+  repeated-call guard (its chat changed);
 - a turn someone was watching sends nothing.
+
+"Watching" means a chat socket is attached to the turn (`turn.subscribers`).
+The app closes its socket when it goes to the background (§7), so a phone
+locked mid-turn counts as gone. A browser tab left open on that chat still
+counts as watching.
+
+Two endings send nothing even with no client attached:
+
+- the delegation was refused (`DelegationDenied`): the session behind the
+  turn was revoked, so whoever ended it doesn't want this chat on a phone;
+- the turn was cancelled by the server shutting down
+  (`TurnRunner.shutdown`): otherwise every restart would notify for each
+  running turn.
 
 The call runs in the background with a short timeout: it never delays or
 fails the turn. It's skipped if the user turned that kind off (§8).
 
+MCP elicitation (#344) would be a third "needs you" state; it would reuse
+`needs_approval` or add a kind when it lands.
+
 ## 7. The Android app (#296)
 
 - `expo-notifications` with FCM. `google-services.json` (§9) is copied
-  into the build by `scripts/build_host_app_android.sh` when present and
-  stays out of git; without it the APK builds with notifications off.
+  into the build by `scripts/build_host_app_android.sh` when present; without
+  it the APK builds with notifications off. It should stay out of git:
+  #296 adds it to `services/frontend/.gitignore`.
 - One channel, "Chats", for both kinds.
-- Android 13+ needs `POST_NOTIFICATIONS`. The app asks when it's first
-  useful (creating a routine, or turning notifications on in Settings),
-  never on first launch.
+- Android 13+ needs `POST_NOTIFICATIONS`. The app asks only from Settings
+  → Notifications and when saving a routine in the Routines app, never on
+  first launch. A routine the agent creates in chat doesn't prompt; while
+  permission isn't granted, its tool result in chat shows a one-line hint
+  linking to Settings → Notifications.
+- `useChat` closes the chat socket when the app goes to the background and
+  reconnects when it's back (`reconnectNow`, which already catches up on a
+  turn that ran meanwhile). The turn keeps running detached (M17-01); the
+  server then sees nobody watching (§6).
 - After sign-in it registers the token, again when it rotates, and
   unregisters on sign-out.
 - Tapping a notification opens `/chat/<thread_id>`, after signing in if
@@ -138,7 +173,8 @@ system settings.
    create a project (Analytics not needed).
 2. Add an Android app with package `ai.homeai.host`; download
    `google-services.json` and put it at
-   `services/frontend/google-services.json` (gitignored).
+   `services/frontend/google-services.json`. It should be gitignored;
+   until #296 adds it to `services/frontend/.gitignore`, don't commit it.
 3. Project settings → Service accounts → Generate new private key. Put it
    in `.env` as one line, without printing it:
    `echo "FCM_SERVICE_ACCOUNT_B64=$(base64 -w0 key.json)" >> .env`, then
@@ -149,13 +185,16 @@ system settings.
 
 - Platform pytest against a fake FCM over real HTTP (token exchange and
   send): register, move, delete; sign-out and revoke drop devices; notify
-  reaches that user's devices only; unregistered tokens are pruned; no
-  credential is a no-op; the payload has no content beyond §1.
+  reaches that user's devices only; a device whose session expired, was
+  revoked or whose user is disabled gets nothing; unregistered tokens are
+  pruned; no credential is a no-op; the payload has no content beyond §1.
 - agent-server pytest with the fake platform: a detached turn notifies
-  once with the right kind and thread; a watched turn doesn't; a setting
-  off sends nothing; the platform down doesn't affect the turn.
+  once with the right kind and thread; a watched turn doesn't; a refused
+  delegation or a shutdown sends nothing; a setting off sends nothing; the
+  platform down doesn't affect the turn.
 - Jest: register and unregister, tap routing, foreground suppression,
-  badge refresh, the settings screen.
+  badge refresh, the socket closing in the background and reconnecting,
+  the permission hint, the settings screen.
 - `gate_m20.sh`: stack healthy, those tests, `verify_egress.sh`, and a
   live smoke: a throwaway `e2e-*` user registers a fake token, a routine
   runs with nobody connected, and the platform's notify log line shows one
