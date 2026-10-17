@@ -482,7 +482,7 @@ forget, the user deletes pages, `memory.md` or the folder in Files.
   - Indexing on write, edit, move and delete; the scan picking up a
     direct write; hybrid ranking with a fake embedder.
   - Admin delivered-routine settings: who may change them, audit.
-- **The eval on Ornith** (`scripts/e2e/memory_eval.sh`): a throwaway
+- **The eval on Ornith** (`scripts/eval/memory/run.sh`, results on #398): a throwaway
   `e2e-*` user, seeded chats over several simulated days, then the
   routine. Several runs per case, with pass rates:
   - **captures:** a partner, a pet, a hometown and a hobby mentioned in
