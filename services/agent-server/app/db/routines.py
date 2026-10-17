@@ -6,6 +6,8 @@ JSON shape from `app.routines.schedule`; `next_run_at` (UTC) is derived from
 it and `timezone`, and is null for a disabled routine or a one-shot that has
 run. `grant_token` is the platform routine grant a scheduled run acts with
 (M17-03): set while the routine is enabled, never returned by the API.
+`system_key` marks a delivered routine (M21-07, `app.routines.delivered`):
+one per user per key.
 
 Each run (M17-04) is a `routine_runs` row: how it was started, its status
 and timing, and the thread it ran in (`threads.routine_id` set) - none for
@@ -100,6 +102,11 @@ ROUTINES_DDL = (
         "CREATE INDEX IF NOT EXISTS routine_runs_inbox_idx "
         "ON routine_runs (owner_user_id, finished_at DESC) WHERE finished_at IS NOT NULL"
     ),
+    "ALTER TABLE routines ADD COLUMN IF NOT EXISTS system_key TEXT",
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS routines_system_key_idx "
+        "ON routines (owner_user_id, system_key) WHERE system_key IS NOT NULL"
+    ),
 )
 
 RunStatus = Literal[
@@ -146,6 +153,7 @@ class RoutineRecord:
     created_at: datetime
     updated_at: datetime
     grant_token: str | None = None
+    system_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +165,7 @@ class NewRoutine:
     timezone: str
     enabled: bool = True
     next_run_at: datetime | None = None
+    system_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -299,8 +308,9 @@ class PgRoutineStore:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "INSERT INTO routines "
-                "(owner_user_id, space, name, prompt, schedule, timezone, enabled, next_run_at) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+                "(owner_user_id, space, name, prompt, schedule, timezone, enabled, next_run_at, "
+                "system_key) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
                 (
                     owner_user_id,
                     routine.space,
@@ -310,6 +320,7 @@ class PgRoutineStore:
                     routine.timezone,
                     routine.enabled,
                     routine.next_run_at,
+                    routine.system_key,
                 ),
             )
             row = await cur.fetchone()
@@ -513,7 +524,6 @@ class PgRoutineStore:
         return [(routines[run.routine_id], run) for run in runs]
 
 
-
 class InMemoryRoutineStore:
     """Dict-backed `RoutineStore`; `thread_store` gets the `ON DELETE SET NULL`."""
 
@@ -524,6 +534,11 @@ class InMemoryRoutineStore:
 
     async def create(self, owner_user_id: str, routine: NewRoutine) -> RoutineRecord:
         now = datetime.now(UTC)
+        if routine.system_key is not None and any(
+            (r.owner_user_id, r.system_key) == (owner_user_id, routine.system_key)
+            for r in self._rows.values()
+        ):
+            raise ValueError(f"duplicate delivered routine {routine.system_key!r}")
         record = RoutineRecord(
             id=str(uuid.uuid4()),
             owner_user_id=owner_user_id,
@@ -537,6 +552,7 @@ class InMemoryRoutineStore:
             last_run_at=None,
             created_at=now,
             updated_at=now,
+            system_key=routine.system_key,
         )
         self._rows[record.id] = record
         return record

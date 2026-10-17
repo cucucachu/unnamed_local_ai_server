@@ -67,9 +67,11 @@ from app.api.chat_ws import (
     list_state_history,
     public_approval,
 )
-from app.core.identity import CurrentUser
+from app.core.delegation import Caller
+from app.core.identity import IDENTITY_HEADER, CurrentUser
 from app.db.threads import ThreadRecord, ThreadStore
 from app.db.turn_stats import TurnStat, TurnStatsStore
+from app.routines import delivered
 
 router = APIRouter()
 
@@ -224,11 +226,18 @@ async def list_threads(
 
     Chats waiting on an approval, then unread ones, then the rest, each
     newest activity first. `?routine_id=` lists that routine's runs, newest
-    first.
+    first. A quiet delivered routine's runs (M21-07) are left out unless
+    they need the user; they're in the routine's list.
     """
     await request.app.state.orphan_adopter.adopt()
+    await request.app.state.delivered_routines.ensure(
+        Caller(identity_token=request.headers.get(IDENTITY_HEADER) or ""), user.user_id
+    )
     store = _thread_store(request)
     records = await store.list_for_owner(user.user_id, routine_id=routine_id)
+    if routine_id is None:
+        quiet = await delivered.quiet_thread_ids(request.app.state, user.user_id)
+        records = [r for r in records if r.id not in quiet]
     waiting = await request.app.state.routine_store.waiting_thread_ids(user.user_id)
     threads = [
         _to_thread_out(r).model_copy(
@@ -427,9 +436,7 @@ def _build_branch_points(
         )
         if anchor is None or not getattr(anchor, "id", None):
             continue
-        active_index = next(
-            (i for i, b in enumerate(branches) if b.checkpoint_id == active_tip), 0
-        )
+        active_index = next((i for i, b in enumerate(branches) if b.checkpoint_id == active_tip), 0)
         points.append(
             BranchPointOut(
                 anchor_message_id=anchor.id,

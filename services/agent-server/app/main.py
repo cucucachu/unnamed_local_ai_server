@@ -33,6 +33,7 @@ from app.db.routines import InMemoryRoutineStore, PgRoutineStore, RoutineStore
 from app.db.settings import InMemorySettingsStore, PgSettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
 from app.db.turn_stats import InMemoryTurnStatsStore, PgTurnStatsStore, TurnStatsStore
+from app.routines.delivered import DeliveredRoutines
 from app.routines.scheduler import RoutineScheduler
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ def create_app(
                 app.state.thread_store
             )
             install_orphan_adopter(app)
+            app.state.delivered_routines = DeliveredRoutines(app.state)
             app.state.tool_policies = tool_policies_override or StaticToolPolicies()
             app.state.agent = build_agent(app.state.settings, checkpointer_override, app.state)
             app.state.turn_runner = TurnRunner(app.state)
@@ -172,6 +174,7 @@ def create_app(
             )
             app.state.routine_store = routine_store_override or PgRoutineStore(pg_checkpointer.pool)
             install_orphan_adopter(app)
+            app.state.delivered_routines = DeliveredRoutines(app.state)
             s = app.state.settings
             app.state.tool_policies = tool_policies_override or PlatformToolPolicies(s.platform_url)
             registering = asyncio.create_task(

@@ -36,6 +36,7 @@ from app.agent.approvals import PolicyUnavailable
 from app.agent.repeat_guard import RepeatedToolCall
 from app.core.delegation import Delegation, DelegationDenied
 from app.db.rls import bind_user
+from app.routines import delivered
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,8 @@ class ActiveTurn:
     started_mono: float = field(default_factory=time.monotonic)
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     prior_assistant_id: str | None = None
+    # A quiet delivered routine's thread (M21-07): a completed turn isn't unread.
+    quiet: bool = False
     _timer: asyncio.TimerHandle | None = None
     _ended: bool = False
     _done: bool = False
@@ -152,8 +155,11 @@ class ActiveTurn:
     def _on_detached_timeout(self) -> None:
         self._timer = None
         if not self.subscribers:
-            logger.info("turn on thread %s: no client for %ss, cancelling",
-                        self.thread_id, self.request.detached_timeout_s)
+            logger.info(
+                "turn on thread %s: no client for %ss, cancelling",
+                self.thread_id,
+                self.request.detached_timeout_s,
+            )
             self.cancel()
 
     def _finish(self) -> None:
@@ -286,7 +292,7 @@ class TurnRunner:
             await self._state.thread_store.turn_ended(
                 turn.thread_id,
                 awaiting_approval=outcome.pending_approval is not None,
-                unread=not turn.subscribers,
+                unread=not turn.subscribers and not (turn.quiet and outcome.status == "completed"),
             )
         except Exception:
             logger.exception("turn on thread %s: recording its end failed", turn.thread_id)
@@ -299,6 +305,12 @@ class TurnRunner:
             policy = await self._state.tool_policies.for_turn(request.delegation)
         except PolicyUnavailable as exc:
             raise RuntimeError(f"couldn't load the user's tool settings ({exc})") from exc
+        definition = await delivered.definition_for_thread(
+            self._state, request.thread_id, request.user_id
+        )
+        if definition is not None:
+            policy = delivered.without_tools(policy, definition.unavailable_tools)
+            turn.quiet = definition.quiet
         config = ws.graph_config(
             request.thread_id,
             request.checkpoint_id,
@@ -328,4 +340,3 @@ class TurnRunner:
 
     async def _turn_end(self, turn: ActiveTurn, status: str) -> None:
         turn.emit(await _ws().turn_end_frame(self._state, turn, status))
-

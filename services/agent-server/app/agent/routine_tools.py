@@ -14,6 +14,11 @@ any of them but `current_time`: an unattended run making more unattended
 runs would outlive whatever the user approved it for (the platform refuses
 a routine run's delegation too).
 
+A delivered routine (M21-07, `app.routines.delivered`) follows the same
+rules as over REST: `delete_routine` and a rename or move are refused, with
+a reason the model can pass on, before any card; its prompt is the
+editable part, and `prompt=""` resets it to the default.
+
 Times are local to the routine's timezone; the default is the user's
 (`SettingsDocument.timezone`, kept in step with their device by the app),
 else UTC. The model learns "now" from `current_time` rather than from the
@@ -34,8 +39,8 @@ from app.agent import approvals
 from app.agent.app_tools import _ask_user, _delegation_token
 from app.core.delegation import Caller
 from app.db.routines import RoutineRecord
+from app.routines import delivered, service
 from app.routines import schedule as sched
-from app.routines import service
 
 ROUTINE_TOOL_NAMES: tuple[str, ...] = (
     "current_time",
@@ -120,10 +125,26 @@ def _shorten(text: str, limit: int = _MAX_PROMPT_SHOWN) -> str:
 
 def _summary(record: RoutineRecord) -> str:
     state = "on" if record.enabled else "off"
+    definition = delivered.definition_of(record)
+    if definition is None:
+        prompt, note = record.prompt, ""
+    else:
+        prompt = delivered.editable_prompt(record, definition)
+        note = (
+            "\n  Delivered with HomeAI: it can be turned off, rescheduled or have its prompt "
+            'edited (prompt="" resets it), but not deleted, renamed or moved.'
+        )
     return (
         f'- "{record.name}" (id {record.id}), {state}: {_when(record.schedule, record.timezone)}; '
         f"next run {_local(record.next_run_at, record.timezone)}; space {record.space}.\n"
-        f"  Prompt: {_shorten(record.prompt)}"
+        f"  Prompt: {_shorten(prompt)}{note}"
+    )
+
+
+def _delivered_delete(record: RoutineRecord) -> str:
+    return (
+        f'Error: "{record.name}" is delivered with HomeAI, so it can\'t be deleted. '
+        "It can be turned off instead (update_routine with enabled false)."
     )
 
 
@@ -276,7 +297,8 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         routine: its id (or exact name) from list_routines. To change when it
         runs, pass the whole new schedule (repeat and time, plus date / days /
         day_of_month as for create_routine). enabled: false pauses it, true
-        turns it back on. May need the user's approval.
+        turns it back on. prompt="" resets a delivered routine's prompt to its
+        default. May need the user's approval.
         """
         context = _context(config)
         if isinstance(context, str):
@@ -305,6 +327,8 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         if not changes and space is None:
             return "Nothing to change."
         try:
+            changes = service.check_changes(current, {**changes, "space": space})
+            changes.pop("space", None)
             if timezone is not None:
                 service.check_timezone(timezone)
             if space is not None:
@@ -348,6 +372,8 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         current = _find(await state.routine_store.list_for_owner(user_id), routine)
         if isinstance(current, str):
             return current
+        if delivered.definition_of(current) is not None:
+            return _delivered_delete(current)
         description = (
             f'Delete the routine "{current.name}" ({_when(current.schedule, current.timezone)}).'
             f"\n\nPrompt:\n{_shorten(current.prompt)}"
@@ -381,7 +407,9 @@ def _change_lines(current: RoutineRecord, changes: dict) -> list[str]:
         lines.append(f"Space: {changes['space']}")
     if "enabled" in changes:
         lines.append("Turn it on" if changes["enabled"] else "Turn it off")
-    if "prompt" in changes:
+    if changes.get("prompt") == "":
+        lines.append("Prompt: back to the default")
+    elif "prompt" in changes:
         lines.append(f"Prompt:\n{changes['prompt']}")
     return lines
 

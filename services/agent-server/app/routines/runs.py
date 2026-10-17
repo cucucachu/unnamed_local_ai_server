@@ -23,6 +23,7 @@ from app.agent.turn_runner import ActiveTurn, TurnOutcome, TurnRequest
 from app.core.delegation import Delegation, DelegationDenied
 from app.db.routines import RoutineRecord, RunRecord, RunStatus
 from app.db.threads import ThreadRecord
+from app.routines import delivered
 from app.routines.schedule import zone
 
 logger = logging.getLogger(__name__)
@@ -36,16 +37,25 @@ def run_title(routine: RoutineRecord, started: datetime) -> str:
     return f"{routine.name} · {local:%b} {local.day}"
 
 
-def run_message(routine: RoutineRecord, started: datetime) -> str:
+def run_message(routine: RoutineRecord, started: datetime, body: str | None = None) -> str:
     """The run's first message. Without the framing a model can read a name, a
-    space and a prompt as a request to create that routine (#315)."""
+    space and a prompt as a request to create that routine (#315). `body`
+    replaces the prompt (a delivered routine's fixed and editable parts)."""
     local = started.astimezone(zone(routine.timezone))
     return (
         f'{RUN_MARKER} "{routine.name}" (space {routine.space}), started '
         f"{local:%a %b} {local.day}, {local:%H:%M}. Do what it asks now; nobody is watching "
         "live. Don't create or change routines and don't ask about the schedule.\n\n"
-        f"{routine.prompt}"
+        f"{routine.prompt if body is None else body}"
     )
+
+
+async def first_message(app_state: Any, routine: RoutineRecord, started: datetime) -> str:
+    definition = delivered.definition_of(routine)
+    if definition is None:
+        return run_message(routine, started)
+    body = await delivered.run_body(app_state, routine, definition, started)
+    return run_message(routine, started, body)
 
 
 async def create_run_thread(app_state: Any, routine: RoutineRecord) -> ThreadRecord:
@@ -60,7 +70,9 @@ async def grant_delegation(
     """An unattended run's delegation from the routine's grant (M17-03).
 
     None, with the routine disabled, once the grant is gone or dead (revoked
-    in Settings -> Sessions, password changed, edit rights lost, ...).
+    in Settings -> Sessions, password changed, edit rights lost, ...). A
+    delivered routine stays on with its grant cleared instead; the user's
+    next request issues a new one (`DeliveredRoutines.forget`).
     `DelegationUnavailable` propagates: the platform couldn't be asked.
     """
     client = app_state.delegation_client
@@ -71,6 +83,14 @@ async def grant_delegation(
             pass
         else:
             return Delegation(client, grant)
+    if delivered.definition_of(routine) is not None:
+        logger.info("routine %s: no valid grant; waiting for the user's next request", routine.id)
+        if routine.grant_token is not None:
+            await app_state.routine_store.update(
+                routine.id, routine.owner_user_id, {"grant_token": None}
+            )
+        app_state.delivered_routines.forget(routine.owner_user_id)
+        return None
     logger.info("routine %s: its grant is no longer valid; disabling it", routine.id)
     await app_state.routine_store.update(
         routine.id,
@@ -85,11 +105,12 @@ async def launch_run(
 ) -> ActiveTurn:
     """Start the run's turn in the background; nobody is attached to it."""
     document = await app_state.settings_store.get_document(routine.owner_user_id)
+    message = await first_message(app_state, routine, datetime.now(UTC))
     turn, queue = await app_state.turn_runner.start(
         TurnRequest(
             thread_id=thread.id,
             user_id=routine.owner_user_id,
-            run_input={"messages": [HumanMessage(content=run_message(routine, datetime.now(UTC)))]},
+            run_input={"messages": [HumanMessage(content=message)]},
             thinking_enabled=document.thinking_enabled,
             delegation=delegation,
             routine_run=True,

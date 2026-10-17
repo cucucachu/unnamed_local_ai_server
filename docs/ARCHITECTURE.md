@@ -1582,7 +1582,12 @@ their threads as plain chats (`ON DELETE SET NULL`).
   its last day). `next_run_at` is UTC: a local time skipped by a DST jump
   runs just after it (02:30 → 03:30), a repeated one at its first
   occurrence. Null while disabled, or once a one-shot has run.
-- `GET /api/routines` → `200 [{routine}, ...]` by name.
+- `GET /api/routines` → `200 [{routine}, ...]` by name, after creating
+  the caller's missing delivered routines (M21-07, below). A delivered
+  routine's `{routine}` adds `"delivered": true`, `"fixed_prompt"`,
+  `"prompt_is_default"` and `"unavailable_tools": [{"name", "label",
+  "group"}]` (catalog names and labels); its `prompt` is the editable part.
+  Every other routine has `delivered: false` and an empty list.
 - `POST /api/routines` body `{"name", "prompt", "space"?: "/personal",
   "schedule", "timezone", "enabled"?: true}` →
   `201 {routine}`. An `approval_mode` from an older app is ignored (#342). The caller
@@ -1592,7 +1597,9 @@ their threads as plain chats (`ON DELETE SET NULL`).
 - `GET /api/routines/{id}` → `{routine}`; `PATCH` with any subset of the
   create fields → `{routine}` (`next_run_at` recomputed when `schedule`,
   `timezone` or `enabled` change; a new `space` is checked again);
-  `DELETE` → `204`.
+  `DELETE` → `204`. A delivered routine: `DELETE` → `409
+  delivered_routine`, a new `name` or `space` → `422`, `prompt: ""` resets
+  the editable part (`422` for any other routine).
 - `{run}` = `{"id", "trigger": "schedule"|"manual", "status", "detail":
   str|null, "thread_id": uuid|null, "due_at", "started_at", "finished_at":
   iso8601|null, "created_at"}`.
@@ -1687,6 +1694,47 @@ their threads as plain chats (`ON DELETE SET NULL`).
   one needs approval. The chats list puts both first (`GET /api/threads`
   above); the Chat icon's badge counts them (`lib/chatAttention.ts`, polled
   every minute). `routine_runs.seen_at` is no longer used.
+- **Delivered routines** (M21-07, `app/routines/delivered.py`,
+  docs/MEMORY.md §4). A `Definition` ships in the image (`key`, `name`, a
+  default local time, a fixed prompt with `{since}`/`{now}`, a default
+  editable prompt, `unavailable_tools`, `quiet`). Every user gets one
+  `routines` row per definition, marked by `system_key` (unique per
+  owner). M21-10 adds the first, `memory`.
+  - **Creating each copy.** `GET /api/threads` and `GET /api/routines`
+    create any missing copy, at most once per user per process, as an
+    ordinary routine created through `app/routines/service.py` on the
+    caller's identity: `/personal`, enabled, a fresh grant. The schedule is
+    daily at the default time plus a fixed per-user offset of 0–119
+    minutes (a hash of the user id), in the user's Settings timezone; until
+    that's known, nothing is created. It never fails the request.
+  - **Storage.** `prompt` holds only the editable part; `''` (or the
+    default's own text, when saved) means the default, so later releases
+    can improve it. The fixed prompt and unavailable tools are only in the
+    definition.
+  - **Rules** (the service, so REST and the agent tools alike): `DELETE` →
+    `409 delivered_routine`; a new `name` or `space` → `422`. On/off,
+    schedule, timezone and the editable prompt are the user's;
+    `prompt: ""` resets it. `delete_routine` and a rename or move through
+    `update_routine` are refused before any card, with a reason the model
+    can pass on.
+  - **The run message** is the usual framing, then the fixed prompt (with
+    `{since}`: the start of the last successful run, else 14 days back;
+    `{now}`: the run's start, both in the routine's timezone), then the
+    editable part.
+  - **Unavailable tools.** For every turn in a delivered routine's thread
+    (a scheduled run, Run now, or the user replying in its chat),
+    `TurnRunner._stream` removes the definition's `unavailable_tools` from
+    the turn's `ToolPolicy` (`delivered.without_tools`). So they aren't
+    bound, a call is refused, the `task` helper doesn't get them, and with
+    `open_integration` gone there's no integrations list.
+  - **A lost grant** doesn't turn it off: the grant is cleared, scheduled
+    runs are `missed` with "open HomeAI to keep this routine running", and
+    the user's next `GET /api/threads` or `GET /api/routines` issues a new
+    one.
+  - **Quiet** (`quiet=True`): a completed turn in its thread isn't marked
+    unread, and `GET /api/threads` without `routine_id` leaves out its runs
+    that are queued, running or succeeded. A run waiting on an approval or
+    one that failed is listed like any other. (Notifications are M20's.)
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every
