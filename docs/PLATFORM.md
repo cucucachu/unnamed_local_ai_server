@@ -569,6 +569,65 @@ between is `EEXIST`, the same `409 already_exists` the check gives; the legacy
 migration picks the next free name instead. Without `renameat2` a move
 fails (`ENOSYS`, `500`) rather than fall back to a plain `rename`.
 
+### File search
+
+`POST /api/platform/files/search` (M21-03, design in `docs/MEMORY.md` §5)
+searches the text files the caller can read now, under `path`, by meaning
+and by words. It takes a session or a delegation like every files route,
+and a routine run's delegation reaches only its space. The route table
+is in `docs/ARCHITECTURE.md` §3 "Files".
+
+**The index** (`app/core/fileindex.py`, migration 0019) is a cache in
+`homeai_platform` that can always be rebuilt from disk:
+- `indexed_files` has one row per file looked at: its modification time
+  and size, so the scan rereads only files that changed.
+- `file_chunks` holds the chunks, each with its line range, an
+  EmbeddingGemma vector (pgvector, HNSW) and a `tsvector` of its path and
+  text (GIN).
+
+Rows go with their file, and with their space when it's archived (on the
+next scan) or deleted.
+
+**What's indexed:**
+- UTF-8 text files up to 1 MiB.
+- Skipped: binaries (a NUL byte or not UTF-8, remembered with no chunks),
+  hidden files and folders (`.trash`, `.env`), `node_modules`, `dist`,
+  `build`, `target`, `venv`, `__pycache__`, `site-packages`, and lock files.
+- Symlinks aren't followed.
+
+Markdown is split at headings outside code fences, with small sections
+packed together up to ~1,500 characters. Anything else, and any section
+bigger than that, goes in ~1,500-character windows on line boundaries that
+overlap by up to 200 characters.
+
+**Freshness.** One background task in the platform process does all the
+indexing:
+- Every files route that changes something (write, content, edit, upload,
+  move, rename, copy, delete) queues the path and returns without waiting.
+- A scan every `FILE_INDEX_SCAN_INTERVAL_S` (300 s), and once at startup,
+  compares every space with disk. It catches writes that bypass the API,
+  such as `execute_code`, the legacy migration and app scaffolding.
+
+Chunks are stored first and embedded afterwards, so full-text search sees a
+file at once. A chunk whose text didn't change keeps its vector. The model
+id is the served weights' file name: when it changes, every chunk is
+re-embedded in the background, and search uses only vectors from the
+current model. If the embeddings service is down, embedding is retried a
+minute later; file operations never wait on it or fail because of it. Input
+the service refuses (`400`) is left without a vector, and full-text search
+still finds it. `FILE_INDEX_ENABLED=false` stops indexing.
+
+**Ranking.** The query is embedded with EmbeddingGemma's search-query
+prompt (documents get its `title: <path> | text:` prompt). The top 50
+chunks by cosine distance and the top 50 full-text matches, which match
+any of the query's words, are merged by reciprocal rank fusion (k = 60).
+A chunk both rankings find comes first. Small embedding models are weak on
+names and codes, and full-text search is blind to paraphrase. The vector
+half always returns its nearest chunks, however distant, so results are
+best first, not all relevant. Without `EMBEDDINGS_URL`, or when the
+service doesn't answer within 10 s, only the full-text half runs and the
+response says `"semantic": false`.
+
 ### Legacy migration
 
 On the switch to the platform files API (M11-01), the pre-Stage-3 files root

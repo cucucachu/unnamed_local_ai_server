@@ -25,6 +25,7 @@ SHIPPED = [
     (16, "integration_token_header"),
     (17, "integration_oauth"),
     (18, "integration_turned_off"),
+    (19, "file_index"),
 ]
 
 
@@ -80,6 +81,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0016_integration_token_header.sql",
             "0017_integration_oauth.sql",
             "0018_integration_turned_off.sql",
+            "0019_file_index.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
@@ -95,6 +97,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "integration_credentials",
             "integration_oauth_clients",
         }
+        tables |= {"indexed_files", "file_chunks"}
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
         cur = await conn.execute("SELECT value FROM platform_state WHERE key = 'public_https'")

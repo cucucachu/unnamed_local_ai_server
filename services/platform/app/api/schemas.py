@@ -457,6 +457,26 @@ class GrepBody(BaseModel):
     max_count: int | None = Field(default=None, ge=0)
 
 
+class SearchBody(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    path: VPath = "/"
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class SearchHitOut(BaseModel):
+    path: str
+    line_start: int
+    line_end: int
+    snippet: str
+    score: float
+
+
+class SearchOut(BaseModel):
+    results: list[SearchHitOut]
+    # False: the embeddings service wasn't reachable, so only full-text matching ran.
+    semantic: bool
+
+
 class GrepMatchOut(BaseModel):
     path: str
     line: int

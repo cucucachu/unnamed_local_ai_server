@@ -2390,12 +2390,15 @@ lists the deliberate differences). A failure the agent should read back is
 | `POST /api/platform/files/edit` | write | `{"path", "old_string", "new_string", "replace_all": false}` | `200 {"path", "occurrences"}`; CRLF/CR normalized to LF | `string_not_found`, `string_not_unique` (+ `occurrences`), `trailing_newline_mismatch`, `not_text`; `404 not_found` |
 | `POST /api/platform/files/grep` | read | `{"pattern", "path"?, "glob"?, "max_count"?}` | `200 {"matches": [{"path", "line", "text"}], "truncated", "error": str|null}` — literal substring per line, path order; files > 10 MiB and symlinks skipped; 15 s budget | `invalid_glob` |
 | `POST /api/platform/files/glob` | read | `{"pattern", "path"?}` | `200 {"matches": [{"path", "is_dir": false, "size", "modified_at"}], "truncated", "truncation_reason": "budget"|null}` — regular files only, sorted; 5 s budget | `invalid_glob` (incl. `..`) |
+| `POST /api/platform/files/search` (M21-03) | read | `{"query", "path": "/", "limit": 10}` (`limit` 1–50) | `200 {"results": [{"path", "line_start", "line_end", "snippet", "score"}], "semantic"}` — best first: the file index's vector and full-text rankings merged by reciprocal rank fusion; `snippet` ≤ ~400 chars; `semantic: false` when the embeddings service is unreachable (full-text only) | `invalid_query` (blank); `404 not_found` |
 
 For grep and glob, `path` is optional. It can be a space, a directory, or a
 file (a file searches only that file), or it can be `/` or `/spaces`.
 `/` searches every space the caller can read, and `/spaces` every shared one.
 A missing path returns empty results rather than 404. `glob` patterns are
-relative to `path`.
+relative to `path`. Search takes `path` the same way, but answers from the
+file index (docs/PLATFORM.md §5 "File search"), not by reading files, so a
+file changed a moment ago may not show up yet.
 
 *Which side formats what* (M11-02), checked against deepagents 0.7.11:
 
