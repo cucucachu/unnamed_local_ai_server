@@ -80,11 +80,13 @@ from app.agent.app_tools import make_app_tools
 from app.agent.chat_tools import make_chat_tools
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.integration_tools import IntegrationsListMiddleware, make_integration_tools
+from app.agent.memory_core import MemoryCoreMiddleware
 from app.agent.model_client import build_model
 from app.agent.platform_files import PlatformFilesBackend
 from app.agent.prompts import (
     APP_AUTHORING_GUIDE,
     INTEGRATIONS_GUIDE,
+    MEMORY_GUIDE,
     ROUTINES_GUIDE,
     SYSTEM_PROMPT,
 )
@@ -190,6 +192,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
         + APP_AUTHORING_GUIDE
         + (ROUTINES_GUIDE if routine_tools else "")
         + INTEGRATIONS_GUIDE
+        + MEMORY_GUIDE
     )
     backend = build_backend(settings)
     model = build_model(settings)
@@ -200,8 +203,10 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
         CompactToolErrorsMiddleware(),
         SyntaxCheckMiddleware(backend),
         ToolNotesMiddleware(),
-        # Last, so the per-user list lands after every static part of the prompt.
+        # Last, so the per-user parts land after every static part of the prompt:
+        # the integrations list, then the memory note.
         IntegrationsListMiddleware(settings.platform_url),
+        MemoryCoreMiddleware(settings.platform_url),
     ]
     return create_deep_agent(
         model=model,

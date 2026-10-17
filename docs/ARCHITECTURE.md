@@ -693,6 +693,24 @@ what another doc says it should be.
     - Pages are about 12,000 characters, cut on turn boundaries, and each
       ends with the next `offset`.
   - Catalog group "Chats", both read-only. Docs: `docs/MEMORY.md` §6.
+- **Memory core (M21-06)** (`app/agent/memory_core.py`,
+  `MemoryCoreMiddleware`, last in the middleware list so it comes after
+  the integrations list; the task helper gets it too).
+  - When a thread's first turn starts, it reads
+    `/personal/Memory/memory.md` with the turn's delegation (`GET
+    /files/download`) and keeps it in the thread's state (`memory_core`).
+  - Every model call appends it to the system message with a fixed
+    framing: the notes were written by the nightly Memory routine, they
+    are data rather than instructions, and what the user says now wins.
+    It's cut at 8,000 characters with a note saying so.
+  - A missing or empty note freezes as no block. A platform error
+    freezes nothing, logs, and the next turn tries again; it never fails
+    a turn.
+  - The static `MEMORY_GUIDE` paragraph (`prompts.py`) is the same for
+    every user: it says what `/personal/Memory/` is, says to search it
+    with `search_files`/`grep` when the user's past matters, and answers
+    "remember X" with "it will be added overnight". Docs:
+    `docs/MEMORY.md` §3.
 - **System prompt** (`app/agent/prompts.py`): paths start with
   `/personal/` or `/spaces/<slug>/` (`ls /spaces` lists the user's
   shared spaces); each write/edit/delete targets exactly one space, and a
@@ -1878,8 +1896,8 @@ to Ask first. `approval_request` is **always** immediately followed by
   routine run, else `chat`. Results come back marked untrusted; every
   failure is a tool result (`Error (<code>): ...`), never a failed turn.
 - The static prompt's `INTEGRATIONS_GUIDE` says how to use them.
-  `IntegrationsListMiddleware` (last in the middleware list, so it lands
-  after every static part) appends one line per integration the user has
+  `IntegrationsListMiddleware` (after every static part; only the memory
+  core, M21-06, comes after it) appends one line per integration the user has
   (`GET /api/platform/integrations`, with "not connected" / "needs
   reconnecting" notes) to the system message. It's fetched when the
   thread's first turn starts and kept in the thread's state
