@@ -673,6 +673,26 @@ what another doc says it should be.
   - Platform failures are short `Error: ...` results, never a failed turn.
   - Catalog: group Files, "Search files by meaning", read-only, so allowed
     by default. Approval card: "Search files: <query>".
+- **`list_chats` / `read_chat` (M21-05)** (`app/agent/chat_tools.py`)
+  read this service's own records for the user the run acts as
+  (`configurable["user_id"]`), with RLS underneath, so another user's
+  chat is "not found". Times are shown in the user's timezone, and dates
+  given without an offset are read in it.
+  - `list_chats(since, before, query, include_routine_runs=False,
+    limit=20)` returns the chats with activity in the window, newest
+    first: id, title, start, last activity, and the routine's name for a
+    run. `query` matches titles. It leaves out the current chat and, by
+    default, routine runs.
+  - `read_chat(chat_id, since, offset=0)` reads the active branch through
+    `agent.aget_state`, exactly as `GET /api/threads/{id}/messages` does.
+    - Each turn is the user's message and the final reply (the last
+      assistant text without tool calls), timed by `turn_stats.started_at`,
+      or the chat's creation when there's no stat.
+    - Tool calls, tool results, reasoning and in-between text are never
+      included.
+    - Pages are about 12,000 characters, cut on turn boundaries, and each
+      ends with the next `offset`.
+  - Catalog group "Chats", both read-only. Docs: `docs/MEMORY.md` §6.
 - **System prompt** (`app/agent/prompts.py`): paths start with
   `/personal/` or `/spaces/<slug>/` (`ls /spaces` lists the user's
   shared spaces); each write/edit/delete targets exactly one space, and a

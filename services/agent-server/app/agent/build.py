@@ -77,6 +77,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import approvals
 from app.agent.app_tools import make_app_tools
+from app.agent.chat_tools import make_chat_tools
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.integration_tools import IntegrationsListMiddleware, make_integration_tools
 from app.agent.model_client import build_model
@@ -180,8 +181,10 @@ def build_backend(settings: Settings) -> CompositeBackend:
 
 
 def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> CompiledStateGraph:
-    """`app_state` (the app's stores and delegation client) adds the routine tools (M17-07)."""
+    """`app_state` (the app's stores and delegation client) adds the routine tools (M17-07)
+    and the chat tools (M21-05)."""
     routine_tools = make_routine_tools(app_state) if app_state is not None else []
+    chat_tools = make_chat_tools(app_state) if app_state is not None else []
     prompt = (
         SYSTEM_PROMPT
         + APP_AUTHORING_GUIDE
@@ -214,6 +217,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
             make_search_files_tool(settings),
             *make_app_tools(settings),
             *routine_tools,
+            *chat_tools,
             *make_integration_tools(settings),
         ],
         checkpointer=checkpointer,
