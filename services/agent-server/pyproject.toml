@@ -1,6 +1,7 @@
 [project]
 name = "agent-server"
 version = "0.1.0"
+license = "Apache-2.0"
 description = "M2-01: FastAPI service hosting the agent and the chat WS"
 requires-python = ">=3.12"
 dependencies = [

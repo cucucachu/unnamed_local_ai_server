@@ -1,0 +1,9 @@
+Home AI Agent
+Copyright 2026 Cody Jones
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party dependencies (npm and Python packages, container base images,
+system packages and model weights) are fetched at build or install time and
+remain under their own licenses; they are not covered by this project's
+license.

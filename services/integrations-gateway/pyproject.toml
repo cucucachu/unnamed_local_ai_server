@@ -1,6 +1,7 @@
 [project]
 name = "integrations-gateway"
 version = "0.1.0"
+license = "Apache-2.0"
 description = "M18-04: the only component that talks to MCP servers and holds the credential key"
 requires-python = ">=3.12"
 dependencies = [

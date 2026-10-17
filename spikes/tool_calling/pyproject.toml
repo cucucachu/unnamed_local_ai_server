@@ -1,6 +1,7 @@
 [project]
 name = "tool-calling-spike"
 version = "0.1.0"
+license = "Apache-2.0"
 description = "M1-03: tool-calling validation spike against the real model-runner"
 readme = "README.md"
 requires-python = ">=3.12"

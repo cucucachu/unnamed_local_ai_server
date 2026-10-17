@@ -1,5 +1,6 @@
 {
   "name": "app-runtime-spike",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "M12-01 risk-gate spike: sandboxed app runtime (esbuild + react-native-web in a sandboxed iframe / WebView), sqlite3def, WAL read-only. See README.md.",

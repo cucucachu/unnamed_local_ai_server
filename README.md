@@ -336,4 +336,6 @@ Restore the platform database and `platform-data` from the same backup run: sess
 
 ## License
 
-Not yet decided — this is a personal home-server project. No license is currently granted for reuse.
+Licensed under the [Apache License, Version 2.0](LICENSE). Redistributions must keep the copyright and license notices and the [NOTICE](NOTICE) file.
+
+Dependencies, container images and model weights are fetched at build or install time and stay under their own licenses.

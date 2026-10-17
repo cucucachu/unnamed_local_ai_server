@@ -1,5 +1,6 @@
 {
   "name": "homeai-app-builder",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "M12-04: the app builder image - import allowlist, type-check, esbuild bundle and smoke render of user apps against the SDK in packages/homeai-sdk, run by code-exec-manager with no network (docs/PLATFORM.md §7).",
