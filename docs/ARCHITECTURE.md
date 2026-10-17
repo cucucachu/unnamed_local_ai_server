@@ -1700,7 +1700,10 @@ their threads as plain chats (`ON DELETE SET NULL`).
   default local time, a fixed prompt with `{since}`/`{now}`, a default
   editable prompt, `unavailable_tools`, `quiet`). Every user gets one
   `routines` row per definition, marked by `system_key` (unique per
-  owner). M21-10 adds the first, `memory`.
+  owner). The only one is `memory` (M21-10, "Memory", daily at 03:00
+  plus the per-user offset, quiet, no web or integrations; its prompt is
+  `app/routines/memory_prompt.py`). Its live check is
+  `scripts/e2e/m21_memory_routine_smoke.sh`.
   - **Creating each copy.** `GET /api/threads` and `GET /api/routines`
     create any missing copy, at most once per user per process, as an
     ordinary routine created through `app/routines/service.py` on the

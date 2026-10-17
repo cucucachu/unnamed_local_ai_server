@@ -58,7 +58,7 @@ ZONE = "America/Los_Angeles"
 
 @pytest.fixture(autouse=True)
 def _tidy(monkeypatch) -> None:
-    monkeypatch.setitem(delivered.DEFINITIONS, "tidy", TIDY)
+    monkeypatch.setattr(delivered, "DEFINITIONS", {"tidy": TIDY})
     monkeypatch.setattr(delivered, "_now", lambda: NOW)
 
 

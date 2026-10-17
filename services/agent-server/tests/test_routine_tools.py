@@ -63,7 +63,9 @@ def _approval(frames: list[dict]) -> dict:
 
 
 def _routines(client) -> list[dict]:
-    return client.get("/api/routines", headers=HEADERS).json()
+    """The user's own routines, without the delivered ones every user has."""
+    routines = client.get("/api/routines", headers=HEADERS).json()
+    return [r for r in routines if not r["delivered"]]
 
 
 def test_the_agent_has_the_routine_tools(client) -> None:
@@ -93,8 +95,8 @@ def test_create_asks_with_the_schedule_in_words(client, fake_model, fake_platfor
     assert routine["timezone"] == "America/Los_Angeles"
     assert (routine["space"], routine["enabled"]) == ("/personal", True)
     assert routine["next_run_at"] == "2026-10-06T14:00:00Z"
-    [grant] = fake_platform.routine_grants.values()
-    assert (grant.user_id, grant.routine_id) == (ALICE, routine["id"])
+    [grant] = [g for g in fake_platform.routine_grants.values() if g.routine_id == routine["id"]]
+    assert grant.user_id == ALICE
     [out] = _tool_results(fake_model)
     assert out.startswith("Created.") and routine["id"] in out
 

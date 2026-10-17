@@ -341,7 +341,7 @@ function Field({
     <View style={[styles.field, containerStyle]}>
       <Text style={styles.label}>{label}</Text>
       <TextInput
-        style={style ?? styles.input}
+        style={[style ?? styles.input, props.editable === false && styles.locked]}
         placeholderTextColor={theme.textMuted}
         autoCorrect={false}
         accessibilityLabel={label}
@@ -395,6 +395,10 @@ const styles = StyleSheet.create({
     color: theme.text,
     backgroundColor: theme.surface,
     fontSize: 15,
+  },
+  locked: {
+    color: theme.textMuted,
+    backgroundColor: 'transparent',
   },
   prompt: {
     minHeight: 110,
