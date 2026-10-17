@@ -6,6 +6,10 @@ from the app, or a chat turn's delegation from the agent (`Caller`). An
 enabled routine holds a platform routine grant (M17-03) for its scheduled
 runs: issued when it's created or enabled or moves space, revoked when it's
 disabled or deleted. Failures are `RoutineError`s carrying an HTTP status.
+
+A delivered routine (M21-07, `app.routines.delivered`) can't be deleted
+(`409 delivered_routine`), renamed or moved (`422`); its `prompt` is the
+editable part, `''` (or the default's text) meaning the default.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Any
 
 from app.core.delegation import Caller, DelegationDenied, DelegationUnavailable
 from app.db.routines import NewRoutine, RoutineRecord
+from app.routines import delivered
 from app.routines import schedule as sched
 
 EDIT_ROLES = frozenset({"editor", "owner"})
@@ -37,6 +42,7 @@ class Draft:
     schedule: sched.Schedule
     timezone: str
     enabled: bool = True
+    system_key: str | None = None
 
 
 def _platform_error(exc: DelegationDenied | DelegationUnavailable) -> RoutineError:
@@ -112,6 +118,7 @@ async def create(
             timezone=draft.timezone,
             enabled=draft.enabled,
             next_run_at=next_run_at(schedule, draft.timezone, draft.enabled, now),
+            system_key=draft.system_key,
         ),
     )
     if record.enabled:
@@ -124,11 +131,33 @@ async def create(
     return record
 
 
+DELIVERED_DELETE = "delivered_routine"
+
+
+def check_changes(current: RoutineRecord, changes: dict) -> dict:
+    """`changes` as they'd be saved, or a `RoutineError` if `current` can't take them."""
+    changes = {k: v for k, v in changes.items() if v is not None}
+    definition = delivered.definition_of(current)
+    if definition is None:
+        if changes.get("prompt") == "":
+            raise RoutineError(422, "the prompt can't be empty")
+        return changes
+    if changes.get("name", current.name) != current.name:
+        raise RoutineError(422, f'"{current.name}" is a delivered routine: it can\'t be renamed')
+    if changes.get("space", current.space) != current.space:
+        raise RoutineError(
+            422, f'"{current.name}" is a delivered routine: it always works in {current.space}'
+        )
+    if "prompt" in changes:
+        changes["prompt"] = delivered.stored_prompt(changes["prompt"], definition)
+    return changes
+
+
 async def update(
     state: Any, caller: Caller, current: RoutineRecord, changes: dict, now: datetime
 ) -> RoutineRecord:
     """`changes`: any of `Draft`'s fields (a `schedule` already a `sched.Schedule`)."""
-    changes = {k: v for k, v in changes.items() if v is not None}
+    changes = check_changes(current, changes)
     if "timezone" in changes:
         check_timezone(changes["timezone"])
     if "space" in changes:
@@ -157,6 +186,8 @@ async def update(
 
 
 async def delete(state: Any, current: RoutineRecord) -> None:
+    if delivered.definition_of(current) is not None:
+        raise RoutineError(409, DELIVERED_DELETE)
     if current.grant_token:
         await _revoke_grant(state, current.grant_token)
     if not await state.routine_store.delete(current.id, current.owner_user_id):

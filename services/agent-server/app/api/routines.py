@@ -12,6 +12,12 @@ Saving goes through `app.routines.service` (shared with the agent's
 routine tools), on the caller's identity token: the space check and the
 routine grant (M17-03) an enabled routine holds for its scheduled runs.
 
+A delivered routine (M21-07, `app.routines.delivered`) is listed with
+`delivered`, its read-only `fixed_prompt`, `prompt_is_default` and the
+`unavailable_tools` its runs never get; `prompt` is its editable part, and
+`PATCH` `prompt: ""` resets it. Listing routines creates the caller's
+missing delivered routines first.
+
 A run follows its owner's tool permissions like any chat (#342,
 `app.agent.approvals`). A run is a chat: the chats list puts runs that need
 the user first (M17-10, `GET /api/threads`).
@@ -28,14 +34,16 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from app.core.delegation import Caller, Delegation, DelegationDenied, DelegationUnavailable
 from app.core.identity import IDENTITY_HEADER, CurrentUser
 from app.db.routines import RoutineRecord, RoutineStore, RunRecord
+from app.routines import delivered, service
 from app.routines import schedule as sched
-from app.routines import service
 from app.routines.runs import create_run_thread
 
 router = APIRouter()
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
+# `""` resets a delivered routine's editable part; refused for any other routine.
+PatchPrompt = Annotated[str, StringConstraints(strip_whitespace=True, max_length=20_000)]
 SpacePath = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
 
 
@@ -64,7 +72,7 @@ class RoutinePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: Name | None = None
-    prompt: Prompt | None = None
+    prompt: PatchPrompt | None = None
     space: SpacePath | None = None
     schedule: sched.Schedule | None = None
     timezone: Annotated[str, Field(max_length=64)] | None = None
@@ -82,6 +90,12 @@ class LastRun(BaseModel):
     thread_id: str | None
 
 
+class UnavailableTool(BaseModel):
+    name: str
+    label: str
+    group: str
+
+
 class RoutineOut(BaseModel):
     id: str
     name: str
@@ -95,6 +109,15 @@ class RoutineOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_run: LastRun | None = None
+    delivered: bool = False
+    fixed_prompt: str | None = None
+    prompt_is_default: bool = False
+    unavailable_tools: list[UnavailableTool] = []
+
+
+_OWN_FIELDS = frozenset(
+    {"last_run", "delivered", "fixed_prompt", "prompt_is_default", "unavailable_tools"}
+)
 
 
 class RunOut(BaseModel):
@@ -114,7 +137,18 @@ def _store(request: Request) -> RoutineStore:
 
 
 def _out(record: RoutineRecord, last_run: RunRecord | None = None) -> RoutineOut:
-    fields = {name: getattr(record, name) for name in RoutineOut.model_fields if name != "last_run"}
+    fields = {
+        name: getattr(record, name) for name in RoutineOut.model_fields if name not in _OWN_FIELDS
+    }
+    definition = delivered.definition_of(record)
+    if definition is not None:
+        fields.update(
+            prompt=delivered.editable_prompt(record, definition),
+            delivered=True,
+            fixed_prompt=definition.fixed_prompt,
+            prompt_is_default=not record.prompt,
+            unavailable_tools=delivered.unavailable_tool_labels(definition),
+        )
     if last_run is not None:
         fields["last_run"] = LastRun(
             **{name: getattr(last_run, name) for name in LastRun.model_fields}
@@ -147,6 +181,7 @@ def _http(exc: service.RoutineError) -> HTTPException:
 
 @router.get("/routines", response_model=list[RoutineOut])
 async def list_routines(request: Request, user: CurrentUser) -> list[RoutineOut]:
+    await request.app.state.delivered_routines.ensure(_caller(request), user.user_id)
     store = _store(request)
     latest = await store.latest_runs(user.user_id)
     return [_out(r, latest.get(r.id)) for r in await store.list_for_owner(user.user_id)]

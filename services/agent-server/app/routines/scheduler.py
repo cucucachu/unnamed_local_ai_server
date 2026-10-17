@@ -43,7 +43,7 @@ from app.core.delegation import Delegation, DelegationDenied, DelegationUnavaila
 from app.db.rls import bind_user
 from app.db.routines import RoutineRecord, RunRecord
 from app.db.threads import ThreadRecord
-from app.routines import runs
+from app.routines import delivered, runs
 from app.routines.schedule import next_run, parse_schedule
 
 logger = logging.getLogger(__name__)
@@ -190,12 +190,16 @@ class RoutineScheduler:
         try:
             delegation = await runs.grant_delegation(self._state, routine, thread.id)
         except DelegationUnavailable:
-            delegation, detail = None, "couldn't reach the platform"
+            delegation, status, detail = None, "failed", "couldn't reach the platform"
         else:
-            detail = "no longer allowed to run (its permission was revoked); turned off"
+            if delivered.definition_of(routine) is not None:
+                status, detail = "missed", delivered.NO_GRANT
+            else:
+                status = "failed"
+                detail = "no longer allowed to run (its permission was revoked); turned off"
         if delegation is None:
             await self._state.thread_store.delete(thread.id, routine.owner_user_id)
-            await self._finish(run, "failed", detail)
+            await self._finish(run, status, detail)
         return delegation
 
     async def start_manual(
