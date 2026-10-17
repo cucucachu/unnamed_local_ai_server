@@ -90,12 +90,16 @@ export function initialForm(routine: Routine | null): RoutineFormState {
 const TIME = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 const DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
-/** The form as a request body, or what's wrong with it. */
-export function formToInput(form: RoutineFormState): { input: RoutineInput } | { error: string } {
+/** The form as a request body, or what's wrong with it. A delivered
+ * routine's prompt may be empty: that puts back its default. */
+export function formToInput(
+  form: RoutineFormState,
+  { delivered = false }: { delivered?: boolean } = {},
+): { input: RoutineInput } | { error: string } {
   const name = form.name.trim();
   const prompt = form.prompt.trim();
   if (!name) return { error: 'Give the routine a name.' };
-  if (!prompt) return { error: 'Say what the agent should do.' };
+  if (!prompt && !delivered) return { error: 'Say what the agent should do.' };
   const time = TIME.exec(form.time.trim());
   if (!time) return { error: 'Enter the time as HH:MM, e.g. 07:30.' };
   const hhmm = `${time[1].padStart(2, '0')}:${time[2]}`;
@@ -132,7 +136,9 @@ export function formToInput(form: RoutineFormState): { input: RoutineInput } | {
   };
 }
 
-/** Name, prompt, space, schedule and timezone (M17-06). */
+/** Name, prompt, space, schedule and timezone (M17-06). A delivered
+ * routine's name and space are fixed, and its prompt is only the editable
+ * part, with Reset to default (M21-09). */
 export function RoutineForm({
   routine,
   spaces,
@@ -151,16 +157,20 @@ export function RoutineForm({
   const set = <K extends keyof RoutineFormState>(key: K, value: RoutineFormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
-  const choices = routineSpaces(spaces).map((space) => ({
-    value: spacePath(space),
-    label: space.kind === 'personal' ? 'Personal' : space.name,
-    testID: `routine-space-${space.slug}`,
-  }));
+  const delivered = routine?.delivered ?? false;
+  const adminOff = routine?.disabled_by_admin ?? false;
+  const choices = routineSpaces(spaces)
+    .map((space) => ({
+      value: spacePath(space),
+      label: space.kind === 'personal' ? 'Personal' : space.name,
+      testID: `routine-space-${space.slug}`,
+    }))
+    .filter((choice) => !delivered || choice.value === form.space);
   if (!choices.some((choice) => choice.value === form.space)) {
     // Archived, or edit rights lost: still shown, so saving doesn't move it.
     choices.push({ value: form.space, label: form.space, testID: 'routine-space-current' });
   }
-  const checked = formToInput(form);
+  const checked = formToInput(form, { delivered });
   const preview = 'input' in checked ? scheduleSummary(checked.input.schedule) : null;
 
   const submit = () => {
@@ -174,16 +184,33 @@ export function RoutineForm({
 
   return (
     <View style={styles.form} testID="routine-form">
-      <Field label="Name" value={form.name} onChangeText={(v) => set('name', v)} testID="routine-name" maxLength={120} />
       <Field
-        label="What should the agent do?"
+        label="Name"
+        value={form.name}
+        onChangeText={(v) => set('name', v)}
+        editable={!delivered}
+        testID="routine-name"
+        maxLength={120}
+      />
+      <Field
+        label={delivered ? 'Your part of its instructions' : 'What should the agent do?'}
         value={form.prompt}
         onChangeText={(v) => set('prompt', v)}
         multiline
         style={[styles.input, styles.prompt]}
         testID="routine-prompt"
-        placeholder="Summarize my unread notes and list what's due this week."
+        placeholder={
+          delivered ? 'Left empty, it uses the default.' : "Summarize my unread notes and list what's due this week."
+        }
       />
+      {delivered && routine && !routine.prompt_is_default && form.prompt !== '' ? (
+        <ActionButton label="Reset to default" compact onPress={() => set('prompt', '')} testID="routine-prompt-reset" />
+      ) : null}
+      {delivered && routine && !routine.prompt_is_default && form.prompt === '' ? (
+        <Text style={settingsStyles.muted} testID="routine-prompt-reset-note">
+          Saving puts back the default instructions.
+        </Text>
+      ) : null}
 
       <SectionTitle>Space</SectionTitle>
       <View style={styles.chips}>
@@ -274,10 +301,18 @@ export function RoutineForm({
 
       <Card>
         <View style={[settingsStyles.row, settingsStyles.firstRow]}>
-          <Text style={[settingsStyles.rowTitle, styles.grow]}>On</Text>
+          <View style={styles.grow}>
+            <Text style={settingsStyles.rowTitle}>On</Text>
+            {adminOff ? (
+              <Text style={settingsStyles.muted} testID="routine-enabled-admin-off">
+                Turned off by your admin
+              </Text>
+            ) : null}
+          </View>
           <Switch
             value={form.enabled}
             onValueChange={(v) => set('enabled', v)}
+            disabled={adminOff}
             accessibilityLabel="Routine on"
             testID="routine-enabled"
           />

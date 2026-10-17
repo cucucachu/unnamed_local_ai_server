@@ -37,9 +37,17 @@ export interface LastRun {
   thread_id: string | null;
 }
 
+export interface UnavailableTool {
+  name: string;
+  /** The tool's label in Settings → Agent tools. */
+  label: string;
+  group: string;
+}
+
 export interface Routine {
   id: string;
   name: string;
+  /** For a delivered routine, only the part the user may edit. */
   prompt: string;
   /** `/personal` or `/spaces/<slug>`. */
   space: string;
@@ -51,6 +59,14 @@ export interface Routine {
   created_at: string;
   updated_at: string;
   last_run?: LastRun | null;
+  /** Built in (M21-07): can't be deleted, renamed or moved. */
+  delivered?: boolean;
+  /** The admin has it off for everyone (M21-08); the user's `enabled` is kept. */
+  disabled_by_admin?: boolean;
+  /** The part of a delivered routine's prompt that's always included. */
+  fixed_prompt?: string | null;
+  prompt_is_default?: boolean;
+  unavailable_tools?: UnavailableTool[];
 }
 
 export interface RoutineRun {
@@ -175,8 +191,10 @@ export function scheduleSummary(schedule: Schedule): string {
 }
 
 /** When it next runs, in the routine's own timezone. */
-export function nextRunLabel(routine: Pick<Routine, 'next_run_at' | 'timezone' | 'enabled'>): string {
-  if (!routine.enabled) return 'Off';
+export function nextRunLabel(
+  routine: Pick<Routine, 'next_run_at' | 'timezone' | 'enabled' | 'disabled_by_admin'>,
+): string {
+  if (!routine.enabled || routine.disabled_by_admin) return 'Off';
   if (!routine.next_run_at) return 'Not scheduled';
   try {
     return new Intl.DateTimeFormat('en-US', {
@@ -226,6 +244,19 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   waiting_approval: 'Needs approval',
   expired: 'Approval expired',
 };
+
+/** "Search the web, Read web pages, Integrations": a group that contributes
+ * more than two tools is named once instead of tool by tool. */
+export function unavailableSummary(tools: UnavailableTool[]): string {
+  const counts = new Map<string, number>();
+  for (const tool of tools) counts.set(tool.group, (counts.get(tool.group) ?? 0) + 1);
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = (counts.get(tool.group) ?? 0) > 2 ? tool.group : tool.label;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names.join(', ');
+}
 
 export function runStatusLabel(status: RunStatus): string {
   return STATUS_LABELS[status] ?? status;

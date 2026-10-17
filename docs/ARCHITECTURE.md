@@ -1747,6 +1747,12 @@ their threads as plain chats (`ON DELETE SET NULL`).
     user's own `enabled` is kept. `list_routines` tells the agent. Settings
     → Agent tools (admins) has a "Delivered routines" section, one switch
     each with its description.
+  - **The Routines app** (M21-09) marks it "Built in" and has no Delete;
+    its screen says what it can't use (a group of more than two tools is
+    named once, e.g. "Integrations") and shows the fixed part collapsed
+    under "Always included". The editor locks the name and space, edits
+    only the editable part, and has Reset to default (saves `prompt: ""`).
+    While the admin has it off, the switch is locked and Run now disabled.
   - **The memory note** (M21-06) adds "The Memory routine is turned off, so
     these notes aren't being updated." to its framing when the user's
     Memory routine exists and is off, by them or by the admin.

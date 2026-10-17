@@ -63,15 +63,23 @@ export default function RoutinesScreen() {
                     testID={`routine-row-${routine.id}`}
                   >
                     <View style={settingsStyles.rowMain}>
-                      <Text style={settingsStyles.rowTitle} numberOfLines={1}>
-                        {routine.name}
-                      </Text>
+                      <View style={styles.title}>
+                        <Text style={[settingsStyles.rowTitle, styles.shrink]} numberOfLines={1}>
+                          {routine.name}
+                        </Text>
+                        {routine.delivered ? <Badge label="Built in" testID={`routine-builtin-${routine.id}`} /> : null}
+                      </View>
                       <Text style={settingsStyles.muted} testID={`routine-summary-${routine.id}`}>
                         {scheduleSummary(routine.schedule)}
                       </Text>
                       <Text style={settingsStyles.muted} testID={`routine-next-${routine.id}`}>
                         Next: {nextRunLabel(routine)}
                       </Text>
+                      {routine.disabled_by_admin ? (
+                        <Text style={settingsStyles.muted} testID={`routine-admin-off-${routine.id}`}>
+                          Turned off by your admin
+                        </Text>
+                      ) : null}
                       {routine.last_run ? (
                         <View style={styles.lastRun}>
                           <Text style={settingsStyles.muted}>Last:</Text>
@@ -86,7 +94,7 @@ export default function RoutinesScreen() {
                     <Switch
                       value={routine.enabled}
                       onValueChange={(enabled) => toggle(routine, enabled)}
-                      disabled={busyKey !== null}
+                      disabled={busyKey !== null || routine.disabled_by_admin}
                       accessibilityLabel={`${routine.name} on`}
                       testID={`routine-toggle-${routine.id}`}
                     />
@@ -105,6 +113,14 @@ export default function RoutinesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  title: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  shrink: {
+    flexShrink: 1,
   },
   lastRun: {
     flexDirection: 'row',
