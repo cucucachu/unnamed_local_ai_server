@@ -1,6 +1,7 @@
 [project]
 name = "egress-proxy"
 version = "0.1.0"
+license = "Apache-2.0"
 description = "M7-02: GET/HEAD-only MITM egress filter + destination guard (mitmproxy addon)"
 requires-python = ">=3.12"
 dependencies = [

@@ -6,7 +6,7 @@
   "types": "index.ts",
   "scripts": {},
   "keywords": ["react-native", "expo", "homeai-device-key"],
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/cucucachu/unnamed_local_ai_server",
   "peerDependencies": {
     "expo": "*",

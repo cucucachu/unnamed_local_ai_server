@@ -1,5 +1,6 @@
 {
   "name": "homeai-sandbox-spike-host",
+  "license": "Apache-2.0",
   "private": true,
   "main": "index.ts",
   "description": "M12-01: minimal Expo SDK 57 host that runs the sandboxed app runtime in an iframe (web) or react-native-webview (Expo Go).",

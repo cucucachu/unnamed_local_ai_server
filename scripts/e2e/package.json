@@ -1,5 +1,6 @@
 {
   "name": "chat-browser-smoke",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "description": "M2-06 full-stack chat smoke test (headless browser via Playwright) — see chat_browser_smoke.sh.",
