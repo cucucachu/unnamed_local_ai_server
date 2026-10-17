@@ -337,3 +337,123 @@ describe('recent runs and More…', () => {
     expect(mockDismissTo).toHaveBeenCalledWith('/');
   });
 });
+
+describe('a delivered routine', () => {
+  const memory = (overrides: Partial<Routine> = {}) =>
+    routine({
+      id: 'm1',
+      name: 'Memory',
+      prompt: 'Keep notes on what matters to me.',
+      schedule: { kind: 'daily', time: '03:11:00' },
+      delivered: true,
+      fixed_prompt: 'Read your chats since the last run and update /personal/Memory.',
+      prompt_is_default: false,
+      unavailable_tools: [
+        { name: 'web_search', label: 'Search the web', group: 'Web' },
+        { name: 'web_fetch', label: 'Read web pages', group: 'Web' },
+        { name: 'open_integration', label: 'Look at integrations', group: 'Integrations' },
+        { name: 'use_integration', label: 'Use integrations', group: 'Integrations' },
+        { name: 'read_integration_resource', label: 'Read integration resources', group: 'Integrations' },
+        { name: 'get_integration_prompt', label: 'Use integration prompts', group: 'Integrations' },
+      ],
+      ...overrides,
+    });
+  const detailRoutes = (body: Routine) => ({
+    'GET /api/routines/m1': { body },
+    'GET /api/routines/m1/runs': { body: [runRecord({ id: 'run-q' })] },
+    'GET /api/platform/spaces': { body: { spaces: SPACES } },
+  });
+
+  beforeEach(() => {
+    mockParams = { routineId: 'm1' };
+  });
+
+  it('is marked built in on the list', async () => {
+    mockFetchRoutes({ 'GET /api/routines': { body: [memory(), routine()] } });
+    renderer = await render(RoutinesScreen);
+    expect(exists(renderer, 'routine-builtin-m1')).toBe(true);
+    expect(exists(renderer, 'routine-builtin-r1')).toBe(false);
+  });
+
+  it('has no Delete, says what it can’t use, and keeps the fixed prompt collapsed', async () => {
+    mockFetchRoutes(detailRoutes(memory()));
+    renderer = await render(RoutineDetailScreen);
+
+    expect(exists(renderer, 'routine-delete')).toBe(false);
+    expect(textOf(renderer)).toContain("This routine can't use: Search the web, Read web pages, Integrations");
+    expect(textOf(renderer)).toContain('Keep notes on what matters to me.');
+    expect(exists(renderer, 'routine-fixed-prompt')).toBe(false);
+    expect(exists(renderer, 'routine-run-run-q')).toBe(true);
+
+    await press(renderer, 'routine-fixed-toggle');
+    expect(textOf(renderer)).toContain('Read your chats since the last run');
+  });
+
+  it('shows the admin’s switch and locks its own', async () => {
+    mockFetchRoutes(detailRoutes(memory({ disabled_by_admin: true })));
+    renderer = await render(RoutineDetailScreen);
+    expect(textOf(renderer)).toContain('Turned off by your admin');
+    expect(textOf(renderer)).toContain('Next: Off');
+    const runNow = renderer.root.find((n) => n.props.testID === 'routine-run-now' && n.props.accessibilityState);
+    expect(runNow.props.accessibilityState.disabled).toBe(true);
+
+    act(() => renderer!.unmount());
+    mockFetchRoutes({ 'GET /api/routines': { body: [memory({ disabled_by_admin: true })] } });
+    renderer = await render(RoutinesScreen);
+    expect(exists(renderer, 'routine-admin-off-m1')).toBe(true);
+    const toggle = renderer.root.find((n) => n.props.testID === 'routine-toggle-m1' && n.props.onValueChange);
+    expect(toggle.props.disabled).toBe(true);
+  });
+
+  it('locks the name and space, and resets the prompt to the default', async () => {
+    const fetchMock = mockFetchRoutes({
+      'GET /api/routines/m1': { body: memory({ disabled_by_admin: true }) },
+      'GET /api/platform/spaces': { body: { spaces: SPACES } },
+      'PATCH /api/routines/m1': { body: memory({ prompt_is_default: true }) },
+    });
+    renderer = await render(RoutineEditScreen);
+
+    const name = renderer.root.find((n) => n.props.testID === 'routine-name' && n.props.onChangeText);
+    expect(name.props.editable).toBe(false);
+    expect(exists(renderer, 'routine-space-alice')).toBe(true);
+    expect(exists(renderer, 'routine-space-family')).toBe(false);
+    const enabled = renderer.root.find((n) => n.props.testID === 'routine-enabled' && n.props.onValueChange);
+    expect(enabled.props.disabled).toBe(true);
+
+    await press(renderer, 'routine-prompt-reset');
+    expect(exists(renderer, 'routine-prompt-reset-note')).toBe(true);
+    await press(renderer, 'routine-save');
+
+    expect(requestsTo(fetchMock, 'PATCH', '/api/routines/m1')).toEqual([
+      { schedule: { kind: 'daily', time: '03:11' }, prompt: '' },
+    ]);
+  });
+
+  it('has no Reset when the prompt is already the default', async () => {
+    mockFetchRoutes({
+      'GET /api/routines/m1': { body: memory({ prompt_is_default: true }) },
+      'GET /api/platform/spaces': { body: { spaces: SPACES } },
+    });
+    renderer = await render(RoutineEditScreen);
+    expect(exists(renderer, 'routine-prompt-reset')).toBe(false);
+  });
+
+  it('leaves ordinary routines as they were', async () => {
+    mockParams = { routineId: 'r1' };
+    mockFetchRoutes({
+      'GET /api/routines/r1': { body: routine() },
+      'GET /api/routines/r1/runs': { body: [] },
+      'GET /api/platform/spaces': { body: { spaces: SPACES } },
+    });
+    renderer = await render(RoutineDetailScreen);
+    expect(exists(renderer, 'routine-delete')).toBe(true);
+    expect(exists(renderer, 'routine-delivered')).toBe(false);
+
+    act(() => renderer!.unmount());
+    renderer = await render(RoutineEditScreen);
+    const name = renderer.root.find((n) => n.props.testID === 'routine-name' && n.props.onChangeText);
+    expect(name.props.editable).toBe(true);
+    expect(exists(renderer, 'routine-space-family')).toBe(true);
+    expect(exists(renderer, 'routine-prompt-reset')).toBe(false);
+  });
+});

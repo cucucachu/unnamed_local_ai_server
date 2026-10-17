@@ -1,5 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { RoutineRunList } from '@/components/RoutineRunList';
@@ -24,6 +24,7 @@ import {
   runRoutineNow,
   scheduleSummary,
   spaceLabel,
+  unavailableSummary,
   type Routine,
   type RoutineRun,
 } from '@/lib/routines';
@@ -47,12 +48,15 @@ function confirmDelete(routine: Routine): Promise<boolean> {
 const RECENT_RUNS = 5;
 
 /** Routines → one routine (M17-06, M17-09): what it does and when, Run now,
- * edit, delete, and its last few runs (More… for all); a run opens its chat. */
+ * edit, delete, and its last few runs (More… for all); a run opens its chat.
+ * A delivered routine (M21-09) can't be deleted, says which tools it can't
+ * use, and shows its fixed prompt part read-only. */
 export default function RoutineDetailScreen() {
   const { routineId } = useLocalSearchParams<{ routineId: string }>();
   const router = useRouter();
   const { message: toast, showToast } = useToast();
   const { busyKey, run } = useAction(showToast);
+  const [fixedOpen, setFixedOpen] = useState(false);
 
   const load = useCallback(async (): Promise<{ routine: Routine; runs: RoutineRun[]; spaces: Space[] }> => {
     const [routine, runs, spaces] = await Promise.all([
@@ -113,11 +117,48 @@ export default function RoutineDetailScreen() {
                 <Text style={settingsStyles.muted} testID="routine-detail-next">
                   Next: {nextRunLabel(routine)}
                 </Text>
+                {routine.disabled_by_admin ? (
+                  <Text style={styles.notice} testID="routine-detail-admin-off">
+                    Turned off by your admin. Your own setting is kept for when they turn it back on.
+                  </Text>
+                ) : null}
                 <Text style={styles.prompt} testID="routine-detail-prompt">
                   {routine.prompt}
                 </Text>
               </View>
             </Card>
+
+            {routine.delivered ? (
+              <Card testID="routine-delivered">
+                <View style={settingsStyles.cardBody}>
+                  <Text style={settingsStyles.muted} testID="routine-delivered-note">
+                    Built into HomeAI. You can change its time, turn it off, or edit your part of its instructions.
+                  </Text>
+                  {routine.unavailable_tools?.length ? (
+                    <Text style={settingsStyles.muted} testID="routine-unavailable-tools">
+                      {`This routine can't use: ${unavailableSummary(routine.unavailable_tools)}`}
+                    </Text>
+                  ) : null}
+                  {routine.fixed_prompt ? (
+                    <>
+                      <Pressable
+                        onPress={() => setFixedOpen((open) => !open)}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: fixedOpen }}
+                        testID="routine-fixed-toggle"
+                      >
+                        <Text style={styles.moreText}>{fixedOpen ? 'Always included ▾' : 'Always included ▸'}</Text>
+                      </Pressable>
+                      {fixedOpen ? (
+                        <Text style={styles.fixed} testID="routine-fixed-prompt">
+                          {routine.fixed_prompt}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
+                </View>
+              </Card>
+            ) : null}
 
             <View style={settingsStyles.rowActions}>
               <ActionButton
@@ -125,7 +166,7 @@ export default function RoutineDetailScreen() {
                 variant="primary"
                 onPress={handleRunNow}
                 busy={busyKey === 'run-now'}
-                disabled={busyKey !== null}
+                disabled={busyKey !== null || routine.disabled_by_admin}
                 testID="routine-run-now"
               />
               <ActionButton
@@ -134,14 +175,16 @@ export default function RoutineDetailScreen() {
                 disabled={busyKey !== null}
                 testID="routine-edit"
               />
-              <ActionButton
-                label="Delete"
-                variant="danger"
-                onPress={() => handleDelete(routine)}
-                busy={busyKey === 'delete'}
-                disabled={busyKey !== null}
-                testID="routine-delete"
-              />
+              {routine.delivered ? null : (
+                <ActionButton
+                  label="Delete"
+                  variant="danger"
+                  onPress={() => handleDelete(routine)}
+                  busy={busyKey === 'delete'}
+                  disabled={busyKey !== null}
+                  testID="routine-delete"
+                />
+              )}
             </View>
 
             <SectionTitle>Recent runs</SectionTitle>
@@ -171,6 +214,14 @@ const styles = StyleSheet.create({
   prompt: {
     color: theme.text,
     fontSize: 14,
+  },
+  notice: {
+    color: theme.danger,
+    fontSize: 14,
+  },
+  fixed: {
+    color: theme.textMuted,
+    fontSize: 13,
   },
   more: {
     alignSelf: 'flex-start',
