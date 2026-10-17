@@ -30,7 +30,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from langgraph.errors import GraphRecursionError
+
 from app.agent.approvals import PolicyUnavailable
+from app.agent.repeat_guard import RepeatedToolCall
 from app.core.delegation import Delegation, DelegationDenied
 from app.db.rls import bind_user
 
@@ -246,6 +249,19 @@ class TurnRunner:
                 )
             except DelegationDenied as exc:
                 outcome = TurnOutcome("error", error=exc)
+                return outcome
+            except (GraphRecursionError, RepeatedToolCall) as exc:
+                logger.warning("turn on thread %s stopped: %r", request.thread_id, exc)
+                stuck = (
+                    exc
+                    if isinstance(exc, RepeatedToolCall)
+                    else RuntimeError(
+                        "The agent took too many steps without finishing, so it stopped. Try "
+                        "rephrasing the request, or breaking it into smaller steps."
+                    )
+                )
+                turn.emit({"type": "error", "message": str(stuck)})
+                outcome = TurnOutcome("error", error=stuck)
                 return outcome
             except Exception as exc:
                 logger.exception("turn on thread %s failed", request.thread_id)

@@ -1770,6 +1770,13 @@ to Ask first. `approval_request` is **always** immediately followed by
   `app/agent/tool_policy.py`) into `configurable["tool_policy"]`. If it
   can't be read the turn ends with an `error` frame and the model isn't
   called. A turn with no delegation binds every tool and asks for each.
+- `RepeatGuardMiddleware` (#383, `app/agent/repeat_guard.py`, first in
+  the list and also on the subagent) counts identical calls (same tool,
+  same arguments) since the turn's last user message. Past 3 the call
+  isn't run and the model reads a tool error saying it already has the
+  result; at 6 the turn ends. That, and hitting `AGENT_RECURSION_LIMIT`,
+  end the turn with a plain-words `error` frame, which a routine run
+  records as its error.
 - `ToolPolicyMiddleware` (also on the general-purpose subagent) binds only
   the tools that are on. The list is fixed for the thread, so the prompt
   prefix stays cached; a call to a tool turned off since is refused with a

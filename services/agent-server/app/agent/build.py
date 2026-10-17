@@ -87,6 +87,7 @@ from app.agent.prompts import (
     ROUTINES_GUIDE,
     SYSTEM_PROMPT,
 )
+from app.agent.repeat_guard import RepeatGuardMiddleware
 from app.agent.routine_tools import make_routine_tools
 from app.agent.symbol_tools import make_symbol_tools
 from app.agent.syntax_check import SyntaxCheckMiddleware
@@ -187,6 +188,8 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
     backend = build_backend(settings)
     model = build_model(settings)
     middleware = [
+        # First, so a refused repeat never reaches the approval card.
+        RepeatGuardMiddleware(),
         approvals.ToolPolicyMiddleware(),
         CompactToolErrorsMiddleware(),
         SyntaxCheckMiddleware(backend),
