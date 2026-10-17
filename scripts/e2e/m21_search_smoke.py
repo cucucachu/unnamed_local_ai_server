@@ -32,10 +32,12 @@ FILES = {
     "/personal/notes/recipes.md": "# Recipes\n\nPancakes: two eggs, a cup of flour, milk.\n",
 }
 PARAPHRASE = "which relative of mine is an apiarist"
+# The other M21 smokes import these helpers and set their own.
+PREFIX = "m21-search"
 
 
 def log(msg: str) -> None:
-    print(f"[m21-search] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+    print(f"[{PREFIX}] {time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
 def fail(msg: str) -> None:

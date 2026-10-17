@@ -70,6 +70,9 @@ describe('runningStatusLine', () => {
     expect(
       runningStatusLine([tool('t6', 'search_files', { status: 'running', args: { query: 'maria', path: '/' } })]),
     ).toBe('Searching files…');
+    expect(runningStatusLine([tool('t7', 'read_chat', { category: 'plan', status: 'running', args: {} })])).toBe(
+      'Reading chats…',
+    );
     expect(
       runningStatusLine([
         tool('t5', 'web_fetch', { category: 'web', status: 'running', args: { url: 'https://example.com/docs' } }),

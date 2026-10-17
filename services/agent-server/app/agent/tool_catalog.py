@@ -61,6 +61,11 @@ CATALOG: tuple[CatalogTool, ...] = (
         ("delete", "Delete files", False, "Delete a file or folder permanently."),
     ),
     *_tools(
+        "Chats",
+        ("list_chats", "List chats", True, "See your past chats and routine runs."),
+        ("read_chat", "Read chats", True, "Read what you and the assistant said in a past chat."),
+    ),
+    *_tools(
         "Code",
         (
             "execute_code",

@@ -325,6 +325,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent.app_tools import APP_TOOL_NAMES
 from app.agent.approvals import HITL_TOOL_NAMES, ToolPolicy
+from app.agent.chat_tools import CHAT_TOOL_NAMES
 from app.agent.integration_tools import INTEGRATION_TOOL_NAMES
 from app.agent.routine_tools import ROUTINE_TOOL_NAMES
 from app.agent.turn_runner import END, ActiveTurn, TurnOutcome, TurnRequest, TurnRunner
@@ -356,6 +357,7 @@ _TOOL_CATEGORY_BY_NAME: dict[str, str] = {
     "web_fetch": "web",
     **dict.fromkeys(APP_TOOL_NAMES, "app"),
     **dict.fromkeys(ROUTINE_TOOL_NAMES, "plan"),
+    **dict.fromkeys(CHAT_TOOL_NAMES, "plan"),
     **dict.fromkeys(INTEGRATION_TOOL_NAMES, "integration"),
 }
 
