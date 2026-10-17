@@ -160,8 +160,11 @@ export function connectIntegration(integrationId: string, secret: string): Promi
 
 /** The provider's sign-in page for the user's own connection; open it with `openSignIn`. */
 export function startMySignIn(integrationId: string): Promise<{ authorize_url: string }> {
-  return send<{ authorize_url: string }>('POST', `${MINE}/${id(integrationId)}/oauth/start`);
+  return send<{ authorize_url: string }>('POST', `${MINE}/${id(integrationId)}/oauth/start${FROM_APP}`);
 }
+
+/** The return page links into the app when the sign-in started there. */
+const FROM_APP = Platform.OS === 'web' ? '' : '?app=true';
 
 /** Go to a provider's sign-in page. Its return page links back into HomeAI.
  * The web goes in this tab (no popup to block); Android opens the browser. */
@@ -223,7 +226,7 @@ export function adminSetSharedCredential(integrationId: string, secret: string):
 
 /** The provider's sign-in page for the household's shared connection. */
 export function adminStartSharedSignIn(integrationId: string): Promise<{ authorize_url: string }> {
-  return send<{ authorize_url: string }>('POST', `${ADMIN}/${id(integrationId)}/oauth/start`);
+  return send<{ authorize_url: string }>('POST', `${ADMIN}/${id(integrationId)}/oauth/start${FROM_APP}`);
 }
 
 export function adminClearSharedCredential(integrationId: string): Promise<void> {
