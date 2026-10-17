@@ -18,6 +18,10 @@ runs on the detached turn runner until it ends or `run_timeout_s` cancels
 it (`app.routines.runs.finish_run` records the outcome). A one-shot is
 disabled when claimed, and its grant revoked once its run is over.
 
+A delivered routine the admin turned off for everyone (M21-08) is skipped
+quietly: its claimed run record is deleted, at the claim and again before
+it starts. If the platform can't say, the run fails.
+
 At startup, runs a restart cut off are failed and queued ones are queued
 again. Run-now (`start_manual`) skips the queue - someone asked for it -
 but is recorded and time-limited the same way.
@@ -124,6 +128,8 @@ class RoutineScheduler:
             self._clock(), CLAIM_BATCH, advance, self._grace
         )
         for routine, run in claimed:
+            if await self._off_for_everyone(routine, run):
+                continue
             if run.status == "queued":
                 self._queue.put_nowait((routine, run))
             else:
@@ -171,6 +177,8 @@ class RoutineScheduler:
             if not routine.enabled and not _is_once(routine):
                 await self._finish(run, "missed", "the routine was turned off")
                 return
+            if await self._off_for_everyone(routine, run, strict=True):
+                return
             thread = await runs.create_run_thread(state, routine)
             delegation = await self._delegation(routine, run, thread)
             if delegation is None:
@@ -183,6 +191,25 @@ class RoutineScheduler:
             )
             turn = await runs.launch_run(state, routine, thread, delegation)
         await self._finish_turn(run, turn)
+
+    async def _off_for_everyone(
+        self, routine: RoutineRecord, run: RunRecord, *, strict: bool = False
+    ) -> bool:
+        """A delivered routine the admin has off: its run record goes. With
+        `strict`, a platform that can't say fails the run instead."""
+        if delivered.definition_of(routine) is None:
+            return False
+        off = await self._state.delivered_routines.admin_off()
+        if off is None:
+            if strict:
+                await self._finish(run, "failed", "couldn't reach the platform")
+            return strict
+        if routine.system_key not in off:
+            return False
+        bind_user(routine.owner_user_id)
+        await self._state.routine_store.delete_run(run.id, run.owner_user_id)
+        logger.info("routine %s: off for everyone; skipped", routine.id)
+        return True
 
     async def _delegation(
         self, routine: RoutineRecord, run: RunRecord, thread: ThreadRecord

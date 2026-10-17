@@ -6,6 +6,7 @@ from app.api.external import (
     appdata,
     apps,
     audit,
+    delivered_routines,
     device_pairs,
     directory,
     files,
@@ -33,6 +34,7 @@ router.include_router(files.router)
 router.include_router(media.router)
 router.include_router(settings.router)
 router.include_router(tools.router)
+router.include_router(delivered_routines.router)
 router.include_router(integration_oauth.router)
 router.include_router(integrations.router)
 router.include_router(admin.router)

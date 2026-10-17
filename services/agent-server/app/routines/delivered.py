@@ -20,6 +20,12 @@ then can the platform issue the routine grant scheduled runs act with. It
 waits until the user's timezone is known, and runs at most once per user
 per process, unless `forget` says a grant was lost: the next request then
 issues a new one. It never fails the request.
+
+The admin can turn each definition off for the whole household (M21-08):
+the platform keeps the switch, agent-server registers its definitions there
+at startup (`register`) and reads the switches with its service token
+(`admin_off`), since the scheduler has no user to ask as. While one is off
+nothing runs it; each user's own `enabled` is kept.
 """
 
 from __future__ import annotations
@@ -31,6 +37,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
+
 from app.agent.approvals import ToolPolicy
 from app.agent.tool_catalog import CATALOG, NAMES
 from app.core.delegation import Caller
@@ -41,6 +49,9 @@ from app.routines import service
 logger = logging.getLogger(__name__)
 
 SPACE = "/personal"
+MEMORY_KEY = "memory"
+REGISTER_RETRY_S = 15.0
+_SWITCHES_TIMEOUT_S = 10.0
 FIRST_SINCE = timedelta(days=14)
 MAX_OFFSET_MINUTES = 120
 NO_GRANT = "open HomeAI to keep this routine running"
@@ -50,6 +61,8 @@ NO_GRANT = "open HomeAI to keep this routine running"
 class Definition:
     key: str
     name: str
+    # One line for the admin's switch in Settings.
+    description: str
     # Local time of the default daily run, before the per-user offset.
     time: str
     # The mechanics, with `{since}` and `{now}`; users can't change it.
@@ -160,11 +173,65 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def catalog_payload() -> dict[str, Any]:
+    return {
+        "routines": [
+            {"key": d.key, "name": d.name, "description": d.description}
+            for d in DEFINITIONS.values()
+        ]
+    }
+
+
+async def register(platform_url: str, agent_token: str) -> None:
+    """Send the definitions to the platform (for the admin's switches), retrying until it answers."""
+    if not agent_token:
+        return
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.put(
+                    f"{platform_url}/internal/delivered-routines",
+                    json=catalog_payload(),
+                    headers={"Authorization": f"Bearer {agent_token}"},
+                )
+            if response.status_code == 204:
+                logger.info("delivered routines registered (%d)", len(DEFINITIONS))
+                return
+            logger.warning(
+                "delivered routines: HTTP %s %s", response.status_code, response.text[:200]
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("delivered routines: platform unreachable (%r); retrying", exc)
+        await asyncio.sleep(REGISTER_RETRY_S)
+
+
 class DeliveredRoutines:
     def __init__(self, app_state: Any) -> None:
         self._state = app_state
         self._done: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = {}
+
+    async def admin_off(self) -> frozenset[str] | None:
+        """The keys the admin turned off; None if the platform can't say."""
+        settings = self._state.settings
+        if not settings.platform_agent_token:
+            return frozenset()  # no platform to ask (dev, tests): everything is on
+        try:
+            async with httpx.AsyncClient(timeout=_SWITCHES_TIMEOUT_S) as client:
+                response = await client.get(
+                    f"{settings.platform_url}/internal/delivered-routines",
+                    headers={"Authorization": f"Bearer {settings.platform_agent_token}"},
+                )
+            listed = response.json()["routines"] if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            logger.warning("delivered routines: switches unavailable: %r", exc)
+            return None
+        if not isinstance(listed, list):
+            logger.warning("delivered routines: switches: HTTP %s", response.status_code)
+            return None
+        return frozenset(
+            r["key"] for r in listed if isinstance(r, dict) and r.get("enabled_by_admin") is False
+        )
 
     def forget(self, user_id: str) -> None:
         """Check this user again on their next request (a grant was lost)."""

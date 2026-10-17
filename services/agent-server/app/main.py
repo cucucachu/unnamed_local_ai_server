@@ -33,10 +33,19 @@ from app.db.routines import InMemoryRoutineStore, PgRoutineStore, RoutineStore
 from app.db.settings import InMemorySettingsStore, PgSettingsStore, SettingsStore
 from app.db.threads import InMemoryThreadStore, PgThreadStore, ThreadStore
 from app.db.turn_stats import InMemoryTurnStatsStore, PgTurnStatsStore, TurnStatsStore
+from app.routines import delivered
 from app.routines.delivered import DeliveredRoutines
 from app.routines.scheduler import RoutineScheduler
 
 logger = logging.getLogger(__name__)
+
+
+async def _register(platform_url: str, agent_token: str) -> None:
+    """The tool catalog and the delivered routines, for the platform's settings screens."""
+    await asyncio.gather(
+        tool_catalog.register(platform_url, agent_token),
+        delivered.register(platform_url, agent_token),
+    )
 
 
 def create_app(
@@ -177,9 +186,7 @@ def create_app(
             app.state.delivered_routines = DeliveredRoutines(app.state)
             s = app.state.settings
             app.state.tool_policies = tool_policies_override or PlatformToolPolicies(s.platform_url)
-            registering = asyncio.create_task(
-                tool_catalog.register(s.platform_url, s.platform_agent_token)
-            )
+            registering = asyncio.create_task(_register(s.platform_url, s.platform_agent_token))
             app.state.agent = build_agent(app.state.settings, pg_checkpointer.saver, app.state)
             app.state.turn_runner = TurnRunner(app.state)
             async with _running_turns(app):

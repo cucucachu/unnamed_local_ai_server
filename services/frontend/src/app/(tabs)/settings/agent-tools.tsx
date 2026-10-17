@@ -4,19 +4,31 @@ import { StyleSheet, Switch, Text, View } from 'react-native';
 import { Card, LoadState, SectionTitle, Segmented, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
-import { adminChangeTools, adminListTools, toolGroups, type AdminTool, type ToolPermission } from '@/lib/platform';
+import {
+  adminChangeTools,
+  adminListTools,
+  adminSetDeliveredRoutine,
+  listDeliveredRoutines,
+  toolGroups,
+  type AdminTool,
+  type DeliveredRoutine,
+  type ToolPermission,
+} from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Settings → Agent tools (admins, #342): a tool turned off here is off
  * for everyone; "Always ask" means nobody can let it run unasked. Within
- * that, each person picks their own (Settings → Agent permissions). */
+ * that, each person picks their own (Settings → Agent permissions).
+ * Below, the routines every user gets (M21-08), each on or off for everyone;
+ * a person's own switch is kept for when it's back on. */
 export default function AgentToolsScreen() {
   const { withStepUp } = useStepUp();
   const { message: toast, showToast } = useToast();
   const load = useCallback(() => withStepUp(adminListTools), [withStepUp]);
   const { data: tools, error, reload, setData } = useLoad(load);
   const { busyKey, run } = useAction(showToast);
+  const { data: routines, setData: setRoutines } = useLoad(listDeliveredRoutines);
 
   const change = useCallback(
     async (tool: AdminTool, changes: { enabled?: boolean; ceiling?: ToolPermission }) => {
@@ -25,6 +37,16 @@ export default function AgentToolsScreen() {
       );
     },
     [run, setData, withStepUp],
+  );
+
+  const setRoutine = useCallback(
+    async (routine: DeliveredRoutine, enabled: boolean) => {
+      await run(routine.key, async () => {
+        const updated = await withStepUp(() => adminSetDeliveredRoutine(routine.key, enabled));
+        setRoutines((current) => (current ?? []).map((r) => (r.key === updated.key ? updated : r)));
+      });
+    },
+    [run, setRoutines, withStepUp],
   );
 
   return (
@@ -79,6 +101,40 @@ export default function AgentToolsScreen() {
             </View>
           ))
         )}
+        {routines && routines.length > 0 ? (
+          <View style={styles.group} testID="admin-delivered-routines">
+            <SectionTitle>Delivered routines</SectionTitle>
+            <Text style={settingsStyles.muted}>
+              Every person gets these. Turned off here, they don&apos;t run for anyone; each person&apos;s own switch is
+              kept for when it&apos;s back on.
+            </Text>
+            <Card>
+              {routines.map((routine, index) => (
+                <View
+                  key={routine.key}
+                  style={[settingsStyles.row, index === 0 && settingsStyles.firstRow]}
+                  testID={`admin-delivered-row-${routine.key}`}
+                >
+                  <View style={settingsStyles.rowMain}>
+                    <Text style={[settingsStyles.rowTitle, !routine.enabled_by_admin && styles.offText]}>
+                      {routine.name}
+                    </Text>
+                    <Text style={settingsStyles.muted}>
+                      {routine.enabled_by_admin ? routine.description : 'Off for everyone.'}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={routine.enabled_by_admin}
+                    onValueChange={(enabled) => setRoutine(routine, enabled)}
+                    disabled={busyKey !== null}
+                    accessibilityLabel={`${routine.name} on for everyone`}
+                    testID={`admin-delivered-enabled-${routine.key}`}
+                  />
+                </View>
+              ))}
+            </Card>
+          </View>
+        ) : null}
       </SettingsFrame>
       <Toast message={toast} testID="settings-toast" />
     </View>

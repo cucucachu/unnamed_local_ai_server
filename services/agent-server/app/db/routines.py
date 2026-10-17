@@ -230,6 +230,10 @@ class RoutineStore(Protocol):
         self, run_id: str, owner_user_id: str, changes: dict[str, Any]
     ) -> RunRecord | None: ...
 
+    async def delete_run(self, run_id: str, owner_user_id: str) -> bool:
+        """A run that should never have been recorded (its routine is off for everyone)."""
+        ...
+
     async def list_runs(self, routine_id: str, owner_user_id: str) -> list[RunRecord]:
         """Newest first."""
         ...
@@ -410,6 +414,16 @@ class PgRoutineStore:
             )
             row = await cur.fetchone()
         return _run_from_row(row) if row is not None else None
+
+    async def delete_run(self, run_id: str, owner_user_id: str) -> bool:
+        if not _is_valid_uuid(run_id):
+            return False
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "DELETE FROM routine_runs WHERE id = %s AND owner_user_id = %s",
+                (run_id, owner_user_id),
+            )
+        return cur.rowcount > 0
 
     async def list_runs(self, routine_id: str, owner_user_id: str) -> list[RunRecord]:
         if not _is_valid_uuid(routine_id):
@@ -629,6 +643,13 @@ class InMemoryRoutineStore:
         run = replace(run, **changes)
         self._runs[run_id] = run
         return run
+
+    async def delete_run(self, run_id: str, owner_user_id: str) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.owner_user_id != owner_user_id:
+            return False
+        del self._runs[run_id]
+        return True
 
     async def list_runs(self, routine_id: str, owner_user_id: str) -> list[RunRecord]:
         runs = [

@@ -937,6 +937,36 @@ class ToolCatalogIn(BaseModel):
     tools: Annotated[list[AgentToolIn], Field(max_length=200)]
 
 
+RoutineKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+
+
+class DeliveredRoutineIn(BaseModel):
+    key: RoutineKey
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    description: Annotated[str, Field(max_length=500)]
+
+
+class DeliveredRoutineCatalogIn(BaseModel):
+    routines: Annotated[list[DeliveredRoutineIn], Field(max_length=50)]
+
+
+class DeliveredRoutineOut(BaseModel):
+    key: str
+    name: str
+    description: str
+    enabled_by_admin: bool
+
+
+class DeliveredRoutineList(BaseModel):
+    routines: list[DeliveredRoutineOut]
+
+
+class DeliveredRoutineAdminIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class UserToolOut(BaseModel):
     name: str
     label: str

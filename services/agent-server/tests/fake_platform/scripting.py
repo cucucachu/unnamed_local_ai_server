@@ -144,6 +144,11 @@ class FakePlatform:
     search_error: tuple[int, str] | None = None
     # (status, detail) to fail the next downloads with instead (M21-06).
     download_error: tuple[int, str] | None = None
+    # Delivered routines (M21-08): what agent-server registered, the keys the
+    # admin turned off, and whether reading the switches fails.
+    delivered_registered: list[dict] = field(default_factory=list)
+    delivered_off: set[str] = field(default_factory=set)
+    delivered_unavailable: bool = False
     # --- apps ---
     apps: list[dict] = field(default_factory=list)
     instances: list[dict] = field(default_factory=list)

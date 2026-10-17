@@ -328,6 +328,24 @@ export async function adminChangeTools(
   return (await send<{ tools: AdminTool[] }>('PATCH', '/api/platform/admin/tools', { changes })).tools;
 }
 
+/** A routine every user gets (M21-08), e.g. Memory, and the admin's switch for it. */
+export interface DeliveredRoutine {
+  key: string;
+  name: string;
+  description: string;
+  enabled_by_admin: boolean;
+}
+
+export async function listDeliveredRoutines(): Promise<DeliveredRoutine[]> {
+  return (await apiFetch<{ routines: DeliveredRoutine[] }>('/api/platform/delivered-routines')).routines;
+}
+
+export async function adminSetDeliveredRoutine(key: string, enabled: boolean): Promise<DeliveredRoutine> {
+  return send<DeliveredRoutine>('PUT', `/api/platform/admin/delivered-routines/${encodeURIComponent(key)}`, {
+    enabled,
+  });
+}
+
 /** Tools by group, in the order the server lists them. */
 export function toolGroups<T extends { group: string }>(tools: T[]): [string, T[]][] {
   const byGroup = new Map<string, T[]>();

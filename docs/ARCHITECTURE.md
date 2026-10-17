@@ -1587,7 +1587,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   routine's `{routine}` adds `"delivered": true`, `"fixed_prompt"`,
   `"prompt_is_default"` and `"unavailable_tools": [{"name", "label",
   "group"}]` (catalog names and labels); its `prompt` is the editable part.
-  Every other routine has `delivered: false` and an empty list.
+  `"disabled_by_admin"` (M21-08) is true while the admin has it off for
+  everyone. Every other routine has `delivered: false` and an empty list.
 - `POST /api/routines` body `{"name", "prompt", "space"?: "/personal",
   "schedule", "timezone", "enabled"?: true}` →
   `201 {routine}`. An `approval_mode` from an older app is ignored (#342). The caller
@@ -1735,6 +1736,20 @@ their threads as plain chats (`ON DELETE SET NULL`).
     unread, and `GET /api/threads` without `routine_id` leaves out its runs
     that are queued, running or succeeded. A run waiting on an approval or
     one that failed is listed like any other. (Notifications are M20's.)
+  - **The admin's switch** (M21-08, docs/PLATFORM.md §4 "Delivered
+    routines"). agent-server registers its definitions (`key`, `name`,
+    `description`) at startup next to the tool catalog, and reads the
+    switches with its service token (`DeliveredRoutines.admin_off`). While
+    the admin has one off: the scheduler deletes its claimed run record
+    and starts nothing (checked at the claim and again before the run
+    starts; a platform that can't say fails the run); Run now is `409
+    disabled_by_admin`; `{routine}` has `"disabled_by_admin": true`; the
+    user's own `enabled` is kept. `list_routines` tells the agent. Settings
+    → Agent tools (admins) has a "Delivered routines" section, one switch
+    each with its description.
+  - **The memory note** (M21-06) adds "The Memory routine is turned off, so
+    these notes aren't being updated." to its framing when the user's
+    Memory routine exists and is off, by them or by the admin.
 
 `threads.active_checkpoint_id` (M8-05, `text` null) is the tip history
 and the WS should read. Null means chronological latest. Every
