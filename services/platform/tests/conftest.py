@@ -1,6 +1,6 @@
 """Shared fixtures: one throwaway Postgres container per test session.
 
-`pg_server` starts `postgres:17` (same image as the live stack) via the
+`pg_server` starts the live stack's Postgres image (pgvector on postgres:17) via the
 host's `docker` CLI on a random loopback port, with the same superuser name
 as the live volume (`homeai`). Each test that needs a database gets a fresh
 one from `pg_database`, dropped afterwards, so tests never share state.
@@ -34,7 +34,7 @@ from app.core import appbuild, fsops, storage
 from app.core.config import Settings
 from app.main import create_app
 
-PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "postgres:17")
+PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "pgvector/pgvector:0.8.7-pg17-trixie")
 SUPERUSER = "homeai"
 SUPERUSER_PASSWORD = "test-superuser-password"
 

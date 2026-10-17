@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     integrations_gateway_token: str = ""
     integrations_gateway_timeout_s: float = 60.0
 
+    # The embeddings service file search uses (M21, docs/MEMORY.md §5).
+    # Unset: search uses full-text matching only.
+    embeddings_url: str = ""
+
     # Failed credential attempts allowed per bucket (username, client IP)
     # per window on login/setup/step-up/invite accept. LAN/VPN keep 5/60;
     # a public origin uses the tighter pair below (M15-05).

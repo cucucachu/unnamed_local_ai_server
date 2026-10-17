@@ -6,8 +6,8 @@
 # Builds the platform Dockerfile's `base` stage (python + uv + ffmpeg, the
 # layers the runtime image starts from), then runs pytest in it as your uid,
 # with the source mounted read-only, the host's uv cache, and a throwaway
-# `postgres:17` on a private network (`TEST_PG_HOST`, see
-# services/platform/tests/conftest.py). Touches nothing of the compose
+# Postgres in the live image (pgvector on postgres:17) on a private network
+# (`TEST_PG_HOST`, see services/platform/tests/conftest.py). Touches nothing of the compose
 # project: no live image, volume, or service.
 #
 # Usage:
@@ -38,7 +38,7 @@ docker network create "$net" >/dev/null
 # Superuser name and password: SUPERUSER / SUPERUSER_PASSWORD in tests/conftest.py.
 docker run -d --rm --name "$pg" --network "$net" --label homeai.test=platform \
   -e POSTGRES_USER=homeai -e POSTGRES_PASSWORD=test-superuser-password \
-  "${TEST_PG_IMAGE:-postgres:17}" >/dev/null
+  "${TEST_PG_IMAGE:-pgvector/pgvector:0.8.7-pg17-trixie}" >/dev/null
 
 mkdir -p "$uv_cache"
 [ "$#" -gt 0 ] || set -- tests/test_thumbnails.py tests/test_media_api.py

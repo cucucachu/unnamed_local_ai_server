@@ -12,6 +12,7 @@
 #   db-init            -> M10-02 (one-shot: platform role + homeai_platform DB; M11-04: agent role) [added]
 #   platform           -> M10-02 (auth, spaces, app registry, user storage) [added]
 #   wireguard          -> M15-01 (WireGuard sidecar: one UDP port, NET_ADMIN) [added]
+#   embeddings         -> M21-02 (CPU llama.cpp embeddings for file search) [added]
 #
 # Fixed topology (see docs/ARCHITECTURE.md's "Service catalog"): `caddy`
 # publishes host ports 80 and 443; `wireguard` publishes UDP 51820 (M15-01).
@@ -318,6 +319,36 @@ services:
       retries: 20
       start_period: 300s
 
+  # M21-02: text embeddings for the platform's file search (docs/MEMORY.md
+  # §5.4), on the CPU: the GPU belongs to model-runner. Only the platform
+  # calls it. Weights from services/embeddings/fetch-model.sh.
+  embeddings:
+    build: ./services/embeddings
+    restart: unless-stopped
+    # internal-only (M7-01) - no route to the public internet.
+    networks: [homeai-internal]
+    user: "${HOMEAI_UID}:${HOMEAI_GID}"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./services/embeddings/models:/models:ro
+    # Two slots of 2,048 tokens each: a search chunk is ~1,500 characters.
+    command: >
+      --model /models/${EMBEDDINGS_MODEL_FILE:-embeddinggemma-300M-Q8_0.gguf}
+      --embedding
+      --host 0.0.0.0 --port 8080
+      --ctx-size 4096 --parallel 2
+      --batch-size 2048 --ubatch-size 2048
+      --threads ${EMBEDDINGS_THREADS:-6}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   agent-server:
     build:
       context: ./services/agent-server
@@ -388,7 +419,12 @@ services:
       ROUTINES_SCHEDULER_ENABLED: "false"
 
   postgres:
-    image: postgres:17
+    # M21-02: postgres:17 plus pgvector, on the same Debian (trixie, glibc
+    # 2.41) as the postgres:17 image it replaces, so the existing `pgdata`
+    # starts unchanged and text collations keep their order. Pinned by digest
+    # (`docker inspect --format='{{index .RepoDigests 0}}'`, 2026-10-17).
+    image: pgvector/pgvector@sha256:7a7e9f22015b67edb4bef5c59daeebcd7e74bfa570df6ce60ae01237c8648a84
+    # was: pgvector/pgvector:0.8.7-pg17-trixie (PostgreSQL 17.11, pgvector 0.8.7)
     restart: unless-stopped
     # internal-only (M7-01) - no route to the public internet.
     networks: [homeai-internal]
@@ -412,7 +448,8 @@ services:
   # up` and exits 0 when there's nothing to do; `platform` waits for it.
   # Manual re-run: `docker compose run --rm db-init`.
   db-init:
-    image: postgres:17
+    # Same image as `postgres`, so psql matches the server.
+    image: pgvector/pgvector@sha256:7a7e9f22015b67edb4bef5c59daeebcd7e74bfa570df6ce60ae01237c8648a84
     restart: "no"
     networks: [homeai-internal]
     depends_on:
@@ -475,6 +512,8 @@ services:
       PLATFORM_EGRESS_TOKEN: ${PLATFORM_EGRESS_TOKEN:-}
       INTEGRATIONS_GATEWAY_URL: http://integrations-gateway:8000
       INTEGRATIONS_GATEWAY_TOKEN: ${INTEGRATIONS_GATEWAY_TOKEN:-}
+      # M21: the embeddings service file search uses (docs/MEMORY.md §5).
+      EMBEDDINGS_URL: http://embeddings:8080
       # This machine's own LAN addresses (comma-separated), so Settings can
       # tell when an integration runs here too, which needs a firewall rule,
       # and an OAuth sign-in may return to them (docs/INTEGRATIONS.md §5.1).

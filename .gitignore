@@ -1,4 +1,5 @@
 services/model-runner/models/*.gguf
+services/embeddings/models/*.gguf
 *.apk
 *.aab
 .env
