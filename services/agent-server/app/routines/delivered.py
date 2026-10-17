@@ -43,8 +43,8 @@ from app.agent.approvals import ToolPolicy
 from app.agent.tool_catalog import CATALOG, NAMES
 from app.core.delegation import Caller
 from app.db.routines import RoutineRecord
+from app.routines import memory_prompt, service
 from app.routines import schedule as sched
-from app.routines import service
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,27 @@ class Definition:
     quiet: bool = False
 
 
-# key -> definition. M21-10 adds `memory`.
-DEFINITIONS: dict[str, Definition] = {}
+MEMORY = Definition(
+    key=MEMORY_KEY,
+    name="Memory",
+    description="Each night, keeps notes on what the user's chats say about them, for every new chat.",
+    time="03:00",
+    fixed_prompt=memory_prompt.FIXED,
+    default_prompt=memory_prompt.DEFAULT,
+    unavailable_tools=frozenset(
+        {
+            "web_search",
+            "web_fetch",
+            "open_integration",
+            "use_integration",
+            "read_integration_resource",
+            "get_integration_prompt",
+        }
+    ),
+    quiet=True,
+)
+
+DEFINITIONS: dict[str, Definition] = {d.key: d for d in (MEMORY,)}
 
 
 def definition_of(routine: RoutineRecord | None) -> Definition | None:
