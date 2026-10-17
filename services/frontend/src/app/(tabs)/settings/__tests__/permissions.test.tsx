@@ -1,6 +1,6 @@
 import { act, type ReactTestRenderer } from 'react-test-renderer';
 
-import type { AdminTool, MyTool } from '@/lib/platform';
+import type { AdminTool, DeliveredRoutine, MyTool } from '@/lib/platform';
 
 import { exists, flush, isDisabled, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../../test-utils/screen';
 
@@ -136,6 +136,7 @@ describe('AgentToolsScreen', () => {
     let tools = [admin('execute_code'), admin('delete')];
     const fetchMock = mockFetchRoutes({
       'GET /api/platform/admin/tools': () => ({ body: { tools } }),
+      'GET /api/platform/delivered-routines': { body: { routines: [] } },
       'PATCH /api/platform/admin/tools': (body) => {
         const [change] = (body as { changes: { name: string; ceiling?: 'ask' | 'allow'; enabled?: boolean }[] }).changes;
         tools = tools.map((t) => (t.name === change.name ? { ...t, ...change } : t));
@@ -156,5 +157,41 @@ describe('AgentToolsScreen', () => {
     });
     expect(textOf(renderer)).toContain('Off for everyone.');
     expect(mockWithStepUp).toHaveBeenCalledTimes(3);
+  });
+
+  it('turns a delivered routine off for everyone', async () => {
+    const memory: DeliveredRoutine = {
+      key: 'memory',
+      name: 'Memory',
+      description: 'Keeps notes from your chats each night.',
+      enabled_by_admin: true,
+    };
+    const fetchMock = mockFetchRoutes({
+      'GET /api/platform/admin/tools': { body: { tools: [admin('read_file')] } },
+      'GET /api/platform/delivered-routines': { body: { routines: [memory] } },
+      'PUT /api/platform/admin/delivered-routines/memory': (body) => ({
+        body: { ...memory, enabled_by_admin: (body as { enabled: boolean }).enabled },
+      }),
+    });
+    renderer = await render(AgentToolsScreen);
+    expect(textOf(renderer)).toContain('Delivered routines');
+    expect(textOf(renderer)).toContain('Keeps notes from your chats each night.');
+    expect(switchOf(renderer, 'admin-delivered-enabled-memory').value).toBe(true);
+
+    await toggle(renderer, 'admin-delivered-enabled-memory', false);
+    expect(requestsTo(fetchMock, 'PUT', '/api/platform/admin/delivered-routines/memory')).toEqual([
+      { enabled: false },
+    ]);
+    expect(switchOf(renderer, 'admin-delivered-enabled-memory').value).toBe(false);
+    expect(textOf(renderer)).toContain('Off for everyone.');
+  });
+
+  it('shows no section when nothing is delivered', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/admin/tools': { body: { tools: [admin('read_file')] } },
+      'GET /api/platform/delivered-routines': { body: { routines: [] } },
+    });
+    renderer = await render(AgentToolsScreen);
+    expect(exists(renderer, 'admin-delivered-routines')).toBe(false);
   });
 });

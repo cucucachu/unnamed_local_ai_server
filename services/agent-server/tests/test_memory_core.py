@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from app.agent.memory_core import CORE_MAX_CHARS, CUT_NOTE, memory_block
+from app.agent.memory_core import CORE_MAX_CHARS, CUT_NOTE, STALE_NOTE, memory_block
 from app.agent.prompts import MEMORY_GUIDE
+from app.db.routines import NewRoutine
 from tests.fake_identity import TEST_USER_ID
 from tests.fake_model.scripting import FakeModel, TextTurn
-from tests.fake_platform.scripting import FakePlatform
+from tests.fake_platform.scripting import AGENT_TOKEN, FakePlatform
 from tests.test_chat_ws import _make_client
 from tests.test_integration_tools import _system, _turn
 
@@ -135,3 +136,36 @@ async def test_the_static_prefix_is_the_same_with_and_without_a_note(
     without, with_core = fake_model.requests
     assert without["tools"] == with_core["tools"]
     assert _system(with_core) == f"{_system(without)}\n\n{memory_block('Sister: Ingrid.')}"
+
+
+async def _memory_routine(client, *, enabled: bool) -> None:
+    store = client.app.state.routine_store
+    schedule = {"kind": "daily", "time": "03:00"}
+    routine = NewRoutine("/personal", "Memory", "", schedule, "UTC", enabled, system_key="memory")
+    await store.create(TEST_USER_ID, routine)
+
+
+async def test_the_note_says_when_the_routine_is_off(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    _note(fake_platform, "Sister: Ingrid.")
+    fake_model.queue(TextTurn("a"), TextTurn("b"), TextTurn("c"))
+    with _make_client(fake_model, fake_platform, platform_agent_token=AGENT_TOKEN) as client:
+        with client.websocket_connect("/ws/chat/core-no-routine") as ws:
+            _turn(ws, "hi")
+        client.portal.call(lambda: _memory_routine(client, enabled=False))
+        with client.websocket_connect("/ws/chat/core-user-off") as ws:
+            _turn(ws, "hi")
+        store = client.app.state.routine_store
+        (routine,) = client.portal.call(store.list_for_owner, TEST_USER_ID)
+        client.portal.call(store.update, routine.id, TEST_USER_ID, {"enabled": True})
+        fake_platform.delivered_off.add("memory")
+        with client.websocket_connect("/ws/chat/core-admin-off") as ws:
+            _turn(ws, "hi")
+
+    none, user_off, admin_off = (_system(r) for r in fake_model.requests)
+    assert none.endswith(memory_block("Sister: Ingrid."))
+    assert STALE_NOTE not in none
+    assert user_off.endswith(memory_block("Sister: Ingrid.", stale=True))
+    assert admin_off.endswith(memory_block("Sister: Ingrid.", stale=True))
+    assert STALE_NOTE in admin_off

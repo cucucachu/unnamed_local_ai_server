@@ -123,8 +123,10 @@ def _shorten(text: str, limit: int = _MAX_PROMPT_SHOWN) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _summary(record: RoutineRecord) -> str:
+def _summary(record: RoutineRecord, off: frozenset[str] = frozenset()) -> str:
     state = "on" if record.enabled else "off"
+    if record.system_key in off:
+        state += ", but the admin turned it off for everyone, so it doesn't run"
     definition = delivered.definition_of(record)
     if definition is None:
         prompt, note = record.prompt, ""
@@ -203,7 +205,10 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         routines = await state.routine_store.list_for_owner(user_id)
         if not routines:
             return "The user has no routines."
-        return "\n".join(_summary(r) for r in routines)
+        off = frozenset()
+        if any(delivered.definition_of(r) for r in routines):
+            off = await state.delivered_routines.admin_off() or frozenset()
+        return "\n".join(_summary(r, off) for r in routines)
 
     @tool
     async def create_routine(

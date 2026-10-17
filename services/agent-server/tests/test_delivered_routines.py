@@ -17,7 +17,7 @@ from app.routines import delivered
 from app.routines.delivered import Definition, DeliveredRoutines
 from app.routines.runs import RUN_MARKER
 from tests.fake_model.scripting import ErrorTurn, FakeModel, TextTurn, ToolCallTurn
-from tests.fake_platform.scripting import FakePlatform
+from tests.fake_platform.scripting import AGENT_TOKEN, FakePlatform
 from tests.test_chat_ws import _drain_turn
 from tests.test_hitl_approvals import _bound_tools
 from tests.test_integration_tools import HOME, _system
@@ -46,6 +46,7 @@ OFF = frozenset(
 TIDY = Definition(
     key="tidy",
     name="Tidy",
+    description="Tidies up.",
     time="03:00",
     fixed_prompt="Look at the chats from {since} to {now}.",
     default_prompt="Keep what matters.",
@@ -433,3 +434,87 @@ def test_a_quiet_failure_is_listed_and_unread(client, harness, fake_model) -> No
     assert run["status"] == "failed"
     listed = {t["id"]: t for t in client.get("/api/threads", headers=HEADERS).json()}
     assert listed[run["thread_id"]]["unread"]
+
+
+# --- the admin's switch (M21-08) -----------------------------------------------------------
+
+
+@pytest.fixture
+def switched(client, fake_platform: FakePlatform):
+    """agent-server with a platform token, so it reads the admin's switches."""
+    state = client.app.state
+    state.settings = state.settings.model_copy(update={"platform_agent_token": AGENT_TOKEN})
+    return fake_platform
+
+
+def test_off_for_everyone_nothing_runs_and_the_users_choice_is_kept(
+    client, harness, fake_model: FakeModel, switched
+) -> None:
+    routine = _provisioned(client)
+    assert not routine["disabled_by_admin"]
+    switched.delivered_off.add("tidy")
+
+    listed = client.get("/api/routines", headers=HEADERS).json()[0]
+    assert listed["disabled_by_admin"] and listed["enabled"]
+    assert _routine(client, routine["id"])["disabled_by_admin"]
+    due = datetime.fromisoformat(routine["next_run_at"])
+    h = harness(due + timedelta(seconds=5))
+    h.start()
+    h.tick()
+    h.idle()
+    assert _runs(client, routine["id"]) == []  # skipped quietly: no run record
+    assert fake_model.requests == []
+    refused = client.post(f"/api/routines/{routine['id']}/run", headers=HEADERS)
+    assert (refused.status_code, refused.json()["detail"]) == (409, "disabled_by_admin")
+
+    switched.delivered_off.clear()
+    back = _routine(client, routine["id"])
+    assert not back["disabled_by_admin"] and back["enabled"]
+    fake_model.queue(TextTurn("tidied"))
+    run = _run_scheduled(client, harness, routine)
+    assert run["status"] == "succeeded"
+
+
+def test_if_the_platform_cant_say_the_run_fails(client, harness, switched) -> None:
+    routine = _provisioned(client)
+    switched.delivered_unavailable = True
+    run = _run_scheduled(client, harness, routine)
+    assert (run["status"], run["detail"]) == ("failed", "couldn't reach the platform")
+    assert client.post(f"/api/routines/{routine['id']}/run", headers=HEADERS).status_code == 503
+
+
+def test_an_ordinary_routine_doesnt_ask_about_switches(
+    client, harness, fake_model, switched
+) -> None:
+    switched.delivered_unavailable = True
+    body = {
+        "name": "Brief",
+        "prompt": "Summarize.",
+        "schedule": {"kind": "daily", "time": "08:00"},
+        "timezone": ZONE,
+    }
+    routine = client.post("/api/routines", json=body, headers=HEADERS).json()
+    assert routine["disabled_by_admin"] is False
+    fake_model.queue(TextTurn("brief"))
+    assert _run_scheduled(client, harness, routine)["status"] == "succeeded"
+
+
+def test_list_routines_tells_the_agent_its_off_for_everyone(
+    client, fake_model: FakeModel, switched
+) -> None:
+    _provisioned(client)
+    switched.delivered_off.add("tidy")
+    fake_model.queue(ToolCallTurn(name="list_routines", args={}), TextTurn("done"))
+    thread = client.post("/api/threads", json={}, headers=HEADERS).json()["id"]
+    with client.websocket_connect(f"/ws/chat/{thread}", headers=HEADERS) as ws:
+        ws.send_json({"type": "user_message", "content": "my routines?"})
+        _drain_turn(ws)
+    (listed,) = _tool_results(fake_model.requests[-1])
+    assert "admin turned it off for everyone" in listed
+
+
+async def test_the_definitions_are_registered(fake_platform: FakePlatform, monkeypatch) -> None:
+    await delivered.register(fake_platform.base_url, AGENT_TOKEN)
+    assert fake_platform.delivered_registered == [
+        {"key": "tidy", "name": "Tidy", "description": "Tidies up."}
+    ]

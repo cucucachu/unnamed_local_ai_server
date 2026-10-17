@@ -206,7 +206,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
         # Last, so the per-user parts land after every static part of the prompt:
         # the integrations list, then the memory note.
         IntegrationsListMiddleware(settings.platform_url),
-        MemoryCoreMiddleware(settings.platform_url),
+        MemoryCoreMiddleware(settings.platform_url, app_state),
     ]
     return create_deep_agent(
         model=model,

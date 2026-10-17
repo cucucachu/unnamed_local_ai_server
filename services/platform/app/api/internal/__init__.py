@@ -11,6 +11,7 @@ from app.api.internal import (
     auth,
     bootstrap,
     delegations,
+    delivered_routines,
     egress,
     exec_grants,
     health,
@@ -34,6 +35,7 @@ router.include_router(hitl.router)
 router.include_router(space_access.router)
 router.include_router(routine_grants.router)
 router.include_router(tool_catalog.router)
+router.include_router(delivered_routines.router)
 router.include_router(integrations.router)
 router.include_router(integration_approvals.router)
 router.include_router(egress.router)

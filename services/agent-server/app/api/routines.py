@@ -16,7 +16,10 @@ A delivered routine (M21-07, `app.routines.delivered`) is listed with
 `delivered`, its read-only `fixed_prompt`, `prompt_is_default` and the
 `unavailable_tools` its runs never get; `prompt` is its editable part, and
 `PATCH` `prompt: ""` resets it. Listing routines creates the caller's
-missing delivered routines first.
+missing delivered routines first. `disabled_by_admin` (M21-08) says the
+admin has it off for everyone: it doesn't run, Run now included (`409
+disabled_by_admin`), and the user's own `enabled` is kept for when it's
+back on.
 
 A run follows its owner's tool permissions like any chat (#342,
 `app.agent.approvals`). A run is a chat: the chats list puts runs that need
@@ -110,13 +113,21 @@ class RoutineOut(BaseModel):
     updated_at: datetime
     last_run: LastRun | None = None
     delivered: bool = False
+    disabled_by_admin: bool = False
     fixed_prompt: str | None = None
     prompt_is_default: bool = False
     unavailable_tools: list[UnavailableTool] = []
 
 
 _OWN_FIELDS = frozenset(
-    {"last_run", "delivered", "fixed_prompt", "prompt_is_default", "unavailable_tools"}
+    {
+        "last_run",
+        "delivered",
+        "disabled_by_admin",
+        "fixed_prompt",
+        "prompt_is_default",
+        "unavailable_tools",
+    }
 )
 
 
@@ -136,7 +147,9 @@ def _store(request: Request) -> RoutineStore:
     return request.app.state.routine_store
 
 
-def _out(record: RoutineRecord, last_run: RunRecord | None = None) -> RoutineOut:
+def _out(
+    record: RoutineRecord, last_run: RunRecord | None = None, off: frozenset[str] = frozenset()
+) -> RoutineOut:
     fields = {
         name: getattr(record, name) for name in RoutineOut.model_fields if name not in _OWN_FIELDS
     }
@@ -145,6 +158,7 @@ def _out(record: RoutineRecord, last_run: RunRecord | None = None) -> RoutineOut
         fields.update(
             prompt=delivered.editable_prompt(record, definition),
             delivered=True,
+            disabled_by_admin=record.system_key in off,
             fixed_prompt=definition.fixed_prompt,
             prompt_is_default=not record.prompt,
             unavailable_tools=delivered.unavailable_tool_labels(definition),
@@ -171,6 +185,13 @@ async def _owned(request: Request, routine_id: str, user_id: str) -> RoutineReco
     return record
 
 
+async def _admin_off(request: Request, *records: RoutineRecord) -> frozenset[str]:
+    """The delivered routines the admin has off, if any of `records` is one."""
+    if not any(delivered.definition_of(r) for r in records):
+        return frozenset()
+    return await request.app.state.delivered_routines.admin_off() or frozenset()
+
+
 def _caller(request: Request) -> Caller:
     return Caller(identity_token=request.headers.get(IDENTITY_HEADER) or "")
 
@@ -184,7 +205,9 @@ async def list_routines(request: Request, user: CurrentUser) -> list[RoutineOut]
     await request.app.state.delivered_routines.ensure(_caller(request), user.user_id)
     store = _store(request)
     latest = await store.latest_runs(user.user_id)
-    return [_out(r, latest.get(r.id)) for r in await store.list_for_owner(user.user_id)]
+    records = await store.list_for_owner(user.user_id)
+    off = await _admin_off(request, *records)
+    return [_out(r, latest.get(r.id), off) for r in records]
 
 
 @router.post("/routines", status_code=201, response_model=RoutineOut)
@@ -203,7 +226,7 @@ async def create_routine(body: RoutineIn, request: Request, user: CurrentUser) -
 async def get_routine(routine_id: str, request: Request, user: CurrentUser) -> RoutineOut:
     record = await _owned(request, routine_id, user.user_id)
     runs = await _store(request).list_runs(routine_id, user.user_id)
-    return _out(record, runs[0] if runs else None)
+    return _out(record, runs[0] if runs else None, await _admin_off(request, record))
 
 
 @router.patch("/routines/{routine_id}", response_model=RoutineOut)
@@ -218,7 +241,7 @@ async def update_routine(
         record = await service.update(request.app.state, _caller(request), current, changes, _now())
     except service.RoutineError as exc:
         raise _http(exc) from exc
-    return _out(record)
+    return _out(record, off=await _admin_off(request, record))
 
 
 @router.delete("/routines/{routine_id}", status_code=204)
@@ -234,6 +257,12 @@ async def delete_routine(routine_id: str, request: Request, user: CurrentUser) -
 async def run_routine(routine_id: str, request: Request, user: CurrentUser) -> RunOut:
     """Start a run now, as the caller (whose session the run's delegation hangs off)."""
     routine = await _owned(request, routine_id, user.user_id)
+    if delivered.definition_of(routine) is not None:
+        off = await request.app.state.delivered_routines.admin_off()
+        if off is None:
+            raise HTTPException(status_code=503, detail="platform unavailable")
+        if routine.system_key in off:
+            raise HTTPException(status_code=409, detail="disabled_by_admin")
     try:
         await service.editable_space(request.app.state, _caller(request), routine.space)
     except service.RoutineError as exc:

@@ -15,6 +15,8 @@ from app.api.schemas import (
     AdminToolChanges,
     AdminToolList,
     AdminUserPatch,
+    DeliveredRoutineAdminIn,
+    DeliveredRoutineOut,
     InviteCreated,
     InviteCreateRequest,
     InviteList,
@@ -26,7 +28,15 @@ from app.api.schemas import (
     UserOut,
 )
 from app.api.session_http import is_https
-from app.core import invites, platform_settings, spaces, tool_permissions, users, webauthn
+from app.core import (
+    delivered_routines,
+    invites,
+    platform_settings,
+    spaces,
+    tool_permissions,
+    users,
+    webauthn,
+)
 from app.core.errors import InvalidInput
 from app.core.origin import require_privileged_origin
 from app.core.principal import Principal, SteppedUpAdmin, require_admin_stepped_up
@@ -102,6 +112,17 @@ async def change_tools(
     async with request.app.state.db_pool.connection() as conn:
         await tool_permissions.change_admin(conn, principal, changes)
         return AdminToolList(tools=await tool_permissions.admin_view(conn))
+
+
+@router.put("/delivered-routines/{key}", response_model=DeliveredRoutineOut)
+async def set_delivered_routine(
+    key: str, body: DeliveredRoutineAdminIn, request: Request, principal: SteppedUpAdmin
+) -> DeliveredRoutineOut:
+    """One delivered routine on or off for everyone (M21-08). Users' own choices are kept."""
+    async with request.app.state.db_pool.connection() as conn:
+        return DeliveredRoutineOut(
+            **await delivered_routines.set_admin(conn, principal, key, body.enabled)
+        )
 
 
 @router.get("/spaces", response_model=SpaceList)

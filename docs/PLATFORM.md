@@ -329,6 +329,7 @@ so far:
 | `app.installed`, `app.uninstalled` | an app installed into or uninstalled from a space |
 | `space.member_added`, `space.member_role_changed`, `space.member_removed` | membership changes |
 | `tools.settings_changed`, `tools.admin_changed` | a user's own agent tool settings, or the admin's for everyone, changed |
+| `delivered_routines.admin_changed` | the admin turned a delivered routine on or off for everyone (`target_id` is its key) |
 
 App data lives in SQLite, so its event is recorded from inside the SQLite
 write transaction, just before `COMMIT`: if the event can't be stored the
@@ -370,6 +371,28 @@ and unchanged: the agent acts as the user, with their space roles.
   (`/api/platform/admin/tools`). The agent reads its run's policy
   (`/api/platform/tools/policy`) and changes nothing. Both kinds of change
   are audited.
+
+### Delivered routines
+
+The admin's on/off switch for each routine agent-server delivers to every
+user, e.g. Memory (M21-08, `app/core/delivered_routines.py`,
+docs/MEMORY.md §4.4). Each user's own on/off, and everything else about
+the routines, is agent-server's.
+
+- **List** (`delivered_routines`: `key`, `name`, `description`, in
+  agent-server's order): sent at its startup with `PUT
+  /internal/delivered-routines` `{"routines": [{"key", "name",
+  "description"}]}` (`PLATFORM_AGENT_TOKEN`), next to the tool catalog.
+  Replacing it never touches the switches.
+- **Switch** (`delivered_routine_admin_settings`: `key`, `enabled`,
+  `updated_by`, `updated_at`): a missing row means on.
+- `GET /api/platform/delivered-routines` → `{"routines": [{"key", "name",
+  "description", "enabled_by_admin"}]}`, for anyone signed in and their
+  agent. agent-server's scheduler reads the same with its service token,
+  `GET /internal/delivered-routines`, since it has no user to ask as.
+- `PUT /api/platform/admin/delivered-routines/{key}` `{"enabled"}` → the
+  routine's entry: an admin in person, stepped up, from a privileged
+  origin, like `/admin/tools`; audited. `404` for a key nobody registered.
 
 ### Integrations
 

@@ -417,6 +417,34 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         m.update(status="applied", snapshot=f"snap-{migration_id}.sqlite")
         return JSONResponse(m)
 
+    @app.put("/internal/delivered-routines")
+    async def register_delivered(request: Request) -> Response:
+        if _bearer(request) != AGENT_TOKEN:
+            raise _error(401, "unauthenticated")
+        fake.delivered_registered = (await request.json())["routines"]
+        return Response(status_code=204)
+
+    @app.get("/internal/delivered-routines")
+    async def delivered_switches(request: Request) -> JSONResponse:
+        if _bearer(request) != AGENT_TOKEN:
+            raise _error(401, "unauthenticated")
+        if fake.delivered_unavailable:
+            raise _error(503, "unavailable")
+        keys = [r["key"] for r in fake.delivered_registered] or sorted(fake.delivered_off)
+        return JSONResponse(
+            {
+                "routines": [
+                    {
+                        "key": k,
+                        "name": k,
+                        "description": "",
+                        "enabled_by_admin": k not in fake.delivered_off,
+                    }
+                    for k in keys
+                ]
+            }
+        )
+
     @app.post("/internal/hitl-approvals")
     async def hitl_approval(request: Request) -> JSONResponse:
         if _bearer(request) != AGENT_TOKEN:
