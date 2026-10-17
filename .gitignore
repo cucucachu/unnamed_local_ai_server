@@ -20,3 +20,4 @@ scripts/e2e/g13-last-report.json
 scripts/eval/routines/last-report.json
 scripts/eval/integrations/last-report.json
 scripts/eval/integrations/prefix.json
+scripts/eval/memory/last-report.json
