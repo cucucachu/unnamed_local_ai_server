@@ -329,7 +329,22 @@ docs/INTEGRATIONS.md §4 first.
 - [ ] (M18-08) A second household member connects with their own token
       from their phone and can turn lights on. A third who hasn't
       connected asks the agent to, and is told to connect in Settings →
-      Integrations.
+      Integrations. (Home Assistant can't limit entities per user: exposure
+      is house-wide, so this proves separate credentials and attribution,
+      not different visibility.)
+- [x] (M18-07) Home Assistant OAuth from the phone: Add with **Sign in**
+      and **Each person**, Sign in, log in on Home Assistant's page, Back
+      to HomeAI. The phone must reach Home Assistant's login page: if it
+      runs on the HomeAI machine, also
+      `sudo ufw allow from 192.168.0.0/24 to any port 8123 proto tcp`
+      (your LAN's subnet). Passed 2026-10-17 (chat and a routine used it).
+- [x] (M18-07) Robinhood OAuth: only from a browser on the HomeAI machine
+      at `http://localhost` (Robinhood returns to loopback addresses only;
+      docs/INTEGRATIONS.md §5.1). Passed 2026-10-14 (79 tools found).
+- [ ] (#379, #380) Manage → an integration: Turn off; the agent no longer
+      lists it and a routine using it says an admin turned it off; Turn on
+      and it works as before. Turn all on / off and Always ask for all on
+      the tool list; a member's Turn all off / on skips admin-locked tools.
 
 ## M19
 

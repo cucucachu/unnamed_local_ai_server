@@ -268,6 +268,56 @@ describe('IntegrationScreen', () => {
     ]);
     expect(exists(renderer, 'integration-allow-all')).toBe(false);
   });
+
+  it('turns every tool it may on or off at once, and says when an admin turned it off', async () => {
+    let integration = mine({
+      status: 'connected',
+      turned_off: true,
+      tools: [
+        tool('get_state'),
+        tool('turn_on', { enabled: false }),
+        tool('unlock_door', { permission: 'allow' }),
+        tool('set_alarm', { enabled: false, enabled_locked: true }),
+      ],
+    });
+    const fetchMock = mockFetchRoutes({
+      [`GET ${MINE}`]: () => ({ body: { integrations: [integration] } }),
+      [`PATCH ${MINE}/int-1/tools`]: (body) => {
+        const changes = (body as { changes: { name: string; enabled?: boolean }[] }).changes;
+        integration = {
+          ...integration,
+          tools: integration.tools.map((t) => ({ ...t, ...changes.find((c) => c.name === t.name) })),
+        };
+        return { body: { integrations: [integration] } };
+      },
+    });
+    renderer = await render(IntegrationScreen);
+    expect(exists(renderer, 'integration-turned-off')).toBe(true);
+    expect(textOf(renderer)).toContain('Turned off');
+
+    await press(renderer, 'integration-all-off');
+    await press(renderer, 'integration-all-on');
+    expect(requestsTo(fetchMock, 'PATCH', `${MINE}/int-1/tools`)).toEqual([
+      {
+        changes: [
+          { name: 'get_state', enabled: false },
+          { name: 'unlock_door', enabled: false },
+        ],
+      },
+      {
+        changes: [
+          { name: 'get_state', enabled: true },
+          { name: 'turn_on', enabled: true },
+          { name: 'unlock_door', enabled: true },
+        ],
+      },
+    ]);
+    expect(exists(renderer, 'integration-all-on')).toBe(false);
+    await press(renderer, 'integration-all-ask');
+    expect(requestsTo(fetchMock, 'PATCH', `${MINE}/int-1/tools`)[2]).toEqual({
+      changes: [{ name: 'unlock_door', permission: 'ask' }],
+    });
+  });
 });
 
 describe('AddIntegrationScreen', () => {
@@ -466,6 +516,52 @@ describe('ManageIntegrationScreen', () => {
     await press(renderer, 'manage-integration-uninstall-confirm-button');
     expect(requestsTo(fetchMock, 'DELETE', `${ADMIN}/int-1`)).toHaveLength(1);
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('turns all tools on or off and sets every limit at once, and turns the integration off and on', async () => {
+    let integration = adminView({
+      tools: [
+        { name: 'get_state', title: null, description: '', annotations: {}, enabled: true, ceiling: 'allow' },
+        { name: 'turn_on', title: null, description: '', annotations: {}, enabled: false, ceiling: 'allow' },
+      ],
+    });
+    const fetchMock = mockFetchRoutes({
+      [`GET ${ADMIN}`]: () => ({ body: { integrations: [integration] } }),
+      [`PATCH ${ADMIN}/int-1/tools`]: (body) => {
+        const changes = (body as { changes: { name: string }[] }).changes;
+        integration = {
+          ...integration,
+          tools: integration.tools.map((t) => ({ ...t, ...changes.find((c) => c.name === t.name) })),
+        };
+        return { body: integration };
+      },
+      [`PATCH ${ADMIN}/int-1`]: (body) => {
+        integration = { ...integration, ...(body as { turned_off: boolean }) };
+        return { body: integration };
+      },
+    });
+    renderer = await render(ManageIntegrationScreen);
+    await press(renderer, 'manage-integration-all-on');
+    await press(renderer, 'manage-integration-all-ask');
+    expect(requestsTo(fetchMock, 'PATCH', `${ADMIN}/int-1/tools`)).toEqual([
+      { changes: [{ name: 'turn_on', enabled: true }] },
+      {
+        changes: [
+          { name: 'get_state', ceiling: 'ask' },
+          { name: 'turn_on', ceiling: 'ask' },
+        ],
+      },
+    ]);
+    expect(exists(renderer, 'manage-integration-all-ask')).toBe(false);
+    expect(exists(renderer, 'manage-integration-all-choose')).toBe(true);
+
+    expect(exists(renderer, 'manage-integration-turned-off')).toBe(false);
+    await press(renderer, 'manage-integration-turn');
+    expect(requestsTo(fetchMock, 'PATCH', `${ADMIN}/int-1`)).toEqual([{ turned_off: true }]);
+    expect(exists(renderer, 'manage-integration-turned-off')).toBe(true);
+    await press(renderer, 'manage-integration-turn');
+    expect(requestsTo(fetchMock, 'PATCH', `${ADMIN}/int-1`)[1]).toEqual({ turned_off: false });
+    expect(mockWithStepUp).toHaveBeenCalled();
   });
 
   it('sets the shared token without ever showing it', async () => {

@@ -612,6 +612,48 @@ async def test_no_auth_needs_no_connection(platform, people):
     assert (await _connect(platform, people["bob"], iid)).status_code == 422
 
 
+async def test_turning_off_keeps_everything_but_stops_use(platform, people):
+    iid = await _installed(platform, people)
+    await _admin_tools(platform, people, iid, {"name": "turn_on", "enabled": True})
+    await _connect(platform, people["bob"], iid)
+    before = (await _grant(platform, people["bob_agent"])).json()
+    assert before["turned_off"] is False
+
+    off = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"turned_off": True}, headers=people["admin"]
+    )
+    assert off.status_code == 200, off.text
+    assert off.json()["turned_off"] is True
+    assert (await _mine(platform, people["bob"]))["home"]["turned_off"] is True
+    during = (await _grant(platform, people["bob_agent"])).json()
+    assert during["turned_off"] is True
+    assert (during["credential"], during["tools"]) == (before["credential"], before["tools"])
+
+    on = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"turned_off": False}, headers=people["admin"]
+    )
+    assert on.json()["turned_off"] is False
+    after = (await _grant(platform, people["bob_agent"])).json()
+    assert after == before
+    kinds = sql(
+        platform,
+        "SELECT kind FROM audit_events WHERE kind LIKE 'integrations.turned_%' ORDER BY id",
+    )
+    assert [k["kind"] for k in kinds] == ["integrations.turned_off", "integrations.turned_on"]
+    again = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"turned_off": False}, headers=people["admin"]
+    )
+    assert again.status_code == 200
+    assert (
+        len(sql(platform, "SELECT 1 FROM audit_events WHERE kind LIKE 'integrations.turned_%'"))
+        == 2
+    )
+    member = await platform.client.patch(
+        f"{ADMIN}/{iid}", json={"turned_off": True}, headers=people["bob"]
+    )
+    assert member.status_code == 403
+
+
 async def test_disconnecting(platform, people):
     iid = await _installed(platform, people)
     await _connect(platform, people["bob"], iid)

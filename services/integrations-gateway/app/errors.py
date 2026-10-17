@@ -13,6 +13,10 @@ MESSAGES = {
         "The integration rejected the stored credential. The user (or an admin, for a shared "
         "one) needs to reconnect it in Settings → Integrations."
     ),
+    "turned_off": (
+        "An admin turned this integration off. Tell the user it can't be used until an admin "
+        "turns it back on in Settings → Integrations; don't retry."
+    ),
     "not_found": "No such integration, tool, resource or prompt, or the tool is turned off.",
     "invalid_arguments": "The arguments don't match the tool's input schema. Fix them and retry.",
     "refused_by_policy": "This isn't allowed by the user's settings or was rejected. Don't retry.",

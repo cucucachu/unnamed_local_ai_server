@@ -124,6 +124,21 @@ async def test_the_list_is_fixed_for_the_thread(
     assert len(fake_platform.integration_lists) == 2  # once per thread
 
 
+async def test_a_turned_off_integration_is_left_out(
+    fake_model: FakeModel, fake_platform: FakePlatform, fake_gateway: FakeGateway
+) -> None:
+    fake_platform.integrations = [HOME, {**CALENDAR, "turned_off": True}]
+    fake_model.queue(TextTurn("hi"))
+    with (
+        _client(fake_model, fake_platform, fake_gateway) as client,
+        client.websocket_connect("/ws/chat/int-off") as ws,
+    ):
+        _turn(ws, "hello")
+    system = _system(fake_model.requests[0])
+    assert "- home (Home Assistant)" in system
+    assert "- calendar (" not in system
+
+
 async def test_no_list_without_open_integration(
     fake_model: FakeModel, fake_platform: FakePlatform, fake_gateway: FakeGateway
 ) -> None:

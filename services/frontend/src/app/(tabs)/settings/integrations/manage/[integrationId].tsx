@@ -65,13 +65,17 @@ export default function ManageIntegrationScreen() {
   useReloadOnReturn(reload);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
 
-  const changeTool = useCallback(
-    (tool: AdminIntegrationTool, changes: { enabled?: boolean; ceiling?: ToolPermission }) =>
-      run(tool.name, async () =>
-        setData(await withStepUp(() => adminChangeIntegrationTools(integrationId, [{ name: tool.name, ...changes }]))),
-      ),
+  const changeTools = useCallback(
+    (key: string, changes: { name: string; enabled?: boolean; ceiling?: ToolPermission }[]) =>
+      run(key, async () => setData(await withStepUp(() => adminChangeIntegrationTools(integrationId, changes)))),
     [integrationId, run, setData, withStepUp],
   );
+
+  async function handleTurn(off: boolean) {
+    await run('turn', async () =>
+      setData(await withStepUp(() => adminEditIntegration(integrationId, { turned_off: off }))),
+    );
+  }
 
   async function handleRefresh() {
     await run('refresh', async () => setData(await withStepUp(() => adminRefreshIntegration(integrationId))));
@@ -131,6 +135,13 @@ export default function ManageIntegrationScreen() {
           )
         ) : (
           <>
+            {integration.turned_off ? (
+              <Notice testID="manage-integration-turned-off">
+                <Text style={noticeTextStyle}>
+                  Turned off: nobody can use it, and the agent doesn&apos;t see it. Connections and settings are kept.
+                </Text>
+              </Notice>
+            ) : null}
             <ServerCard integration={integration} />
             <DescriptionCard
               key={integration.description}
@@ -157,17 +168,33 @@ export default function ManageIntegrationScreen() {
                 {integration.discovered_at ? 'The server offers no tools.' : 'Not discovered yet. Refresh to look.'}
               </Text>
             ) : (
-              <Card>
-                {integration.tools.map((tool, index) => (
-                  <AdminToolRow
-                    key={tool.name}
-                    tool={tool}
-                    first={index === 0}
-                    busy={busyKey !== null}
-                    onChange={(changes) => changeTool(tool, changes)}
-                  />
-                ))}
-              </Card>
+              <>
+                {integration.tools.length > 1 ? (
+                  <View style={settingsStyles.rowActions}>
+                    {adminBulk(integration.tools).map((b) => (
+                      <ActionButton
+                        key={b.key}
+                        label={b.label}
+                        compact
+                        disabled={busyKey !== null}
+                        onPress={() => changeTools(b.key, b.changes)}
+                        testID={`manage-integration-${b.key}`}
+                      />
+                    ))}
+                  </View>
+                ) : null}
+                <Card>
+                  {integration.tools.map((tool, index) => (
+                    <AdminToolRow
+                      key={tool.name}
+                      tool={tool}
+                      first={index === 0}
+                      busy={busyKey !== null}
+                      onChange={(changes) => changeTools(tool.name, [{ name: tool.name, ...changes }])}
+                    />
+                  ))}
+                </Card>
+              </>
             )}
             <ActionButton
               label="Refresh from the server"
@@ -178,6 +205,21 @@ export default function ManageIntegrationScreen() {
             />
             <Text style={settingsStyles.muted}>New tools a refresh finds start off.</Text>
             <ExposedEntitiesNote />
+
+            <SectionTitle>{integration.turned_off ? 'Turned off' : 'Turn off'}</SectionTitle>
+            <Text style={settingsStyles.muted}>
+              {integration.turned_off
+                ? 'Turning it back on restores it exactly as it was.'
+                : 'Stops everyone using it for now, without deleting anything: connections, sign-ins and tool settings stay.'}
+            </Text>
+            <ActionButton
+              label={integration.turned_off ? 'Turn on' : 'Turn off'}
+              variant={integration.turned_off ? 'primary' : 'secondary'}
+              busy={busyKey === 'turn'}
+              disabled={busyKey !== null}
+              onPress={() => handleTurn(!integration.turned_off)}
+              testID="manage-integration-turn"
+            />
 
             <SectionTitle>Uninstall</SectionTitle>
             {confirmUninstall ? (
@@ -402,6 +444,35 @@ function SignInSection({
       </Card>
     </>
   );
+}
+
+function adminBulk(tools: AdminIntegrationTool[]) {
+  return [
+    {
+      key: 'all-on',
+      label: 'Turn all on',
+      changes: tools.filter((t) => !t.enabled).map((t) => ({ name: t.name, enabled: true })),
+    },
+    {
+      key: 'all-off',
+      label: 'Turn all off',
+      changes: tools.filter((t) => t.enabled).map((t) => ({ name: t.name, enabled: false })),
+    },
+    {
+      key: 'all-ask',
+      label: 'Always ask for all',
+      changes: tools
+        .filter((t) => t.enabled && t.ceiling === 'allow')
+        .map((t) => ({ name: t.name, ceiling: 'ask' as const })),
+    },
+    {
+      key: 'all-choose',
+      label: 'Each person chooses for all',
+      changes: tools
+        .filter((t) => t.enabled && t.ceiling === 'ask')
+        .map((t) => ({ name: t.name, ceiling: 'allow' as const })),
+    },
+  ].filter((b) => b.changes.length > 0);
 }
 
 function AdminToolRow({

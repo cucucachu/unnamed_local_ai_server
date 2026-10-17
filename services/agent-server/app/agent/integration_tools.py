@@ -433,7 +433,7 @@ async def fetch_integrations(platform_url: str, token: str) -> list[dict[str, An
             "tools": _enabled_tools(i.get("tools")),
         }
         for i in listed
-        if isinstance(i, dict) and i.get("slug")
+        if isinstance(i, dict) and i.get("slug") and not i.get("turned_off")
     ]
 
 

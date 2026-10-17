@@ -1029,6 +1029,8 @@ class IntegrationPatch(BaseModel):
     cert_fingerprint: Fingerprint | None = None
     private_address: bool | None = None
     token_header: TokenHeader | None = None
+    # Off: kept as is (credentials, tool settings) but unusable until turned on.
+    turned_off: bool | None = None
 
 
 class IntegrationToolOut(BaseModel):
@@ -1097,6 +1099,7 @@ class IntegrationOut(BaseModel):
     # A credential for it would cross the network unencrypted: warn before connecting.
     plain_http: bool
     oauth: OAuthSummary | None = None
+    turned_off: bool = False
     status: ConnectionStatus
     tools: list[IntegrationToolOut]
 
@@ -1222,6 +1225,7 @@ class AdminIntegrationOut(BaseModel):
     url: str
     plain_http: bool
     oauth: OAuthSummary | None = None
+    turned_off: bool = False
     cert_fingerprint: str | None
     private_address: bool
     token_header: str | None
@@ -1312,6 +1316,7 @@ class IntegrationGrantOut(BaseModel):
     session_id: UUID
     thread_id: str | None
     integration: IntegrationGatewayView
+    turned_off: bool = False
     status: ConnectionStatus
     credential: IntegrationGrantCredential | None
     tools: dict[str, ToolPolicyEntry]

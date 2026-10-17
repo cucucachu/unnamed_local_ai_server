@@ -4,11 +4,13 @@ import { StyleSheet, Switch, Text, View } from 'react-native';
 
 import {
   ExposedEntitiesNote,
+  Notice,
   PlainHttpWarning,
   SignInNote,
   TokenEntry,
   connectionNote,
   integrationStyles,
+  noticeTextStyle,
   useReloadOnReturn,
 } from '@/components/IntegrationParts';
 import {
@@ -92,6 +94,14 @@ export default function IntegrationScreen() {
           )
         ) : (
           <>
+            {integration.turned_off ? (
+              <Notice testID="integration-turned-off">
+                <Text style={noticeTextStyle}>
+                  An admin turned this integration off, so the agent and routines can&apos;t use it. Your connection
+                  and settings are kept for when it&apos;s turned back on.
+                </Text>
+              </Notice>
+            ) : null}
             {integration.description ? <Text style={settingsStyles.muted}>{integration.description}</Text> : null}
             <ConnectionCard
               integration={integration}
@@ -216,6 +226,26 @@ function ToolsSection({
   const offered = integration.tools.filter((t) => t.enabled || !t.enabled_locked);
   const adminOff = integration.tools.length - offered.length;
   const askers = offered.filter((t) => t.enabled && t.permission === 'ask' && !t.permission_locked);
+  const switchable = offered.filter((t) => !t.enabled_locked);
+  const bulk = [
+    {
+      key: 'all-on',
+      label: 'Turn all on',
+      changes: switchable.filter((t) => !t.enabled).map((t) => ({ name: t.name, enabled: true })),
+    },
+    {
+      key: 'all-off',
+      label: 'Turn all off',
+      changes: switchable.filter((t) => t.enabled).map((t) => ({ name: t.name, enabled: false })),
+    },
+    {
+      key: 'all-ask',
+      label: 'Ask first for all',
+      changes: offered
+        .filter((t) => t.enabled && t.permission === 'allow' && !t.permission_locked)
+        .map((t) => ({ name: t.name, permission: 'ask' as const })),
+    },
+  ].filter((b) => b.changes.length > 0);
 
   return (
     <>
@@ -229,6 +259,20 @@ function ToolsSection({
           <Text style={settingsStyles.muted}>
             Ask first shows you each use to approve; Allow lets the agent go ahead. Routines follow the same settings.
           </Text>
+          {offered.length > 1 && bulk.length ? (
+            <View style={settingsStyles.rowActions}>
+              {bulk.map((b) => (
+                <ActionButton
+                  key={b.key}
+                  label={b.label}
+                  compact
+                  disabled={busy}
+                  onPress={() => onChange(b.key, b.changes)}
+                  testID={`integration-${b.key}`}
+                />
+              ))}
+            </View>
+          ) : null}
           <Card>
             {offered.map((tool, index) => (
               <ToolRow
