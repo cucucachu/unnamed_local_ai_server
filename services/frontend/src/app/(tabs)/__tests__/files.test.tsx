@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { Text as RNText } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
+import * as filesLib from '@/lib/files';
 import type { FileEntry } from '@/lib/files';
 
 // Same mocking shape as `chat/__tests__/index.test.tsx` — plus
@@ -207,6 +208,22 @@ describe('FilesScreen — tap routing (M5-02)', () => {
 
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/file', params: { path: TEXT_FILE.path } });
     expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' })).toHaveLength(0);
+  });
+
+  it('tapping a PDF opens it in the platform viewer (M22-11)', async () => {
+    const pdf: FileEntry = { ...TEXT_FILE, name: 'manual.pdf', path: '/personal/manual.pdf', mime: 'application/pdf' };
+    const openPdf = jest.spyOn(filesLib, 'openPdf').mockResolvedValue(undefined);
+    mockFilesApi([pdf]);
+
+    const renderer = await renderScreen();
+    await act(async () => {
+      findRow(renderer, pdf.name).props.onPress();
+    });
+
+    expect(openPdf).toHaveBeenCalledWith('/personal/manual.pdf');
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' })).toHaveLength(0);
+    openPdf.mockRestore();
   });
 
   it('tapping any other file, or text over 1 MiB, opens the action sheet instead of navigating', async () => {

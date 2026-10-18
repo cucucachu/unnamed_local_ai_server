@@ -270,4 +270,20 @@ describe('FileScreen (M22-10)', () => {
     await flush();
     expect(mockDispatch).toHaveBeenCalledWith({ type: 'GO_BACK' });
   });
+
+  it('shows CSV as a table and code with line numbers (M22-11)', async () => {
+    const rows = Array.from({ length: 6000 }, (_, i) => `${i},item ${i}`).join('\n');
+    mockFiles({ '/personal/big.csv': text(`id,name\n${rows}\n`), '/personal/app.json': text('{\n  "a": 1\n}\n') });
+    let r = await renderFile('/personal/big.csv');
+    expect(byId(r, 'csv-count').props.children).toBe('Showing 5,000 of 6,000 rows');
+    const headerCells = byId(r, 'csv-header').findAllByType(RNText).map((cell) => cell.props.children);
+    expect(headerCells.slice(0, 2)).toEqual(['id', 'name']);
+    expect(exists(r, 'file-edit')).toBe(true);
+
+    act(() => r.unmount());
+    r = await renderFile('/personal/app.json');
+    expect(byId(r, 'code-gutter').props.children).toBe('1\n2\n3');
+    expect(byId(r, 'code-text').props.children).toBe('{\n  "a": 1\n}');
+    expect(exists(r, 'file-edit')).toBe(true);
+  });
 });

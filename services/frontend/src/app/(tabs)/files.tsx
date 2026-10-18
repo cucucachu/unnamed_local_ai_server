@@ -19,6 +19,7 @@ import {
   listFiles,
   mkdir,
   movePath,
+  openPdf,
   parentPath,
   pickAndUpload,
   copyPath,
@@ -26,7 +27,7 @@ import {
   type FileEntry,
 } from '@/lib/files';
 import { previewKind } from '@/lib/media';
-import { TEXT_MAX_BYTES, isTextFileName } from '@/lib/textFiles';
+import { TEXT_MAX_BYTES, isPdfName, isTextFileName } from '@/lib/textFiles';
 import { theme } from '@/lib/theme';
 
 type LoadState = 'loading' | 'error' | 'done';
@@ -239,11 +240,13 @@ export default function FilesScreen() {
         openMedia(entry);
       } else if (isTextFileName(entry.name) && entry.size <= TEXT_MAX_BYTES) {
         router.push({ pathname: '/file', params: { path: entry.path } });
+      } else if (isPdfName(entry.name)) {
+        openPdf(entry.path).catch((error) => showToast(errorDetail(error, "Couldn't open the PDF")));
       } else {
         setActionSheetEntry(entry);
       }
     },
-    [openMedia, router, setBrowsePath],
+    [openMedia, router, setBrowsePath, showToast],
   );
 
   // Long-press (native) / right-click (web) opens the SAME action sheet for
