@@ -679,7 +679,7 @@ async def uninstall_app(
 
 async def _working_for_publish(conn: AsyncConnection, app_id: UUID) -> Row:
     cur = await conn.execute(
-        "SELECT id, version, commit, manifest, bundle_path FROM app_versions "
+        "SELECT id, version, commit, manifest, bundle_path, tables_doc FROM app_versions "
         "WHERE app_id = %s AND kind = 'working'",
         (app_id,),
     )
@@ -725,11 +725,12 @@ async def publish_app(
         async with conn.transaction():
             cur = await conn.execute(
                 "INSERT INTO app_versions "
-                "(app_id, version, kind, commit, manifest, bundle_path, published_at) "
-                "VALUES (%s, %s, 'published', %s, %s, %s, now()) RETURNING id",
+                "(app_id, version, kind, commit, manifest, bundle_path, tables_doc, published_at) "
+                "VALUES (%s, %s, 'published', %s, %s, %s, %s, now()) RETURNING id",
                 (
                     app_id, working["version"], working["commit"],
                     Jsonb(working["manifest"]), working["bundle_path"],
+                    Jsonb(working["tables_doc"]),
                 ),
             )  # fmt: skip
             version_id = (await cur.fetchone())["id"]

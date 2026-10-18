@@ -202,7 +202,16 @@ def test_every_shipped_template_validates_and_its_actions_run(slug: str, tmp_pat
     assert found == [], [d.as_dict() for d in found]
     assert doc["version"] == "1.0.0"
 
-    con = appschema.scratch_from((pkg / "schema.sql").read_text())
+    schema_sql = (pkg / "schema.sql").read_text()
+    con = appschema.scratch_from(schema_sql)
+    # The data map (M22-06) shows these: every table and column but `id` says what it holds.
+    docs = {d["name"]: d for d in appschema.table_docs(schema_sql)}
+    for table, info in appschema.describe(con)["tables"].items():
+        assert docs[table]["description"], f"{slug}: table {table} has no comment"
+        own = [
+            c for c in info["parsed"]["columns"] if c != "id" and c not in appschema.STAMP_COLUMNS
+        ]
+        assert sorted(docs[table]["columns"]) == sorted(own), f"{slug}: {table}'s column comments"
     appdb.stamp(con, "00000000-0000-0000-0000-000000000001")
     actions = sorted((pkg / "actions").glob("*.sql")) if (pkg / "actions").is_dir() else []
     # Twice, in name order, so an action that needs another's row (checkIn after addHabit) finds it.

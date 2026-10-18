@@ -710,9 +710,12 @@ async def build_app(
     )
     commit = (history, tree, text) if history is not None and tree is not None else None
     bundle_path = await anyio.to_thread.run_sync(_store_bundle, data_dir, app_id, build_id, output)
+    tables_doc = appschema.table_docs(schema_sql or "")
     try:
         async with pool.connection() as conn:
-            previous, commit_id = await _record(conn, principal, app_id, doc, bundle_path, commit)
+            previous, commit_id = await _record(
+                conn, principal, app_id, doc, bundle_path, commit, tables_doc
+            )
     except BaseException:
         await anyio.to_thread.run_sync(_drop_bundle, data_dir, bundle_path)
         raise
@@ -767,8 +770,10 @@ async def _record(
     doc: Any,
     bundle_path: str,
     commit: tuple[AppHistory, str, str] | None,
+    tables_doc: list[dict[str, Any]],
 ) -> tuple[str | None, str | None]:
-    """Make `bundle_path` (and the commit of `(history, tree, message)`) the working version's.
+    """Make `bundle_path` (and the commit of `(history, tree, message)`, the schema's
+    `tables_doc`) the working version's.
 
     (the bundle it replaced if nothing else uses it, the commit id).
     """
@@ -778,9 +783,9 @@ async def _record(
         commit_id = await _commit(app_id, commit)
         await conn.execute("UPDATE apps SET name = %s WHERE id = %s", (doc["name"], app_id))
         await conn.execute(
-            "UPDATE app_versions SET version = %s, manifest = %s, bundle_path = %s, commit = %s "
-            "WHERE id = %s",
-            (doc["version"], Jsonb(doc), bundle_path, commit_id, row["id"]),
+            "UPDATE app_versions SET version = %s, manifest = %s, bundle_path = %s, commit = %s, "
+            "tables_doc = %s WHERE id = %s",
+            (doc["version"], Jsonb(doc), bundle_path, commit_id, Jsonb(tables_doc), row["id"]),
         )
         await conn.execute(
             "UPDATE app_instances SET granted_reads = %s "

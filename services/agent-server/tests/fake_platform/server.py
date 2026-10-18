@@ -285,6 +285,27 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         who = _who(request)
         return JSONResponse({"spaces": [_public_space(s) for s in fake.spaces_for(who.user_id)]})
 
+    @app.get("/api/platform/data-map")
+    async def data_map(request: Request) -> JSONResponse:
+        fake.data_map_requests.append(_bearer(request))
+        who = _who(request)
+        if fake.data_map_error is not None:
+            raise _error(*fake.data_map_error)
+        out = []
+        for space in fake.spaces_for(who.user_id):
+            for inst in (i for i in fake.instances if i["space_id"] == space["id"]):
+                app_ = next(a for a in fake.apps if a["id"] == inst["app_id"])
+                folder = app_["source_path"].split("/Apps/", 1)[1]
+                raw = fake.tree(app_["source_key"]).get(f"Apps/{folder}/app.json")
+                doc = json.loads(raw) if raw else {}
+                out.append(
+                    {"id": inst["id"], "app": {k: app_[k] for k in ("id", "slug", "name")},
+                     "space": _public_space(space),
+                     "description": (doc.get("homeai") or {}).get("description"),
+                     "tables": fake.data_map_tables.get(inst["id"], [])}
+                )  # fmt: skip
+        return JSONResponse({"instances": out})
+
     @app.get("/api/platform/spaces/{space_id}/instances")
     async def list_instances(request: Request, space_id: str) -> JSONResponse:
         _space(_who(request), space_id)

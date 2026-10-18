@@ -146,6 +146,11 @@ Apps (query with app_query; details with list_apps):
 - Capped at ~1,500 characters. Past that, the list shortens to app names
   and the agent calls `list_apps`.
 
+Shipped in M22-06: `GET /api/platform/data-map` (PLATFORM.md §7 "The data
+map"), agent-server's `DataMapMiddleware` (ARCHITECTURE.md), and comments
+on every table and column of the shipped templates (checked by
+`test_app_templates.py`).
+
 ### 5.2 App rows in search
 
 An app declares which tables hold text worth finding:

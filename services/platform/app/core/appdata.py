@@ -35,6 +35,7 @@ import errno
 import logging
 import os
 import re
+import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -279,6 +280,29 @@ class AppData:
         except (appdb.InstanceStorageError, StorageError) as exc:
             logger.error("instance %s: %s", target.id, exc)
             raise ServerError("instance_storage_invalid") from exc
+
+    async def table_rows(self, instance: Row, space: Row) -> dict[str, int] | None:
+        """`{table: row count}` of the instance's database in creation order, the
+        platform's own tables left out; None (logged) if it can't be read."""
+
+        def count(con: Any, _fd: int) -> dict[str, int]:
+            names = [
+                name
+                for (name,) in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY rowid"
+                )
+                if not name.lower().startswith(appschema.RESERVED_PREFIXES)
+            ]
+            return {
+                n: con.execute(f"SELECT count(*) FROM {appschema.quote(n)}").fetchone()[0]
+                for n in names
+            }
+
+        try:
+            return await self._run(Target(instance, space), count)
+        except (PlatformError, sqlite3.Error) as exc:
+            logger.warning("instance %s: row counts unavailable: %r", instance["id"], exc)
+            return None
 
     async def _read_from_package(
         self, conn: AsyncConnection, principal: Principal, target: Target, parts: tuple[str, ...]

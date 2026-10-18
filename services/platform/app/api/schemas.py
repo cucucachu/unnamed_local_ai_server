@@ -781,6 +781,41 @@ class ForkOut(BaseModel):
     instance: InstanceOut
 
 
+class DataMapTable(BaseModel):
+    name: str
+    rows: int | None
+    description: str | None
+    columns: dict[str, str]
+
+
+class DataMapApp(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+
+
+class DataMapSpace(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    kind: str
+    role: str
+
+
+class DataMapInstance(BaseModel):
+    id: UUID
+    app: DataMapApp
+    space: DataMapSpace
+    description: str | None
+    tables: list[DataMapTable]
+
+
+class DataMapOut(BaseModel):
+    """`GET /api/platform/data-map` (M22-06)."""
+
+    instances: list[DataMapInstance]
+
+
 class AppTemplateOut(BaseModel):
     slug: str
     name: str

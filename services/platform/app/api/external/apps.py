@@ -20,6 +20,7 @@ from app.api.schemas import (
     AppTemplateList,
     AppValidationOut,
     CatalogList,
+    DataMapOut,
     ForkOut,
     ForkRequest,
     InstallRequest,
@@ -32,7 +33,7 @@ from app.api.schemas import (
     UpdateInstanceOut,
     UpdateInstanceRequest,
 )
-from app.core import appbuild, apphistory, apps, apptemplates, manifest
+from app.core import appbuild, apphistory, apps, apptemplates, datamap, manifest
 from app.core.errors import Unavailable
 from app.core.principal import CurrentUser
 
@@ -174,6 +175,14 @@ async def revert_app(
         diagnostics=diagnostics,
         migrations=migrations,
     )
+
+
+@router.get("/data-map", response_model=DataMapOut)
+async def get_data_map(request: Request, principal: CurrentUser):
+    """Every live instance in the user's spaces with its tables and row counts (`app.core.datamap`)."""
+    async with request.app.state.db_pool.connection() as conn:
+        instances = await datamap.data_map(conn, principal, request.app.state.appdata)
+    return DataMapOut(instances=instances)
 
 
 @router.get("/spaces/{space_id}/instances", response_model=InstanceList)

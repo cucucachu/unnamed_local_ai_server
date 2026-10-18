@@ -97,7 +97,9 @@ App authoring (create_app, file tools on /<space>/Apps/<slug>/, build_app):
 Package layout:
   app.json          {"name","slug","version","homeai":{"sdk":"1","icon":"<name>","permissions":{}}}
   AGENT.md          what it does, the tables, each action, how to extend it
-  schema.sql        SQLite CREATE TABLE / INDEX (desired schema; builds migrate additively)
+  schema.sql        SQLite CREATE TABLE / INDEX (desired schema; builds migrate additively).
+                    A "-- what one row is" line above each CREATE TABLE and a trailing
+                    "-- what it holds" on each column: every chat's app list shows them
   actions/<name>.sql  camelCase file, :named params, all statements in one transaction
   app/_layout.tsx   Stack + Stack.Screen titles; any folder may have its own _layout.tsx
   app/index.tsx     home screen; app/<name>.tsx is /<name>; app/<name>/[id].tsx is /<name>/:id
