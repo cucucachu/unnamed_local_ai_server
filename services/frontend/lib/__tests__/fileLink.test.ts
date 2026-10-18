@@ -1,4 +1,5 @@
-import { filePathFromHref, normalizeFileLink } from '../fileLink';
+import { filePathFromHref, linkPathFrom, normalizeFileLink } from '../fileLink';
+import { isMarkdownName, isTextFileName } from '../textFiles';
 
 describe('filePathFromHref', () => {
   it('maps a bare relative href the model sometimes emits into the personal space', () => {
@@ -60,5 +61,41 @@ describe('normalizeFileLink', () => {
 
   it.each(cases)('normalizes $href to $expected', ({ href, expected }) => {
     expect(normalizeFileLink(href)).toBe(expected);
+  });
+});
+
+describe('linkPathFrom (M22-10)', () => {
+  it.each([
+    ['b.md', '/personal/notes/b.md'],
+    ['./b.md#top', '/personal/notes/b.md'],
+    ['../todo%20list.md', '/personal/todo list.md'],
+    ['../../../../etc/passwd', '/personal/etc/passwd'],
+    ['file:/spaces/family/c.txt', '/spaces/family/c.txt'],
+    ['/spaces/family/c.txt', '/spaces/family/c.txt'],
+  ])('resolves %s against /personal/notes', (href, expected) => {
+    expect(linkPathFrom(href, '/personal/notes')).toBe(expected);
+  });
+
+  it('stays inside a shared space', () => {
+    expect(linkPathFrom('../../x.md', '/spaces/family/docs')).toBe('/spaces/family/x.md');
+  });
+
+  it('leaves web links and anchors alone, and keeps chat behaviour without a base', () => {
+    for (const href of ['https://example.com', 'mailto:a@b.c', 'tel:123', '#heading', '']) {
+      expect(linkPathFrom(href, '/personal/notes')).toBeNull();
+    }
+    expect(linkPathFrom('notes/a.md')).toBe('/personal/notes/a.md');
+  });
+});
+
+describe('isTextFileName', () => {
+  it('opens text, code and extensionless names, not binaries', () => {
+    for (const name of ['a.md', 'b.TXT', 'c.json', '.gitignore', 'README', 'x.py']) {
+      expect(isTextFileName(name)).toBe(true);
+    }
+    for (const name of ['a.zip', 'b.pdf', 'c.sqlite', 'd.png']) {
+      expect(isTextFileName(name)).toBe(false);
+    }
+    expect([isMarkdownName('a.md'), isMarkdownName('a.txt')]).toEqual([true, false]);
   });
 });

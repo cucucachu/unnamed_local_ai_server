@@ -323,6 +323,20 @@ this is host work.
   Edit switches to a plain editor; Save writes with `if_version`. On `409`:
   reload, keep mine (overwrite), or save as a copy. Up to 1 MiB, the same
   limit as the search index.
+
+  > **As built (M22-10):** `src/app/file.tsx` (route `/file?path=`, a stack
+  > screen over the tabs). Files opens it for a known text or code
+  > extension, or a name with no extension, up to 1 MiB; the content must
+  > decode as UTF-8 without NULs or the screen says it isn't text. It stats
+  > first (version, writable), then reads the whole file from
+  > `/files/stream`. Markdown links resolve relative to the file's folder,
+  > never above its space (`linkPathFrom` in `lib/fileLink.ts`), and open
+  > in Files with `router.dismissTo`. Save is `/files/write` with
+  > `if_version`. On `409 changed` it offers Reload theirs, Keep mine
+  > (written without `if_version`) and Save as copy (`name (copy).md`, then
+  > `(copy 2)` and so on, opened after saving). Leaving with unsaved changes
+  > asks first (`beforeRemove`, and `beforeunload` on web). Smoke:
+  > `scripts/e2e/m22_text_editor_smoke.sh`.
 - **Then:** CSV as a table, JSON and code in monospace with line numbers,
   and PDF opened in the browser's or phone's own viewer.
 - "Open with" an app is M23 (it needs the files bridge).

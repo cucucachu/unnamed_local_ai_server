@@ -36,3 +36,29 @@ export function normalizeFileLink(href: string): string {
   }
   return stripped ? `/personal/${stripped}` : '/personal';
 }
+
+/** A markdown link in a file under `baseDir` as a virtual path: relative hrefs
+ * (`b.md`, `../notes/c.md`) resolve against the file's folder, never above
+ * its space; `file:` and absolute paths go through `filePathFromHref`; web
+ * links (`https:`, `mailto:` and other schemes) and `#anchors` give null. */
+export function linkPathFrom(href: string, baseDir?: string): string | null {
+  if (href.startsWith('file:') || href.startsWith('/')) return filePathFromHref(href);
+  if (baseDir === undefined) return filePathFromHref(href);
+  if (href === '' || href.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+  let rel = href.split('#')[0].split('?')[0];
+  try {
+    rel = decodeURIComponent(rel);
+  } catch {
+    // keep the raw path if it isn't valid URI encoding
+  }
+  const parts = baseDir.split('/').filter(Boolean);
+  const floor = parts[0] === 'spaces' ? 2 : 1;
+  for (const segment of rel.split('/')) {
+    if (segment === '..') {
+      if (parts.length > floor) parts.pop();
+    } else if (segment !== '.' && segment !== '') {
+      parts.push(segment);
+    }
+  }
+  return `/${parts.join('/')}`;
+}

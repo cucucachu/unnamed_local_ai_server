@@ -40,6 +40,8 @@ export interface FileEntry {
   label?: string | null;
   /** The caller's role, on space entries only. */
   role?: SpaceRole | null;
+  /** Regular files: what a write's `if_version` compares (M22-09). */
+  version?: string | null;
 }
 
 export interface FileListing {

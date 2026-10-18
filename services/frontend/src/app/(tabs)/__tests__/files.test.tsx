@@ -197,18 +197,31 @@ describe('FilesScreen — tap routing (M5-02)', () => {
     expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' })).toHaveLength(0);
   });
 
-  it('tapping a non-media file opens the action sheet instead of navigating', async () => {
+  it('tapping a text file opens the text viewer (M22-10)', async () => {
     mockFilesApi([TEXT_FILE]);
 
     const renderer = await renderScreen();
-    const row = findRow(renderer, TEXT_FILE.name);
-
     await act(async () => {
-      row.props.onPress();
+      findRow(renderer, TEXT_FILE.name).props.onPress();
     });
 
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/file', params: { path: TEXT_FILE.path } });
+    expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' })).toHaveLength(0);
+  });
+
+  it('tapping any other file, or text over 1 MiB, opens the action sheet instead of navigating', async () => {
+    const zip: FileEntry = { ...TEXT_FILE, name: 'backup.zip', path: '/personal/backup.zip', mime: 'application/zip' };
+    const huge: FileEntry = { ...TEXT_FILE, name: 'huge.log', path: '/personal/huge.log', size: 2 * 1024 * 1024 };
+    mockFilesApi([zip, huge]);
+
+    const renderer = await renderScreen();
+    for (const entry of [zip, huge]) {
+      await act(async () => {
+        findRow(renderer, entry.name).props.onPress();
+      });
+      expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' }).length).toBeGreaterThan(0);
+    }
     expect(mockPush).not.toHaveBeenCalled();
-    expect(renderer.root.findAllByProps({ testID: 'file-action-sheet' }).length).toBeGreaterThan(0);
   });
 
   it('long-press on a media file still opens the action sheet (not a media-bypass)', async () => {

@@ -26,6 +26,7 @@ import {
   type FileEntry,
 } from '@/lib/files';
 import { previewKind } from '@/lib/media';
+import { TEXT_MAX_BYTES, isTextFileName } from '@/lib/textFiles';
 import { theme } from '@/lib/theme';
 
 type LoadState = 'loading' | 'error' | 'done';
@@ -236,11 +237,13 @@ export default function FilesScreen() {
         // action sheet too (for parity with every other file action),
         // reached via long-press below.
         openMedia(entry);
+      } else if (isTextFileName(entry.name) && entry.size <= TEXT_MAX_BYTES) {
+        router.push({ pathname: '/file', params: { path: entry.path } });
       } else {
         setActionSheetEntry(entry);
       }
     },
-    [openMedia, setBrowsePath],
+    [openMedia, router, setBrowsePath],
   );
 
   // Long-press (native) / right-click (web) opens the SAME action sheet for
