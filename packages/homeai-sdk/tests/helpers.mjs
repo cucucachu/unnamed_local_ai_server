@@ -24,16 +24,25 @@ function routeFiles(dir, prefix = '') {
   });
 }
 
-/** The app bundle for `appDir`; `edits` = {relative path: new content}. */
-export async function bundleApp(appDir = FIXTURE, { dev = true, edits = {} } = {}) {
-  const files = routeFiles(path.join(appDir, 'app')).filter((f) => f !== '_layout.tsx');
-  const lines = fs.existsSync(path.join(appDir, 'app/_layout.tsx')) ? ["import Layout from './app/_layout.tsx';"] : [];
+/**
+ * The app bundle for `appDir`; `edits` = {relative path: new content}. `legacy` builds the
+ * pre-M22-02 shape (`layout` = app/_layout.tsx only, no `layouts`), as older stored bundles have.
+ */
+export async function bundleApp(appDir = FIXTURE, { dev = true, edits = {}, legacy = false } = {}) {
+  const all = routeFiles(path.join(appDir, 'app')).sort();
+  const layoutFiles = all.filter((f) => path.posix.basename(f).startsWith('_layout.'));
+  const files = all.filter((f) => !layoutFiles.includes(f));
+  const lines = layoutFiles.map((f, i) => `import L${i} from './app/${f}';`);
   const routes = files.map((f, i) => {
     lines.push(`import R${i} from './app/${f}';`);
     const parts = f.replace(/\.tsx?$/, '').split('/');
-    return `{ name: ${JSON.stringify(parts.join('/'))}, segments: ${JSON.stringify(parts.filter((p, j) => !(p === 'index' && j === parts.length - 1)))}, component: R${i} }`;
+    const segments = parts.filter((p, j) => !/^\(.*\)$/.test(p) && !(p === 'index' && j === parts.length - 1));
+    return `{ name: ${JSON.stringify(parts.join('/'))}, segments: ${JSON.stringify(segments)}, component: R${i} }`;
   });
-  lines.push(`export const layout = ${lines.length > files.length ? 'Layout' : 'undefined'};`, `export const routes = [${routes.join(', ')}];`);
+  const folders = layoutFiles.map((f) => path.posix.dirname(f).replace(/^\.$/, ''));
+  if (legacy) lines.push(`export const layout = ${folders.includes('') ? `L${folders.indexOf('')}` : 'undefined'};`);
+  else lines.push(`export const layouts = {${folders.map((d, i) => `${JSON.stringify(d)}: L${i}`).join(', ')}};`);
+  lines.push(`export const routes = [${routes.join(', ')}];`);
   const res = await esbuild.build({
     stdin: { contents: lines.join('\n'), resolveDir: appDir, loader: 'js' },
     bundle: true,

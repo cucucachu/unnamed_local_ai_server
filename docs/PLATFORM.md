@@ -807,19 +807,42 @@ the platform publishes.
 ### Allowed imports (D9)
 
 `react`, `react-native` (all of react-native-web's exports), `expo-router`
-(shim: `Stack` + `Stack.Screen`, `Slot`, `Link`, `router` / `useRouter`,
-`useLocalSearchParams`, `useGlobalSearchParams`, `usePathname`),
-`expo-sqlite` (shim bound to this instance's database), `@homeai/sdk`, and
-a growing allowlist of Expo-compatible shims. Relative imports must resolve
+(shim: `Stack` + `Stack.Screen`, `Tabs` + `Tabs.Screen`, `Slot`, `Link`,
+`router` / `useRouter`, `useLocalSearchParams`, `useGlobalSearchParams`,
+`usePathname`), `expo-sqlite` (shim bound to this instance's database),
+`@expo/vector-icons` (`Ionicons` only, M22-02), `@homeai/sdk`, and a
+growing allowlist of Expo-compatible shims. Relative imports must resolve
 inside the app directory (symlinks included). Anything else — including
 `react-dom`, `fs`, `window`, `document`, raw `fetch` — fails the build:
 imports in the bundler's allowlist plugin (file:line:col), DOM globals in
 the type-check (no `dom` lib).
 
 Routes: only `.ts`/`.tsx` files under `app/`, segments `name`, `index`,
-`[param]`, `[...rest]`, and a root `app/_layout.tsx`. Groups, nested
-layouts, tabs and modals are not in the shim yet and are rejected with a
-diagnostic until added.
+`[param]`, `[...rest]`, `(group)` folders, and a `_layout.tsx` in any
+folder (root required). `+special` files are rejected with a diagnostic.
+
+> **As built (M22-02)** (`packages/homeai-sdk/src/router.tsx`): a group
+> isn't part of the path, and two files for the same path are a diagnostic
+> (builder and platform). The builder emits `layouts` (by folder, `""` the
+> root) next to `routes`, whose names keep their groups (`(tabs)/index`);
+> the runtime still runs bundles built before, which only have `layout`.
+> One history is the truth; each layout renders the entries under its
+> folder. `Stack` shows one screen per run of entries with the same child
+> (a nested layout's folder or a route); a nested navigator's screen has
+> no header of its own unless the layout's `Stack.Screen` asks for one.
+> `Tabs` shows the active tab's trailing entries, remembers each tab's
+> entries when you switch away (tapping the active tab pops it to its
+> first screen), and lists the `Tabs.Screen`s in order or, without any,
+> every child of its folder; options `title`, `icon` (an `IconName`),
+> `tabBarIcon`, `tabBarBadge`, `href: null`. `presentation: 'modal'`, set
+> on the layout's `Stack.Screen`, draws the screen as a sheet over the one
+> beneath with a Close button. `headerLeft` (replaces back) and
+> `headerRight` take a node or `({ tintColor }) => node`. A back button
+> shows whenever the screen isn't the first entry of the history.
+> `@expo/vector-icons`'s `Ionicons` draws from a subset font in the
+> runtime: 244 outline icons (`scripts/ICONS.txt`, generated into
+> `src/icons.generated.ts` by `scripts/icons.py`); other names are a type
+> error. It added ≈45 KB gzip to the runtime (145.9 → 194.1 KB).
 
 ### `@homeai/sdk` (the only platform-specific surface; keep it tiny)
 

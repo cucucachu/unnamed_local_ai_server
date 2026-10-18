@@ -1,0 +1,25 @@
+add add-circle airplane alarm albums alert-circle analytics apps archive arrow-back
+arrow-down arrow-forward arrow-up arrow-undo arrow-redo at attach bag bandage bar-chart
+barbell basket battery-half bed beer bicycle bonfire book bookmark bookmarks
+briefcase brush bug build bulb bus business cafe calculator calendar
+call camera car card cart cash chatbox chatbubble chatbubbles checkbox
+checkmark checkmark-circle checkmark-done chevron-back chevron-down chevron-forward chevron-up clipboard close close-circle
+cloud cloud-upload cloud-download code color-palette compass construct copy create cube
+cut desktop document document-text documents download ellipse ellipsis-horizontal ellipsis-vertical exit
+eye eye-off fast-food female film filter fish fitness flag flame
+flash flask flower folder folder-open footsteps funnel game-controller gift git-branch
+glasses globe grid hammer hand-left happy headset heart heart-dislike help
+help-circle home hourglass ice-cream image images infinite information-circle key keypad
+laptop layers leaf library link list location lock-closed lock-open log-in
+log-out magnet mail male man map medal medical medkit megaphone
+menu mic mic-off moon musical-note musical-notes navigate newspaper notifications nutrition
+options paper-plane partly-sunny pause paw pencil people person person-add person-circle
+pie-chart pin pint pizza planet play play-circle podium pricetag pricetags
+print pulse push qr-code radio rainy reader receipt refresh reload
+remove remove-circle repeat restaurant ribbon rocket rose sad save school
+search send server settings share shield shield-checkmark shirt shuffle skull
+snow sparkles speedometer square star star-half stats-chart stop stopwatch storefront
+sunny swap-horizontal swap-vertical sync tennisball terminal text thermometer thumbs-down thumbs-up
+ticket time timer today toggle trail-sign train trash trending-down trending-up
+trophy tv umbrella videocam volume-high volume-mute walk wallet warning watch
+water wifi wine woman

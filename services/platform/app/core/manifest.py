@@ -19,9 +19,9 @@ pointer into that file (`""` for non-JSON files or the file as a whole),
 is the builder's job (M12-04), not this module's.
 
 Routes (§7 "Routes"): only `.ts`/`.tsx` files under `app/`, segments
-`name`, `index`, `[param]` and a final `[...rest]`, and the one root
-`app/_layout.tsx`. Groups, nested layouts and `+special` files aren't in
-the router shim yet, so they're diagnostics. Dotfiles are ignored and
+`name`, `index`, `[param]`, a final `[...rest]` and `(group)` folders (not
+part of the path), and a `_layout.tsx` in any folder (M22-02). `+special`
+files aren't in the router shim, so they're diagnostics. Dotfiles are ignored and
 symlinks are refused, never followed: the package is read below an open
 fd on its folder, each directory opened `O_NOFOLLOW` from its parent's fd.
 """
@@ -59,6 +59,7 @@ PRIVILEGED_CAPABILITIES = ("files",)
 NAME_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 PARAM_SEGMENT_RE = re.compile(r"^\[[A-Za-z_][A-Za-z0-9_]*\]$")
 REST_SEGMENT_RE = re.compile(r"^\[\.\.\.[A-Za-z_][A-Za-z0-9_]*\]$")
+GROUP_SEGMENT_RE = re.compile(r"^\([A-Za-z0-9][A-Za-z0-9_-]*\)$")
 ROUTE_SUFFIXES = (".tsx", ".ts")
 
 _EXPORT_NAME_MSG = (
@@ -462,7 +463,13 @@ def _required_file(pkg: int, rel: str, what: str) -> list[Diagnostic]:
 def _check_segment(segment: str, *, last: bool) -> str | None:
     """Why `segment` isn't a valid route segment, or None."""
     if segment.startswith("(") and segment.endswith(")"):
-        return "route groups like (name) aren't supported yet"
+        if not GROUP_SEGMENT_RE.fullmatch(segment):
+            return f"\"{segment}\" is not a valid group: use (name) with letters, digits, '-', '_'"
+        return (
+            "a group (name) is a folder, not a file: put screens inside it, e.g. app/(tabs)/index.tsx"
+            if last
+            else None
+        )
     if segment.startswith("+"):
         return f"special route files like {segment} aren't supported yet"
     if REST_SEGMENT_RE.fullmatch(segment):
@@ -505,10 +512,11 @@ def _open_dir(dir_fd: int, name: str) -> int | None:
         return None
 
 
-def _route_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
+def _route_diagnostics(pkg: int, walk: _Walk) -> tuple[list[Diagnostic], bool]:
+    """The route problems, and whether some route is the home screen (`/`, e.g. app/(tabs)/index.tsx)."""
     out: list[Diagnostic] = []
     routes: dict[tuple[str, ...], str] = {}
-    dynamic: dict[PurePosixPath, str] = {}
+    dynamic: dict[tuple[str, ...], str] = {}
 
     def visit(dir_fd: int, dir_rel: PurePosixPath) -> None:
         for entry, rel in walk.entries(dir_fd, dir_rel):
@@ -516,7 +524,6 @@ def _route_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
             if entry.is_symlink():
                 out.append(Diagnostic(str(rel), "", f"{rel} is a symlink; apps can't use symlinks"))
                 continue
-            top = rel.parent == PurePosixPath("app")
             if entry.is_dir(follow_symlinks=False):
                 problem = _check_segment(name, last=False)
                 if problem:
@@ -542,33 +549,26 @@ def _route_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
                 )
                 continue
             if stem == "_layout":
-                if not top:
-                    out.append(
-                        Diagnostic(
-                            str(rel),
-                            "",
-                            f"{rel}: nested layouts aren't supported yet; only app/_layout.tsx",
-                        )
-                    )
                 continue
             problem = _check_segment(stem, last=True)
             if problem:
                 out.append(Diagnostic(str(rel), "", f"{rel}: {problem}"))
                 continue
-            segments = rel.parent.parts[1:] + (() if stem == "index" else (stem,))
+            folder = tuple(p for p in rel.parent.parts[1:] if not GROUP_SEGMENT_RE.fullmatch(p))
+            segments = folder + (() if stem == "index" else (stem,))
             if segments in routes:
                 out.append(
                     Diagnostic(
                         str(rel),
                         "",
                         f"{rel} and {routes[segments]} are the same route "
-                        f"(/{'/'.join(segments)}); keep one",
+                        f"(/{'/'.join(segments)}; groups aren't part of the path); keep one",
                     )
                 )
                 continue
             routes[segments] = str(rel)
             if stem.startswith("["):
-                other = dynamic.get(rel.parent)
+                other = dynamic.get(folder)
                 if other and PurePosixPath(other).stem != stem:
                     out.append(
                         Diagnostic(
@@ -578,14 +578,14 @@ def _route_diagnostics(pkg: int, walk: _Walk) -> list[Diagnostic]:
                             "same folder, so the router can't tell them apart; keep one",
                         )
                     )
-                dynamic.setdefault(rel.parent, str(rel))
+                dynamic.setdefault(folder, str(rel))
 
     if (fd := _open_dir(pkg, "app")) is not None:
         try:
             visit(fd, PurePosixPath("app"))
         finally:
             os.close(fd)
-    return out
+    return out, () in routes
 
 
 def _action_diagnostics(pkg: int, walk: _Walk, *, shipped: bool = False) -> list[Diagnostic]:
@@ -756,8 +756,10 @@ def validate_package(
     walk = _Walk()
     if _is(pkg, "app", stat.S_ISDIR):
         out += _required_file(pkg, "app/_layout.tsx", "the root layout (e.g. a <Stack />)")
-        out += _required_file(pkg, "app/index.tsx", "the home screen")
-        out += _route_diagnostics(pkg, walk)
+        routes, home = _route_diagnostics(pkg, walk)
+        if not home and not any(d.file.startswith("app/index.") for d in routes):
+            out += _required_file(pkg, "app/index.tsx", "the home screen")
+        out += routes
     elif _is(pkg, "app", stat.S_ISLNK):
         out.append(Diagnostic("app", "", "app/ must be a folder, not a symlink"))
     elif not shipped:
