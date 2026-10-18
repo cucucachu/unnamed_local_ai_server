@@ -945,6 +945,43 @@ RpcRequest = Annotated[
 ]
 
 
+class ExportBody(BaseModel):
+    # A new folder; default Exports/<slug>-<UTC time> in the instance's space.
+    folder: VPath | None = None
+
+
+class ExportTableOut(BaseModel):
+    name: str
+    file: str
+    rows: int
+
+
+class ExportOut(BaseModel):
+    folder: str
+    tables: list[ExportTableOut]
+
+
+class ImportBody(BaseModel):
+    table: Short
+    path: VPath
+    # CSV header -> table column; without one, headers match columns by name.
+    mapping: Annotated[dict[Short, Short], Field(max_length=256)] | None = None
+    delimiter: Literal[",", ";", "\t"] = ","
+    dry_run: bool = False
+
+
+class ImportOut(BaseModel):
+    table: str
+    rows: int
+    mapping: dict[str, str]
+    skipped: list[str]
+    # Without a mapping, headers that match no column (a dry run reports them; an import fails).
+    unmatched: list[str]
+    headers: list[str]
+    columns: list[str]
+    dry_run: bool
+
+
 class MigrationStepOut(BaseModel):
     kind: Literal["additive", "safe", "destructive"]
     op: str

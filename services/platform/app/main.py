@@ -26,6 +26,7 @@ from app.core.config import Settings
 from app.core.errors import (
     Conflict,
     Forbidden,
+    ImportFailed,
     InvalidApp,
     InvalidInput,
     MigrationFailed,
@@ -80,6 +81,11 @@ def _install_error_handlers(app: FastAPI) -> None:
         if exc.index is not None:
             body["index"] = exc.index
         return JSONResponse(body, status_code=503 if exc.code == "db_busy" else 422)
+
+    @app.exception_handler(ImportFailed)
+    async def import_failed(request: Request, exc: ImportFailed) -> JSONResponse:
+        body = {"detail": exc.code, "message": exc.message, "line": exc.line}
+        return JSONResponse(body | {"column": exc.column}, status_code=422)
 
     @app.exception_handler(MigrationFailed)
     async def migration_failed(request: Request, exc: MigrationFailed) -> JSONResponse:

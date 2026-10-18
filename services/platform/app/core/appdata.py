@@ -49,7 +49,18 @@ from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import appdb, apps, appschema, audit, beneath, fsops, manifest, spaces, vfs
+from app.core import (
+    appcsv,
+    appdb,
+    apps,
+    appschema,
+    audit,
+    beneath,
+    fsops,
+    manifest,
+    spaces,
+    vfs,
+)
 from app.core.errors import (
     Conflict,
     InvalidApp,
@@ -192,6 +203,40 @@ def _read_package_file(r: vfs.Resolved, parts: tuple[str, ...], limit: int) -> b
             return _read_package_fd(dir_fd, parts, limit)
         finally:
             os.close(dir_fd)
+
+
+def _write_export(dest: vfs.Resolved, files: list[tuple[str, bytes]], owner: fsops.Owner) -> None:
+    with dest.open_root() as root:
+        try:
+            beneath.lstat_at(root, dest.rel)
+        except FileNotFoundError:
+            pass
+        else:
+            raise Conflict("exists")
+        try:
+            fsops.make_dirs(root, dest.rel, owner)
+        except (NotADirectoryError, FileExistsError) as exc:
+            raise Conflict("exists") from exc
+        dir_fd = beneath.open(root, dest.rel, os.O_RDONLY | os.O_DIRECTORY, symlinks=False)
+        try:
+            for name, data in files:
+                fsops.replace_file_at(dir_fd, name, data, owner)
+        finally:
+            os.close(dir_fd)
+
+
+def _read_import_file(src: vfs.Resolved) -> bytes:
+    with src.open_root() as root:
+        try:
+            with fsops.open_regular(root, src.rel) as f:
+                data = f.read(appcsv.MAX_IMPORT_BYTES + 1)
+        except FileNotFoundError as exc:
+            raise NotFound("not_found") from exc
+        except IsADirectoryError as exc:
+            raise InvalidInput("not_a_file") from exc
+    if len(data) > appcsv.MAX_IMPORT_BYTES:
+        raise InvalidInput("file_too_large")
+    return data
 
 
 class AppData:
@@ -596,6 +641,81 @@ class AppData:
             else result["changes"]
         )
         if changes:
+            self._changed(target)
+        return result
+
+    # --- CSV export and import (M22-08) ---------------------------------------------------
+
+    async def export_csv(self, principal: Principal, instance_id: UUID, folder: str | None) -> Row:
+        """Every table as `<table>.csv` plus `schema.sql`, into the new folder `folder`
+        (default `Exports/<slug>-<UTC time>` in the instance's space, or in the caller's
+        personal space if they can't write there). Read on the instance, write on the folder."""
+        async with self.pool.connection() as conn:
+            target = await self._target(conn, principal, instance_id, "read")
+            if folder is None:
+                access = await spaces.authorize_space(conn, principal, target.space_id, "read")
+                home = (
+                    vfs.space_prefix(target.space)
+                    if spaces.ROLE_RANK[access.role] >= spaces.ROLE_RANK["editor"]
+                    else f"/{vfs.PERSONAL}"
+                )
+                stamp = time.strftime("%Y-%m-%d-%H%M%S", time.gmtime())
+                folder = vfs.join(home, "Exports", f"{target.instance['slug']}-{stamp}")
+            dest = await vfs.resolve_virtual_path(conn, principal, self.storage, folder, "write")
+            if dest.kind != "space" or not dest.rel:
+                raise InvalidInput("invalid_path")
+            try:
+                schema = await self._read_from_package(conn, principal, target, ("schema.sql",))
+            except PlatformError:
+                schema = None
+
+        def read(con: Any, _fd: int) -> tuple[list[appcsv.TableCsv], str]:
+            con.execute("BEGIN")
+            try:
+                return appcsv.export_tables(con), appcsv.live_schema(con)
+            finally:
+                con.execute("COMMIT")
+
+        tables, live = await self._run(target, read)
+        files = [(t.file, t.data) for t in tables]
+        files.append(("schema.sql", schema if schema is not None else live.encode()))
+        owner = fsops.Owner(principal.uid, dest.space["gid"])
+        await anyio.to_thread.run_sync(_write_export, dest, files, owner)
+        return {
+            "folder": dest.vpath,
+            "space_id": dest.space["id"],
+            "rel": dest.rel,
+            "tables": [{"name": t.table, "file": t.file, "rows": t.rows} for t in tables],
+        }
+
+    async def import_csv(
+        self,
+        principal: Principal,
+        instance_id: UUID,
+        table: str,
+        path: str,
+        mapping: dict[str, str] | None,
+        delimiter: str = ",",
+        dry_run: bool = False,
+    ) -> Row:
+        """One CSV file in Files into `table`, in one transaction (`appcsv`). Write on the
+        instance, read on the file; recorded like any write (`app_data.write`)."""
+        async with self.pool.connection() as conn:
+            target = await self._target(conn, principal, instance_id, "write")
+            src = await vfs.resolve_virtual_path(conn, principal, self.storage, path, "read")
+        if src.kind != "space" or not src.rel:
+            raise InvalidInput("invalid_path")
+        data = await anyio.to_thread.run_sync(_read_import_file, src)
+        audited = self._audited(
+            principal, target, {"op": "import", "table": table, "path": src.vpath}
+        )
+        fn = _stamped(
+            principal,
+            lambda c: appcsv.run_import(c, table, data, mapping, delimiter, dry_run, audited),
+        )
+        async with self._lock(target.id):
+            result = await self._run(target, fn)
+        if result["rows"] and not dry_run:
             self._changed(target)
         return result
 

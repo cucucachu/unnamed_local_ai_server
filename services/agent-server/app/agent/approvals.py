@@ -46,6 +46,7 @@ SELF_ASKING_TOOLS = frozenset(
     {
         "app_update",
         "app_action",
+        "app_import",
         "approve_migration",
         "create_routine",
         "update_routine",

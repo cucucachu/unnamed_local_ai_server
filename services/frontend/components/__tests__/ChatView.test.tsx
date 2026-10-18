@@ -1196,6 +1196,40 @@ describe('ChatView', () => {
       ]);
       expect(iconCount(renderer!, 'apps-outline')).toBeGreaterThanOrEqual(2);
     });
+
+    it('a CSV import approval shows the file, the table and the mapping (M22-08)', () => {
+      setUseChatResult({
+        pendingApproval: {
+          interruptId: 'int-import',
+          actions: [
+            {
+              toolCallId: 'call-import',
+              name: 'app_import',
+              category: 'app',
+              args: {
+                instance: 'i-1',
+                space: '/personal',
+                table: 'expenses',
+                path: '/personal/bank.csv',
+                mapping: { Date: 'day' },
+                delimiter: ',',
+              },
+              description: 'Import 12 rows from /personal/bank.csv into expenses of Budget',
+            },
+          ],
+        },
+      });
+
+      let renderer: ReturnType<typeof create> | undefined;
+      act(() => {
+        renderer = create(createElement(ChatScreen));
+      });
+
+      expect(renderer!.root.findByProps({ testID: 'approval-app-body' }).props.children).toBe(
+        'import /personal/bank.csv into expenses',
+      );
+      expect(renderedText(renderer!)).toContain(JSON.stringify(JSON.stringify({ Date: 'day' })).slice(1, -1));
+    });
   });
 
   describe('Edit / Resend / Regenerate (M8-04)', () => {

@@ -1026,7 +1026,8 @@ function firstNLines(text: string, n: number): string {
  * (`execute_code`) -> the command in monospace; file ops (`write_file`/
  * `edit_file`/`delete`) -> the path + first ~20 lines of content/edit;
  * app tools (`app_update`/`app_action`/`approve_migration`, M13-02) -> the
- * target space, then the SQL, action name or migration steps.
+ * target space, then the SQL, action name or migration steps; `app_import` /
+ * `app_export` (M22-08) -> the file and table, or the folder.
  * Falls back to a raw JSON dump for anything else (defensive). */
 function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): ReactElement {
   const args = action.args;
@@ -1062,7 +1063,10 @@ function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): Reac
     if (typeof args.sql === 'string') body = firstNLines(args.sql, 20);
     else if (typeof args.name === 'string') body = `action ${args.name}`;
     else if (Array.isArray(args.steps)) body = firstNLines(args.steps.join('\n'), 20);
-    const params = args.params !== undefined ? JSON.stringify(args.params) : null;
+    else if (typeof args.path === 'string' && typeof args.table === 'string') body = `import ${args.path} into ${args.table}`;
+    else if (action.name === 'app_export') body = `export to ${typeof args.folder === 'string' ? args.folder : "Exports in the app's space"}`;
+    const extra = args.params ?? args.mapping;
+    const params = extra !== undefined && extra !== null ? JSON.stringify(extra) : null;
     return (
       <View style={styles.approvalArgsColumn}>
         {space !== null ? (

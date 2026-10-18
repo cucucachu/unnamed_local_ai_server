@@ -799,3 +799,130 @@ async def test_a_file_write_and_an_app_write_ask_one_after_the_other(fake_model,
         fake_model.queue(TextTurn("done"))
         _assert_turn_end(_approve(ws, second)[-1], "completed")
     assert [body["op"] for _, body in fake_platform.rpc_calls][-1] == "run"
+
+
+# --- CSV export / import (M22-08) ------------------------------------------------------------
+
+ALLOW_CSV = ToolPolicy(DEFAULT_POLICY.available, DEFAULT_POLICY.allowed | {"app_export"})
+
+
+def _turn(fake_model, fake_platform, policy, *calls: ToolCallTurn, path: str = "csv") -> list[dict]:
+    fake_model.queue(*calls, TextTurn("ok"))
+    with (
+        _client(fake_model, fake_platform, policy) as client,
+        client.websocket_connect(f"/ws/chat/{path}") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "go"})
+        frames = _drain_turn(ws)
+    _assert_turn_end(frames[-1], "completed")
+    return frames
+
+
+async def test_app_export_names_the_folder_and_files(fake_model, fake_platform):
+    _family(fake_platform, "viewer")
+    _, inst = fake_platform.seed_app("family", "groceries")
+    _turn(
+        fake_model, fake_platform, ALLOW_CSV,
+        ToolCallTurn("app_export", {"instance": "family/groceries"}),
+        ToolCallTurn("app_export", {"instance": inst["id"], "folder": "/personal/Backup"}),
+    )  # fmt: skip
+    assert fake_platform.export_calls == [
+        (inst["id"], {}), (inst["id"], {"folder": "/personal/Backup"}),
+    ]  # fmt: skip
+    assert _tool_results(fake_model) == [
+        (
+            "OK: exported to /personal/Exports/groceries-2026-10-18-120000: "
+            "items.csv (2 rows), schema.sql."
+        ),
+        "OK: exported to /personal/Backup: items.csv (2 rows), schema.sql.",
+    ]
+
+
+async def test_app_import_checks_then_asks_then_imports(fake_model, fake_platform):
+    _family(fake_platform)
+    _, inst = fake_platform.seed_app("family", "groceries")
+    args = {"instance": "family/groceries", "table": "items", "path": "/spaces/family/list.csv",
+            "mapping": {"Item": "name"}}  # fmt: skip
+    fake_model.queue(ToolCallTurn("app_import", args))
+    with (
+        _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
+        client.websocket_connect("/ws/chat/import") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "import my list"})
+        frames = _drain_turn(ws)
+        _assert_turn_end(frames[-1], "awaiting_approval")
+        [approval] = [f for f in frames if f["type"] == "approval_request"]
+        [action] = approval["actions"]
+        assert (action["name"], action["category"]) == ("app_import", "app")
+        assert action["args"] == {
+            "instance": inst["id"], "space": "/spaces/family", "table": "items",
+            "path": "/spaces/family/list.csv", "mapping": {"Item": "name"}, "delimiter": ",",
+        }  # fmt: skip
+        assert action["description"] == (
+            "Import 3 rows from /spaces/family/list.csv into items of Groceries in "
+            '/spaces/family (shared space "Family"): Item -> name'
+        )
+        assert [b["dry_run"] for _, b in fake_platform.import_calls] == [True]
+
+        fake_model.queue(TextTurn("imported"))
+        resumed = _approve(ws, approval)
+    _assert_turn_end(resumed[-1], "completed")
+    body = {"table": "items", "path": "/spaces/family/list.csv", "mapping": {"Item": "name"},
+            "delimiter": ","}  # fmt: skip
+    # The approved call re-runs from the top, so its dry run repeats before the import.
+    check = (inst["id"], {**body, "dry_run": True})
+    assert fake_platform.import_calls == [check, check, (inst["id"], body)]
+    assert _tool_results(fake_model) == ["OK: imported 3 rows into items (Item -> name)."]
+
+
+async def test_app_import_with_unmatched_headers_asks_for_a_mapping(fake_model, fake_platform):
+    _family(fake_platform)
+    _, inst = fake_platform.seed_app("family", "groceries")
+    fake_platform.import_plan = {"unmatched": ["Qty"], "headers": ["name", "Qty"]}
+    allows = ToolPolicy(DEFAULT_POLICY.available, DEFAULT_POLICY.allowed | {"app_import"})
+    frames = _turn(
+        fake_model, fake_platform, allows,
+        ToolCallTurn("app_import", {"instance": inst["id"], "table": "items",
+                                    "path": "/spaces/family/list.csv"}),
+    )  # fmt: skip
+    assert not any(f["type"] == "approval_request" for f in frames)
+    assert len(fake_platform.import_calls) == 1
+    assert _tool_results(fake_model) == [
+        (
+            "Error: no column of items for Qty. Give a mapping from the file's headers "
+            "(name, Qty) to the table's columns (id, name, done); unmapped headers are skipped."
+        )
+    ]
+
+
+async def test_a_failed_import_names_the_line_and_column(fake_model, fake_platform):
+    _family(fake_platform)
+    _, inst = fake_platform.seed_app("family", "groceries")
+    fake_platform.import_error = (422, {"detail": "import_failed", "line": 5, "column": "name",
+                                        "message": "NOT NULL constraint failed: items.name"})  # fmt: skip
+    allows = ToolPolicy(DEFAULT_POLICY.available, DEFAULT_POLICY.allowed | {"app_import"})
+    _turn(
+        fake_model, fake_platform, allows,
+        ToolCallTurn("app_import", {"instance": inst["id"], "table": "items",
+                                    "path": "/spaces/family/list.csv"}),
+    )  # fmt: skip
+    assert len(fake_platform.import_calls) == 2
+    assert _tool_results(fake_model) == [
+        "Error: nothing was imported. line 5, column name: NOT NULL constraint failed: items.name"
+    ]
+
+
+async def test_a_viewer_cannot_import(fake_model, fake_platform):
+    _family(fake_platform, "viewer")
+    _, inst = fake_platform.seed_app("family", "groceries")
+    _turn(
+        fake_model, fake_platform, DEFAULT_POLICY,
+        ToolCallTurn("app_import", {"instance": inst["id"], "table": "items", "path": "/x.csv"}),
+        ToolCallTurn("app_import", {"instance": inst["id"], "table": "items", "path": "/x.csv",
+                                    "delimiter": "|"}),
+    )  # fmt: skip
+    assert fake_platform.import_calls == []
+    assert _tool_results(fake_model) == [
+        'Error: the user can only view /spaces/family (shared space "Family"); importing writes.',
+        'Error: delimiter must be ",", ";" or a tab.',
+    ]

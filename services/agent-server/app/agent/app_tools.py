@@ -1,7 +1,7 @@
 """The agent's app tools (M13-02, docs/PLATFORM.md §7 "Agent tools for apps").
 
 `list_apps`, `create_app`, `build_app`, `app_query`, `app_update`,
-`app_action` and `approve_migration`, each a thin client of the platform's
+`app_action`, `app_export`, `app_import` and `approve_migration`, each a thin client of the platform's
 apps API acting as the user through the run's delegation
 (`configurable["delegation"]`, as `PlatformFilesBackend` does). No
 delegation, no request. Nothing here raises: a failure is a string the
@@ -9,7 +9,7 @@ model reads.
 
 Reads and changes are separate tools (`app_query`, `app_update`) because
 each tool has its own permission (#342, `app.agent.approvals`).
-`app_update`, `app_action` and `approve_migration` ask from inside the
+`app_update`, `app_action`, `app_import` and `approve_migration` ask from inside the
 tool (`langgraph.types.interrupt`) rather than through
 `HumanInTheLoopMiddleware`, because the card shows facts only the platform
 knows (the instance's space, the action's SQL, the migration's steps).
@@ -53,6 +53,8 @@ APP_TOOL_NAMES: tuple[str, ...] = (
     "app_query",
     "app_update",
     "app_action",
+    "app_export",
+    "app_import",
     "approve_migration",
 )
 
@@ -142,6 +144,17 @@ class _Platform:
             },
             headers={"Authorization": f"Bearer {self.settings.platform_agent_token}"},
         )
+
+
+def _import_error(reply: _Reply) -> str:
+    """An import's failure, with the CSV line and column when the platform names them."""
+    if reply.field("detail") != "import_failed":
+        return f"Error: {_why(reply)}"
+    where = [f"line {reply.field('line')}"] if reply.field("line") else []
+    if reply.field("column"):
+        where.append(f"column {reply.field('column')}")
+    prefix = f"{', '.join(where)}: " if where else ""
+    return f"Error: nothing was imported. {prefix}{reply.field('message')}"
 
 
 def _why(reply: _Reply) -> str:
@@ -852,6 +865,97 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         return out + ("\n" + _rows(body["rows"]) if body.get("rows") else "")
 
     @tool
+    async def app_export(instance: str, config: RunnableConfig, folder: str | None = None) -> str:
+        """Save a copy of an installed app's data in Files: each table as <table>.csv plus
+        schema.sql, in a new folder.
+
+        instance: the instance id from list_apps (or "<space>/<app-slug>"). folder: a new
+        folder path (/personal/... or /spaces/<slug>/...); by default Exports/<slug>-<time> in
+        the app's space. Returns the folder and each file's row count.
+        """
+        token = _delegation_token(config)
+        if token is None:
+            return _NO_DELEGATION
+        async with _Platform(settings, token) as api:
+            cat = await _catalog(api, with_apps=False)
+            if isinstance(cat, str):
+                return cat
+            inst = _find_instance(cat, instance)
+            if isinstance(inst, str):
+                return inst
+            body = {"folder": folder} if folder else {}
+            reply = await api.call("POST", f"{API}/apps/instances/{inst['id']}/export", json=body)
+        if reply.status == 409:
+            return f"Error: {folder or 'the export folder'} already exists; pick a new folder."
+        if not reply.ok:
+            return f"Error: {_why(reply)}"
+        files = [f"{t['file']} ({t['rows']} rows)" for t in reply.body["tables"]]
+        return f"OK: exported to {reply.body['folder']}: {', '.join([*files, 'schema.sql'])}."
+
+    @tool
+    async def app_import(
+        instance: str,
+        table: str,
+        path: str,
+        config: RunnableConfig,
+        tool_call_id: Annotated[str, InjectedToolCallId],
+        mapping: dict[str, str] | None = None,
+        delimiter: str = ",",
+    ) -> str:
+        """Import a CSV file from Files into one table of an installed app, all rows or none.
+
+        instance: the instance id from list_apps (or "<space>/<app-slug>"). path: the CSV
+        file (/personal/... or /spaces/<slug>/...); its first line names the columns.
+        mapping: {"CSV header": "table column"} for the headers to import (the rest are
+        skipped); without it every header must be a column name. delimiter: "," (default),
+        ";" or a tab. Empty fields take the column's default. Much faster than many
+        app_update calls. May need the user's approval.
+        """
+        token = _delegation_token(config)
+        if token is None:
+            return _NO_DELEGATION
+        if delimiter not in (",", ";", "\t"):
+            return 'Error: delimiter must be ",", ";" or a tab.'
+        async with _Platform(settings, token) as api:
+            cat = await _catalog(api, with_apps=False)
+            if isinstance(cat, str):
+                return cat
+            inst = _find_instance(cat, instance)
+            if isinstance(inst, str):
+                return inst
+            if inst["space"]["role"] == "viewer":
+                return f"Error: the user can only view {_space_label(inst['space'])}; importing writes."
+            url = f"{API}/apps/instances/{inst['id']}/import"
+            body = {"table": table, "path": path, "mapping": mapping, "delimiter": delimiter}
+            check = await api.call("POST", url, json={**body, "dry_run": True})
+            if not check.ok:
+                return _import_error(check)
+            plan = check.body
+            if plan["unmatched"]:
+                return (
+                    f"Error: no column of {table} for {', '.join(plan['unmatched'])}. Give a "
+                    f"mapping from the file's headers ({', '.join(plan['headers'])}) to the "
+                    f"table's columns ({', '.join(plan['columns'])}); unmapped headers are skipped."
+                )
+            columns = ", ".join(f"{h} -> {c}" for h, c in plan["mapping"].items())
+            if approvals.needs_approval(config, "app_import", tool_call_id):
+                description = (
+                    f"Import {plan['rows']} rows from {path} into {table} of "
+                    f"{inst['app']['name']} in {_space_label(inst['space'])}: {columns}"
+                )
+                args = {"instance": inst["id"], "space": _space_path(inst["space"]), **body}
+                approved, reason = _ask_user("app_import", args, description, tool_call_id)
+                if not approved:
+                    return f"The user rejected this import; nothing was imported. {reason}"
+            reply = await api.call("POST", url, json=body)
+        if not reply.ok:
+            return _import_error(reply)
+        skipped = reply.body["skipped"]
+        return f"OK: imported {reply.body['rows']} rows into {table} ({columns})." + (
+            f" Skipped: {', '.join(skipped)}." if skipped else ""
+        )
+
+    @tool
     async def approve_migration(
         instance: str,
         migration_id: str,
@@ -921,4 +1025,14 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
             + "."
         )
 
-    return [list_apps, create_app, build_app, app_query, app_update, app_action, approve_migration]
+    return [
+        list_apps,
+        create_app,
+        build_app,
+        app_query,
+        app_update,
+        app_action,
+        app_export,
+        app_import,
+        approve_migration,
+    ]

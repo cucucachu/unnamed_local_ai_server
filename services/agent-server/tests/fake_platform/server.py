@@ -465,6 +465,30 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         rows = [] if body["op"] == "run" else fake.rows.get(instance_id, [])[:1]
         return JSONResponse({"rows": rows, "changes": 1, "lastInsertRowId": 7})
 
+    @app.post("/api/platform/apps/instances/{instance_id}/export")
+    async def export(request: Request, instance_id: str) -> JSONResponse:
+        inst, _ = _instance(_who(request), instance_id)
+        body = await request.json()
+        fake.export_calls.append((instance_id, body))
+        folder = body.get("folder") or f"/personal/Exports/{inst['app']['slug']}-2026-10-18-120000"
+        tables = [{"name": "items", "file": "items.csv", "rows": 2}]
+        return JSONResponse({"folder": folder, "tables": tables}, status_code=201)
+
+    @app.post("/api/platform/apps/instances/{instance_id}/import")
+    async def import_csv(request: Request, instance_id: str) -> JSONResponse:
+        _, space = _instance(_who(request), instance_id)
+        body = await request.json()
+        fake.import_calls.append((instance_id, body))
+        if space["role"] == "viewer":
+            raise _error(403, "insufficient_role")
+        if fake.import_error is not None and not body.get("dry_run"):
+            return JSONResponse(fake.import_error[1], status_code=fake.import_error[0])
+        mapping = body.get("mapping") or {"name": "name"}
+        out = {"table": body["table"], "rows": 3, "mapping": mapping, "skipped": [],
+               "unmatched": [], "headers": list(mapping), "columns": ["id", "name", "done"],
+               "dry_run": bool(body.get("dry_run"))}  # fmt: skip
+        return JSONResponse({**out, **(fake.import_plan if body.get("dry_run") else {})})
+
     @app.get("/api/platform/apps/instances/{instance_id}/migrations")
     async def migrations(request: Request, instance_id: str) -> JSONResponse:
         _instance(_who(request), instance_id)
