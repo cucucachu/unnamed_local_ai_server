@@ -80,13 +80,16 @@ export class ApiError extends Error {
   readonly detail: string;
   /** From a `429`'s `Retry-After` header, when present. */
   readonly retryAfterSeconds: number | null;
+  /** The parsed error body, for errors that carry more than `detail`. */
+  readonly body: unknown;
 
-  constructor(status: number, detail: string, retryAfterSeconds: number | null = null) {
+  constructor(status: number, detail: string, retryAfterSeconds: number | null = null, body: unknown = undefined) {
     super(detail);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.body = body;
   }
 }
 
@@ -147,6 +150,7 @@ export async function apiFetch<T>(
       response.status,
       detailFromBody(body, response.statusText || 'Request failed'),
       retryAfterFrom(response),
+      body,
     );
   }
 

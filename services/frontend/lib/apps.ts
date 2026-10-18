@@ -246,3 +246,80 @@ export function describePermissions(perms: Record<string, unknown>): string[] {
     Array.isArray(value) ? `${key}: ${value.join(', ')}` : `${key}: ${JSON.stringify(value)}`,
   );
 }
+
+/** One table of an instance in `GET /api/platform/data-map` (M22-06). */
+export interface DataMapTable {
+  name: string;
+  rows: number | null;
+  description: string | null;
+  columns: Record<string, string>;
+}
+
+export interface DataMapInstance {
+  id: string;
+  app: { id: string; slug: string; name: string };
+  space: { id: string; slug: string; name: string; kind: string; role: string };
+  description: string | null;
+  tables: DataMapTable[];
+}
+
+export async function getDataMap(): Promise<DataMapInstance[]> {
+  return (await apiFetch<{ instances: DataMapInstance[] }>('/api/platform/data-map')).instances;
+}
+
+export interface ExportResult {
+  /** The new folder's virtual path, e.g. `/spaces/family/Exports/notes-2026-10-18-120000`. */
+  folder: string;
+  tables: { name: string; file: string; rows: number }[];
+}
+
+/** Every table as `<table>.csv` plus `schema.sql`, in a new folder (M22-08). */
+export function exportAppData(instanceId: string, folder?: string): Promise<ExportResult> {
+  return apiFetch(`/api/platform/apps/instances/${encodeURIComponent(instanceId)}/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(folder ? { folder } : {}),
+  });
+}
+
+export type CsvDelimiter = ',' | ';' | '\t';
+
+export interface ImportResult {
+  table: string;
+  rows: number;
+  /** CSV header -> table column, for the headers imported. */
+  mapping: Record<string, string>;
+  skipped: string[];
+  dry_run: boolean;
+  headers: string[];
+  columns: string[];
+  /** Headers with no column of that name; set only by a dry run without a mapping. */
+  unmatched: string[];
+}
+
+/** Imports one CSV file from Files into `table`, all rows or none; `dryRun` checks it
+ * and rolls back. Fails with `ApiError 422 import_failed` (see `importErrorMessage`). */
+export function importCsv(
+  instanceId: string,
+  body: { table: string; path: string; mapping?: Record<string, string>; delimiter?: CsvDelimiter; dryRun?: boolean },
+): Promise<ImportResult> {
+  return apiFetch(`/api/platform/apps/instances/${encodeURIComponent(instanceId)}/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      table: body.table,
+      path: body.path,
+      mapping: body.mapping ?? null,
+      delimiter: body.delimiter ?? ',',
+      dry_run: body.dryRun ?? false,
+    }),
+  });
+}
+
+/** An `import_failed` error's line, column and reason, or null for any other error. */
+export function importErrorMessage(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.detail !== 'import_failed') return null;
+  const body = (error.body ?? {}) as { message?: string; line?: number | null; column?: string | null };
+  const where = [body.line ? `Line ${body.line}` : null, body.column ? `column ${body.column}` : null].filter(Boolean);
+  return `Nothing was imported. ${where.length ? `${where.join(', ')}: ` : ''}${body.message ?? ''}`.trim();
+}

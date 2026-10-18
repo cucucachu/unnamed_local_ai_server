@@ -1285,6 +1285,56 @@ description, tables: [{name, rows, description, columns}]}`:
 agent-server shows this in every thread (ARCHITECTURE.md "The data map"),
 and `list_apps` adds each instance's table and column descriptions.
 
+#### CSV export and import (M22-08)
+
+`app/core/appcsv.py`, through `AppData.export_csv` / `import_csv`.
+
+**Export.** `POST /api/platform/apps/instances/{id}/export` `{folder?}`
+needs read access to the instance. It writes every user table (creation
+order, the platform's own left out) as `<table>.csv` plus `schema.sql`
+into a new folder, and returns `201 {folder, tables: [{name, file, rows}]}`.
+- CSV: a header row, then one line per row in `rowid` order. The stamp
+  columns are included. NULL is an empty field and a BLOB is base64.
+- `schema.sql` is the tracked version's, or the live database's DDL when
+  the package has none.
+- The folder defaults to `Exports/<slug>-<UTC YYYY-MM-DD-HHMMSS>` in the
+  instance's space, or in `/personal` when the caller only views it. A
+  given `folder` is a virtual path the caller can write.
+- Errors: the folder already exists, 409 `exists`; a space root, 422
+  `invalid_path`; more than 64 MiB of CSV, 422 `export_too_large`.
+- The new files are indexed for search like any other write.
+
+**Import.** `POST /api/platform/apps/instances/{id}/import` `{table, path,
+mapping?, delimiter=",", dry_run=false}` needs write access to the
+instance's space and read access to `path`. It loads one CSV file into one
+table in one transaction (an `appdb.Session` with a 60 s deadline), so
+every row goes in or none does. It returns `{table, rows, mapping,
+skipped, dry_run, headers, columns, unmatched}`.
+- The first line names the columns. `mapping` is `{header: column}`; a
+  header left out of it is skipped. Without a mapping, headers match column
+  names case-insensitively.
+- Stamp columns (`_created_by` etc.) are never imported; the platform
+  stamps each row as an RPC write would. An empty field is left out of
+  that row's INSERT, so the column default applies.
+- `delimiter` is `,`, `;` or a tab. A UTF-8 BOM is dropped. Limits: 16 MiB
+  (`file_too_large`) and 50,000 rows.
+- `dry_run` runs every INSERT and rolls back. Without a mapping, a dry run
+  with headers that match no column returns them in `unmatched` (with
+  `headers` and `columns`) instead of failing, so a client can ask for a
+  mapping.
+- A bad file or row fails with 422 `{detail: "import_failed", message,
+  line, column}`: the CSV line (1 is the header) and the column when
+  known, e.g. a NOT NULL or CHECK failure. Other errors: `unknown_table`
+  422, `not_a_file` 422, `not_found` 404.
+- A real import is audited (`op: import`, table, path, rows) and
+  notifies `on_change`, so open runners refresh and indexed rows are
+  re-indexed.
+
+The app info screen (opened from an install) has a Data section: Export
+data for anyone who can see the instance, and for owners and editors an
+import form (table, path, delimiter, Check file, then a per-header column
+picker and Import). The agent has `app_export` and `app_import` (below).
+
 ### Build and verify
 
 The platform builds apps in a sandboxed container (network none, same
@@ -1525,6 +1575,14 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > - `approve_migration(instance, migration_id)` (not in the original list:
 >   approving inside `build_app` would re-run the build when the paused
 >   call resumes).
+> - `app_export(instance, folder?)` / `app_import(instance, table, path,
+>   mapping?, delimiter?)` (M22-08, "CSV export and import" above).
+>   `app_export` asks through the standard approval card unless allowed.
+>   `app_import` does a dry run first. If headers are unmatched, it lists
+>   the file's headers and the table's columns so the model can pass a
+>   mapping. Otherwise it asks from inside the tool, showing the row count
+>   and `header -> column` pairs, and then imports. A failed import names
+>   the CSV line and column.
 >
 > **Approvals.** The tools call LangGraph `interrupt()` themselves rather
 > than going through `HumanInTheLoopMiddleware`, since whether a call needs

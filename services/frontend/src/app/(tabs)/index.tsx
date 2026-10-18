@@ -288,7 +288,7 @@ export default function HomeScreen() {
           onRebuild={() => void handleRebuild()}
           onInfo={() => {
             setMenu(null);
-            router.push({ pathname: '/apps/info/[appId]', params: { appId: menu.instance.app_id } });
+            router.push({ pathname: '/apps/info/[appId]', params: { appId: menu.instance.app_id, instanceId: menu.instance.id } });
           }}
           onUninstall={() => void handleUninstall()}
         />

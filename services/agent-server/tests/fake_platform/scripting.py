@@ -174,6 +174,13 @@ class FakePlatform:
     data_map_requests: list[str | None] = field(default_factory=list)
     data_map_error: tuple[int, str] | None = None
     rpc_calls: list[tuple[str, dict]] = field(default_factory=list)
+    # CSV export / import (M22-08): each call's (instance id, body); an import's dry run
+    # answers `import_plan` (unmatched headers etc.), and `import_error` (status, body)
+    # fails the real import instead.
+    export_calls: list[tuple[str, dict]] = field(default_factory=list)
+    import_calls: list[tuple[str, dict]] = field(default_factory=list)
+    import_plan: dict = field(default_factory=dict)
+    import_error: tuple[int, dict] | None = None
     system_action_calls: list[tuple[str, str, dict]] = field(default_factory=list)
     system_apps: list[dict] = field(default_factory=_default_system_apps)
     # marker -> (thread_id, instance_id, migration_id)

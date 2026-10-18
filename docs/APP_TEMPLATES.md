@@ -190,6 +190,12 @@ An app declares which tables hold text worth finding:
   statement import uses it. The agent gets it as `app_import(instance,
   table, path, mapping)`, since many single-row `app_update`s are slow.
 
+> **As built (M22-08):** `POST /apps/instances/{id}/export` and `/import`
+> (PLATFORM.md §7 "CSV export and import"), the Data section of the app info
+> screen, and the agent's `app_export` / `app_import`. An import's dry run
+> reports headers that match no column, so the UI and the agent can map
+> them before importing.
+
 ## 6. Memory over time
 
 The nightly Memory routine (`docs/MEMORY.md` §4) keeps current facts from

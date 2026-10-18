@@ -10,7 +10,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Request
 
-from app.api.schemas import InstanceBundleOut, MigrationList, MigrationOut, RpcRequest
+from app.api.schemas import (
+    ExportBody,
+    ExportOut,
+    ImportBody,
+    ImportOut,
+    InstanceBundleOut,
+    MigrationList,
+    MigrationOut,
+    RpcRequest,
+)
 from app.core import appbuild, hitl
 from app.core.principal import CurrentUser
 
@@ -30,6 +39,26 @@ async def rpc(
     instance_id: UUID, body: Annotated[RpcRequest, Body()], request: Request, principal: CurrentUser
 ) -> dict:
     return await request.app.state.appdata.rpc(principal, instance_id, body.model_dump())
+
+
+@router.post("/export", response_model=ExportOut, status_code=201)
+async def export(
+    instance_id: UUID, body: ExportBody, request: Request, principal: CurrentUser
+) -> ExportOut:
+    """Every table as CSV plus `schema.sql` into a new folder in Files (M22-08)."""
+    out = await request.app.state.appdata.export_csv(principal, instance_id, body.folder)
+    request.app.state.file_index.changed(out["space_id"], tuple(out["rel"]))
+    return ExportOut(folder=out["folder"], tables=out["tables"])
+
+
+@router.post("/import", response_model=ImportOut)
+async def import_csv(
+    instance_id: UUID, body: ImportBody, request: Request, principal: CurrentUser
+) -> ImportOut:
+    """One CSV file in Files into one table, in one transaction (M22-08)."""
+    return await request.app.state.appdata.import_csv(
+        principal, instance_id, body.table, body.path, body.mapping, body.delimiter, body.dry_run
+    )
 
 
 @router.get("/migrations", response_model=MigrationList)

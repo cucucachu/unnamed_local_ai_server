@@ -45,6 +45,17 @@ class SqlFailed(InvalidInput):
         self.index = index
 
 
+class ImportFailed(InvalidInput):
+    """422 `import_failed`: a CSV import (M22-08) failed and nothing was imported. The body
+    adds `message`, the CSV `line` (1 is the header) and the `column`, when known."""
+
+    def __init__(self, message: str, line: int | None = None, column: str | None = None):
+        super().__init__("import_failed")
+        self.message = message
+        self.line = line
+        self.column = column
+
+
 class MigrationFailed(InvalidInput):
     """422 `migration_failed`: applying a migration rolled back; the body adds `migration`."""
 

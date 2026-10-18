@@ -87,6 +87,8 @@ CATALOG: tuple[CatalogTool, ...] = (
         ("build_app", "Build apps", False, "Build an app's code and switch it to the new version."),
         ("app_update", "Change app data", False, "Add, change or remove data in an app."),
         ("app_action", "Run app actions", False, "Run an app's actions, such as moving a file."),
+        ("app_export", "Export app data", False, "Save a copy of an app's data as CSV files."),
+        ("app_import", "Import into apps", False, "Add rows to an app from a CSV file."),
         (
             "approve_migration",
             "Apply destructive app changes",

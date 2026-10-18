@@ -327,7 +327,7 @@ describe('app grid (M19-04)', () => {
 
     await longPress(renderer, 'apps-open-groceries');
     await press(renderer, 'app-sheet-info');
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/apps/info/[appId]', params: { appId: 'app-groceries' } });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/apps/info/[appId]', params: { appId: 'app-groceries', instanceId: 'i1' } });
 
     await longPress(renderer, 'apps-open-groceries');
     await press(renderer, 'app-sheet-open');

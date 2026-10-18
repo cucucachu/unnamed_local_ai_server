@@ -2,6 +2,7 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { AppDataSection } from '@/components/AppDataSection';
 import {
   ActionButton,
   Badge,
@@ -12,7 +13,17 @@ import {
   settingsStyles,
 } from '@/components/SettingsUI';
 import { isReadOnly } from '@/lib/platform';
-import { getApp, getAppHistory, publishApp, revertApp, type App, type AppCommit, type RevertResult } from '@/lib/apps';
+import {
+  getApp,
+  getAppHistory,
+  getDataMap,
+  publishApp,
+  revertApp,
+  type App,
+  type AppCommit,
+  type DataMapInstance,
+  type RevertResult,
+} from '@/lib/apps';
 import { listSpaces, type Space } from '@/lib/platform';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
@@ -26,17 +37,25 @@ interface AppInfo {
   /** null when the user sees the app only through an install. */
   commits: AppCommit[] | null;
   nextOffset: number | null;
+  /** The install the screen was opened from, for its Data section; null without one. */
+  instance: DataMapInstance | null;
 }
 
-async function loadAppInfo(appId: string): Promise<AppInfo> {
-  const [app, spaces] = await Promise.all([getApp(appId), listSpaces()]);
+async function loadAppInfo(appId: string, instanceId: string | undefined): Promise<AppInfo> {
+  const [app, spaces, dataMap] = await Promise.all([
+    getApp(appId),
+    listSpaces(),
+    instanceId ? getDataMap() : Promise.resolve([]),
+  ]);
+  const instance = dataMap.find((i) => i.id === instanceId) ?? null;
   const space = spaces.find((s) => s.id === app.source_space_id);
   const catalogSpaces = spaces.filter((s) => s.archived_at === null && !isReadOnly(s));
   if (app.source_path === null) {
-    return { app, canRevert: false, catalogSpaces: [], commits: null, nextOffset: null };
+    return { app, canRevert: false, catalogSpaces: [], commits: null, nextOffset: null, instance };
   }
   const page = await getAppHistory(appId);
   return {
+    instance,
     app,
     canRevert: space !== undefined && !isReadOnly(space),
     catalogSpaces,
@@ -83,12 +102,15 @@ function describeRevert(result: RevertResult): { text: string; ok: boolean } {
  * An app's info and source history (`docs/PLATFORM.md` §7 "Source
  * history"), from the runner's info button. Every successful build is a
  * commit; the space's owners and editors can revert to an earlier one,
- * which restores its files as a new commit and rebuilds the app.
+ * which restores its files as a new commit and rebuilds the app. Opened
+ * from an install (`instanceId`), it also exports and imports that
+ * install's data.
  */
 export default function AppInfoScreen() {
-  const params = useLocalSearchParams<{ appId: string }>();
+  const params = useLocalSearchParams<{ appId: string; instanceId?: string }>();
   const appId = Array.isArray(params.appId) ? params.appId[0] : params.appId;
-  const load = useCallback(() => loadAppInfo(appId), [appId]);
+  const instanceId = Array.isArray(params.instanceId) ? params.instanceId[0] : params.instanceId;
+  const load = useCallback(() => loadAppInfo(appId, instanceId), [appId, instanceId]);
   const { data, error, reload, setData } = useLoad(load);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const [selected, setSelected] = useState<string[] | null>(null);
@@ -104,7 +126,7 @@ export default function AppInfoScreen() {
     );
   }
 
-  const { app, canRevert, catalogSpaces, commits, nextOffset } = data;
+  const { app, canRevert, catalogSpaces, commits, nextOffset, instance } = data;
   const listed = selected ?? catalogSpaces.filter((s) => s.kind === 'shared').map((s) => s.id);
 
   const revert = async (commit: AppCommit) => {
@@ -159,6 +181,8 @@ export default function AppInfoScreen() {
           <ErrorText testID="app-info-error">{notice.text}</ErrorText>
         )
       ) : null}
+
+      {instance ? <AppDataSection instance={instance} busyKey={busyKey} run={run} onNotice={setNotice} /> : null}
 
       {canRevert && catalogSpaces.length > 0 ? (
         <>

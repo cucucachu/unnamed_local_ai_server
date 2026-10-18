@@ -31,7 +31,7 @@ export default function AppRunnerScreen() {
           headerRight: appId
             ? () => (
                 <Pressable
-                  onPress={() => router.push({ pathname: '/apps/info/[appId]', params: { appId } })}
+                  onPress={() => router.push({ pathname: '/apps/info/[appId]', params: { appId, instanceId } })}
                   accessibilityRole="button"
                   accessibilityLabel="App info"
                   testID="app-info-button"

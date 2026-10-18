@@ -413,6 +413,10 @@ class Session:
         self._scope = _ATTACH_STATE.get(id(con))
         self._denied: list[str] = []
 
+    def deadline_in(self, seconds: float) -> None:
+        """Give the whole session `seconds` instead of OP_TIMEOUT_S (a CSV import)."""
+        self._deadline = time.monotonic() + seconds
+
     @contextmanager
     def _guarded(self) -> Iterator[None]:
         self._denied.clear()

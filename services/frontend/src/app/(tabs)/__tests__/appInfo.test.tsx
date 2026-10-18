@@ -2,7 +2,7 @@ import { createElement, type ReactNode } from 'react';
 import { Alert, type AlertButton } from 'react-native';
 import { act, type ReactTestRenderer } from 'react-test-renderer';
 
-import { exists, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../test-utils/screen';
+import { exists, isDisabled, mockFetchRoutes, press, render, requestsTo, textOf, type } from '../../../../test-utils/screen';
 
 const mockPush = jest.fn();
 const mockParams: { current: Record<string, string> } = { current: {} };
@@ -181,6 +181,126 @@ describe('AppInfoScreen', () => {
   });
 });
 
+describe('AppInfoScreen data (M22-08)', () => {
+  const dataMap = (role: string) => ({
+    body: {
+      instances: [
+        {
+          id: 'i1',
+          app: { id: 'a1', slug: 'groceries', name: 'Groceries' },
+          space: { id: 's1', slug: 'family', name: 'Family', kind: 'shared', role },
+          description: null,
+          tables: [
+            { name: 'items', rows: 3, description: null, columns: {} },
+            { name: 'stores', rows: 1, description: null, columns: {} },
+          ],
+        },
+      ],
+    },
+  });
+  const plan = (extra: object = {}) => ({
+    table: 'stores',
+    rows: 2,
+    mapping: { name: 'name' },
+    skipped: [],
+    dry_run: true,
+    headers: ['name', 'Town'],
+    columns: ['id', 'name', 'city'],
+    unmatched: ['Town'],
+    ...extra,
+  });
+
+  beforeEach(() => {
+    mockParams.current = { appId: 'a1', instanceId: 'i1' };
+  });
+
+  it('has no data section without an install', async () => {
+    mockParams.current = { appId: 'a1' };
+    routes('owner');
+    renderer = await render(AppInfoScreen);
+    expect(exists(renderer, 'app-export')).toBe(false);
+  });
+
+  it('exports, even for a viewer, who gets no import', async () => {
+    const fetchMock = routes('viewer', {
+      'GET /api/platform/data-map': dataMap('viewer'),
+      'POST /api/platform/apps/instances/i1/export': {
+        status: 201,
+        body: {
+          folder: '/personal/Exports/groceries-2026-10-18-120000',
+          tables: [
+            { name: 'items', file: 'items.csv', rows: 3 },
+            { name: 'stores', file: 'stores.csv', rows: 1 },
+          ],
+        },
+      },
+    });
+    renderer = await render(AppInfoScreen);
+    expect(exists(renderer, 'app-import')).toBe(false);
+
+    await press(renderer, 'app-export');
+
+    expect(requestsTo(fetchMock, 'POST', '/instances/i1/export')).toEqual([{}]);
+    expect(textOf(renderer)).toContain('Exported 2 tables (4 rows) to /personal/Exports/groceries-2026-10-18-120000.');
+  });
+
+  it('checks a file, maps its headers, then imports', async () => {
+    const fetchMock = routes('editor', {
+      'GET /api/platform/data-map': dataMap('editor'),
+      'POST /api/platform/apps/instances/i1/import': (body) =>
+        (body as { dry_run: boolean }).dry_run
+          ? { body: plan() }
+          : { body: plan({ dry_run: false, mapping: { name: 'name', Town: 'city' }, unmatched: [] }) },
+    });
+    renderer = await render(AppInfoScreen);
+    expect(isDisabled(renderer, 'app-import-check')).toBe(true);
+
+    await press(renderer, 'app-import-table-stores');
+    await type(renderer, 'app-import-path', ' /spaces/family/stores.csv ');
+    await press(renderer, 'app-import-delimiter-semicolon');
+    await press(renderer, 'app-import-check');
+
+    expect(textOf(renderer)).toContain('No column of stores for Town. Pick a column for each header, or skip it.');
+    await press(renderer, 'app-import-map-Town-city');
+    await press(renderer, 'app-import-confirm');
+
+    expect(requestsTo(fetchMock, 'POST', '/instances/i1/import')).toEqual([
+      { table: 'stores', path: '/spaces/family/stores.csv', mapping: null, delimiter: ';', dry_run: true },
+      {
+        table: 'stores',
+        path: '/spaces/family/stores.csv',
+        mapping: { name: 'name', Town: 'city' },
+        delimiter: ';',
+        dry_run: false,
+      },
+    ]);
+    expect(textOf(renderer)).toContain('Imported 2 rows into stores.');
+    expect(exists(renderer, 'app-import-plan')).toBe(false);
+  });
+
+  it("shows a failed import's line and column", async () => {
+    routes('owner', {
+      'GET /api/platform/data-map': dataMap('owner'),
+      'POST /api/platform/apps/instances/i1/import': (body) =>
+        (body as { dry_run: boolean }).dry_run
+          ? { body: plan({ table: 'items', headers: ['name'], unmatched: [] }) }
+          : {
+              status: 422,
+              body: { detail: 'import_failed', message: 'NOT NULL constraint failed: items.name', line: 4, column: 'name' },
+            },
+    });
+    renderer = await render(AppInfoScreen);
+
+    await type(renderer, 'app-import-path', '/personal/list.csv');
+    await press(renderer, 'app-import-check');
+    expect(textOf(renderer)).toContain('2 rows ready to import into items.');
+    await press(renderer, 'app-import-confirm');
+
+    expect(exists(renderer, 'app-info-error')).toBe(true);
+    expect(textOf(renderer)).toContain('Nothing was imported. Line 4, column name: NOT NULL constraint failed: items.name');
+  });
+});
+
 describe('AppRunnerScreen', () => {
   it("has a header button to the app's info", async () => {
     mockParams.current = { instanceId: 'i1' };
@@ -214,7 +334,7 @@ describe('AppRunnerScreen', () => {
     });
     await press(header, 'app-info-button');
 
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/apps/info/[appId]', params: { appId: 'a1' } });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/apps/info/[appId]', params: { appId: 'a1', instanceId: 'i1' } });
     act(() => header.unmount());
   });
 });
