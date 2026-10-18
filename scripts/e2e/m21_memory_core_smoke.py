@@ -75,7 +75,14 @@ def main() -> None:
         fail(f"the reply should come from the note: tools {names}, reply {reply!r}")
     log(f"OK: answered from the injected note (tools {names}): {result['reply'].strip()!r}")
 
-    result = asyncio.run(turn_rejecting(thread, "Please remember that my favourite colour is teal."))
+    # Writes ask for this turn, whatever the user had (gate_full.sh allows every tool).
+    writes = ("write_file", "edit_file")
+    before = [{"name": t["name"], "permission": t["permission"]} for t in api("GET", "/api/platform/tools")["tools"] if t["name"] in writes]
+    api("PATCH", "/api/platform/tools", {"changes": [{"name": n, "permission": "ask"} for n in writes]})
+    try:
+        result = asyncio.run(turn_rejecting(thread, "Please remember that my favourite colour is teal."))
+    finally:
+        api("PATCH", "/api/platform/tools", {"changes": before})
     if read_core() != CORE:
         fail(f"the note changed without asking: tools {result['tools']}, cards {result['cards']}")
     how = "asked to edit the notes (rejected)" if result["cards"] else "left it for the night"
