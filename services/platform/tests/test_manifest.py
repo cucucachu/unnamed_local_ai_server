@@ -193,8 +193,10 @@ def test_symlinked_manifest_is_refused(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("rel", "needle"),
     [
-        ("app/(tabs)/index.tsx", "route groups"),
-        ("app/item/_layout.tsx", "nested layouts"),
+        ("app/(tabs).tsx", "a group (name) is a folder"),
+        ("app/(my tabs)/home.tsx", "not a valid group"),
+        ("app/(tabs)/index.tsx", "same route"),
+        ("app/(tabs)/item/[slug].tsx", "both dynamic routes"),
         ("app/+not-found.tsx", "special route files"),
         ("app/helper.js", "only .ts/.tsx"),
         ("app/types.d.ts", "only .ts/.tsx"),
@@ -216,13 +218,32 @@ def test_bad_routes(tmp_path: Path, rel: str, needle: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "rel", ["app/about.tsx", "app/settings/index.tsx", "app/[...rest].tsx", "app/util.ts"]
+    "rel",
+    [
+        "app/about.tsx",
+        "app/settings/index.tsx",
+        "app/[...rest].tsx",
+        "app/util.ts",
+        "app/(tabs)/_layout.tsx",
+        "app/(tabs)/about.tsx",
+        "app/item/_layout.tsx",
+    ],
 )
 def test_good_routes(tmp_path: Path, rel: str) -> None:
     folder = write_package(tmp_path / "hello")
     (folder / rel).parent.mkdir(parents=True, exist_ok=True)
     (folder / rel).write_text("")
     assert validate_package(folder, "hello")[1] == []
+
+
+def test_home_screen_in_a_group(tmp_path: Path) -> None:
+    files = {k: v for k, v in PACKAGE_FILES.items() if k != "app/index.tsx"}
+    files["app/(tabs)/_layout.tsx"] = files["app/_layout.tsx"]
+    files["app/(tabs)/index.tsx"] = PACKAGE_FILES["app/index.tsx"]
+    assert validate_package(write_package(tmp_path / "hello", files=files), "hello")[1] == []
+    del files["app/(tabs)/index.tsx"]
+    (diag,) = validate_package(write_package(tmp_path / "bye", files=files), "bye")[1]
+    assert diag.file == "app/index.tsx" and "home screen" in diag.message
 
 
 def test_dotfiles_are_ignored(tmp_path: Path) -> None:

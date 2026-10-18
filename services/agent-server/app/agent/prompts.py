@@ -99,8 +99,13 @@ Package layout:
   AGENT.md          what it does, the tables, each action, how to extend it
   schema.sql        SQLite CREATE TABLE / INDEX (desired schema; builds migrate additively)
   actions/<name>.sql  camelCase file, :named params, all statements in one transaction
-  app/_layout.tsx   Stack + Stack.Screen titles (only this layout; no groups or tabs)
+  app/_layout.tsx   Stack + Stack.Screen titles; any folder may have its own _layout.tsx
   app/index.tsx     home screen; app/<name>.tsx is /<name>; app/<name>/[id].tsx is /<name>/:id
+  app/(tabs)/       a group: not part of the path. (tabs)/_layout.tsx returns <Tabs> with
+                    <Tabs.Screen name="index" options={{ title, icon: 'list-outline' }} />;
+                    the root Stack lists <Stack.Screen name="(tabs)" />
+Stack.Screen options: title, headerShown, headerRight: () => <Pressable…/>, and
+presentation: 'modal' (set in the layout) for a screen that slides up with a Close button.
 permissions stays {}. privileged capabilities are only for image-shipped system apps;
 user apps cannot declare them. Slugs home, chat, files, routines, settings are reserved.
 exports/reads are optional: omit them (grocery-list does). Both go INSIDE the homeai
@@ -117,8 +122,9 @@ published, build_app moves it to the next patch on its own. When you change an e
 app, set the next minor yourself (1.2.3 -> 1.3.0) for a new feature, or the next major
 (2.0.0) for a breaking change (removed screens, actions, tables or columns), before
 build_app. Never lower it.
-Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk, relative files
-in this folder. No fetch, window, document, react-dom, or fs.
+Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk,
+@expo/vector-icons (Ionicons, -outline names only), relative files in this folder.
+No fetch, window, document, react-dom, or fs.
 @homeai/sdk:
   useDatabase() / useSQLiteContext()  the same hook (expo-sqlite's name is an alias):
     getAllAsync, getFirstAsync, runAsync — one statement, ? placeholders + an array

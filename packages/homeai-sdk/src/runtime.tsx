@@ -7,11 +7,13 @@ import * as jsxRuntime from 'react/jsx-runtime';
 import * as RN from 'react-native';
 import { createRoot, type Root } from 'react-dom/client';
 import * as Router from './router';
+import { Ionicons } from './icons';
 import * as SDK from './sdk';
 import { emit, installReceiver, on } from './bridge';
 import type { SandboxConfig } from './protocol';
 
-type AppExports = { routes: Router.RouteTable['routes']; layout?: React.ComponentType };
+// `layouts` by folder since M22-02; bundles built before then have only `layout` (app/_layout.tsx).
+type AppExports = { routes: Router.RouteTable['routes']; layouts?: Router.RouteTable['layouts']; layout?: React.ComponentType };
 
 declare global {
   interface Window {
@@ -26,6 +28,7 @@ export const modules: Record<string, unknown> = {
   'react-native': RN,
   'expo-router': {
     Stack: Router.Stack,
+    Tabs: Router.Tabs,
     Slot: Router.Slot,
     Link: Router.Link,
     router: Router.router,
@@ -35,6 +38,7 @@ export const modules: Record<string, unknown> = {
     usePathname: Router.usePathname,
   },
   'expo-sqlite': SDK.expoSqlite,
+  '@expo/vector-icons': { Ionicons },
   '@homeai/sdk': {
     useDatabase: SDK.useDatabase,
     useSQLiteContext: SDK.useSQLiteContext,
@@ -87,8 +91,8 @@ if (config.members) SDK.setMembers(config.members);
 
 function mount(app: AppExports) {
   version++;
-  Router.setRouteTable({ routes: app.routes }, config.initialPath ?? '/', (path) => emit('nav.changed', { path }));
-  const Layout = app.layout ?? Router.DefaultLayout;
+  const layouts = app.layouts ?? (app.layout ? { '': app.layout } : {});
+  Router.setRouteTable({ routes: app.routes, layouts }, config.initialPath ?? '/', (path) => emit('nav.changed', { path }));
   if (!root) {
     const el = document.getElementById('root')!;
     root = createRoot(el);
@@ -96,7 +100,7 @@ function mount(app: AppExports) {
   const t0 = performance.now();
   root.render(
     <ErrorBoundary key={version} version={version}>
-      <Layout />
+      <Router.Root />
     </ErrorBoundary>,
   );
   // Report after the commit so the host can time hot reloads end to end.

@@ -1,0 +1,11 @@
+{
+  "name": "Nav check",
+  "slug": "nav-check",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "navigate-outline",
+    "description": "Fixture app for the router tests: tabs, a nested stack in a tab, a modal, header buttons.",
+    "permissions": {}
+  }
+}

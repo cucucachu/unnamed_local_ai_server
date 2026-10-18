@@ -142,7 +142,7 @@ test('a forbidden import is an import diagnostic at the import, even if unused',
   const r = await compileOnly({ 'app/index.tsx': prepend("import { createPortal } from 'react-dom';") });
   assert.equal(r.ok, false);
   assert.deepEqual(r.diagnostics.map(pick), [{ step: 'import', file: 'app/index.tsx', line: 1, column: 30 }]);
-  assert.match(r.diagnostics[0].message, /Import "react-dom" is not allowed in apps\. Allowed modules: react, react-native, expo-router, expo-sqlite, @homeai\/sdk/);
+  assert.match(r.diagnostics[0].message, /Import "react-dom" is not allowed in apps\. Allowed modules: react, react-native, expo-router, expo-sqlite, @expo\/vector-icons, @homeai\/sdk/);
   assert.equal(r.diagnostics[0].source, "import { createPortal } from 'react-dom';");
   assert.ok(!fs.existsSync(path.join(r.out, 'app.js')));
 });
@@ -276,9 +276,56 @@ test('triple-slash directives are refused (they could bring the DOM lib back)', 
 });
 
 test('expo-router features the shim lacks are type errors', async () => {
-  const r = await compileOnly({ 'app/_layout.tsx': (old) => old.replace('import { Stack }', 'import { Stack, Tabs }') });
+  const r = await compileOnly({ 'app/_layout.tsx': (old) => old.replace('import { Stack }', 'import { Stack, Drawer }') });
   assert.deepEqual(r.diagnostics.map(pick), [{ step: 'type', file: 'app/_layout.tsx', line: 1, column: 17 }]);
-  assert.match(r.diagnostics[0].message, /has no exported member 'Tabs'/);
+  assert.match(r.diagnostics[0].message, /has no exported member 'Drawer'/);
+});
+
+const TABS_LAYOUT = `import { Tabs } from 'expo-router';
+export default function TabsLayout() {
+  return (
+    <Tabs>
+      <Tabs.Screen name="index" options={{ title: 'List', icon: 'list-outline' }} />
+      <Tabs.Screen name="about" options={{ title: 'About', icon: 'information-circle-outline', tabBarBadge: 2 }} />
+    </Tabs>
+  );
+}
+`;
+const ROOT_LAYOUT = `import { Stack } from 'expo-router';
+import { Pressable, Text } from 'react-native';
+export default function RootLayout() {
+  return (
+    <Stack>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="new" options={{ presentation: 'modal', title: 'New item', headerRight: () => <Pressable><Text>Save</Text></Pressable> }} />
+    </Stack>
+  );
+}
+`;
+
+test('groups, nested layouts, Tabs and a modal build and render', async () => {
+  const smoke = await build({
+    'app/_layout.tsx': ROOT_LAYOUT,
+    'app/(tabs)/_layout.tsx': TABS_LAYOUT,
+    'app/(tabs)/index.tsx': fs.readFileSync(path.join(GROCERIES, 'app/index.tsx'), 'utf8'),
+    'app/index.tsx': null,
+    'app/(tabs)/about.tsx': "import { Ionicons } from '@expo/vector-icons';\nimport { Text } from 'react-native';\nexport default function About() { return <Text><Ionicons name=\"heart-outline\" /> About</Text>; }\n",
+    'app/new.tsx': "import { Text } from 'react-native';\nexport default function New() { return <Text>New</Text>; }\n",
+  });
+  assert.deepEqual(smoke.diagnostics, []);
+  assert.deepEqual(smoke.routes.map((r) => r.path), ['/about', '/', '/item/1', '/new']);
+});
+
+test('two files for the same path are a route diagnostic', async () => {
+  const r = await compileOnly({ 'app/(tabs)/index.tsx': 'export default function Home() { return null; }\n' });
+  assert.deepEqual(r.diagnostics.map(pick), [{ step: 'route', file: 'app/index.tsx', line: null, column: null }]);
+  assert.match(r.diagnostics[0].message, /same route \(\/\): groups like \(tabs\) aren't part of the path/);
+});
+
+test('an icon outside the subset is a type error', async () => {
+  const r = await compileOnly({ 'app/about.tsx': "import { Ionicons } from '@expo/vector-icons';\nexport default function About() { return <Ionicons name=\"logo-github\" />; }\n" });
+  assert.deepEqual(r.diagnostics.map((d) => [d.step, d.file]), [['type', 'app/about.tsx']]);
+  assert.match(r.diagnostics[0].message, /logo-github/);
 });
 
 test('withTransactionAsync is not in SDK 1', async () => {
@@ -290,8 +337,8 @@ test('withTransactionAsync is not in SDK 1', async () => {
 });
 
 test('an unsupported route is a route diagnostic', async () => {
-  const r = await compileOnly({ 'app/(tabs)/home.tsx': 'export default function Home() { return null; }\n' });
-  assert.deepEqual(r.diagnostics.map(pick), [{ step: 'route', file: 'app/(tabs)/home.tsx', line: null, column: null }]);
+  const r = await compileOnly({ 'app/+not-found.tsx': 'export default function Missing() { return null; }\n' });
+  assert.deepEqual(r.diagnostics.map(pick), [{ step: 'route', file: 'app/+not-found.tsx', line: null, column: null }]);
 });
 
 test('a render-time throw is source-mapped, with the component stack', async () => {

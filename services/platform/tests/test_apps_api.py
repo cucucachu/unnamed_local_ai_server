@@ -279,7 +279,7 @@ async def test_validate_reports_problems_and_keeps_the_last_good_manifest(world)
     folder = _family_pkg(world)
     app = await _registered(world)
     (folder / "app.json").write_text(json.dumps(manifest(version="two")))
-    (folder / "app" / "(tabs)").mkdir()
+    (folder / "app" / "+not-found.tsx").write_text("")
     response = await world.client.post(
         f"{APPS}/{app['id']}/validate", headers=world.headers["alice"]
     )
@@ -288,7 +288,7 @@ async def test_validate_reports_problems_and_keeps_the_last_good_manifest(world)
     assert body["valid"] is False
     assert [(d["file"], d["path"]) for d in body["diagnostics"]] == [
         ("app.json", "/version"),
-        ("app/(tabs)", ""),
+        ("app/+not-found.tsx", ""),
     ]
     assert body["app"]["working_version"]["version"] == "1.0.0"
 

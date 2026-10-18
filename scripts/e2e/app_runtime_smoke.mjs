@@ -56,9 +56,9 @@ try {
     await call('PUT', `/api/platform/files/content?path=${encodeURIComponent(`/personal/Apps/${slug}/${rel}`)}`, undefined, content);
   }
   const appIds = [];
-  async function register(slug, manifest) {
-    for (const rel of files(FIXTURE)) {
-      await upload(slug, rel, rel === 'app.json' && manifest ? Buffer.from(JSON.stringify(manifest)) : fs.readFileSync(path.join(FIXTURE, rel)));
+  async function register(slug, manifest, dir = FIXTURE) {
+    for (const rel of files(dir)) {
+      await upload(slug, rel, rel === 'app.json' && manifest ? Buffer.from(JSON.stringify(manifest)) : fs.readFileSync(path.join(dir, rel)));
     }
     const { app } = await call('POST', '/api/platform/apps', { source_path: `/personal/Apps/${slug}` });
     appIds.push(app.id);
@@ -106,6 +106,33 @@ try {
 
   const viewer = await context.newPage();
   await runViewerChecks(await openHarness(viewer, { origin: BASE, instanceId: instance.id, space: { ...space, role: 'viewer' }, readOnly: true }), platform);
+
+  // M22-02: groups, nested layouts, Tabs, a modal and the icon font, built by the real builder.
+  const nav = await register('nav-check', undefined, path.join(path.dirname(FIXTURE), 'nav-check'));
+  await build(nav.app);
+  const navPage = await context.newPage();
+  const n = await openHarness(navPage, { origin: BASE, instanceId: nav.instance.id, space });
+  const visible = (id) => n.ui.getByTestId(id).first().waitFor({ state: 'visible', timeout: 10000 });
+  await visible('list-screen');
+  await visible('tab-settings');
+  const font = await n.frame.evaluate(async () => (await document.fonts.load('24px Ionicons')).length > 0 && document.fonts.check('24px Ionicons'));
+  if (!font) throw new Error('the Ionicons font did not load in the sandbox');
+  ok('nav-check: the first tab, the tab bar, and the icon font loaded under the sandbox CSP');
+  await n.ui.getByTestId('tab-settings').click();
+  await n.ui.getByTestId('open-advanced').click();
+  await visible('advanced-screen');
+  await n.ui.getByTestId('tab-index').click();
+  await visible('list-screen');
+  await n.ui.getByTestId('tab-settings').click();
+  await visible('advanced-screen');
+  ok('nav-check: each tab keeps its own stack');
+  await n.ui.getByTestId('tab-index').click();
+  await n.ui.getByTestId('open-new').click();
+  await visible('new-screen');
+  await visible('save');
+  await n.ui.getByTestId('header-close').click();
+  await n.ui.getByTestId('new-screen').waitFor({ state: 'detached', timeout: 10000 });
+  ok('nav-check: a modal with headerRight opens and closes');
   console.log('PASS: app runtime smoke');
 } finally {
   await browser.close();

@@ -975,12 +975,15 @@ what another doc says it should be.
   error boundary, boot and `bundle.load`), `bridge.ts` (sandbox transport),
   `sdk.ts` (`@homeai/sdk` + the `expo-sqlite` shim), `router.tsx` (the
   expo-router shim), `protocol.ts` (bridge v1 types, shared by both
-  sides); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
+  sides), `icons.tsx` (`@expo/vector-icons`' `Ionicons` over the subset
+  font in `icons.generated.ts`, from `scripts/icons.py` and
+  `scripts/ICONS.txt`; rerun with `uv run --with fonttools --with brotli
+  python scripts/icons.py`); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
   `bridge-host.ts`, `platform.ts`, `document.ts`, and `web.ts`
   (`@homeai/sdk/host/web`, the iframe); `types/homeai.d.ts` (app typings);
   `modules.json` (the allowed modules); `build.mjs` (`runtimeBuildOptions`;
-  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈469 KB /
-  1.8 MB).
+  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈537 KB /
+  1.9 MB).
 - **Tests**: `cd packages/homeai-sdk && npm ci --ignore-scripts && npm run
   lint && npm test` (`npx playwright install chromium` first).
   `lint` is `tsc` for the sandbox side and again for `src/host/index.ts`
@@ -991,6 +994,10 @@ what another doc says it should be.
   writes, bind forms, live queries and their coalescing, actions, routes,
   `useSpace`, errors, read-only, `bundle.load` delivery, the module
   registry against `modules.json` and the typings, junk envelopes.
+  `tests/nav.test.mjs` (M22-02): the `tests/fixtures/nav-check` app —
+  tabs with a stack per tab, a nested stack, a pushed screen over the
+  tabs, a modal with `headerRight`, deep links, and a bundle in the
+  pre-M22-02 shape.
   `tests/host.test.mjs`: the host's refusals, param rebuilding, in-flight
   cap, message queueing, RPC/bundle/runtime URLs and error mapping, the
   event relay, the document and `injectScriptFor`.
@@ -999,7 +1006,9 @@ what another doc says it should be.
   Chromium against the stand-in platform at a fake origin, events pushed
   into the page (Playwright's `routeWebSocket` would fake `WebSocket`
   inside the sandbox too, past its CSP). `scripts/e2e/app_runtime_smoke.sh`
-  runs the same harness against the live stack.
+  runs the same harness against the live stack, then builds `nav-check`
+  with the real builder and, in the CSP'd frame, switches tabs (each keeps
+  its stack), opens and closes the modal, and checks the icon font loads.
 
 ### exec-toolbox image (`services/code-exec-manager/exec-image/`)
 
@@ -2551,10 +2560,10 @@ any other folders (components, helpers). Checked here: `app.json` against
 the schema below and its `slug` equal to the folder name; the required
 files are regular files (symlinks refused); under `app/` only `.ts`/`.tsx`
 files (not `.d.ts`), segments a name (`^[A-Za-z0-9][A-Za-z0-9_-]*$`),
-`index`, `[param]`, or a final-file `[...rest]`, the one `app/_layout.tsx`
-(no nested layouts, `(group)` folders or `+special` files), no two files
-for the same route and no two differently named dynamic routes in one
-folder; `actions/` holds only files named `^[a-z][a-zA-Z0-9_]*\.sql$`.
+`index`, `[param]`, a final-file `[...rest]` or a `(group)` folder (not
+part of the path), a `_layout.tsx` in any folder (M22-02; no `+special`
+files), no two files for the same path and no two differently named
+dynamic routes in one folder (groups ignored); `actions/` holds only files named `^[a-z][a-zA-Z0-9_]*\.sql$`.
 Dotfiles are ignored; at most 1000 entries are walked and 50 diagnostics
 returned. Content (imports, types, SQL) is the builder's (M12-04).
 

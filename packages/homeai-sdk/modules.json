@@ -1,1 +1,1 @@
-["react", "react/jsx-runtime", "react-native", "expo-router", "expo-sqlite", "@homeai/sdk"]
+["react", "react/jsx-runtime", "react-native", "expo-router", "expo-sqlite", "@expo/vector-icons", "@homeai/sdk"]
