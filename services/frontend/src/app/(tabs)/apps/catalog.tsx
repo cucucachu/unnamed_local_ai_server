@@ -4,7 +4,7 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'r
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { Badge, Card, LoadState, SectionTitle, settingsStyles } from '@/components/SettingsUI';
-import { listCatalog, type CatalogEntry } from '@/lib/apps';
+import { listAppTemplates, listCatalog, type AppTemplate, type CatalogEntry } from '@/lib/apps';
 import { isReadOnly, listSpaces, type Space } from '@/lib/platform';
 import { theme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
@@ -14,17 +14,27 @@ interface SpaceCatalog {
   entries: CatalogEntry[];
 }
 
-async function loadCatalogs(onlySpaceId?: string): Promise<SpaceCatalog[]> {
+interface Catalogs {
+  groups: SpaceCatalog[];
+  templates: AppTemplate[];
+}
+
+async function loadCatalogs(onlySpaceId?: string): Promise<Catalogs> {
   const spaces = (await listSpaces())
     .filter((space) => space.archived_at === null && (!onlySpaceId || space.id === onlySpaceId))
     .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'personal' ? -1 : 1));
-  return Promise.all(spaces.map(async (space) => ({ space, entries: (await listCatalog(space.id)).entries })));
+  const [groups, templates] = await Promise.all([
+    Promise.all(spaces.map(async (space) => ({ space, entries: (await listCatalog(space.id)).entries }))),
+    listAppTemplates(),
+  ]);
+  return { groups, templates };
 }
 
 /**
  * Published apps listed in the catalogs of the user's spaces (M14-01).
  * Tapping an entry that isn't installed opens the install sheet. A space
  * page's Add app tile opens just that space's catalog (`?spaceId=`, M19-07).
+ * Below them, the templates a new app can start from (M22-05).
  */
 export default function CatalogScreen() {
   const router = useRouter();
@@ -56,8 +66,9 @@ export default function CatalogScreen() {
     );
   }
 
-  const groups = data.filter((group) => group.entries.length > 0);
-  const only = spaceId ? data[0]?.space : undefined;
+  const groups = data.groups.filter((group) => group.entries.length > 0);
+  const only = spaceId ? data.groups[0]?.space : undefined;
+  const templates = data.groups.some(({ space }) => !isReadOnly(space)) ? data.templates : [];
   const onlyLabel = only ? (only.kind === 'personal' ? 'Personal' : only.name) : null;
 
   return (
@@ -68,7 +79,7 @@ export default function CatalogScreen() {
       testID="apps-catalog"
     >
       {onlyLabel ? <Stack.Screen options={{ title: `Add to ${onlyLabel}` }} /> : null}
-      {groups.length === 0 ? (
+      {groups.length === 0 && templates.length === 0 ? (
         <View style={styles.empty} testID="catalog-empty">
           <Text style={styles.emptyTitle}>{onlyLabel ? `Nothing to add to ${onlyLabel} yet` : 'Nothing in the catalog yet'}</Text>
           <Text style={settingsStyles.muted}>
@@ -102,6 +113,36 @@ export default function CatalogScreen() {
           </View>
         ))
       )}
+      {templates.length > 0 ? (
+        <View style={styles.group} testID="catalog-templates">
+          <SectionTitle>Start from a template</SectionTitle>
+          <Card>
+            {templates.map((template, index) => (
+              <Pressable
+                key={template.slug}
+                onPress={() =>
+                  router.push({
+                    pathname: '/apps/template',
+                    params: { template: template.slug, ...(spaceId ? { spaceId } : {}) },
+                  })
+                }
+                style={[settingsStyles.row, index === 0 && settingsStyles.firstRow]}
+                accessibilityRole="button"
+                testID={`catalog-template-${template.slug}`}
+              >
+                <Ionicons name="copy-outline" size={22} color={theme.accent} />
+                <View style={settingsStyles.rowMain}>
+                  <Text style={settingsStyles.rowTitle}>{template.name}</Text>
+                  <Text style={settingsStyles.muted} numberOfLines={2}>
+                    {template.description}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+              </Pressable>
+            ))}
+          </Card>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }

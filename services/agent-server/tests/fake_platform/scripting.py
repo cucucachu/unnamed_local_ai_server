@@ -22,11 +22,13 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from app.core.delegation import Caller, DelegationDenied, DelegationUnavailable, Grant
 from tests.fake_identity import TEST_USER_ID
 
 AGENT_TOKEN = "fake-agent-service-token"
+TEMPLATES_DIR = Path(__file__).resolve().parents[4] / "examples" / "apps"
 TEST_SESSION_ID = "11111111-1111-4111-8111-111111111111"
 
 
@@ -152,6 +154,9 @@ class FakePlatform:
     delivered_off: set[str] = field(default_factory=set)
     delivered_unavailable: bool = False
     # --- apps ---
+    # `GET /app-templates` and template installs (M22-05) read the repo's templates.
+    templates_dir: Path = TEMPLATES_DIR
+    template_installs: list[tuple[str, str, dict]] = field(default_factory=list)
     apps: list[dict] = field(default_factory=list)
     instances: list[dict] = field(default_factory=list)
     # instance id -> its migrations, newest last

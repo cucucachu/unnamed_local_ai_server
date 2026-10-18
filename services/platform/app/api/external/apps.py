@@ -17,6 +17,7 @@ from app.api.schemas import (
     AppRegisterRequest,
     AppRevertOut,
     AppRevertRequest,
+    AppTemplateList,
     AppValidationOut,
     CatalogList,
     ForkOut,
@@ -26,10 +27,12 @@ from app.api.schemas import (
     InstanceOut,
     PublishOut,
     PublishRequest,
+    TemplateInstallOut,
+    TemplateInstallRequest,
     UpdateInstanceOut,
     UpdateInstanceRequest,
 )
-from app.core import appbuild, apphistory, apps, manifest
+from app.core import appbuild, apphistory, apps, apptemplates, manifest
 from app.core.errors import Unavailable
 from app.core.principal import CurrentUser
 
@@ -53,6 +56,48 @@ async def register_app(body: AppRegisterRequest, request: Request, principal: Cu
     async with request.app.state.db_pool.connection() as conn:
         app = await apps.register_app(conn, principal, request.app.state.storage, body.source_path)
     return AppValidationOut(app=app, valid=True, diagnostics=[])
+
+
+@router.get("/app-templates", response_model=AppTemplateList)
+async def list_app_templates(request: Request, principal: CurrentUser):
+    """The templates shipped in the image (`app.core.apptemplates`)."""
+    root = request.app.state.settings.app_templates_dir
+    return AppTemplateList(templates=await apptemplates.list_templates(root))
+
+
+@router.post(
+    "/spaces/{space_id}/app-templates/{template}/install",
+    response_model=TemplateInstallOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def install_app_template(
+    space_id: UUID,
+    template: str,
+    body: TemplateInstallRequest,
+    request: Request,
+    principal: CurrentUser,
+):
+    """Copy a template into the space as a new app, install it, and (by default) build it."""
+    state = request.app.state
+    async with state.db_pool.connection() as conn:
+        app, instance = await apptemplates.install_template(
+            conn, principal, state.storage, state.settings.app_templates_dir,
+            space_id, template, body.slug, body.name,
+        )  # fmt: skip
+    if not body.build or state.builds is None:
+        return TemplateInstallOut(app=app, instance=instance, build=None)
+    app, build, diagnostics, migrations = await appbuild.build_app(
+        state.db_pool, principal, state.storage, state.builds, state.builder,
+        state.settings.platform_data_dir, state.appdata, state.history, app["id"],
+    )  # fmt: skip
+    built = AppBuildOut(
+        app=app,
+        ok=build is not None and build.ok,
+        build=None if build is None else vars(build),
+        diagnostics=diagnostics,
+        migrations=migrations,
+    )
+    return TemplateInstallOut(app=app, instance=instance, build=built)
 
 
 @router.get("/apps/{app_id}", response_model=AppOut)

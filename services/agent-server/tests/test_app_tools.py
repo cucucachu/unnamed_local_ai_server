@@ -31,7 +31,6 @@ def _client(fake_model: FakeModel, fake_platform: FakePlatform, policy: ToolPoli
     settings = fake_model.settings(
         platform_url=fake_platform.base_url,
         platform_agent_token=AGENT_TOKEN,
-        app_templates_dir=str(TEMPLATES),
     )
     return TestClient(
         create_app(
@@ -96,6 +95,8 @@ async def test_list_apps_shows_instances_sources_and_data_paths(fake_model, fake
     assert "image-shipped system app" in out
     assert "instance id: files" in out
     assert "moveToSpace(src, dst)" in out
+    assert "Templates for create_app:" in out
+    assert "  tracker: " in out and "  grocery-list: " in out
 
 
 async def test_app_action_files_move_to_space(fake_model, fake_platform):
@@ -152,6 +153,10 @@ async def test_create_app_copies_the_template_registers_and_installs(fake_model,
     assert {k.removeprefix("Apps/chores/") for k in tree} == template
     manifest = json.loads(tree["Apps/chores/app.json"])
     assert (manifest["slug"], manifest["name"]) == ("chores", "Chore Chart")
+    assert manifest["homeai"]["template"]["slug"] == "grocery-list"
+    assert fake_platform.template_installs == [
+        (PERSONAL, "grocery-list", {"slug": "chores", "name": "Chore Chart", "build": False})
+    ]
     [app] = fake_platform.apps
     assert (app["slug"], app["source_path"]) == ("chores", "/personal/Apps/chores")
     [inst] = fake_platform.instances
@@ -214,6 +219,7 @@ async def test_create_app_refuses_bad_input_without_writing(fake_model, fake_pla
         assert name in template
     assert "no space 'work'" in space
     assert fake_platform.apps == [] and list(fake_platform.personal()) == ["Apps/taken/app.json"]
+    assert [t for _, t, _ in fake_platform.template_installs] == ["grocery-list", "no"]
 
 
 async def test_build_app_on_hand_written_files_points_to_create_app(fake_model, fake_platform):

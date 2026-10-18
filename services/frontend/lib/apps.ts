@@ -206,6 +206,36 @@ export function forkApp(appId: string, spaceId: string, slug?: string): Promise<
   });
 }
 
+/** A starter app the platform ships (`GET /api/platform/app-templates`, M22-05). */
+export interface AppTemplate {
+  slug: string;
+  name: string;
+  version: string;
+  icon: string | null;
+  description: string;
+}
+
+export async function listAppTemplates(): Promise<AppTemplate[]> {
+  return (await apiFetch<{ templates: AppTemplate[] }>('/api/platform/app-templates')).templates;
+}
+
+/** Copies `template` into `spaceId` as a new app, installs it and builds it. */
+export function installTemplate(
+  spaceId: string,
+  template: string,
+  slug: string,
+  name: string,
+): Promise<{ app: App; instance: Instance; build: BuildResult | null }> {
+  return apiFetch(
+    `/api/platform/spaces/${encodeURIComponent(spaceId)}/app-templates/${encodeURIComponent(template)}/install`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug, name }),
+    },
+  );
+}
+
 export function permissionsOf(manifest: AppVersion['manifest'] | undefined): Record<string, unknown> {
   const perms = manifest?.homeai?.permissions;
   return perms && typeof perms === 'object' ? perms : {};

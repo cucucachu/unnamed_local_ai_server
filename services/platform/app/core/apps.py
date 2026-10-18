@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import stat
+from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -400,7 +401,7 @@ def _package_exists(r: vfs.Resolved, slug: str) -> bool:
     return True
 
 
-def _copy_into_space(r: vfs.Resolved, slug: str, src_fd: int, owner: fsops.Owner) -> None:
+def copy_into_space(r: vfs.Resolved, slug: str, src_fd: int, owner: fsops.Owner) -> None:
     try:
         with r.open_root() as root:
             fsops.make_dirs(root, (vfs.APPS, slug), owner)
@@ -415,7 +416,10 @@ def _copy_into_space(r: vfs.Resolved, slug: str, src_fd: int, owner: fsops.Owner
         raise Conflict("apps_folder_not_a_directory") from exc
 
 
-def _rewrite_slug(r: vfs.Resolved, slug: str, owner: fsops.Owner) -> None:
+def patch_manifest(
+    r: vfs.Resolved, slug: str, owner: fsops.Owner, patch: Callable[[dict[str, Any]], None]
+) -> None:
+    """Rewrite `Apps/<slug>/app.json` in `r`'s space with `patch` applied to it."""
     with r.open_root() as root:
         dir_fd = beneath.open(root, (vfs.APPS, slug), os.O_RDONLY | os.O_DIRECTORY, symlinks=False)
         try:
@@ -425,12 +429,34 @@ def _rewrite_slug(r: vfs.Resolved, slug: str, owner: fsops.Owner) -> None:
                 raise InvalidApp(
                     [{"file": "app.json", "path": "", "message": "app.json is not an object"}]
                 )
-            doc["slug"] = slug
+            patch(doc)
             fsops.replace_file_at(
-                dir_fd, "app.json", json.dumps(doc, indent=2).encode() + b"\n", owner
+                dir_fd,
+                "app.json",
+                json.dumps(doc, indent=2, ensure_ascii=False).encode() + b"\n",
+                owner,
             )
         finally:
             os.close(dir_fd)
+
+
+async def new_package_target(
+    conn: AsyncConnection, principal: Principal, storage: SpaceStorage, space: Row, slug: str
+) -> tuple[str, vfs.Resolved]:
+    """`<space>/Apps/<slug>` for a new app, or `Conflict("app_exists")` if anything has it."""
+    if not spaces.SLUG_RE.fullmatch(slug):
+        raise InvalidInput("invalid_source_path")
+    dest_path = f"{vfs.space_prefix(space)}/{vfs.APPS}/{slug}"
+    r = await vfs.resolve_virtual_path(conn, principal, storage, dest_path, "write")
+    cur = await conn.execute(
+        "SELECT 1 FROM apps WHERE source_space_id = %s AND slug = %s AND archived_at IS NULL",
+        (space["id"], slug),
+    )
+    if await cur.fetchone() is not None:
+        raise Conflict("app_exists")
+    if await anyio.to_thread.run_sync(_package_exists, r, slug):
+        raise Conflict("app_exists")
+    return dest_path, r
 
 
 # --- apps ------------------------------------------------------------------------
@@ -835,19 +861,8 @@ async def fork_app(
     app = await get_visible_app(conn, principal, app_id)
     dest = await spaces.authorize_space(conn, principal, space_id, "write")
     slug = slug or app["slug"]
-    if not spaces.SLUG_RE.fullmatch(slug):
-        raise InvalidInput("invalid_source_path")
-    dest_path = f"{vfs.space_prefix(dest.space)}/{vfs.APPS}/{slug}"
-    r = await vfs.resolve_virtual_path(conn, principal, storage, dest_path, "write")
+    dest_path, r = await new_package_target(conn, principal, storage, dest.space, slug)
     owner = fsops.Owner(principal.uid, dest.space["gid"])
-    cur = await conn.execute(
-        "SELECT 1 FROM apps WHERE source_space_id = %s AND slug = %s AND archived_at IS NULL",
-        (space_id, slug),
-    )
-    if await cur.fetchone() is not None:
-        raise Conflict("app_exists")
-    if await anyio.to_thread.run_sync(_package_exists, r, slug):
-        raise Conflict("app_exists")
 
     src_fd: int | None = None
     if app["source_path"] is not None:
@@ -870,9 +885,11 @@ async def fork_app(
         except OSError as exc:
             raise ServerError("release_invalid") from exc
     try:
-        await anyio.to_thread.run_sync(_copy_into_space, r, slug, src_fd, owner)
+        await anyio.to_thread.run_sync(copy_into_space, r, slug, src_fd, owner)
         if slug != app["slug"]:
-            await anyio.to_thread.run_sync(_rewrite_slug, r, slug, owner)
+            await anyio.to_thread.run_sync(
+                patch_manifest, r, slug, owner, lambda doc: doc.update(slug=slug)
+            )
     finally:
         os.close(src_fd)
 

@@ -60,9 +60,11 @@ template stays as it is until then.
 
 ## 3. Templates you can install
 
-Today templates live only in agent-server (`/app/templates`, from
-`examples/apps/`), and only the agent's `create_app` uses them. Space
-catalogs list published apps only.
+Before M22-05 templates lived only in agent-server (`/app/templates`, from
+`examples/apps/`), and only the agent's `create_app` used them. Space
+catalogs listed published apps only. Shipped in M22-05 (PLATFORM.md §7
+"Templates"); the catalog has one Templates section with a space picker
+rather than one per space.
 
 - **The platform ships the templates** (copied into its image from
   `examples/apps/`) and lists them: `GET /api/platform/app-templates` with

@@ -159,5 +159,5 @@ async def test_app_authoring_guide_is_in_the_system_prompt(
     assert "App authoring" in text
     assert "app.json" in text and "schema.sql" in text and "AGENT.md" in text
     assert "useDatabase()" in text and "useSQLiteContext()" in text
-    assert "grocery-list" in text and "tracker" in text
+    assert "list_apps lists the templates" in text
     assert "@homeai/sdk" in text

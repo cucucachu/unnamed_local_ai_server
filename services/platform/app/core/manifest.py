@@ -245,6 +245,20 @@ SCHEMA: dict[str, Any] = {
                     "items": _READ_ITEM,
                     "errorMessage": "reads must be an array of {app, export, version}",
                 },
+                "template": {
+                    "description": (
+                        "The shipped template this app was installed from (set by the "
+                        "platform; leave it as it is)."
+                    ),
+                    "type": "object",
+                    "required": ["slug", "version"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "slug": {"type": "string", "pattern": SLUG_PATTERN},
+                        "version": {"type": "string", "maxLength": 64},
+                    },
+                    "errorMessage": 'template must be {"slug", "version"} of a shipped template',
+                },
             },
         },
     },

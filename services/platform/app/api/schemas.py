@@ -781,6 +781,35 @@ class ForkOut(BaseModel):
     instance: InstanceOut
 
 
+class AppTemplateOut(BaseModel):
+    slug: str
+    name: str
+    version: str
+    icon: str | None
+    description: str
+    agent_md: str
+
+
+class AppTemplateList(BaseModel):
+    templates: list[AppTemplateOut]
+
+
+class TemplateInstallRequest(BaseModel):
+    """`slug` / `name` default to the template's; `build: false` leaves it unbuilt (the agent
+    edits it first)."""
+
+    slug: Short | None = None
+    name: Annotated[str, Field(max_length=200)] | None = None
+    build: bool = True
+
+
+class TemplateInstallOut(BaseModel):
+    app: AppOut
+    instance: InstanceOut
+    # None when `build` was false or the builder is unavailable.
+    build: AppBuildOut | None
+
+
 # --- app data (M12-03) ------------------------------------------------------------
 
 SqlText = Annotated[str, Field(min_length=1, max_length=100 * 1024)]

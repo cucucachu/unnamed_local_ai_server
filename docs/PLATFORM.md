@@ -1419,12 +1419,28 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >   and role, source folder, last built commit, the `/app-data/...` path),
 >   plus registered apps that aren't installed, plus the five image-shipped
 >   system apps (Home, Chat, Files, Routines, Settings): native, read-only source,
->   instance id = slug. Files lists `moveToSpace` / `copyToSpace`.
-> - `create_app(space, slug, name, template="grocery-list")`: copies a
->   template (a folder with `app.json` under `APP_TEMPLATES_DIR`; the image
->   ships `examples/apps/` at `/app/templates`) to
->   `<space>/Apps/<slug>/` with `slug`/`name` patched into `app.json`,
->   registers it and installs it in that space tracking `working`.
+>   instance id = slug. Files lists `moveToSpace` / `copyToSpace`, and the
+>   platform's templates follow (M22-05).
+> - `create_app(space, slug, name, template="grocery-list")`: the
+>   platform's template install with `build: false` (below), so the agent
+>   edits before the first build.
+>
+> **Templates (M22-05).** The platform image ships `examples/apps/` at
+> `/app/templates` (`APP_TEMPLATES_DIR`; compose passes it as the
+> `templates` build context). `GET /api/platform/app-templates` lists every
+> folder that passes manifest validation (`slug`, `name`, `version`, `icon`,
+> `description`, `AGENT.md` capped at 64 KB); an invalid one is logged and
+> left out. `POST /api/platform/spaces/{id}/app-templates/{template}/install`
+> `{slug?, name?, build=true}` needs write access to the space: it copies the
+> template to `<space>/Apps/<slug>/`, patches `slug`, `name` and
+> `homeai.template` (`{slug, version}`, provenance; there's no update path,
+> it's a copy like a fork) into `app.json`, registers it, installs it
+> tracking `working` and builds it, returning `{app, instance, build}`.
+> Errors: `unknown_template` 404, `reserved_slug` / `invalid_name` /
+> `invalid_source_path` 400, `app_exists` 409, all before anything is
+> copied. The catalog's "Start from a template" section (when one of the
+> listed spaces is writable) opens a New app sheet: name (the slug follows
+> it), space, Create app, then the runner.
 > - `build_app(app)`: `POST /apps/{id}/build`; returns the diagnostics
 >   (step, file:line:column, message, source excerpt) or success plus each
 >   instance's migration. A pending destructive migration is reported with

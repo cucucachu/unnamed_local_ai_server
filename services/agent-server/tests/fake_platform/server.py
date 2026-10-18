@@ -329,6 +329,59 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
             {"app": _app_out(app_), "valid": True, "diagnostics": []}, status_code=201
         )
 
+    # --- app templates (M22-05) ------------------------------------------------------
+
+    def _template_doc(slug: str) -> dict | None:
+        root = fake.templates_dir / slug
+        if "/" in slug or slug.startswith(".") or not (root / "app.json").is_file():
+            return None
+        return json.loads((root / "app.json").read_text())
+
+    @app.get("/api/platform/app-templates")
+    async def list_templates(request: Request) -> JSONResponse:
+        _who(request)
+        out = []
+        for root in sorted(p for p in fake.templates_dir.iterdir() if p.is_dir()):
+            doc = _template_doc(root.name)
+            if doc is not None:
+                out.append(
+                    {"slug": root.name, "name": doc["name"], "version": doc["version"],
+                     "icon": doc["homeai"].get("icon"),
+                     "description": doc["homeai"].get("description", ""),
+                     "agent_md": (root / "AGENT.md").read_text()}
+                )  # fmt: skip
+        return JSONResponse({"templates": out})
+
+    @app.post("/api/platform/spaces/{space_id}/app-templates/{template}/install")
+    async def install_template(request: Request, space_id: str, template: str) -> JSONResponse:
+        space = _space(_who(request), space_id)
+        body = await request.json()
+        fake.template_installs.append((space["key"], template, body))
+        if space["role"] == "viewer":
+            raise _error(403, "insufficient_role")
+        doc = _template_doc(template)
+        if doc is None:
+            raise _error(404, "unknown_template")
+        slug = body.get("slug") or template
+        tree = fake.tree(space["key"])
+        if any(k.startswith(f"Apps/{slug}/") for k in tree):
+            raise _error(409, "app_exists")
+        root = fake.templates_dir / template
+        doc |= {"slug": slug, "name": body.get("name") or doc["name"]}
+        doc["homeai"]["template"] = {"slug": template, "version": doc["version"]}
+        for path in sorted(root.rglob("*")):
+            rel = path.relative_to(root).as_posix()
+            if path.is_file() and not any(part.startswith(".") for part in rel.split("/")):
+                data = json.dumps(doc).encode() if rel == "app.json" else path.read_bytes()
+                tree[f"Apps/{slug}/{rel}"] = data
+        prefix = "/personal" if space["kind"] == "personal" else f"/spaces/{space['key']}"
+        app_ = fake.add_app(space["key"], f"{prefix}/Apps/{slug}", doc)
+        inst = fake.install(app_, space["key"])
+        return JSONResponse(
+            {"app": _app_out(app_), "instance": _public_instance(inst), "build": None},
+            status_code=201,
+        )
+
     @app.post("/api/platform/apps/{app_id}/build")
     async def build(request: Request, app_id: str) -> JSONResponse:
         who = _who(request)

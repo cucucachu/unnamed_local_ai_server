@@ -1,6 +1,6 @@
 import { act, type ReactTestRenderer } from 'react-test-renderer';
 
-import { exists, mockFetchRoutes, press, render, requestsTo, textOf } from '../../../../test-utils/screen';
+import { exists, isDisabled, mockFetchRoutes, press, render, requestsTo, textOf, type } from '../../../../test-utils/screen';
 
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
@@ -20,6 +20,7 @@ jest.mock('expo-router', () => ({
 /* eslint-disable import/first -- must follow the jest.mock call above */
 import CatalogScreen from '../apps/catalog';
 import InstallScreen from '../apps/install';
+import TemplateScreen from '../apps/template';
 import UpdateScreen from '../apps/update';
 /* eslint-enable import/first */
 
@@ -51,6 +52,16 @@ const entry = {
   instance_id: null,
 };
 
+const tracker = {
+  slug: 'tracker',
+  name: 'Habit Tracker',
+  version: '0.1.0',
+  icon: 'checkmark-done-outline',
+  description: 'Habits and daily check-ins.',
+  agent_md: '',
+};
+const templatesRoute = { 'GET /api/platform/app-templates': { body: { templates: [tracker] } } };
+
 let renderer: ReactTestRenderer | null = null;
 beforeEach(() => {
   mockPush.mockReset();
@@ -67,6 +78,7 @@ describe('CatalogScreen', () => {
     mockFetchRoutes({
       'GET /api/platform/spaces': { body: { spaces: [family] } },
       'GET /api/platform/spaces/s2/catalog': { body: { entries: [entry] } },
+      ...templatesRoute,
     });
     renderer = await render(CatalogScreen);
     expect(textOf(renderer)).toContain('Hello');
@@ -78,12 +90,88 @@ describe('CatalogScreen', () => {
   });
 });
 
+describe('CatalogScreen templates (M22-05)', () => {
+  it('lists templates even with an empty catalog, and opens one for the space', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/spaces': { body: { spaces: [family] } },
+      'GET /api/platform/spaces/s2/catalog': { body: { entries: [] } },
+      ...templatesRoute,
+    });
+    mockParams.current = { spaceId: 's2' };
+    renderer = await render(CatalogScreen);
+    expect(exists(renderer, 'catalog-empty')).toBe(false);
+    expect(textOf(renderer)).toContain('Habits and daily check-ins.');
+    await press(renderer, 'catalog-template-tracker');
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/apps/template',
+      params: { template: 'tracker', spaceId: 's2' },
+    });
+  });
+
+  it('hides templates when every space is view-only', async () => {
+    mockFetchRoutes({
+      'GET /api/platform/spaces': { body: { spaces: [{ ...family, role: 'viewer' }] } },
+      'GET /api/platform/spaces/s2/catalog': { body: { entries: [] } },
+      ...templatesRoute,
+    });
+    renderer = await render(CatalogScreen);
+    expect(exists(renderer, 'catalog-templates')).toBe(false);
+    expect(exists(renderer, 'catalog-empty')).toBe(true);
+  });
+});
+
+describe('TemplateScreen', () => {
+  const personal = { ...family, id: 's1', slug: 'alice', name: 'Alice', kind: 'personal' as const, role: 'owner' };
+  const viewer = { ...family, id: 's3', slug: 'club', name: 'Club', role: 'viewer' };
+  const instance = { id: 'i7', app_id: 'a7', space_id: 's2', tracks: 'working', app: entry.app, update: null };
+
+  it('names the app, picks a writable space, creates it and opens it', async () => {
+    mockParams.current = { template: 'tracker' };
+    const fetchMock = mockFetchRoutes({
+      'GET /api/platform/spaces': { body: { spaces: [family, viewer, personal] } },
+      ...templatesRoute,
+      'POST /api/platform/spaces/s2/app-templates/tracker/install': {
+        status: 201,
+        body: { app: { id: 'a7' }, instance, build: { ok: true, diagnostics: [] } },
+      },
+    });
+    renderer = await render(TemplateScreen);
+    expect(exists(renderer, 'template-space-alice')).toBe(true);
+    expect(exists(renderer, 'template-space-club')).toBe(false);
+    expect(textOf(renderer)).toContain('Saved in Apps/habit-tracker');
+    await type(renderer, 'template-name', 'Reading Log!');
+    expect(textOf(renderer)).toContain('Saved in Apps/reading-log');
+    await press(renderer, 'template-space-family');
+    await press(renderer, 'template-create');
+    expect(requestsTo(fetchMock, 'POST', '/spaces/s2/app-templates/tracker/install')).toEqual([
+      { slug: 'reading-log', name: 'Reading Log!' },
+    ]);
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/apps/[instanceId]', params: { instanceId: 'i7' } });
+  });
+
+  it('shows a taken slug and needs a usable name', async () => {
+    mockParams.current = { template: 'tracker', spaceId: 's2' };
+    mockFetchRoutes({
+      'GET /api/platform/spaces': { body: { spaces: [personal, family] } },
+      ...templatesRoute,
+      'POST /api/platform/spaces/s2/app-templates/tracker/install': { status: 409, body: { detail: 'app_exists' } },
+    });
+    renderer = await render(TemplateScreen);
+    await press(renderer, 'template-create');
+    expect(textOf(renderer)).toContain('already has an app with this short name');
+    expect(mockReplace).not.toHaveBeenCalled();
+    await type(renderer, 'template-name', '!!!');
+    expect(isDisabled(renderer, 'template-create')).toBe(true);
+  });
+});
+
 describe('InstallScreen', () => {
   it("a space's Add app opens just that space's catalog (M19-07)", async () => {
     const personal = { ...family, id: 's1', slug: 'alice', name: 'Alice', kind: 'personal' as const, role: 'owner' };
     const fetchMock = mockFetchRoutes({
       'GET /api/platform/spaces': { body: { spaces: [personal, family] } },
       'GET /api/platform/spaces/s2/catalog': { body: { entries: [entry] } },
+      ...templatesRoute,
     });
     mockParams.current = { spaceId: 's2' };
     renderer = await render(CatalogScreen);

@@ -138,6 +138,12 @@ for (const [slug, expect] of Object.entries(TEMPLATE_ROUTES)) {
   );
 }
 
+// The platform installs every examples/apps/ folder as a template (M22-05).
+test('every shipped template is checked above', { skip: !fs.existsSync(TEMPLATES) && 'examples/ is not here' }, () => {
+  const shipped = fs.readdirSync(TEMPLATES).filter((d) => fs.existsSync(path.join(TEMPLATES, d, 'app.json')));
+  assert.deepEqual(shipped.sort(), Object.keys(TEMPLATE_ROUTES).sort());
+});
+
 test('a forbidden import is an import diagnostic at the import, even if unused', async () => {
   const r = await compileOnly({ 'app/index.tsx': prepend("import { createPortal } from 'react-dom';") });
   assert.equal(r.ok, false);
