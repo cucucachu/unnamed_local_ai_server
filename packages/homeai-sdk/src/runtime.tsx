@@ -8,12 +8,16 @@ import * as RN from 'react-native';
 import { createRoot, type Root } from 'react-dom/client';
 import * as Router from './router';
 import { Ionicons } from './icons';
+import { reactNative } from './rn';
+import { setHostScheme, setUserInterfaceStyle, useTheme } from './theme';
+import * as UI from './ui';
 import * as SDK from './sdk';
 import { emit, installReceiver, on } from './bridge';
 import type { SandboxConfig } from './protocol';
 
-// `layouts` by folder since M22-02; bundles built before then have only `layout` (app/_layout.tsx).
-type AppExports = { routes: Router.RouteTable['routes']; layouts?: Router.RouteTable['layouts']; layout?: React.ComponentType };
+// `layouts` by folder since M22-02 (bundles built before then have only `layout`, app/_layout.tsx);
+// `userInterfaceStyle` (app.json's) since M22-03.
+type AppExports = { routes: Router.RouteTable['routes']; layouts?: Router.RouteTable['layouts']; layout?: React.ComponentType; userInterfaceStyle?: string };
 
 declare global {
   interface Window {
@@ -25,7 +29,7 @@ declare global {
 export const modules: Record<string, unknown> = {
   react: React,
   'react/jsx-runtime': jsxRuntime,
-  'react-native': RN,
+  'react-native': reactNative,
   'expo-router': {
     Stack: Router.Stack,
     Tabs: Router.Tabs,
@@ -39,6 +43,33 @@ export const modules: Record<string, unknown> = {
   },
   'expo-sqlite': SDK.expoSqlite,
   '@expo/vector-icons': { Ionicons },
+  '@homeai/ui': {
+    useTheme,
+    Icon: UI.Icon,
+    Screen: UI.Screen,
+    Section: UI.Section,
+    Card: UI.Card,
+    List: UI.List,
+    ListRow: UI.ListRow,
+    EmptyState: UI.EmptyState,
+    TextField: UI.TextField,
+    NumberField: UI.NumberField,
+    DateField: UI.DateField,
+    TimeField: UI.TimeField,
+    Select: UI.Select,
+    Toggle: UI.Toggle,
+    Stepper: UI.Stepper,
+    SearchField: UI.SearchField,
+    Button: UI.Button,
+    IconButton: UI.IconButton,
+    Chip: UI.Chip,
+    ProgressBar: UI.ProgressBar,
+    Badge: UI.Badge,
+    Money: UI.Money,
+    Duration: UI.Duration,
+    formatMoney: UI.formatMoney,
+    formatDuration: UI.formatDuration,
+  },
   '@homeai/sdk': {
     useDatabase: SDK.useDatabase,
     useSQLiteContext: SDK.useSQLiteContext,
@@ -88,9 +119,11 @@ const config: SandboxConfig = window.__homeai_config ?? {};
 if (config.space) SDK.setSpace(config.space);
 if (config.user) SDK.setUser(config.user);
 if (config.members) SDK.setMembers(config.members);
+setHostScheme(config.colorScheme);
 
 function mount(app: AppExports) {
   version++;
+  setUserInterfaceStyle(app.userInterfaceStyle);
   const layouts = app.layouts ?? (app.layout ? { '': app.layout } : {});
   Router.setRouteTable({ routes: app.routes, layouts }, config.initialPath ?? '/', (path) => emit('nav.changed', { path }));
   if (!root) {

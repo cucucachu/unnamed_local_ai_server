@@ -52,6 +52,7 @@ def test_schema_is_a_valid_2020_12_schema() -> None:
         good_manifest(version="0.2.10-beta.1+build.5"),
         # Expo keys outside `homeai` are allowed.
         good_manifest(orientation="portrait", ios={"supportsTablet": True}),
+        good_manifest(userInterfaceStyle="automatic"),
     ],
 )
 def test_good_manifests(doc) -> None:
@@ -77,6 +78,7 @@ def test_missing_required_properties_point_at_the_missing_key() -> None:
         (good_manifest(version="1.0"), "/version", '"1.0.0"'),
         (good_manifest(name=""), "/name", "1-64 characters"),
         (good_manifest(name=7), "/name", "1-64 characters"),
+        (good_manifest(userInterfaceStyle="auto"), "/userInterfaceStyle", '"automatic"'),
         (_homeai(sdk="2"), "/homeai/sdk", 'one of: "1"'),
         (_homeai(sdk=1), "/homeai/sdk", 'one of: "1"'),
         (_homeai(icon="Cart Outline"), "/homeai/icon", "vector icon name"),

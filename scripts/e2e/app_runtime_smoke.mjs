@@ -133,6 +133,43 @@ try {
   await n.ui.getByTestId('header-close').click();
   await n.ui.getByTestId('new-screen').waitFor({ state: 'detached', timeout: 10000 });
   ok('nav-check: a modal with headerRight opens and closes');
+
+  // M22-03: @homeai/ui and the theme in Chromium, built by the real builder ("automatic", on a dark host).
+  const kit = await register('kit-check', undefined, path.join(path.dirname(FIXTURE), 'kit-check'));
+  await build(kit.app);
+  const kitPage = await context.newPage();
+  const k = await openHarness(kitPage, { origin: BASE, instanceId: kit.instance.id, space, colorScheme: 'dark' });
+  const kstate = async () => JSON.parse(await k.ui.getByTestId('state').textContent());
+  const until = async (what, fn) => {
+    for (const t0 = Date.now(); !(await fn()); ) {
+      if (Date.now() - t0 > 10000) throw new Error(`kit-check: timed out waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+  await k.ui.getByTestId('kit-screen').waitFor({ state: 'visible', timeout: 10000 });
+  const bg = await k.frame.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  if ((await kstate()).scheme !== 'dark' || bg !== 'rgb(14, 17, 22)') throw new Error(`kit-check: not dark (${bg})`);
+  await k.ui.getByTestId('date').fill('2026-10-18');
+  await k.ui.getByTestId('size').selectOption({ label: 'Large' });
+  await k.ui.getByTestId('qty').fill('12.34');
+  await k.ui.getByTestId('qty').blur();
+  await until('fields', async () => {
+    const st = await kstate();
+    return st.date === '2026-10-18' && st.size === 'l' && st.qty === 10;
+  });
+  ok('kit-check: dark on a dark host; date, select and number fields set state');
+  await k.ui.getByTestId('row-Milk').scrollIntoViewIfNeeded();
+  const row = await k.ui.getByTestId('row-Milk').boundingBox();
+  await kitPage.mouse.move(row.x + row.width - 20, row.y + row.height / 2);
+  await kitPage.mouse.down();
+  await kitPage.mouse.move(row.x + 40, row.y + row.height / 2, { steps: 8 });
+  await kitPage.mouse.up();
+  await k.ui.getByTestId('row-Milk-action-0').click();
+  await k.ui.getByTestId('row-Milk').waitFor({ state: 'detached', timeout: 10000 });
+  ok('kit-check: swiping a row reveals its Delete action');
+  await kitPage.evaluate(() => window.harness.sandbox.host.event('theme', { colorScheme: 'light' }));
+  await until('light', async () => (await kstate()).scheme === 'light');
+  ok('kit-check: a theme event switches an "automatic" app to light');
   console.log('PASS: app runtime smoke');
 } finally {
   await browser.close();

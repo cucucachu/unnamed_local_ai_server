@@ -28,7 +28,8 @@ export function runtimeBuildOptions({ dev, nodePaths = [] }) {
     jsx: 'automatic',
     minify: !dev,
     alias: { 'react-native': 'react-native-web' },
-    define: { 'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production') },
+    // react-native-web's Animated calls global.cancelAnimationFrame.
+    define: { 'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production'), global: 'globalThis' },
     logLevel: 'warning',
   };
 }

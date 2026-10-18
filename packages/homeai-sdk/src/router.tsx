@@ -25,6 +25,7 @@ import {
 } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from './icons';
+import { useTheme } from './theme';
 
 export type RouteDef = { name: string; segments: string[]; component: ComponentType<any> };
 export type RouteTable = { layouts: Record<string, ComponentType<any>>; routes: RouteDef[] };
@@ -45,8 +46,6 @@ type ScreenOptions = {
   href?: null;
 };
 
-const TINT = '#208AEF';
-const INACTIVE = '#8E8E93';
 const NOT_FOUND = '+not-found';
 
 let table: RouteTable = { layouts: {}, routes: [] };
@@ -230,29 +229,31 @@ function ChildContent({ dir, child, entries }: { dir: string; child: string; ent
   return C ? <C /> : <NotFound path={entry.path} />;
 }
 
-function renderSlot(slot: HeaderSlot | undefined) {
-  return typeof slot === 'function' ? slot({ tintColor: TINT }) : (slot ?? null);
+function renderSlot(slot: HeaderSlot | undefined, tintColor: string) {
+  return typeof slot === 'function' ? slot({ tintColor }) : (slot ?? null);
 }
 
 function Header({ title, opts, back, close }: { title: string; opts: ScreenOptions; back: boolean; close: boolean }) {
+  const { colors } = useTheme();
+  const tint = { color: colors.tint };
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, { borderColor: colors.border, backgroundColor: colors.background }]}>
       {opts.headerLeft !== undefined ? (
-        <View testID="header-left">{renderSlot(opts.headerLeft)}</View>
+        <View testID="header-left">{renderSlot(opts.headerLeft, colors.tint)}</View>
       ) : (
         back && (
           <Pressable testID="header-back" onPress={router.back} style={styles.back}>
-            <Text style={styles.backText}>‹ Back</Text>
+            <Text style={[styles.backText, tint]}>‹ Back</Text>
           </Pressable>
         )
       )}
-      <Text role="heading" style={styles.title} numberOfLines={1}>
+      <Text role="heading" style={[styles.title, { color: colors.text }]} numberOfLines={1}>
         {title}
       </Text>
-      {opts.headerRight !== undefined && <View testID="header-right">{renderSlot(opts.headerRight)}</View>}
+      {opts.headerRight !== undefined && <View testID="header-right">{renderSlot(opts.headerRight, colors.tint)}</View>}
       {close && (
         <Pressable testID="header-close" accessibilityLabel="Close" onPress={router.back} style={styles.back}>
-          <Text style={styles.backText}>Close</Text>
+          <Text style={[styles.backText, tint]}>Close</Text>
         </Pressable>
       )}
     </View>
@@ -291,6 +292,7 @@ function optionsFrom(children: ReactNode, Screen: unknown) {
 
 export function Stack({ children, screenOptions = {} }: { children?: ReactNode; screenOptions?: ScreenOptions }) {
   const { dir, entries } = useNav();
+  const { colors } = useTheme();
   const { byName } = optionsFrom(children, StackScreen);
   const screens = runs(entries, dir);
   const top = screens.length - 1;
@@ -322,7 +324,7 @@ export function Stack({ children, screenOptions = {} }: { children?: ReactNode; 
               if (modal) {
                 return (
                   <View style={[styles.overlay, !visible && styles.hidden]}>
-                    <View testID="modal" style={styles.sheet}>{body}</View>
+                    <View testID="modal" style={[styles.sheet, { backgroundColor: colors.background }]}>{body}</View>
                   </View>
                 );
               }
@@ -356,6 +358,7 @@ function tabPath(dir: string, child: string): string | null {
 
 export function Tabs({ children, screenOptions = {} }: { children?: ReactNode; screenOptions?: ScreenOptions }) {
   const { dir, entries } = useNav();
+  const { colors } = useTheme();
   const { byName, order } = optionsFrom(children, TabsScreen);
   const declared = order.length
     ? order
@@ -397,11 +400,11 @@ export function Tabs({ children, screenOptions = {} }: { children?: ReactNode; s
           )}
         />
       )}
-      <View role="tablist" style={styles.tabBar}>
+      <View role="tablist" style={[styles.tabBar, { borderColor: colors.border, backgroundColor: colors.surface }]}>
         {tabs.map((t) => {
           const o = { ...screenOptions, ...byName[t] };
           const focused = t === active;
-          const color = focused ? TINT : INACTIVE;
+          const color = focused ? colors.tint : colors.inactive;
           return (
             <Pressable
               key={t}
@@ -469,12 +472,12 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   hidden: { display: 'none' },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  sheet: { height: '92%', backgroundColor: '#fff', borderTopLeftRadius: 12, borderTopRightRadius: 12, overflow: 'hidden' },
-  header: { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderColor: '#ddd', gap: 12 },
+  sheet: { height: '92%', borderTopLeftRadius: 12, borderTopRightRadius: 12, overflow: 'hidden' },
+  header: { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, gap: 12 },
   back: { paddingRight: 8 },
-  backText: { color: TINT, fontSize: 16 },
+  backText: { fontSize: 16 },
   title: { flex: 1, fontSize: 18, fontWeight: '600' },
-  tabBar: { flexDirection: 'row', borderTopWidth: 1, borderColor: '#ddd', backgroundColor: '#fafafa' },
+  tabBar: { flexDirection: 'row', borderTopWidth: 1 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 6, gap: 2 },
   tabLabel: { fontSize: 11 },
   badge: { position: 'absolute', top: -4, right: -10, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#E5484D', alignItems: 'center' },

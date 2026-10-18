@@ -181,6 +181,16 @@ SCHEMA: dict[str, Any] = {
             ),
             "errorMessage": 'version must be a semantic version string like "1.0.0"',
         },
+        "userInterfaceStyle": {
+            "description": (
+                'Expo\'s key. "light" (the default), "dark", or "automatic" to follow the '
+                "host's light/dark scheme; the runtime themes the router, @homeai/ui and "
+                "plain Text to match."
+            ),
+            "type": "string",
+            "enum": ["light", "dark", "automatic"],
+            "errorMessage": 'userInterfaceStyle must be "light", "dark" or "automatic"',
+        },
         "homeai": {
             "type": "object",
             "required": ["sdk", "icon"],

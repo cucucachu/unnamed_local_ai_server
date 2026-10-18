@@ -17,7 +17,9 @@
 # hot-reloads the app on its route, a self-navigating frame is removed, and a
 # read-only host refuses writes. Then (M22-02) it builds the nav-check fixture
 # and checks tabs keep their own stacks, a modal opens and closes, and the
-# icon font loads under the sandbox CSP. Everything it created (user, personal
+# icon font loads under the sandbox CSP; and (M22-03) the kit-check fixture:
+# @homeai/ui's fields and swipe actions, and the theme following the host.
+# Everything it created (user, personal
 # space, apps, instances, bundles) is deleted on exit.
 #
 # Prerequisites: the stack is up with caddy and platform built from this

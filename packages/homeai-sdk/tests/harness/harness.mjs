@@ -23,7 +23,7 @@ const HOST_SCRIPT = `
   try {
     const bundle = await H.fetchBundle(cfg.instanceId);
     const runtime = await H.fetchRuntime(bundle.sdk);
-    const html = H.sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: cfg.space } });
+    const html = H.sandboxDocument({ runtime, app: bundle.code, config: { initialPath: cfg.initialPath, space: cfg.space, colorScheme: cfg.colorScheme } });
     h.srcdocBytes = html.length;
     const sb = H.mountSandboxFrame(document.getElementById('app'), {
       html,
@@ -57,8 +57,8 @@ const HOST_SCRIPT = `
 `;
 
 /** `events`: 'ws' (the platform's /ws/platform/events) or 'push' (frames handed to `harness.deliver`). */
-export async function hostPage({ instanceId, space, readOnly = false, events = 'ws' }) {
-  const cfg = JSON.stringify({ instanceId, space, readOnly, events }).replace(/</g, '\\u003c');
+export async function hostPage({ instanceId, space, readOnly = false, events = 'ws', initialPath = '/', colorScheme }) {
+  const cfg = JSON.stringify({ instanceId, space, readOnly, events, initialPath, colorScheme }).replace(/</g, '\\u003c');
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>runtime harness</title></head>
 <body style="margin:0"><div id="app" style="display:flex;height:640px;width:420px"></div>
@@ -72,10 +72,10 @@ export async function hostPage({ instanceId, space, readOnly = false, events = '
  * Opens the host page. `probes` collects every request to PROBE_PATH (from
  * any frame), `unexpected` anything the sandbox frame requested at all.
  */
-export async function openHarness(page, { origin, instanceId, space, readOnly = false, events = 'ws', onReady }) {
+export async function openHarness(page, { origin, instanceId, space, readOnly = false, events = 'ws', initialPath, colorScheme, onReady }) {
   const probes = [];
   const fromSandbox = [];
-  const html = await hostPage({ instanceId, space, readOnly, events });
+  const html = await hostPage({ instanceId, space, readOnly, events, initialPath, colorScheme });
   await page.route(`${origin}${HOST_PATH}`, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: html }));
   await page.route(`${origin}${PROBE_PATH}**`, (route) => {
     probes.push(route.request().url());
