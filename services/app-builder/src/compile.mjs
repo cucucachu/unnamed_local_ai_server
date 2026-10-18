@@ -100,17 +100,28 @@ function outputs(result) {
  * `prod` is what the platform stores; `dev` (unminified, development React
  * warnings) is what the smoke render evaluates.
  */
+/** app.json's top-level `userInterfaceStyle` (Expo's key), for the runtime's theme; the platform validated app.json. */
+function userInterfaceStyle(appRoot) {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(appRoot, 'app.json'), 'utf8')).userInterfaceStyle;
+    return ['light', 'dark', 'automatic'].includes(v) ? v : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
 export async function compileApp(appRoot) {
   appRoot = path.resolve(appRoot);
   const t0 = performance.now();
   const rt = routeTable(appRoot);
   const routes = rt.routes;
   if (rt.diagnostics.length) return { ok: false, diagnostics: rt.diagnostics, routes };
+  const entry = `${rt.entrySource}\nexport const userInterfaceStyle = ${JSON.stringify(userInterfaceStyle(appRoot))};`;
   let prod;
   let dev;
   try {
-    prod = outputs(await bundle(appRoot, rt.entrySource, false));
-    dev = outputs(await bundle(appRoot, rt.entrySource, true));
+    prod = outputs(await bundle(appRoot, entry, false));
+    dev = outputs(await bundle(appRoot, entry, true));
   } catch (err) {
     if (!err.errors) throw err;
     return { ok: false, diagnostics: err.errors.map((m) => toDiagnostic(m, appRoot)), routes };

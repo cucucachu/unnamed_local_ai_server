@@ -122,9 +122,17 @@ published, build_app moves it to the next patch on its own. When you change an e
 app, set the next minor yourself (1.2.3 -> 1.3.0) for a new feature, or the next major
 (2.0.0) for a breaking change (removed screens, actions, tables or columns), before
 build_app. Never lower it.
-Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk,
+Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk, @homeai/ui,
 @expo/vector-icons (Ionicons, -outline names only), relative files in this folder.
 No fetch, window, document, react-dom, or fs.
+@homeai/ui: build screens from these before hand-styling Views. Screen (scrolling page),
+Section title, List data renderItem empty, ListRow title subtitle value icon onPress
+actions=[{label, onPress}] (swipe), EmptyState, Card, TextField, NumberField (number|null),
+DateField ('YYYY-MM-DD'|null), TimeField ('HH:MM'|null), Select options=[{label,value}],
+Toggle, Stepper, SearchField, Button variant=primary|secondary|destructive|plain, IconButton,
+Chip, ProgressBar (0-1), Badge, Money amount, Duration seconds, useTheme() for colors.
+New apps set "userInterfaceStyle": "automatic" at the top level of app.json (follows the
+host's dark mode); then never hard-code text or background colors: use useTheme().colors.
 @homeai/sdk:
   useDatabase() / useSQLiteContext()  the same hook (expo-sqlite's name is an alias):
     getAllAsync, getFirstAsync, runAsync — one statement, ? placeholders + an array

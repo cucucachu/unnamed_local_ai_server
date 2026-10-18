@@ -810,7 +810,8 @@ the platform publishes.
 (shim: `Stack` + `Stack.Screen`, `Tabs` + `Tabs.Screen`, `Slot`, `Link`,
 `router` / `useRouter`, `useLocalSearchParams`, `useGlobalSearchParams`,
 `usePathname`), `expo-sqlite` (shim bound to this instance's database),
-`@expo/vector-icons` (`Ionicons` only, M22-02), `@homeai/sdk`, and a
+`@expo/vector-icons` (`Ionicons` only, M22-02), `@homeai/sdk`,
+`@homeai/ui` (M22-03), and a
 growing allowlist of Expo-compatible shims. Relative imports must resolve
 inside the app directory (symlinks included). Anything else — including
 `react-dom`, `fs`, `window`, `document`, raw `fetch` — fails the build:
@@ -843,6 +844,35 @@ folder (root required). `+special` files are rejected with a diagnostic.
 > runtime: 244 outline icons (`scripts/ICONS.txt`, generated into
 > `src/icons.generated.ts` by `scripts/icons.py`); other names are a type
 > error. It added ≈45 KB gzip to the runtime (145.9 → 194.1 KB).
+
+### `@homeai/ui` and the theme (M22-03)
+
+A small kit of phone-app components, in the runtime bundle
+(`packages/homeai-sdk/src/ui.tsx`, typed in `types/homeai.d.ts`), so apps
+look alike without hand-styling every `View`: `Screen`, `Section`, `Card`,
+`List` (`data` + `renderItem`, or children; `empty`), `ListRow` (title,
+subtitle, value, icon, chevron when pressable; `actions` revealed by a
+swipe left or a long press), `EmptyState`; `TextField`, `NumberField`
+(`number | null`, clamped and rounded on blur), `DateField`
+(`'YYYY-MM-DD' | null`) and `TimeField` (`'HH:MM' | null`) over the
+browser's own inputs, `Select` (a `<select>`), `Toggle`, `Stepper`,
+`SearchField`, `Button` (primary, secondary, destructive, plain; `loading`),
+`IconButton`, `Chip`; `Icon`, `ProgressBar`, `Badge`, `Money` /
+`formatMoney`, `Duration` / `formatDuration`. Icon props are `IconName`s.
+Charts follow in M22-04.
+
+The theme (`src/theme.ts`, `useTheme()`: colors, spacing, radius, font)
+is chosen by Expo's top-level app.json key `userInterfaceStyle`, which the
+builder bakes into the bundle and the platform's schema checks: missing or
+`"light"` is light, so apps written before the kit look exactly as they
+did; `"dark"` is dark; `"automatic"` follows the host's scheme, which the
+host passes as sandbox config `colorScheme` and can change with the
+`theme` event (`{colorScheme}`). The web host is dark-only and says
+`"dark"`. The router's header, modal sheet and tab bar, the kit, and in
+dark the default colour of plain `Text` and `TextInput` (the outermost
+`Text` only, so nesting still inherits) follow the theme;
+`useColorScheme()` answers for the app, not the browser. The kit added
+≈5 KB gzip to the runtime (193.9 → 198.9 KB at `gzip -9`).
 
 ### `@homeai/sdk` (the only platform-specific surface; keep it tiny)
 

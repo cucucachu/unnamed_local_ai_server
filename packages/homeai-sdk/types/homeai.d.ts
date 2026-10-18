@@ -61,6 +61,103 @@ declare module '@homeai/sdk' {
   export function useMember(id: string | null | undefined): Member | undefined;
 }
 
+declare module '@homeai/ui' {
+  import type { ReactElement, ReactNode } from 'react';
+  import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
+  import type { IconName } from '@expo/vector-icons';
+
+  /** The app's theme: light unless app.json says `"userInterfaceStyle": "automatic"` (follow the host) or `"dark"`. */
+  export type Theme = {
+    scheme: 'light' | 'dark';
+    colors: {
+      background: string; surface: string; text: string; textMuted: string; border: string;
+      tint: string; onTint: string; danger: string; success: string; warning: string; inactive: string;
+    };
+    spacing: { xs: number; sm: number; md: number; lg: number; xl: number };
+    radius: { sm: number; md: number; lg: number };
+    font: { small: number; body: number; title: number; large: number };
+  };
+  export function useTheme(): Theme;
+
+  type El = ReactElement | null;
+  type Style = StyleProp<ViewStyle>;
+
+  export function Icon(props: { name: IconName; size?: number; color?: string; style?: StyleProp<TextStyle>; testID?: string }): El;
+
+  /** A screen's body: themed background, padding and spacing between children; scrolls unless scroll={false}. */
+  export function Screen(props: { children?: ReactNode; scroll?: boolean; padded?: boolean; style?: Style; testID?: string }): El;
+  /** A titled group: put a List, Card or fields inside. */
+  export function Section(props: { title?: string; footer?: string; children?: ReactNode; testID?: string }): El;
+  export function Card(props: { children?: ReactNode; onPress?: () => void; style?: Style; testID?: string }): El;
+  /** Rows in one card with separators: data + renderItem, or ListRow children. `empty` shows when there are none. */
+  export function List<T>(props: {
+    data?: readonly T[] | null;
+    renderItem?: (item: T, index: number) => ReactNode;
+    keyExtractor?: (item: T, index: number) => string | number;
+    children?: ReactNode;
+    empty?: ReactNode;
+    style?: Style;
+    testID?: string;
+  }): El;
+  export type RowAction = { label: string; icon?: IconName; color?: string; onPress: () => void };
+  /** A row: title, subtitle, value on the right, icon on the left, chevron when pressable. `actions` show on swipe left or long press. */
+  export function ListRow(props: {
+    title: string;
+    subtitle?: string;
+    value?: string | number;
+    icon?: IconName;
+    iconColor?: string;
+    left?: ReactNode;
+    right?: ReactNode;
+    chevron?: boolean;
+    onPress?: () => void;
+    onLongPress?: () => void;
+    actions?: RowAction[];
+    testID?: string;
+  }): El;
+  export function EmptyState(props: { icon?: IconName; title: string; message?: string; action?: { title: string; onPress: () => void }; testID?: string }): El;
+
+  export function TextField(props: {
+    label?: string;
+    value: string;
+    onChangeText: (text: string) => void;
+    placeholder?: string;
+    multiline?: boolean;
+    error?: string | null;
+    hint?: string;
+    autoFocus?: boolean;
+    secureTextEntry?: boolean;
+    keyboardType?: 'default' | 'email-address' | 'numeric' | 'decimal-pad' | 'phone-pad' | 'url';
+    onSubmitEditing?: () => void;
+    editable?: boolean;
+    testID?: string;
+  }): El;
+  /** A number, or null when empty. Clamped to min/max and rounded to `decimals` on blur. */
+  export function NumberField(props: { label?: string; value: number | null; onChange: (value: number | null) => void; min?: number; max?: number; decimals?: number; placeholder?: string; error?: string | null; hint?: string; testID?: string }): El;
+  /** A date as 'YYYY-MM-DD', or null. */
+  export function DateField(props: { label?: string; value: string | null; onChange: (date: string | null) => void; min?: string; max?: string; error?: string | null; hint?: string; testID?: string }): El;
+  /** A time as 'HH:MM', or null. */
+  export function TimeField(props: { label?: string; value: string | null; onChange: (time: string | null) => void; error?: string | null; hint?: string; testID?: string }): El;
+  export function Select<V extends string | number>(props: { label?: string; value: V | null; options: readonly { label: string; value: V }[]; onChange: (value: V) => void; placeholder?: string; error?: string | null; hint?: string; testID?: string }): El;
+  export function Toggle(props: { label: string; description?: string; value: boolean; onValueChange: (value: boolean) => void; disabled?: boolean; testID?: string }): El;
+  export function Stepper(props: { label?: string; value: number; onChange: (value: number) => void; min?: number; max?: number; step?: number; testID?: string }): El;
+  export function SearchField(props: { value: string; onChangeText: (text: string) => void; placeholder?: string; testID?: string }): El;
+  export function Button(props: { title: string; onPress: () => void; variant?: 'primary' | 'secondary' | 'destructive' | 'plain'; icon?: IconName; disabled?: boolean; loading?: boolean; style?: Style; testID?: string }): El;
+  /** An icon-only button; accessibilityLabel says what it does. */
+  export function IconButton(props: { icon: IconName; onPress: () => void; accessibilityLabel: string; color?: string; size?: number; disabled?: boolean; testID?: string }): El;
+  export function Chip(props: { label: string; selected?: boolean; onPress?: () => void; icon?: IconName; testID?: string }): El;
+
+  /** value from 0 to 1. */
+  export function ProgressBar(props: { value: number; color?: string; testID?: string }): El;
+  export function Badge(props: { value: string | number; color?: string; testID?: string }): El;
+  /** An amount in major units (12.5 = $12.50); `colored` makes negatives red and positives green. */
+  export function Money(props: { amount: number; currency?: string; signed?: boolean; colored?: boolean; style?: StyleProp<TextStyle>; testID?: string }): El;
+  export function formatMoney(amount: number, currency?: string, options?: { signed?: boolean }): string;
+  /** 45 → "45s", 750 → "12m 30s", 3900 → "1h 05m". */
+  export function Duration(props: { seconds: number; style?: StyleProp<TextStyle>; testID?: string }): El;
+  export function formatDuration(seconds: number): string;
+}
+
 declare module 'expo-sqlite' {
   import type { ReactNode } from 'react';
   import type { Database } from '@homeai/sdk';

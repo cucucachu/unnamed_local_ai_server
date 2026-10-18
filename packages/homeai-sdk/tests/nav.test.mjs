@@ -3,65 +3,12 @@
 // the pre-M22-02 shape (`layout` only).
 //   npm test    (builds dist/ first)
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import vm from 'node:vm';
-import { JSDOM } from 'jsdom';
-import { FIXTURE, RUNTIME_DEV, bundleApp } from './helpers.mjs';
+import { FIXTURE, bootJsdom, until } from './helpers.mjs';
 
 const NAV = path.join(path.dirname(FIXTURE), 'nav-check');
-const runtimeCode = fs.readFileSync(RUNTIME_DEV, 'utf8');
-
-async function until(what, fn, timeoutMs = 3000) {
-  const t0 = Date.now();
-  for (;;) {
-    const v = await fn();
-    if (v) return v;
-    if (Date.now() - t0 > timeoutMs) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}
-
-/** The runtime and an app bundle in jsdom, with no platform behind it (nothing here queries). */
-async function boot({ appDir = NAV, initialPath = '/', legacy = false } = {}) {
-  const dom = new JSDOM('<!doctype html><html><head></head><body><div id="root"></div></body></html>', {
-    runScripts: 'outside-only',
-    pretendToBeVisual: true,
-    url: 'about:blank',
-  });
-  const win = dom.window;
-  win.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-  const events = [];
-  win.ReactNativeWebView = { postMessage: (s) => events.push(JSON.parse(s)) };
-  win.__homeai_config = { initialPath };
-  const ctx = dom.getInternalVMContext();
-  new vm.Script(runtimeCode, { filename: 'runtime.js' }).runInContext(ctx);
-  new vm.Script(await bundleApp(appDir, { legacy }), { filename: 'app.js' }).runInContext(ctx);
-  const hidden = (el) => {
-    for (let e = el; e; e = e.parentElement) if (win.getComputedStyle(e).display === 'none') return true;
-    return false;
-  };
-  const all = (id) => [...win.document.querySelectorAll(`[data-testid="${id}"]`)].filter((el) => !hidden(el));
-  const $ = (id) => all(id)[0] ?? null;
-  const s = {
-    win,
-    $,
-    all,
-    shown: (id) => $(id) !== null,
-    click: (id) => $(id).click(),
-    headings: () => [...win.document.querySelectorAll('[role="heading"]')].filter((h) => !hidden(h)).map((h) => h.textContent),
-    paths: () => events.filter((m) => m.kind === 'evt' && m.event === 'nav.changed').map((m) => m.data.path),
-    errors: () => events.filter((m) => m.kind === 'evt' && m.event === 'runtime.error'),
-    close: () => win.close(),
-  };
-  await until('first render', () => events.some((m) => m.event === 'runtime.ready'));
-  return s;
-}
+const boot = (opts = {}) => bootJsdom({ appDir: NAV, ...opts });
 
 test('a Stack over a (tabs) group opens on the first tab, with the tab bar', async () => {
   const s = await boot();

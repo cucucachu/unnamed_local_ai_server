@@ -978,11 +978,14 @@ what another doc says it should be.
   sides), `icons.tsx` (`@expo/vector-icons`' `Ionicons` over the subset
   font in `icons.generated.ts`, from `scripts/icons.py` and
   `scripts/ICONS.txt`; rerun with `uv run --with fonttools --with brotli
-  python scripts/icons.py`); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
+  python scripts/icons.py`), `theme.ts` (the theme from app.json's
+  `userInterfaceStyle` and the host's scheme), `rn.tsx` (the
+  `react-native` apps get: themed default `Text` / `TextInput` colours),
+  `ui.tsx` (`@homeai/ui`); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
   `bridge-host.ts`, `platform.ts`, `document.ts`, and `web.ts`
   (`@homeai/sdk/host/web`, the iframe); `types/homeai.d.ts` (app typings);
   `modules.json` (the allowed modules); `build.mjs` (`runtimeBuildOptions`;
-  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈537 KB /
+  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈553 KB /
   1.9 MB).
 - **Tests**: `cd packages/homeai-sdk && npm ci --ignore-scripts && npm run
   lint && npm test` (`npx playwright install chromium` first).
@@ -998,6 +1001,11 @@ what another doc says it should be.
   tabs with a stack per tab, a nested stack, a pushed screen over the
   tabs, a modal with `headerRight`, deep links, and a bundle in the
   pre-M22-02 shape.
+  `tests/ui.test.mjs` (M22-03): the `tests/fixtures/kit-check` app — the
+  kit's fields, rows, swipe actions and display components, and the theme:
+  `"automatic"` following the config and `theme` events, dark defaults for
+  plain `Text` / `TextInput`, and light for apps without the key and for
+  older bundles.
   `tests/host.test.mjs`: the host's refusals, param rebuilding, in-flight
   cap, message queueing, RPC/bundle/runtime URLs and error mapping, the
   event relay, the document and `injectScriptFor`.
@@ -1008,7 +1016,9 @@ what another doc says it should be.
   inside the sandbox too, past its CSP). `scripts/e2e/app_runtime_smoke.sh`
   runs the same harness against the live stack, then builds `nav-check`
   with the real builder and, in the CSP'd frame, switches tabs (each keeps
-  its stack), opens and closes the modal, and checks the icon font loads.
+  its stack), opens and closes the modal, and checks the icon font loads;
+  then `kit-check` on a dark host: dark theme, native date / select inputs,
+  a mouse swipe opening a row's action, and a `theme` event to light.
 
 ### exec-toolbox image (`services/code-exec-manager/exec-image/`)
 

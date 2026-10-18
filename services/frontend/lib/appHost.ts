@@ -93,7 +93,7 @@ export async function loadInstanceDocument(instanceId: string, space: Space): Pr
   const options = platformOptions();
   const [bundle, people] = await Promise.all([fetchBundle(instanceId, options), sandboxPeople(space)]);
   const runtime = await fetchRuntime(bundle.sdk, options);
-  const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space), ...people } });
+  const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space), ...people, colorScheme: 'dark' } });
   return { appId: bundle.app_id, version: bundle.version, html };
 }
 

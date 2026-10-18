@@ -1,0 +1,12 @@
+{
+  "name": "Kit check",
+  "slug": "kit-check",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "color-palette-outline",
+    "description": "Fixture app for the @homeai/ui tests: the kit's components and the theme.",
+    "permissions": {}
+  }
+}

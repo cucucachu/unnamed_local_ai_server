@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import vm from 'node:vm';
+import { JSDOM } from 'jsdom';
 import { ALLOWED_MODULES, SDK_ROOT } from '../build.mjs';
 
 export const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'runtime-check');
@@ -43,6 +45,10 @@ export async function bundleApp(appDir = FIXTURE, { dev = true, edits = {}, lega
   if (legacy) lines.push(`export const layout = ${folders.includes('') ? `L${folders.indexOf('')}` : 'undefined'};`);
   else lines.push(`export const layouts = {${folders.map((d, i) => `${JSON.stringify(d)}: L${i}`).join(', ')}};`);
   lines.push(`export const routes = [${routes.join(', ')}];`);
+  if (!legacy) {
+    const style = JSON.parse(edits['app.json'] ?? fs.readFileSync(path.join(appDir, 'app.json'), 'utf8')).userInterfaceStyle;
+    lines.push(`export const userInterfaceStyle = ${JSON.stringify(style ?? 'light')};`);
+  }
   const res = await esbuild.build({
     stdin: { contents: lines.join('\n'), resolveDir: appDir, loader: 'js' },
     bundle: true,
@@ -194,4 +200,58 @@ export function stubPlatform(appDir = FIXTURE, { instanceId = INSTANCE_ID } = {}
       return reply(404, { detail: 'not_found' });
     },
   };
+}
+
+export async function until(what, fn, timeoutMs = 3000) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+/**
+ * The dev runtime and an app bundle in jsdom, with no platform behind it (for screens that don't
+ * query). `config` is merged into the sandbox config; `send(event, data)` delivers a host event.
+ */
+export async function bootJsdom({ appDir = FIXTURE, initialPath = '/', legacy = false, edits = {}, config = {} } = {}) {
+  const dom = new JSDOM('<!doctype html><html><head></head><body><div id="root"></div></body></html>', {
+    runScripts: 'outside-only',
+    pretendToBeVisual: true,
+    url: 'about:blank',
+  });
+  const win = dom.window;
+  win.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+  const events = [];
+  win.ReactNativeWebView = { postMessage: (s) => events.push(JSON.parse(s)) };
+  win.__homeai_config = { initialPath, ...config };
+  const ctx = dom.getInternalVMContext();
+  new vm.Script(fs.readFileSync(RUNTIME_DEV, 'utf8'), { filename: 'runtime.js' }).runInContext(ctx);
+  new vm.Script(await bundleApp(appDir, { legacy, edits }), { filename: 'app.js' }).runInContext(ctx);
+  const hidden = (el) => {
+    for (let e = el; e; e = e.parentElement) if (win.getComputedStyle(e).display === 'none') return true;
+    return false;
+  };
+  const all = (id) => [...win.document.querySelectorAll(`[data-testid="${id}"]`)].filter((el) => !hidden(el));
+  const $ = (id) => all(id)[0] ?? null;
+  const s = {
+    win,
+    $,
+    all,
+    shown: (id) => $(id) !== null,
+    click: (id) => $(id).click(),
+    headings: () => [...win.document.querySelectorAll('[role="heading"]')].filter((h) => !hidden(h)).map((h) => h.textContent),
+    paths: () => events.filter((m) => m.kind === 'evt' && m.event === 'nav.changed').map((m) => m.data.path),
+    errors: () => events.filter((m) => m.kind === 'evt' && m.event === 'runtime.error'),
+    send: (event, data) => win.__homeaiReceive(JSON.stringify({ homeai: 1, kind: 'evt', event, data })),
+    close: () => win.close(),
+  };
+  await until('first render', () => events.some((m) => m.event === 'runtime.ready'));
+  return s;
 }

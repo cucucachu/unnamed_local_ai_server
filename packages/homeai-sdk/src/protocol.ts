@@ -54,6 +54,7 @@ export type HostEvents = {
   space: Space;
   user: User;
   members: Member[];
+  theme: { colorScheme: 'light' | 'dark' };
 };
 
 /** Sandbox -> host events. */
@@ -63,8 +64,12 @@ export type SandboxEvents = {
   'nav.changed': { path: string };
 };
 
-/** What the host puts in the sandbox document (`window.__homeai_config`). */
-export type SandboxConfig = { initialPath?: string; space?: Space | null; user?: User | null; members?: Member[] };
+/**
+ * What the host puts in the sandbox document (`window.__homeai_config`). `colorScheme` is the
+ * host's: apps whose app.json says `"userInterfaceStyle": "automatic"` follow it, and the `theme`
+ * event changes it.
+ */
+export type SandboxConfig = { initialPath?: string; space?: Space | null; user?: User | null; members?: Member[]; colorScheme?: 'light' | 'dark' };
 
 /** The largest envelope either side accepts, in UTF-16 code units. */
 export const MAX_MESSAGE_CHARS = 1 << 20;

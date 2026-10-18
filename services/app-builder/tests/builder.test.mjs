@@ -328,6 +328,30 @@ test('an icon outside the subset is a type error', async () => {
   assert.match(r.diagnostics[0].message, /logo-github/);
 });
 
+const KIT = path.join(here, '..', '..', '..', 'packages', 'homeai-sdk', 'tests', 'fixtures', 'kit-check', 'app');
+
+test('@homeai/ui screens type-check and render, and userInterfaceStyle is in the bundle', async () => {
+  const edits = {
+    'app/kit.tsx': fs.readFileSync(path.join(KIT, 'index.tsx'), 'utf8'),
+    'app/plain.tsx': fs.readFileSync(path.join(KIT, 'plain.tsx'), 'utf8'),
+    'app.json': (old) => JSON.stringify({ ...JSON.parse(old), userInterfaceStyle: 'automatic' }),
+  };
+  const compiled = await compileOnly(edits);
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.match(fs.readFileSync(path.join(compiled.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "automatic"/);
+  const smoke = await build(edits);
+  assert.deepEqual(smoke.diagnostics, []);
+  assert.ok(smoke.routes.some((r) => r.path === '/kit'));
+  const light = await compileOnly();
+  assert.match(fs.readFileSync(path.join(light.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "light"/);
+});
+
+test('a kit icon outside the subset is a type error', async () => {
+  const r = await compileOnly({ 'app/about.tsx': "import { ListRow } from '@homeai/ui';\nexport default function About() { return <ListRow title=\"x\" icon=\"logo-github\" />; }\n" });
+  assert.deepEqual(r.diagnostics.map((d) => [d.step, d.file]), [['type', 'app/about.tsx']]);
+  assert.match(r.diagnostics[0].message, /logo-github/);
+});
+
 test('withTransactionAsync is not in SDK 1', async () => {
   const r = await compileOnly({
     'app/index.tsx': (old) => old.replace('async function add() {', 'async function add() {\n    await db.withTransactionAsync(async () => {});'),

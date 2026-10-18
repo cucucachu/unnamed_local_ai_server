@@ -1,0 +1,1 @@
+-- No data: this fixture only exercises the UI kit.
