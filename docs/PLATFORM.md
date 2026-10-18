@@ -859,7 +859,16 @@ browser's own inputs, `Select` (a `<select>`), `Toggle`, `Stepper`,
 `SearchField`, `Button` (primary, secondary, destructive, plain; `loading`),
 `IconButton`, `Chip`; `Icon`, `ProgressBar`, `Badge`, `Money` /
 `formatMoney`, `Duration` / `formatDuration`. Icon props are `IconName`s.
-Charts follow in M22-04.
+Charts (M22-04, `src/charts.tsx`): `BarChart` and `LineChart` take `data`
+rows, `x` (the field labelling each point, in order) and `y` (a field, or
+several for one series each, with a legend; `names` renames them), plus
+`formatX` / `formatY`; `PieChart` takes `label` and `value` (positive
+values only) and draws a donut with a legend of percents. They are SVG,
+themed, sized to their container's width; bars always include 0 and lines
+fit their range; x labels thin out to what fits; a non-number value is a
+missing bar or a break in the line; empty data says "No data yet". Each
+chart is one `role="img"` whose label is a summary (each series' first,
+last, highest and lowest points, or each slice's percent).
 
 The theme (`src/theme.ts`, `useTheme()`: colors, spacing, radius, font)
 is chosen by Expo's top-level app.json key `userInterfaceStyle`, which the
@@ -872,7 +881,8 @@ host passes as sandbox config `colorScheme` and can change with the
 dark the default colour of plain `Text` and `TextInput` (the outermost
 `Text` only, so nesting still inherits) follow the theme;
 `useColorScheme()` answers for the app, not the browser. The kit added
-≈5 KB gzip to the runtime (193.9 → 198.9 KB at `gzip -9`).
+≈5 KB gzip to the runtime (193.9 → 198.9 KB at `gzip -9`), the charts
+≈3 KB more.
 
 ### `@homeai/sdk` (the only platform-specific surface; keep it tiny)
 

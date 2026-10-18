@@ -11,6 +11,7 @@ import { Ionicons } from './icons';
 import { reactNative } from './rn';
 import { setHostScheme, setUserInterfaceStyle, useTheme } from './theme';
 import * as UI from './ui';
+import { BarChart, LineChart, PieChart } from './charts';
 import * as SDK from './sdk';
 import { emit, installReceiver, on } from './bridge';
 import type { SandboxConfig } from './protocol';
@@ -69,6 +70,9 @@ export const modules: Record<string, unknown> = {
     Duration: UI.Duration,
     formatMoney: UI.formatMoney,
     formatDuration: UI.formatDuration,
+    BarChart,
+    LineChart,
+    PieChart,
   },
   '@homeai/sdk': {
     useDatabase: SDK.useDatabase,

@@ -156,6 +156,39 @@ declare module '@homeai/ui' {
   /** 45 → "45s", 750 → "12m 30s", 3900 → "1h 05m". */
   export function Duration(props: { seconds: number; style?: StyleProp<TextStyle>; testID?: string }): El;
   export function formatDuration(seconds: number): string;
+
+  type Field<T> = keyof T & string;
+  /**
+   * `data` rows; `x` the field labelling each point (in order: a category, a date string);
+   * `y` the field to plot, or several for one series each (`names` for the legend).
+   * Values that aren't numbers are skipped. Bars always include 0; lines fit their range.
+   */
+  export type ChartProps<T extends object> = {
+    data: readonly T[] | null | undefined;
+    x: Field<T>;
+    y: Field<T> | readonly Field<T>[];
+    names?: Partial<Record<Field<T>, string>>;
+    /** Also starts the chart's spoken summary. */
+    title?: string;
+    height?: number;
+    colors?: readonly string[];
+    formatX?: (value: unknown) => string;
+    formatY?: (value: number) => string;
+    testID?: string;
+  };
+  export function BarChart<T extends object>(props: ChartProps<T>): El;
+  export function LineChart<T extends object>(props: ChartProps<T>): El;
+  /** A donut of each row's `value` (positive values only) with a legend of `label` and percent. */
+  export function PieChart<T extends object>(props: {
+    data: readonly T[] | null | undefined;
+    label: Field<T>;
+    value: Field<T>;
+    title?: string;
+    size?: number;
+    colors?: readonly string[];
+    format?: (value: number) => string;
+    testID?: string;
+  }): El;
 }
 
 declare module 'expo-sqlite' {

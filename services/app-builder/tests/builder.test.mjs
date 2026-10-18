@@ -330,10 +330,11 @@ test('an icon outside the subset is a type error', async () => {
 
 const KIT = path.join(here, '..', '..', '..', 'packages', 'homeai-sdk', 'tests', 'fixtures', 'kit-check', 'app');
 
-test('@homeai/ui screens type-check and render, and userInterfaceStyle is in the bundle', async () => {
+test('@homeai/ui screens and charts type-check and render, and userInterfaceStyle is in the bundle', async () => {
   const edits = {
     'app/kit.tsx': fs.readFileSync(path.join(KIT, 'index.tsx'), 'utf8'),
     'app/plain.tsx': fs.readFileSync(path.join(KIT, 'plain.tsx'), 'utf8'),
+    'app/charts.tsx': fs.readFileSync(path.join(KIT, 'charts.tsx'), 'utf8'),
     'app.json': (old) => JSON.stringify({ ...JSON.parse(old), userInterfaceStyle: 'automatic' }),
   };
   const compiled = await compileOnly(edits);
@@ -341,7 +342,7 @@ test('@homeai/ui screens type-check and render, and userInterfaceStyle is in the
   assert.match(fs.readFileSync(path.join(compiled.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "automatic"/);
   const smoke = await build(edits);
   assert.deepEqual(smoke.diagnostics, []);
-  assert.ok(smoke.routes.some((r) => r.path === '/kit'));
+  assert.deepEqual(smoke.routes.filter((r) => ['/kit', '/charts'].includes(r.path)).map((r) => r.timed_out), [false, false]);
   const light = await compileOnly();
   assert.match(fs.readFileSync(path.join(light.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "light"/);
 });
