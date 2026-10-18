@@ -4,15 +4,17 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
+import { CodeView } from '@/components/CodeView';
+import { CsvTable } from '@/components/CsvTable';
 import { Markdown } from '@/components/Markdown';
 import { ApiError } from '@/lib/api';
 import { describeFilesError, parentPath } from '@/lib/files';
 import {
   NotTextError,
   copyPathFor,
-  isMarkdownName,
   loadTextFile,
   saveTextFile,
+  textViewOf,
   type TextFile,
 } from '@/lib/textFiles';
 import { monospaceFontFamily, theme } from '@/lib/theme';
@@ -44,7 +46,8 @@ function confirmDiscard(): Promise<boolean> {
 /**
  * A text file from Files (M22-10, docs/APP_TEMPLATES.md §8): markdown
  * rendered with the chat's `Markdown` (relative and `file:` links open in
- * Files), other text in monospace. The space's owners and editors get Edit,
+ * Files), CSV/TSV as a table and JSON/code with line numbers (M22-11),
+ * other text in monospace. The space's owners and editors get Edit,
  * a plain editor whose Save sends the version it loaded (`if_version`). If
  * the file changed since, they choose: reload theirs, keep mine
  * (overwrite), or save mine as a copy. Leaving with unsaved changes asks
@@ -239,9 +242,17 @@ export default function FileScreen() {
           accessibilityLabel={`Edit ${name}`}
           testID="file-editor"
         />
+      ) : textViewOf(name) === 'csv' ? (
+        <View style={styles.body} testID="file-view">
+          <CsvTable name={name} text={current.file.text} />
+        </View>
+      ) : textViewOf(name) === 'code' ? (
+        <View style={styles.body} testID="file-view">
+          <CodeView text={current.file.text} />
+        </View>
       ) : (
         <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent} testID="file-view">
-          {isMarkdownName(name) ? (
+          {textViewOf(name) === 'markdown' ? (
             <Markdown onFileLink={openInFiles} baseDir={parentPath(current.file.path)}>
               {current.file.text}
             </Markdown>

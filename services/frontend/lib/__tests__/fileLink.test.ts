@@ -1,5 +1,5 @@
 import { filePathFromHref, linkPathFrom, normalizeFileLink } from '../fileLink';
-import { isMarkdownName, isTextFileName } from '../textFiles';
+import { csvDelimiterFor, isMarkdownName, isPdfName, isTextFileName, parseCsv, textViewOf } from '../textFiles';
 
 describe('filePathFromHref', () => {
   it('maps a bare relative href the model sometimes emits into the personal space', () => {
@@ -97,5 +97,29 @@ describe('isTextFileName', () => {
       expect(isTextFileName(name)).toBe(false);
     }
     expect([isMarkdownName('a.md'), isMarkdownName('a.txt')]).toEqual([true, false]);
+  });
+});
+
+describe('textViewOf / parseCsv (M22-11)', () => {
+  it('routes by type', () => {
+    expect(['a.md', 'b.csv', 'c.tsv', 'd.json', 'e.py', 'f.txt', 'README', 'g.yaml'].map(textViewOf)).toEqual([
+      'markdown', 'csv', 'csv', 'code', 'code', 'text', 'text', 'code',
+    ]);
+    expect([isPdfName('x.PDF'), isPdfName('x.txt')]).toEqual([true, false]);
+  });
+
+  it('parses quotes, doubled quotes, embedded newlines and CRLF', () => {
+    expect(parseCsv('a,b\r\n"x, y","say ""hi"""\n"two\nlines",\n', ',')).toEqual([
+      ['a', 'b'],
+      ['x, y', 'say "hi"'],
+      ['two\nlines', ''],
+    ]);
+    expect(parseCsv('', ',')).toEqual([]);
+  });
+
+  it('picks the delimiter from the extension or the header', () => {
+    expect(csvDelimiterFor('a.tsv', 'x,y')).toBe('\t');
+    expect(csvDelimiterFor('a.csv', 'Datum;Betrag;Text\n1,5;2;3')).toBe(';');
+    expect(csvDelimiterFor('a.csv', 'date,amount\n')).toBe(',');
   });
 });

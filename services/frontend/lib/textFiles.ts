@@ -37,6 +37,72 @@ export function isMarkdownName(name: string): boolean {
   return ext === 'md' || ext === 'markdown' || ext === 'mdx';
 }
 
+const PROSE_EXTENSIONS = new Set(['txt', 'log', 'srt', 'vtt', 'tex', 'rst', 'org']);
+
+/** How the viewer shows a text file (M22-11): markdown rendered, CSV/TSV as
+ * a table, prose as plain text, everything else as code with line numbers. */
+export type TextView = 'markdown' | 'csv' | 'text' | 'code';
+
+export function textViewOf(name: string): TextView {
+  const ext = extensionOf(name);
+  if (isMarkdownName(name)) return 'markdown';
+  if (ext === 'csv' || ext === 'tsv') return 'csv';
+  if (ext === null || PROSE_EXTENSIONS.has(ext)) return 'text';
+  return 'code';
+}
+
+export function isPdfName(name: string): boolean {
+  return extensionOf(name) === 'pdf';
+}
+
+/** Rows of a CSV file (RFC 4180 quoting, CRLF or LF). A trailing newline
+ * doesn't make an empty last row. */
+export function parseCsv(text: string, delimiter: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') {
+        field += '"';
+        i += 1;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"' && field === '') {
+      quoted = true;
+    } else if (ch === delimiter) {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i += 1;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== '' || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** Tab for `.tsv`; otherwise `;` when the header line has more of them than commas. */
+export function csvDelimiterFor(name: string, text: string): string {
+  if (extensionOf(name) === 'tsv') return '\t';
+  const header = text.slice(0, text.search(/\r?\n|$/));
+  const count = (ch: string) => header.split(ch).length - 1;
+  return count(';') > count(',') ? ';' : ',';
+}
+
 export class NotTextError extends Error {
   readonly reason: 'too_large' | 'binary';
 

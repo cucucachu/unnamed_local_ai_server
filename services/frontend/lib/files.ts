@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { Directory, File, Paths, UploadType } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as DocumentPicker from 'expo-document-picker';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as SecureStore from 'expo-secure-store';
 import * as Sharing from 'expo-sharing';
 
@@ -497,4 +498,37 @@ export function folderLabel(treeUri: string): string {
   if (!tree) return 'the chosen folder';
   const decoded = decodeURIComponent(tree.split('/')[0]);
   return decoded.slice(decoded.indexOf(':') + 1) || decoded;
+}
+
+/** Opens a PDF in the platform's own viewer (M22-11): the browser's on web
+ * (`/files/stream` serves it inline), Android's PDF app through a VIEW
+ * intent on a `content://` copy, iOS's share sheet (Quick Look). Throws
+ * `ApiError 0` when the phone has nothing that opens PDFs. */
+export async function openPdf(path: string): Promise<void> {
+  const url = `${apiBase()}${FILES_API}/stream?${query(path)}`;
+  if (Platform.OS === 'web') {
+    window.open(url, '_blank');
+    return;
+  }
+  const destination = new File(new Directory(Paths.cache), path.split('/').pop() || 'document.pdf');
+  let downloaded: File;
+  try {
+    downloaded = await File.downloadFileAsync(url, destination, { idempotent: true, headers: authHeaders() });
+  } catch (error) {
+    throw new ApiError(0, error instanceof Error ? error.message : 'Download failed');
+  }
+  if (Platform.OS === 'android') {
+    const contentUri = await LegacyFileSystem.getContentUriAsync(downloaded.uri);
+    try {
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: contentUri,
+        type: 'application/pdf',
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      });
+    } catch {
+      throw new ApiError(0, 'No app on this phone opens PDFs');
+    }
+    return;
+  }
+  await Sharing.shareAsync(downloaded.uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
 }

@@ -339,6 +339,20 @@ this is host work.
   > `scripts/e2e/m22_text_editor_smoke.sh`.
 - **Then:** CSV as a table, JSON and code in monospace with line numbers,
   and PDF opened in the browser's or phone's own viewer.
+
+  > **As built (M22-11):** the same `/file` screen picks the view from the
+  > extension (`textViewOf` in `lib/textFiles.ts`). `.csv`/`.tsv` render
+  > as a table (`components/CsvTable.tsx`): RFC 4180 quoting, tab for
+  > `.tsv`, `;` when the header has more semicolons than commas, the first
+  > 5,000 rows with "Showing 5,000 of N rows". `.md` is rendered markdown;
+  > `.txt`, `.log` and names without an extension are plain monospace;
+  > everything else (JSON, YAML, source) is `components/CodeView.tsx`,
+  > monospace with a line-number gutter, no wrapping. Edit works the same
+  > in every view. PDFs (`openPdf` in `lib/files.ts`) open the stream URL
+  > in a new tab on web; on the phone they're downloaded to the cache and
+  > handed to the system viewer: an `ACTION_VIEW` intent on Android
+  > (`expo-intent-launcher`, a new native module, so the phone app needs a
+  > rebuild) and the share sheet on iOS.
 - "Open with" an app is M23 (it needs the files bridge).
 
 ## 9. The templates
