@@ -157,3 +157,83 @@ test('an app without userInterfaceStyle stays light on a dark host, as do bundle
     s.close();
   }
 });
+
+// --- charts (M22-04) ---------------------------------------------------------
+
+test('BarChart: two series, negative values, empty', async () => {
+  const s = await boot({ initialPath: '/charts' });
+  await until('charts', () => s.shown('charts-screen'));
+  const two = s.$('bar-two');
+  assert.equal(two.getAttribute('role'), 'img');
+  assert.equal(
+    two.getAttribute('aria-label'),
+    'Spending: bar chart of 3 points. Spent: from $420.00 (Jan) to $380.00 (Mar), highest $515.00 (Feb), lowest $380.00 (Mar). Budget: from $500.00 (Jan) to $450.00 (Mar), highest $500.00 (Jan), lowest $450.00 (Mar).',
+  );
+  assert.equal(two.querySelectorAll('rect[data-bar]').length, 6);
+  assert.deepEqual([...two.querySelectorAll('text[data-axis="x"]')].map((t) => t.textContent), ['Jan', 'Feb', 'Mar']);
+  assert.match(two.textContent, /Spent.*Budget/, 'a legend for two series');
+  assert.equal(two.querySelector('svg').getAttribute('aria-hidden'), 'true');
+
+  // Bars grow up or down from the zero line.
+  const neg = s.$('bar-negative');
+  const ticks = [...neg.querySelectorAll('text[data-axis="y"]')].map((t) => t.textContent);
+  assert.ok(ticks.includes('0') && ticks.some((v) => v.startsWith('-')), ticks.join(' '));
+  const zeroY = Number([...neg.querySelectorAll('line')].find((l) => l.getAttribute('stroke-width') === '1.5').getAttribute('y1'));
+  const [w1, w2] = ['net:0', 'net:1'].map((k) => neg.querySelector(`rect[data-bar="${k}"]`));
+  assert.ok(Math.abs(Number(w1.getAttribute('y')) + Number(w1.getAttribute('height')) - zeroY) < 0.01, 'positive bar ends at 0');
+  assert.ok(Math.abs(Number(w2.getAttribute('y')) - zeroY) < 0.01, 'negative bar starts at 0');
+  assert.equal(neg.textContent.includes('net'), false, 'no legend for one series');
+
+  assert.equal(s.$('bar-empty-empty').textContent, 'No data yet');
+  assert.equal(s.$('bar-empty').getAttribute('aria-label'), 'Bar chart: no data');
+  assert.equal(s.$('bar-empty').querySelector('svg'), null);
+  assert.deepEqual(s.errors(), []);
+  s.close();
+});
+
+test('LineChart: many points thin their labels, one point, a gap, empty', async () => {
+  const s = await boot({ initialPath: '/charts' });
+  await until('charts', () => s.shown('charts-screen'));
+  const many = s.$('line-many');
+  const labels = [...many.querySelectorAll('text[data-axis="x"]')].map((t) => t.textContent);
+  assert.ok(labels.length >= 3 && labels.length <= 8, `x labels fit a phone width: ${labels.join(' ')}`);
+  assert.equal(labels[0], '08-01');
+  assert.equal(many.querySelectorAll('circle').length, 0, 'no dots past 31 points');
+  assert.equal(many.querySelector('path[data-line="kg"]').getAttribute('d').match(/[ML]/g).length, 60);
+  // A line fits its range instead of starting at 0.
+  const ticks = [...many.querySelectorAll('text[data-axis="y"]')].map((t) => Number(t.textContent));
+  assert.ok(Math.min(...ticks) >= 70, ticks.join(' '));
+  assert.match(many.getAttribute('aria-label'), /^Weight: line chart of 60 points\. kg: from 82 \(08-01\) to /);
+
+  const one = s.$('line-one');
+  assert.equal(one.querySelectorAll('circle').length, 1);
+  assert.equal(one.getAttribute('aria-label'), 'Line chart: line chart of 1 point. kg: 81.4 (Today).');
+
+  const gap = s.$('line-gap').querySelector('path[data-line="km"]').getAttribute('d');
+  assert.equal(gap.match(/M/g).length, 2, `a missing value breaks the line: ${gap}`);
+  assert.equal(s.$('line-gap').querySelectorAll('circle').length, 2);
+
+  assert.equal(s.$('line-empty-empty').textContent, 'No data yet');
+  s.close();
+});
+
+test('PieChart: slices, legend with percents, one slice, empty', async () => {
+  const s = await boot({ initialPath: '/charts' });
+  await until('charts', () => s.shown('charts-screen'));
+  const pie = s.$('pie');
+  assert.equal(pie.getAttribute('aria-label'), 'Categories: Food 23% (300), Rent 69% (900), Fun 8% (100).');
+  assert.deepEqual([...pie.querySelectorAll('[data-slice]')].map((p) => p.getAttribute('data-slice')), ['Food', 'Rent', 'Fun'], 'non-positive values are left out');
+  assert.match(pie.textContent, /Food23%Rent69%Fun8%/);
+  assert.equal(s.$('pie-one').querySelectorAll('circle[data-slice]').length, 1, 'one slice is a full ring');
+  assert.equal(s.$('pie-empty-empty').textContent, 'No data yet');
+  assert.deepEqual(s.errors(), []);
+  s.close();
+});
+
+test('charts follow the theme', async () => {
+  const s = await boot({ initialPath: '/charts', edits: withStyle('dark') });
+  await until('charts', () => s.shown('charts-screen'));
+  assert.equal(s.$('bar-negative').querySelector('text[data-axis="y"]').getAttribute('fill'), '#8b949e');
+  assert.equal(s.$('bar-negative').querySelector('rect[data-bar]').getAttribute('fill'), '#4f8cff');
+  s.close();
+});

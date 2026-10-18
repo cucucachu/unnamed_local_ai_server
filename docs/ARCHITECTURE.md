@@ -981,7 +981,7 @@ what another doc says it should be.
   python scripts/icons.py`), `theme.ts` (the theme from app.json's
   `userInterfaceStyle` and the host's scheme), `rn.tsx` (the
   `react-native` apps get: themed default `Text` / `TextInput` colours),
-  `ui.tsx` (`@homeai/ui`); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
+  `ui.tsx` and `charts.tsx` (`@homeai/ui`); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
   `bridge-host.ts`, `platform.ts`, `document.ts`, and `web.ts`
   (`@homeai/sdk/host/web`, the iframe); `types/homeai.d.ts` (app typings);
   `modules.json` (the allowed modules); `build.mjs` (`runtimeBuildOptions`;
@@ -1005,7 +1005,8 @@ what another doc says it should be.
   kit's fields, rows, swipe actions and display components, and the theme:
   `"automatic"` following the config and `theme` events, dark defaults for
   plain `Text` / `TextInput`, and light for apps without the key and for
-  older bundles.
+  older bundles; and (M22-04) the charts — empty, one point, many points,
+  negative values, a gap, two series, the summaries.
   `tests/host.test.mjs`: the host's refusals, param rebuilding, in-flight
   cap, message queueing, RPC/bundle/runtime URLs and error mapping, the
   event relay, the document and `injectScriptFor`.

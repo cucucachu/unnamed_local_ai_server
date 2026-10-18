@@ -131,6 +131,8 @@ actions=[{label, onPress}] (swipe), EmptyState, Card, TextField, NumberField (nu
 DateField ('YYYY-MM-DD'|null), TimeField ('HH:MM'|null), Select options=[{label,value}],
 Toggle, Stepper, SearchField, Button variant=primary|secondary|destructive|plain, IconButton,
 Chip, ProgressBar (0-1), Badge, Money amount, Duration seconds, useTheme() for colors.
+Charts: <BarChart|LineChart data={rows} x="month" y="total" (or y={['a','b']}) title=…/>,
+<PieChart data={rows} label="category" value="total"/>; pass useQuery rows straight in.
 New apps set "userInterfaceStyle": "automatic" at the top level of app.json (follows the
 host's dark mode); then never hard-code text or background colors: use useTheme().colors.
 @homeai/sdk:
