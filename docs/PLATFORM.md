@@ -771,6 +771,10 @@ Until then they're visible to nobody.
 > [`spikes/app_runtime.md`](spikes/app_runtime.md). The on-device Expo Go
 > check is a maintainer step before G12.
 
+> M22 (navigation, the UI kit, installable templates, the data map, app
+> rows in search, memory over time, text editing in Files) is designed in
+> [`APP_TEMPLATES.md`](APP_TEMPLATES.md).
+
 ### Package format (standards-shaped, D11)
 
 ```text
