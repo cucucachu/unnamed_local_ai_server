@@ -35,6 +35,9 @@ RUN uv sync --frozen --no-dev && rm -rf "$UV_CACHE_DIR"
 
 COPY app/ ./app/
 COPY system_apps/ ./system_apps/
+# Installable app templates: `examples/apps/*` (compose's `templates` additional
+# build context), read from `APP_TEMPLATES_DIR` (default /app/templates).
+COPY --from=templates . ./templates/
 RUN python -m compileall -q app
 
 EXPOSE 8100

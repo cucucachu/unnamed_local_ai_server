@@ -1,7 +1,8 @@
 # Example apps
 
 Hand-written apps in the package format of `docs/PLATFORM.md` §7. They are
-the templates the agent copies when it writes apps (M13), so they stick to
+the templates the platform ships: the catalog's "Start from a template"
+and the agent's `create_app` copy them (M13, M22-05), so they stick to
 plain standards: SQLite DDL in `schema.sql`, `:named`-parameter SQL in
 `actions/`, expo-router files under `app/`, React Native components, and the
 expo-sqlite-shaped API from `@homeai/sdk`.
@@ -60,7 +61,11 @@ build command, so build it with the script above or
 
 - `cd services/app-builder && npm test` builds `grocery-list`, `list`,
   `notes` and `tracker` with the builder (zero diagnostics, every route
-  renders).
+  renders), and fails if a folder here isn't in that list.
+- `services/platform/tests/test_app_templates.py` validates every template
+  and runs its actions against a scratch database.
+- `scripts/e2e/app_template_smoke.sh` creates one from the catalog on the
+  live stack and uses it.
 - `scripts/e2e/grocery_app_smoke.sh` installs it in a personal and a
   shared space on the live stack and drives it in a browser (add, check,
   detail screen, clear checked, reload, live updates between members, a

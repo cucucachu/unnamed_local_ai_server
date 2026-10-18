@@ -149,8 +149,7 @@ SELECT ..., _created_by FROM t; const members = useMembers() at the top of the
 component; members.find((m) => m.id === row._created_by)?.name ?? 'Someone'. Mine:
 row._created_by === useUser()?.id. ORDER BY _created_at for time order.
 A new app always starts with create_app: files you write into an Apps folder yourself are
-not an app, and build_app can't find them. Templates (create_app's template=):
-grocery-list (default; shopping + quantity), list (checklist), notes (title + body),
-tracker (habits + daily check-ins). Pick the closest, then edit. After every edit, build_app and fix every diagnostic. Prefer adding columns
+not an app, and build_app can't find them. list_apps lists the templates (create_app's
+template=, default grocery-list). Pick the closest, then edit. After every edit, build_app and fix every diagnostic. Prefer adding columns
 with NOT NULL DEFAULT <constant>; dropping or renaming is destructive (approve_migration).
 """

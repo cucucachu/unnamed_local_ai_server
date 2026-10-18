@@ -35,6 +35,8 @@ from app.core.config import Settings
 from app.main import create_app
 
 PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "pgvector/pgvector:0.8.7-pg17-trixie")
+# The repo's shipped templates (the image copies them to /app/templates).
+REPO_TEMPLATES = Path(__file__).resolve().parents[3] / "examples" / "apps"
 SUPERUSER = "homeai"
 SUPERUSER_PASSWORD = "test-superuser-password"
 
@@ -143,6 +145,7 @@ def make_settings(db: PgDatabase, data_dir: Path, **overrides) -> Settings:
     spaces_dir = data_dir / "spaces"
     spaces_dir.mkdir(parents=True, exist_ok=True)
     overrides.setdefault("file_index_enabled", False)
+    overrides.setdefault("app_templates_dir", REPO_TEMPLATES)
     return Settings(
         platform_db_host=db.host,
         platform_db_port=db.port,

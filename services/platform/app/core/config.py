@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # Image-shipped system apps (M14-03): Chat, Files, Settings, Home.
     # Default is `system_apps/` next to this package (`/app/system_apps` in the image).
     system_apps_dir: Path = Path(__file__).resolve().parents[2] / "system_apps"
+    # Installable app templates (M22-05, `app/core/apptemplates.py`): `examples/apps/`,
+    # copied into the image at /app/templates.
+    app_templates_dir: Path = Path(__file__).resolve().parents[2] / "templates"
 
     # WireGuard (M15-01): the sidecar's wg0.conf lives on a shared volume
     # (`wireguard-config` → `/data/wireguard`). Server keys stay under

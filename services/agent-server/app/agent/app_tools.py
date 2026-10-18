@@ -32,9 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Annotated, Any, Self
 from uuid import UUID
 
@@ -67,7 +65,6 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _MAX_ROWS_SHOWN = 200
 _MAX_RESULT_CHARS = 20_000
 _MAX_DIAGNOSTICS_SHOWN = 30
-_MAX_TEMPLATE_BYTES = 1024 * 1024
 _TOKEN = re.compile(r"--[^\n]*|/\*.*?\*/|\s+|[A-Za-z_]+|.", re.DOTALL)
 _DDL = frozenset(
     {"alter", "analyze", "attach", "begin", "commit", "create", "detach", "drop", "end",
@@ -458,31 +455,16 @@ def _diagnostic(d: dict) -> str:
 # --- templates ------------------------------------------------------------------------
 
 
-def _templates(settings: Settings) -> dict[str, Path]:
-    root = Path(settings.app_templates_dir)
-    if not root.is_dir():
-        return {}
-    return {
-        p.name: p
-        for p in sorted(root.iterdir())
-        if p.is_dir() and (p / "app.json").is_file() and SLUG_RE.fullmatch(p.name)
-    }
+async def _templates(api: _Platform) -> list[dict] | str:
+    """The platform's installable templates (`GET /app-templates`, M22-05)."""
+    reply = await api.call("GET", f"{API}/app-templates")
+    if not reply.ok:
+        return f"Error: couldn't list the app templates: {_why(reply)}"
+    return reply.body["templates"]
 
 
-def _template_files(root: Path) -> Iterator[tuple[str, bytes]]:
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root)
-        if any(part.startswith(".") for part in rel.parts) or not path.is_file():
-            continue
-        if path.is_symlink() or path.stat().st_size > _MAX_TEMPLATE_BYTES:
-            continue
-        yield rel.as_posix(), path.read_bytes()
-
-
-def _manifest(data: bytes, slug: str, name: str) -> bytes:
-    doc = json.loads(data)
-    doc["slug"], doc["name"] = slug, name
-    return (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode()
+def _template_lines(templates: list[dict]) -> list[str]:
+    return [f"  {t['slug']}: {t['description'] or t['name']}" for t in templates]
 
 
 # --- the tools ------------------------------------------------------------------------
@@ -493,7 +475,6 @@ _NO_DELEGATION = "Error: apps are unavailable for this run (no delegation)."
 
 def make_app_tools(settings: Settings) -> list[BaseTool]:
     """The six app tools, bound to one `Settings` (see `make_execute_code_tool`)."""
-    template_names = ", ".join(_templates(settings)) or "none installed"
 
     @tool
     async def list_apps(config: RunnableConfig) -> str:
@@ -511,8 +492,11 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
             return _NO_DELEGATION
         async with _Platform(settings, token) as api:
             cat = await _catalog(api)
+            templates = await _templates(api)
         if isinstance(cat, str):
             return cat
+        if isinstance(templates, str):
+            templates = []
         lines = []
         for app in cat.system_apps:
             lines += _system_app_lines(app)
@@ -536,17 +520,15 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                     f"- {app['name']} (slug {app['slug']}, not installed): source "
                     f"{app['source_path']} (app id {app['id']})"
                 )
+        starters = "\n".join(["Templates for create_app:", *_template_lines(templates)])
         if not lines:
-            return (
-                "The user has no apps yet. Create one with create_app "
-                f"(templates: {template_names})."
-            )
+            return f"The user has no apps yet. Create one with create_app.\n{starters}"
         return (
             "Apps (system apps are native host screens; an instance is an installed "
             "copy with its own database):\n"
             + "\n".join(lines)
             + "\nBefore changing a user app, read its app.json, AGENT.md and schema.sql. "
-            "System-app source is image-shipped and read-only."
+            "System-app source is image-shipped and read-only.\n" + starters
         )
 
     @tool
@@ -557,9 +539,9 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
 
         space: "personal" or a shared space's slug. slug: the app's folder name, lowercase
         letters, digits and dashes (e.g. "chore-chart"). name: its display name.
-        template: which starter to copy. grocery-list (default) is a shopping list with
-        quantities; list is a generic checklist; notes is title+body notes; tracker is
-        habits with a daily check-in. The source is copied to /personal/Apps/<slug>/ (or
+        template: the starter to copy, by slug; list_apps lists them with what each is
+        for (grocery-list is the default: a shopping list with quantities). Pick the
+        closest. The source is copied to /personal/Apps/<slug>/ (or
         /spaces/<space>/Apps/<slug>/); read its AGENT.md, change the files with the file
         tools, then call build_app.
         """
@@ -569,11 +551,8 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         if not SLUG_RE.fullmatch(slug):
             return "Error: slug must be 1-40 lowercase letters, digits or dashes, not starting with a dash."
         name = name.strip()
-        if not name or len(name) > 100:
-            return "Error: name must be 1-100 characters."
-        root = _templates(settings).get(template)
-        if root is None:
-            return f"Error: no template '{template}' (available: {template_names})."
+        if not name or len(name) > 64:
+            return "Error: name must be 1-64 characters."
         async with _Platform(settings, token) as api:
             cat = await _catalog(api, with_apps=False)
             if isinstance(cat, str):
@@ -584,41 +563,33 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
             if target["role"] == "viewer":
                 return f"Error: the user can only view {_space_label(target)}; they can't add apps there."
             base = f"{_space_path(target)}/Apps/{slug}"
-            reply = await api.call("GET", f"{API}/files/stat", params={"path": base})
-            if reply.ok:
-                return f"Error: {base} already exists; pick another slug."
-            if reply.status != 404:
-                return f"Error: couldn't check {base}: {_why(reply)}"
-            written = []
-            for rel, data in _template_files(root):
-                if rel == "app.json":
-                    data = _manifest(data, slug, name)
-                path = f"{base}/{rel}"
-                reply = await api.call(
-                    "PUT", f"{API}/files/content", params={"path": path}, content=data
+            reply = (
+                await api.call(
+                    "POST",
+                    f"{API}/spaces/{target['id']}/app-templates/{template}/install",
+                    json={"slug": slug, "name": name, "build": False},
                 )
-                if not reply.ok:
-                    return f"Error: couldn't write {path}: {_why(reply)}"
-                written.append(rel)
-            reply = await api.call("POST", f"{API}/apps", json={"source_path": base})
-            if not reply.ok:
-                diagnostics = reply.field("diagnostics") or []
-                details = "\n".join(_diagnostic(d) for d in diagnostics)
-                return f"Error: the files are in {base} but registering failed: {_why(reply)}\n{details}"
-            app = reply.body["app"]
-            reply = await api.call(
-                "POST",
-                f"{API}/spaces/{target['id']}/instances",
-                json={"app_id": app["id"], "tracks": "working"},
+                if SLUG_RE.fullmatch(template)
+                else _Reply(404, {"detail": "unknown_template"})
             )
-            if not reply.ok:
-                return (
-                    f"Error: app registered (id {app['id']}) but installing failed: {_why(reply)}"
-                )
-            inst = reply.body
+            if reply.status == 404 and reply.field("detail") == "unknown_template":
+                templates = await _templates(api)
+                if isinstance(templates, str):
+                    return templates
+                listed = "\n".join(_template_lines(templates))
+                return f"Error: no template '{template}'. The templates:\n{listed}"
+        if reply.status == 409 and reply.field("detail") == "app_exists":
+            return f"Error: {base} already exists; pick another slug."
+        if not reply.ok:
+            diagnostics = reply.field("diagnostics") or []
+            details = "\n".join(_diagnostic(d) for d in diagnostics)
+            return f"Error: couldn't create {base}: {_why(reply)}" + (
+                f"\n{details}" if details else ""
+            )
+        app, inst = reply.body["app"], reply.body["instance"]
         return (
             f"Created '{name}' from the {template} template in {_space_label(target)}.\n"
-            f"source: {base}/ ({', '.join(written)})\n"
+            f"source: {base}/\n"
             f"app id: {app['id']}; instance id: {inst['id']}\n"
             f"Next: read {base}/AGENT.md, edit the files for what the user wants, then call "
             f"build_app(app=\"{base}\"). It isn't built yet, so it doesn't run until then."
