@@ -467,6 +467,29 @@ def _template_lines(templates: list[dict]) -> list[str]:
     return [f"  {t['slug']}: {t['description'] or t['name']}" for t in templates]
 
 
+async def _tables(api: _Platform) -> dict[str, list[dict]]:
+    """Each instance's tables, row counts and `schema.sql` descriptions (`GET /data-map`,
+    M22-06); {} if the platform can't say: list_apps works without them."""
+    reply = await api.call("GET", f"{API}/data-map")
+    if not reply.ok:
+        logger.warning("list_apps: data map unavailable: %s", _why(reply))
+        return {}
+    return {i["id"]: i.get("tables") or [] for i in reply.body.get("instances") or []}
+
+
+def _table_lines(tables: list[dict]) -> list[str]:
+    lines = []
+    for t in tables:
+        rows = "" if t.get("rows") is None else f" ({t['rows']:,} rows)"
+        lines.append(
+            f"  table {t['name']}{rows}" + (f": {t['description']}" if t.get("description") else "")
+        )
+        columns = t.get("columns") or {}
+        if columns:
+            lines.append("    " + "; ".join(f"{c}: {d}" for c, d in columns.items()))
+    return lines
+
+
 # --- the tools ------------------------------------------------------------------------
 
 
@@ -484,8 +507,9 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         screens, read-only source. Files has privileged actions (moveToSpace, copyToSpace).
         For each installed instance: its id, app name/slug/version, the space it's in and
         the user's role there, the app's source folder (edit it with the file tools) and
-        where execute_code can read a read-only copy of its data. Call this before using
-        any other app tool.
+        where execute_code can read a read-only copy of its data, and its tables with
+        row counts and what each table and column holds. Call this before using any
+        other app tool.
         """
         token = _delegation_token(config)
         if token is None:
@@ -493,6 +517,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         async with _Platform(settings, token) as api:
             cat = await _catalog(api)
             templates = await _templates(api)
+            tables = await _tables(api) if not isinstance(cat, str) and cat.instances else {}
         if isinstance(cat, str):
             return cat
         if isinstance(templates, str):
@@ -513,6 +538,7 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
                     + (f"last built commit {built[:7]})" if built else "not built yet)")
                 )
             lines.append(f"  execute_code read-only data: {_data_path(space, inst['app']['slug'])}")
+            lines += _table_lines(tables.get(inst["id"], []))
         installed = {i["app_id"] for i in cat.instances}
         for app in cat.apps:
             if app["id"] not in installed and app.get("source_path"):

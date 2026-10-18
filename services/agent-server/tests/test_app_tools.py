@@ -74,6 +74,11 @@ async def test_list_apps_shows_instances_sources_and_data_paths(fake_model, fake
     _family(fake_platform, "viewer")
     _, groceries = fake_platform.seed_app("family", "groceries")
     _, notes = fake_platform.seed_app(PERSONAL, "notes", built=False)
+    fake_platform.data_map_tables[groceries["id"]] = [
+        {"name": "items", "rows": 1204, "description": "One row per thing to buy.",
+         "columns": {"name": "what to buy", "checked": "1 once it's in the cart"}},
+        {"name": "stores", "rows": None, "description": None, "columns": {}},
+    ]  # fmt: skip
     fake_model.queue(ToolCallTurn("list_apps", {}), TextTurn("ok"))
     with (
         _client(fake_model, fake_platform, DEFAULT_POLICY) as client,
@@ -89,6 +94,8 @@ async def test_list_apps_shows_instances_sources_and_data_paths(fake_model, fake
     assert 'in /spaces/family (shared space "Family"); the user\'s role: viewer' in out
     assert "execute_code read-only data: /app-data/spaces/family/groceries/data.sqlite" in out
     assert "The groceries app." in out
+    assert "  table items (1,204 rows): One row per thing to buy.\n" in out
+    assert "    name: what to buy; checked: 1 once it's in the cart\n  table stores\n" in out
     assert f"instance id: {notes['id']}" in out
     assert "source: /personal/Apps/notes (app id" in out and "not built yet" in out
     assert "/app-data/personal/notes/data.sqlite" in out

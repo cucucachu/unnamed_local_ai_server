@@ -78,6 +78,7 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agent import approvals
 from app.agent.app_tools import make_app_tools
 from app.agent.chat_tools import make_chat_tools
+from app.agent.data_map import DataMapMiddleware
 from app.agent.execute_code_tool import make_execute_code_tool
 from app.agent.integration_tools import IntegrationsListMiddleware, make_integration_tools
 from app.agent.memory_core import MemoryCoreMiddleware
@@ -204,9 +205,10 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
         SyntaxCheckMiddleware(backend),
         ToolNotesMiddleware(),
         # Last, so the per-user parts land after every static part of the prompt:
-        # the integrations list, then the memory note.
+        # the integrations list, the memory note, then the data map.
         IntegrationsListMiddleware(settings.platform_url),
         MemoryCoreMiddleware(settings.platform_url, app_state),
+        DataMapMiddleware(settings.platform_url),
     ]
     return create_deep_agent(
         model=model,

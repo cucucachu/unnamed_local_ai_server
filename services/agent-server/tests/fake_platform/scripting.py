@@ -168,6 +168,11 @@ class FakePlatform:
     builds: list[str] = field(default_factory=list)
     # instance id -> rows any SELECT returns
     rows: dict[str, list[dict]] = field(default_factory=dict)
+    # `GET /data-map` (M22-06): instance id -> its tables there, the bearer per
+    # request, and (status, detail) to fail them with instead.
+    data_map_tables: dict[str, list[dict]] = field(default_factory=dict)
+    data_map_requests: list[str | None] = field(default_factory=list)
+    data_map_error: tuple[int, str] | None = None
     rpc_calls: list[tuple[str, dict]] = field(default_factory=list)
     system_action_calls: list[tuple[str, str, dict]] = field(default_factory=list)
     system_apps: list[dict] = field(default_factory=_default_system_apps)

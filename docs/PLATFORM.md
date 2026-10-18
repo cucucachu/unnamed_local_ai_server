@@ -1216,6 +1216,30 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > only asserts that if `/app-data` is mounted it is read-only, and that B
 > has no path to A's personal app-data.
 
+**The data map (M22-06).** On a successful build the platform parses
+`schema.sql`'s comments (`appschema.table_docs`): the `--` lines right
+above a `CREATE TABLE` (no blank line between) describe the table, and a
+trailing `-- ...` on a column's line describes the column. A block comment,
+or a comment on a line of its own inside the table, describes nothing. Each
+description is cut to 200 characters. The result is stored on the version
+(`app_versions.tables_doc`, `[{name, description, columns: {column:
+description}}]`) and copied when it's published. Versions built before M22-06
+have none until their next build.
+
+`GET /api/platform/data-map` returns `{instances: [...]}`, one entry per live
+instance in the caller's spaces (a routine run's space only), spaces in
+the `GET /spaces` order and apps by name within each. Each entry is
+`{id, app: {id, slug, name}, space: {id, slug, name, kind, role},
+description, tables: [{name, rows, description, columns}]}`:
+- `description` is the tracked version's `homeai.description`.
+- `tables` lists the instance database's tables in creation order, the
+  platform's own left out, with `count(*)`.
+- If the database can't be read (logged), `tables` comes from
+  `tables_doc` with `rows: null`.
+
+agent-server shows this in every thread (ARCHITECTURE.md "The data map"),
+and `list_apps` adds each instance's table and column descriptions.
+
 ### Build and verify
 
 The platform builds apps in a sandboxed container (network none, same

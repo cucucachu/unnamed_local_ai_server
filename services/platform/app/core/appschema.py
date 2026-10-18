@@ -244,6 +244,98 @@ def parse_table(sql: str) -> dict:
     }
 
 
+# --- descriptions (the data map, M22-06) ---------------------------------------------
+
+MAX_DOC_CHARS = 200
+MAX_DOC_ENTRIES = 64
+
+
+def _unquote(token: str) -> str:
+    if token[:1] in '"`[':
+        return token[1:-1].replace('""', '"')
+    return token
+
+
+def _doc(lines: list[str]) -> str | None:
+    text = " ".join(line for line in lines if line)
+    if not text:
+        return None
+    return text if len(text) <= MAX_DOC_CHARS else text[: MAX_DOC_CHARS - 1].rstrip() + "…"
+
+
+def _column_docs(toks: list[str]) -> dict[str, str]:
+    """`{column: description}` from a trailing `-- ...` on each column's line."""
+    docs: dict[str, list[str]] = {}
+    depth, current, fresh, newline = 0, None, True, False
+    for t in toks[toks.index("(") + 1 :]:
+        if t.startswith("--"):
+            if current is not None and not newline:
+                docs.setdefault(current, []).append(t[2:].strip())
+            continue
+        if _is_noise(t):
+            newline = newline or "\n" in t
+            continue
+        if t == "(":
+            depth += 1
+        elif t == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif t == "," and depth == 0:
+            fresh, newline = True, False
+            continue
+        if fresh:
+            fresh = False
+            current = None if t.lower() in _CONSTRAINT_KW else _unquote(t)
+        newline = False
+    out = {}
+    for name, lines in docs.items():
+        doc = _doc(lines)
+        if doc and len(out) < MAX_DOC_ENTRIES:
+            out[name] = doc
+    return out
+
+
+def table_docs(schema_sql: str) -> list[dict]:
+    """Each table in `schema_sql` with what it holds, in order: the `--` lines right
+    above its CREATE TABLE (no blank line between) describe it, a trailing `-- ...`
+    on a column's line describes the column. `[{name, description, columns}]`;
+    descriptions are cut to `MAX_DOC_CHARS`."""
+    out: list[dict] = []
+    for n, stmt in enumerate(_statements(schema_sql)):
+        toks = _TOKEN.findall(stmt)
+        above: list[str] = []
+        # A comment on the line a previous statement ends on isn't "above" the next.
+        line_start = n == 0
+        i = 0
+        while i < len(toks) and _is_noise(toks[i]):
+            t = toks[i]
+            if t.startswith("--"):
+                if line_start:
+                    above.append(t[2:].strip())
+                line_start = False
+            elif t.startswith("/*"):
+                above, line_start = [], False
+            else:
+                if t.count("\n") > 1:
+                    above = []
+                line_start = line_start or "\n" in t
+            i += 1
+        m = _CREATE_TABLE.match("".join(toks[i:]))
+        if m is None or "(" not in toks:
+            continue
+        out.append(
+            {
+                "name": _unquote(m.group(2)),
+                "description": _doc(above),
+                "columns": _column_docs(toks),
+            }
+        )
+        if len(out) >= MAX_DOC_ENTRIES:
+            break
+    return out
+
+
 # --- introspection -------------------------------------------------------------------
 
 

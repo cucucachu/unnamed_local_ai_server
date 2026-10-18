@@ -27,6 +27,7 @@ SHIPPED = [
     (18, "integration_turned_off"),
     (19, "file_index"),
     (20, "delivered_routines"),
+    (21, "app_tables_doc"),
 ]
 
 
@@ -84,6 +85,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0018_integration_turned_off.sql",
             "0019_file_index.sql",
             "0020_delivered_routines.sql",
+            "0021_app_tables_doc.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
