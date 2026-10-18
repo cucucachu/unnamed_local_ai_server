@@ -651,6 +651,47 @@ best first, not all relevant. Without `EMBEDDINGS_URL`, or when the
 service doesn't answer within 10 s, only the full-text half runs and the
 response says `"semantic": false`.
 
+**App rows (M22-07).** An app's `app.json` can declare tables whose rows
+search should find, inside `homeai`:
+
+```json
+"index": [{"table": "recipes", "title": "name", "text": ["steps"], "fields": ["cuisine"]}]
+```
+
+- **Validation.** On build, each entry has to name a rowid table of
+  `schema.sql` (not `WITHOUT ROWID`), once, and only its columns. Up to 16
+  entries, and 16 columns per list.
+- **Rendering.** Each row becomes its `title` value (or `recipes #12` when
+  that's empty), then `name: value` for each field that has a value, then
+  the text columns. It's capped at 64 KiB and chunked like a plain-text
+  file.
+- **Storage** (`app/core/appindex.py`, migration 0022). Chunks go in
+  `app_row_chunks`, keyed by instance, table, rowid and chunk number, with
+  a vector and a `tsvector` like `file_chunks`. `indexed_app_rows` keeps
+  each row's `_updated_at` as it was rendered. `indexed_instances` keeps
+  the hash of the declaration it was indexed with.
+- **Freshness.** A write that changed rows (the same moment as
+  `db_changed`), a build, and an uninstall queue the instance. Each pass
+  compares every declared table's `(rowid, _updated_at)`: new and changed
+  rows are rendered again and keep the vectors of chunks whose text didn't
+  change, and missing rows are dropped. A changed declaration re-indexes
+  the instance from scratch. The periodic scan reconciles every instance
+  and drops rows of instances that are uninstalled or whose app or space
+  is archived. Up to 20,000 rows per table are indexed. A database that
+  can't be read is logged and left as it was. A declared table or column
+  the database doesn't have yet is skipped.
+- **Search.** When `path` covers whole spaces (`/`, `/spaces`,
+  `/<space>`), the live instances' rows in those spaces are ranked
+  together with the file chunks in both halves. The embedding title is the
+  row's title. A folder or a file path searches files only. A hit is
+  `{"kind": "app_row", "app_row": {instance_id, app: {slug, name}, space:
+  {id, slug, name, kind}, table, row_id, title}, snippet, score}`, with
+  `path` and the line numbers `null`. Files are `"kind": "file"`.
+- **Inside the app.** The RPC op `search` (`{query, limit}`, a read) runs
+  the same ranking over that instance's rows only, returning `{results:
+  [{table, id, title, snippet, score}]}`. That's `search(query, limit?)`
+  in `@homeai/sdk`.
+
 ### Legacy migration
 
 On the switch to the platform files API (M11-01), the pre-Stage-3 files root
@@ -901,6 +942,10 @@ dark the default colour of plain `Text` and `TextInput` (the outermost
   attribution itself never depends on them.
 - `askAgent(prompt)` — opens the host's agent panel with that prompt
   (M13-04; a host-local bridge method, never the instance RPC).
+- `search(query, limit?)` → `[{ table, id, title, snippet, score }]`: the
+  instance's `homeai.index` rows by meaning and by words (M22-07, the RPC
+  op `search`; §5 "File search", "App rows"). A read, so viewers can too;
+  a blank query resolves `[]` without a call.
 - Later: cross-instance reads, capability shims.
 
 > **As built (M12-05)** — `packages/homeai-sdk/` holds everything

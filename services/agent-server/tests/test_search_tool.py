@@ -58,6 +58,48 @@ async def test_search_sends_the_delegation_and_renders_hits(fake_model, fake_pla
     )
 
 
+def _row(space: dict, table: str = "recipes") -> dict:
+    return {
+        "kind": "app_row",
+        "path": None,
+        "line_start": None,
+        "line_end": None,
+        "app_row": {
+            "instance_id": "11111111-1111-4111-8111-111111111111",
+            "app": {"slug": "recipes", "name": "Recipes"},
+            "space": space,
+            "table": table,
+            "row_id": 12,
+            "title": "Peanut noodles",
+        },
+        "snippet": "Peanut noodles\ncuisine: Thai",
+        "score": 0.031,
+    }
+
+
+async def test_app_rows_come_with_the_query_that_reads_them(fake_model, fake_platform):
+    personal = {"id": "p", "slug": "alice", "name": "Alice", "kind": "personal"}
+    family = {"id": "f", "slug": "family", "name": "Family", "kind": "shared"}
+    fake_platform.search_results = [_row(personal), HIT, _row(family, "my recipes")]
+    _run(fake_model, fake_platform, {"query": "peanuts"})
+    assert _told(fake_model) == (
+        '3 matches for "peanuts" under /, best first:\n'
+        "\nRecipes (Personal) recipes #12: Peanut noodles\n"
+        '  (app row: app_query(instance="personal/recipes", '
+        'sql="SELECT * FROM recipes WHERE rowid = 12"))\n'
+        "  Peanut noodles\n"
+        "  cuisine: Thai\n"
+        "\n/personal/Memory/people/maria.md (lines 3-5)\n"
+        "  Allergic to peanuts.\n"
+        "  Carries an EpiPen.\n"
+        "\nRecipes (Family) my recipes #12: Peanut noodles\n"
+        '  (app row: app_query(instance="family/recipes", '
+        'sql="SELECT * FROM [my recipes] WHERE rowid = 12"))\n'
+        "  Peanut noodles\n"
+        "  cuisine: Thai"
+    )
+
+
 async def test_words_only_and_no_results_are_said_plainly(fake_model, fake_platform):
     fake_platform.search_semantic = False
     _run(fake_model, fake_platform, {"query": "boat name", "limit": 500})

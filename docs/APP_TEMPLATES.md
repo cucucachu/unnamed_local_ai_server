@@ -164,8 +164,9 @@ An app declares which tables hold text worth finding:
 ```
 
 - The platform renders each row (title, fields as `name: value`, then the
-  text columns) into chunks in the same index as files (`file_chunks`),
-  with the instance, table and row id.
+  text columns) into chunks next to the files' (`app_row_chunks`, beside
+  `file_chunks`), keyed by instance, table and row id. As built: PLATFORM.md
+  §5 "File search", "App rows" (M22-07).
 - `POST /files/search` and `search_files` return app rows next to file
   chunks, ranked together, with a reference the agent can query
   (`Recipes (Personal) recipes #12`). The same space permissions apply.

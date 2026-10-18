@@ -119,6 +119,9 @@ The reader queries the merged view <app>_<export>, named after the EXPORTING app
 read of calendar's events export is SELECT ... FROM calendar_events; rows include
 _space). build_app's render test gives the view the exporter's columns and no rows.
 Bump export version when tables or columns change.
+Tables of text worth finding (recipes, notes, journal entries; not numbers) go in
+homeai.index [{table, title: <column>, text?: [columns], fields?: [columns]}]: search_files
+then finds those rows, and the app's own search box is search(query) from @homeai/sdk.
 app.json version is semver. Leave it at 1.0.0 while first creating an app. Once it is
 published, build_app moves it to the next patch on its own. When you change an existing
 app, set the next minor yourself (1.2.3 -> 1.3.0) for a new feature, or the next major
@@ -142,6 +145,7 @@ host's dark mode); then never hard-code text or background colors: use useTheme(
     getAllAsync, getFirstAsync, runAsync — one statement, ? placeholders + an array
   useQuery(sql, params)  live SELECT; do not copy rows into state
   runAction(name, params)  actions/<name>.sql
+  search(query, limit?)  this app's homeai.index rows by meaning: [{table, id, title, snippet}]
   useSpace()?.role  'owner' | 'editor' | 'viewer' — hide writes from viewers
   useUser() {id, username, name}; useMembers() [{id, username, name, role}]
 Who wrote a row: the platform adds _created_by, _created_at, _updated_by, _updated_at

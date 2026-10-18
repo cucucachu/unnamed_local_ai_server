@@ -51,6 +51,14 @@ declare module '@homeai/sdk' {
   export function runAction(name: string, params?: Record<string, SQLValue>): Promise<ActionResult>;
   /** Opens the host's "Ask the agent" panel with this prompt (a new thread pre-seeded with this app's context). */
   export function askAgent(prompt: string): Promise<void>;
+  /** A row `search` found: `id` is its rowid (the INTEGER PRIMARY KEY), `snippet` a bit of its text. */
+  export type SearchResult = { table: string; id: number; title: string; snippet: string; score: number };
+  /**
+   * This instance's rows in the tables app.json's `homeai.index` declares, by meaning and by
+   * words, best first (at most `limit`, default 10, up to 50). A blank query finds nothing.
+   * New and changed rows show up a moment after they're written.
+   */
+  export function search(query: string, limit?: number): Promise<SearchResult[]>;
   /** The space this instance is installed in; null until the host has said. */
   export function useSpace(): Space | null;
   /** Who is using the app; null until the host has said. */

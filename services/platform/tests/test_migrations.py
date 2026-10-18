@@ -28,6 +28,7 @@ SHIPPED = [
     (19, "file_index"),
     (20, "delivered_routines"),
     (21, "app_tables_doc"),
+    (22, "app_row_index"),
 ]
 
 
@@ -86,6 +87,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0019_file_index.sql",
             "0020_delivered_routines.sql",
             "0021_app_tables_doc.sql",
+            "0022_app_row_index.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}
@@ -103,6 +105,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
         }
         tables |= {"indexed_files", "file_chunks"}
         tables |= {"delivered_routines", "delivered_routine_admin_settings"}
+        tables |= {"indexed_instances", "indexed_app_rows", "app_row_chunks"}
         assert tables <= (await _tables(conn))
         assert await _recorded(conn) == SHIPPED
         cur = await conn.execute("SELECT value FROM platform_state WHERE key = 'public_https'")

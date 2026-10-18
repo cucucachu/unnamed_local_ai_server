@@ -25,6 +25,8 @@ export type Space = { id: string; slug: string; name: string; role: 'owner' | 'e
 /** A person, for display: `id` is what the platform stamps in `_created_by` / `_updated_by`. */
 export type User = { id: string; username: string; name: string };
 export type Member = User & { role: Space['role'] };
+/** A row of this instance that `search` found: `id` is the row's rowid (its INTEGER PRIMARY KEY). */
+export type SearchResult = { table: string; id: number; title: string; snippet: string; score: number };
 
 /** Sandbox -> host requests that the host forwards to the instance RPC. */
 export type PlatformMethods = {
@@ -32,6 +34,8 @@ export type PlatformMethods = {
   'db.getFirst': { params: { sql: string; params: SqlParams }; result: Record<string, unknown> | null };
   'db.run': { params: { sql: string; params: SqlParams }; result: RunResult };
   action: { params: { name: string; params: Record<string, unknown> }; result: ActionResult };
+  /** The instance's own rows its app.json `homeai.index` declares (M22-07). */
+  search: { params: { query: string; limit: number }; result: SearchResult[] };
 };
 /** Sandbox -> host requests the host handles itself (never the platform). */
 export type HostMethods = {
@@ -43,7 +47,7 @@ export type PlatformMethod = keyof PlatformMethods;
 export type HostMethod = keyof HostMethods;
 export type Method = keyof Methods;
 
-export const METHODS: readonly PlatformMethod[] = ['db.getAll', 'db.getFirst', 'db.run', 'action'];
+export const METHODS: readonly PlatformMethod[] = ['db.getAll', 'db.getFirst', 'db.run', 'action', 'search'];
 export const HOST_METHODS: readonly HostMethod[] = ['agent.ask'];
 export const WRITE_METHODS: readonly PlatformMethod[] = ['db.run', 'action'];
 

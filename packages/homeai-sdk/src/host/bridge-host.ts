@@ -49,6 +49,8 @@ const SANDBOX_EVENTS = new Set<string>(['runtime.ready', 'runtime.error', 'nav.c
 const ALLOWED_METHODS = new Set<string>([...METHODS, ...HOST_METHODS]);
 const MAX_SQL_CHARS = 100 * 1024;
 const MAX_PROMPT_CHARS = 32 * 1024;
+const MAX_QUERY_CHARS = 2000;
+const MAX_SEARCH_LIMIT = 50;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -70,6 +72,16 @@ export function checkParams<M extends Method>(method: M, raw: unknown): Methods[
     const params = raw.params ?? {};
     if (!isRecord(params)) throw hostError('bad_request', 'action params must be an object');
     return { name: raw.name, params } as Methods[M]['params'];
+  }
+  if (method === 'search') {
+    if (typeof raw.query !== 'string' || !raw.query.trim() || raw.query.length > MAX_QUERY_CHARS) {
+      throw hostError('bad_request', 'search needs a query (at most 2000 characters)');
+    }
+    const limit = raw.limit ?? 10;
+    if (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > MAX_SEARCH_LIMIT) {
+      throw hostError('bad_request', 'search limit must be 1 to 50');
+    }
+    return { query: raw.query, limit } as Methods[M]['params'];
   }
   if (typeof raw.sql !== 'string' || raw.sql.length > MAX_SQL_CHARS) throw hostError('bad_request', `${method} needs sql (at most 100 KiB)`);
   const params = raw.params ?? [];

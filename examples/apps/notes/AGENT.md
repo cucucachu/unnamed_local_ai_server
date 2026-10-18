@@ -10,7 +10,7 @@ app.json              manifest (name, slug, version, homeai block)
 schema.sql            the database schema (plain SQLite DDL)
 actions/addNote.sql   insert a note with :title
 app/_layout.tsx       the Stack navigator and screen titles
-app/index.tsx         the list: add, pin/unpin
+app/index.tsx         the list: add, search
 app/note/[id].tsx     one note: edit title/body, pin, delete
 ```
 
@@ -29,6 +29,13 @@ app/note/[id].tsx     one note: edit title/body, pin, delete
 
 The list shows pinned notes first, then newest:
 `SELECT … FROM notes ORDER BY pinned DESC, updated_at DESC`.
+
+`app.json`'s `homeai.index` (`{"table": "notes", "title": "title", "text":
+["body"]}`) puts every note in search: the agent's `search_files` finds
+them, and the list's search box calls `search(query)` from `@homeai/sdk`,
+which returns `[{ table, id, title, snippet, score }]` best first, by
+meaning and by words. Add a column to `text` (or `fields`, shown as
+`name: value`) to make it searchable too.
 
 ## Actions
 
@@ -52,6 +59,8 @@ Single-row edits (save, pin, delete) are one statement each, so they use
   array of values. Never build SQL by string concatenation.
 - `runAction(name, params)` for anything that needs more than one
   statement.
+- `search(query, limit?)` for the search box: this instance's indexed
+  rows, best first.
 - `useSpace()?.role` is `'owner'`, `'editor'` or `'viewer'`. Viewers can't
   write, so the screens hide the edit controls when the role is `'viewer'`.
 

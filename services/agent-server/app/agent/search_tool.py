@@ -8,6 +8,8 @@ means no call. Failures are results the model reads, never a failed turn.
 
 from __future__ import annotations
 
+import re
+
 import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
@@ -15,12 +17,31 @@ from langchain_core.tools import BaseTool, tool
 from app.core.config import Settings
 
 SEARCH_TOOL_NAME = "search_files"
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MAX_LIMIT = 50
 _HTTP_TIMEOUT_S = 30.0
 _WORDS_ONLY = (
     "(Matched by words only: searching by meaning is unavailable right now, "
     "so try the exact words you expect in the file.)"
 )
+
+
+def _app_row_lines(ref: dict) -> list[str]:
+    """`Recipes (Personal) recipes #12: Dal`, then the app_query that reads the whole row."""
+    space = ref.get("space") or {}
+    personal = space.get("kind") == "personal"
+    label = "Personal" if personal else space.get("name", "?")
+    where = "personal" if personal else space.get("slug", "?")
+    app = ref.get("app") or {}
+    table = str(ref.get("table", "?"))
+    quoted = table if _IDENT.fullmatch(table) else "[" + table.replace("]", "]]") + "]"
+    return [
+        f"{app.get('name', '?')} ({label}) {table} #{ref.get('row_id')}: {ref.get('title', '')}",
+        (
+            f'  (app row: app_query(instance="{where}/{app.get("slug", "?")}", '
+            f'sql="SELECT * FROM {quoted} WHERE rowid = {ref.get("row_id")}"))'
+        ),
+    ]
 
 
 def format_results(query: str, path: str, body: dict) -> str:
@@ -31,7 +52,11 @@ def format_results(query: str, path: str, body: dict) -> str:
     count = f"{len(results)} match" if len(results) == 1 else f"{len(results)} matches"
     lines = [f'{count} for "{query}" under {path}, best first:']
     for hit in results:
-        lines.append(f"\n{hit['path']} (lines {hit['line_start']}-{hit['line_end']})")
+        if hit.get("kind") == "app_row" and isinstance(hit.get("app_row"), dict):
+            first, how = _app_row_lines(hit["app_row"])
+            lines.extend([f"\n{first}", how])
+        else:
+            lines.append(f"\n{hit['path']} (lines {hit['line_start']}-{hit['line_end']})")
         lines.extend(f"  {line}" for line in str(hit.get("snippet", "")).splitlines())
     return "\n".join(lines) + note
 
@@ -51,13 +76,15 @@ def make_search_files_tool(settings: Settings) -> BaseTool:
     async def search_files(
         query: str, config: RunnableConfig, path: str = "/", limit: int = 10
     ) -> str:
-        """Search the user's text files (notes, documents, app sources) by meaning and by words.
+        """Search the user's text files (notes, documents, app sources) and the rows their apps
+        index (recipes, notes, ...) by meaning and by words.
 
         Finds passages worded differently from the query, as well as exact names and words.
         `path` narrows the search to a folder or a file (/personal/..., /spaces/<slug>/...);
         "/" searches everything the user can read. Returns up to `limit` (at most 50) matches,
         best first, each with its path, line range and a short snippet: read_file the path for
-        more. Recent changes can take a moment to show up. To find every occurrence of an exact
+        more. App rows (searching "/" or a whole space) come as `App (Space) table #id: title`:
+        app_query that instance for the full row. Recent changes can take a moment to show up. To find every occurrence of an exact
         string, use grep instead.
         """
         token = getattr((config.get("configurable") or {}).get("delegation"), "token", None)

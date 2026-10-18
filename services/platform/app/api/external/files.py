@@ -50,13 +50,16 @@ from app.api.schemas import (
     ReadBody,
     ReadOut,
     RenameBody,
+    SearchAppOut,
+    SearchAppRowOut,
     SearchBody,
     SearchHitOut,
     SearchOut,
+    SearchSpaceOut,
     UploadOut,
     WriteBody,
 )
-from app.core import agentfs, beneath, fileindex, fsops, spaces, vfs
+from app.core import agentfs, appindex, beneath, fileindex, fsops, spaces, vfs
 from app.core.agentfs import AgentFsError
 from app.core.beneath import Root
 from app.core.errors import Conflict, Forbidden, InvalidInput, NotFound
@@ -523,7 +526,8 @@ async def glob(body: GlobBody, request: Request, principal: CurrentUser) -> Glob
 
 @router.post("/search", response_model=SearchOut)
 async def search(body: SearchBody, request: Request, principal: CurrentUser) -> SearchOut:
-    """Text files under `path` the caller can read, by meaning and by words (docs/MEMORY.md §5)."""
+    """Text files under `path` the caller can read, by meaning and by words (docs/MEMORY.md §5);
+    searching whole spaces also finds their apps' indexed rows (M22-07)."""
     query = body.query.strip()
     if not query:
         raise InvalidInput("invalid_query")
@@ -545,17 +549,41 @@ async def search(body: SearchBody, request: Request, principal: CurrentUser) -> 
         prefix,
         query,
         body.limit,
+        apps=prefix == "",
     )
-    return SearchOut(
-        results=[
-            SearchHitOut(
+    async with request.app.state.db_pool.connection() as conn:
+        apps = await appindex.apps_of(
+            conn, list({hit.app_row.instance_id for hit in hits if hit.app_row})
+        )
+    by_id = {row["id"]: row for row in rows}
+
+    def out(hit: fileindex.Hit) -> SearchHitOut | None:
+        ref = hit.app_row
+        if ref is None:
+            return SearchHitOut(
                 path=vfs.join(prefixes[hit.space_id], hit.path),
                 line_start=hit.line_start,
                 line_end=hit.line_end,
                 snippet=hit.snippet,
                 score=hit.score,
             )
-            for hit in hits
-        ],
-        semantic=semantic,
-    )
+        if ref.instance_id not in apps:
+            return None
+        space = by_id[hit.space_id]
+        return SearchHitOut(
+            kind="app_row",
+            app_row=SearchAppRowOut(
+                instance_id=ref.instance_id,
+                app=SearchAppOut(**apps[ref.instance_id]),
+                space=SearchSpaceOut(
+                    id=space["id"], slug=space["slug"], name=space["name"], kind=space["kind"]
+                ),
+                table=ref.table,
+                row_id=ref.row_id,
+                title=ref.title,
+            ),
+            snippet=hit.snippet,
+            score=hit.score,
+        )
+
+    return SearchOut(results=[o for hit in hits if (o := out(hit)) is not None], semantic=semantic)

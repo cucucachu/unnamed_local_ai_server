@@ -11,7 +11,7 @@ expo-sqlite-shaped API from `@homeai/sdk`.
 |---|---|
 | [`grocery-list/`](grocery-list/) | Default `create_app` template. One `items` table with quantity/note, two actions (`addItem`, `clearChecked`), a list screen with live data (`useQuery`), a detail screen (`app/item/[id].tsx`), and read-only UI for viewers. Start with its `AGENT.md`. |
 | [`list/`](list/) | Generic checklist: `items` with `done`, `addItem` / `clearDone`, list + detail. |
-| [`notes/`](notes/) | Notes: `title` / `body` / `pinned`, `addNote`, list + `app/note/[id].tsx`. |
+| [`notes/`](notes/) | Notes: `title` / `body` / `pinned`, `addNote`, list + `app/note/[id].tsx`; `homeai.index` makes the notes searchable (chat and the search box, `search()`). |
 | [`tracker/`](tracker/) | Habit tracker: `habits` + `checkins` (one row per habit per day), `addHabit` / `checkIn`, list + `app/habit/[id].tsx`. |
 
 ## Install one into a space

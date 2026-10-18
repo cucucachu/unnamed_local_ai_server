@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
-import { runAction, useQuery, useSpace } from '@homeai/sdk';
+import { runAction, search, useQuery, useSpace, type SearchResult } from '@homeai/sdk';
 
 type Note = { id: number; title: string; body: string; pinned: number };
 
@@ -13,6 +13,30 @@ export default function NotesScreen() {
   );
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
+  const [found, setFound] = useState<SearchResult[] | null>(null);
+
+  // By meaning and by words, over the rows app.json's homeai.index declares.
+  useEffect(() => {
+    if (!query.trim()) {
+      setFound(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      search(query, 20).then(
+        (results) => live && setFound(results),
+        (e) => live && setMessage((e as Error).message),
+      );
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
+  const shown = found
+    ? found.map((hit) => (notes ?? []).find((note) => note.id === hit.id)).filter((note): note is Note => !!note)
+    : notes ?? [];
 
   async function addNote() {
     if (!title.trim()) return;
@@ -48,6 +72,15 @@ export default function NotesScreen() {
         </Text>
       )}
 
+      <TextInput
+        testID="search-notes"
+        style={styles.input}
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Search notes"
+        returnKeyType="search"
+      />
+
       {loading && <Text>Loading…</Text>}
       {error && <Text style={styles.error}>{error.message}</Text>}
       {message !== '' && (
@@ -57,9 +90,11 @@ export default function NotesScreen() {
       )}
 
       <FlatList
-        data={notes ?? []}
+        data={shown}
         keyExtractor={(note) => String(note.id)}
-        ListEmptyComponent={loading ? null : <Text style={styles.muted}>No notes yet.</Text>}
+        ListEmptyComponent={
+          loading ? null : <Text style={styles.muted}>{found ? 'Nothing matches.' : 'No notes yet.'}</Text>
+        }
         renderItem={({ item }) => (
           <Link href={{ pathname: '/note/[id]', params: { id: String(item.id) } }} testID={`note-${item.id}`} style={styles.item}>
             <Text style={styles.title}>
