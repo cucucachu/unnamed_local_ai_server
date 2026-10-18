@@ -7,10 +7,13 @@ them through unchanged. Known differences are listed in `agentfs`'s docstring.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 
 import pytest
 
+from app.api.external import files as files_api
 from app.core import agentfs
 from app.core.agentfs import EMPTY_CONTENT_WARNING, AgentFsError
 from tests.files_world import FILES, World
@@ -261,11 +264,18 @@ async def _call(world: World, route: str, user: str = "bob", **body):
     return await world.client.post(f"{FILES}/{route}", json=body, headers=await world.agent(user))
 
 
+def _version(path: Path) -> str:
+    st = path.stat()
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
 async def test_read_over_http(world: World) -> None:
     _tree(world)
     r = await _call(world, "read", path="/personal/a.txt", offset=3, limit=2)
     assert r.status_code == 200
-    assert r.json() == {
+    assert r.json().pop("version") == _version(world.home("bob") / "a.txt")
+    assert r.json() | {"version": None} == {
+        "version": None,
         "path": "/personal/a.txt", "content": "line 4 hello\nline 5 hello\n", "encoding": "utf-8",
         "total_lines": 10, "start_line": 4, "end_line": 5, "next_offset": 5,
         "no_lines_requested": False,
@@ -281,7 +291,10 @@ async def test_read_over_http(world: World) -> None:
 
 async def test_write_creates_parents_and_overwrites(world: World) -> None:
     r = await _call(world, "write", path="/personal/new/dir/n.md", content="# hi\n")
-    assert (r.status_code, r.json()) == (200, {"path": "/personal/new/dir/n.md"})
+    assert (r.status_code, r.json()) == (200, {
+        "path": "/personal/new/dir/n.md",
+        "version": _version(world.home("bob") / "new" / "dir" / "n.md"),
+    })  # fmt: skip
     assert (world.home("bob") / "new" / "dir" / "n.md").read_text() == "# hi\n"
     r = await _call(world, "write", path="/personal/new/dir/n.md", content="again")
     assert (world.home("bob") / "new" / "dir" / "n.md").read_text() == "again"
@@ -300,13 +313,16 @@ async def test_edit_over_http(world: World) -> None:
         world, "edit", path="/personal/b.txt", old_string="hello", new_string="bye",
         replace_all=True,
     )  # fmt: skip
-    assert r.json() == {"path": "/personal/b.txt", "occurrences": 2}
+    assert r.json() == {
+        "path": "/personal/b.txt", "occurrences": 2, "version": _version(world.home("bob") / "b.txt"),
+    }  # fmt: skip
     assert (world.home("bob") / "b.txt").read_text() == "bye world\nno match\nbye again"
     r = await _call(world, "edit", path="/personal/b.txt", old_string="  no match", new_string="x")
     assert r.json() == {
         "path": "/personal/b.txt",
         "occurrences": 1,
         "note": "Matched ignoring whitespace at lines 2-2.",
+        "version": _version(world.home("bob") / "b.txt"),
     }
     assert (world.home("bob") / "b.txt").read_text() == "bye world\nx\nbye again"
 
@@ -318,6 +334,99 @@ async def test_edit_too_large_over_http(world: World) -> None:
     r = await _call(world, "edit", path="/personal/big.txt", old_string=content, new_string="x")
     assert (r.status_code, r.json()["detail"]) == (422, "edit_too_large")
     assert (world.home("bob") / "big.txt").read_text() == content
+
+
+# --- version check (M22-09) --------------------------------------------------------------
+
+
+async def _stat_version(world: World, path: str) -> str | None:
+    r = await world.client.get(
+        f"{FILES}/stat", params={"path": path}, headers=await world.agent("bob")
+    )
+    assert r.status_code == 200
+    return r.json()["entry"]["version"]
+
+
+async def _put(world: World, path: str, data: bytes, if_version: str | None = None):
+    params = {"path": path} | ({"if_version": if_version} if if_version is not None else {})
+    return await world.client.put(
+        f"{FILES}/content", params=params, content=data, headers=await world.agent("bob")
+    )
+
+
+async def test_stat_and_read_give_the_same_version(world: World) -> None:
+    _tree(world)
+    version = await _stat_version(world, "/personal/a.txt")
+    assert version == _version(world.home("bob") / "a.txt")
+    assert (await _call(world, "read", path="/personal/a.txt")).json()["version"] == version
+    assert await _stat_version(world, "/personal/sub") is None
+
+
+@pytest.mark.parametrize("route", ["write", "content", "edit"])
+async def test_if_version_guards_each_write(world: World, route: str) -> None:
+    path, file = "/personal/b.txt", world.home("bob") / "b.txt"
+    file.write_text("hello world\n")
+
+    async def save(text: str, if_version: str | None):
+        if route == "content":
+            return await _put(world, path, text.encode(), if_version)
+        extra = {} if if_version is None else {"if_version": if_version}
+        if route == "write":
+            return await _call(world, "write", path=path, content=text, **extra)
+        old = file.read_text()
+        return await _call(world, "edit", path=path, old_string=old, new_string=text, **extra)
+
+    # A match writes and returns the new version.
+    r = await save("one\n", await _stat_version(world, path))
+    assert r.status_code == 200
+    assert file.read_text() == "one\n"
+    assert r.json()["version"] == _version(file) == await _stat_version(world, path)
+    current = r.json()["version"]
+
+    # A mismatch refuses and leaves the file as it was.
+    stale = f"{file.stat().st_mtime_ns - 1}-{file.stat().st_size}"
+    r = await save("two\n", stale)
+    assert (r.status_code, r.json()) == (409, {"detail": "changed"})
+    assert (file.read_text(), _version(file)) == ("one\n", current)
+
+    # Without it, writes go through as before.
+    r = await save("three\n", None)
+    assert r.status_code == 200
+    assert file.read_text() == "three\n"
+
+
+@pytest.mark.parametrize("route", ["write", "content"])
+async def test_if_version_on_a_missing_file_creates_nothing(world: World, route: str) -> None:
+    path = "/personal/gone.txt"
+    if route == "write":
+        r = await _call(world, "write", path=path, content="x", if_version="1-1")
+    else:
+        r = await _put(world, path, b"x", "1-1")
+    assert (r.status_code, r.json()) == (409, {"detail": "changed"})
+    assert not (world.home("bob") / "gone.txt").exists()
+
+
+async def test_concurrent_saves_from_one_version_only_one_wins(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check = files_api._check_version
+
+    def slow_check(*args) -> None:
+        check(*args)
+        time.sleep(0.05)  # every save passes its check before any writes, unless they queue
+
+    monkeypatch.setattr(files_api, "_check_version", slow_check)
+    file = world.home("bob") / "n.md"
+    file.write_text("start\n")
+    version = _version(file)
+    replies = await asyncio.gather(*(
+        _call(world, "write", path="/personal/n.md", content=f"save {i}\n" * (i + 1),
+              if_version=version)
+        for i in range(4)
+    ))  # fmt: skip
+    assert sorted(r.status_code for r in replies) == [200, 409, 409, 409]
+    [won] = [i for i, r in enumerate(replies) if r.status_code == 200]
+    assert file.read_text() == f"save {won}\n" * (won + 1)
 
 
 async def test_grep_over_http(world: World) -> None:

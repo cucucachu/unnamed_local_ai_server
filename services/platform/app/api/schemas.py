@@ -370,6 +370,8 @@ class FileEntryOut(BaseModel):
     # Only on the synthetic entries (`/personal`, `/spaces`, `/spaces/<slug>`).
     label: str | None = None
     role: SpaceRole | None = None
+    # Regular files only: what `if_version` compares (M22-09).
+    version: str | None = None
 
 
 class FileListOut(BaseModel):
@@ -397,6 +399,8 @@ class PathBody(BaseModel):
 
 class PathOut(BaseModel):
     path: str
+    # The written file's new version (`/write`, `/content`).
+    version: str | None = None
 
 
 class MoveCopyBody(BaseModel):
@@ -429,11 +433,17 @@ class ReadOut(BaseModel):
     end_line: int | None = None
     next_offset: int | None = None
     no_lines_requested: bool = False
+    version: str | None = None
+
+
+# A file's `version` from stat/read/write; a write with a different one is `409 changed`.
+IfVersion = Annotated[str, Field(max_length=64)]
 
 
 class WriteBody(BaseModel):
     path: VPath
     content: str
+    if_version: IfVersion | None = None
 
 
 class EditBody(BaseModel):
@@ -441,6 +451,7 @@ class EditBody(BaseModel):
     old_string: str
     new_string: str
     replace_all: bool = False
+    if_version: IfVersion | None = None
 
 
 class EditOut(BaseModel):
@@ -448,6 +459,7 @@ class EditOut(BaseModel):
     occurrences: int
     # Set when the edit matched only after ignoring whitespace.
     note: str | None = None
+    version: str | None = None
 
 
 class GrepBody(BaseModel):

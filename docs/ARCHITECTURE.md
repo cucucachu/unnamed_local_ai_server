@@ -2509,7 +2509,8 @@ and the destination space.
 
 *Objects*: `FileEntry` `{"name", "path", "type": "file"|"dir", "size",
 "mtime": ts, "mime": str|null}`, plus `"label"` and `"role"` on the
-synthetic space entries (`/personal`, `/spaces`, `/spaces/<slug>`). A
+synthetic space entries (`/personal`, `/spaces`, `/spaces/<slug>`), and
+`"version": "<mtime ns>-<size>"` on regular files (M22-09; null otherwise). A
 listing: `{"path", "entries": [FileEntry], "role": SpaceRole|null,
 "writable": bool, "space_label": str|null}` — `role`/`writable` are the
 caller's in that space (`null`/`false` at `/` and `/spaces`),
@@ -2547,12 +2548,20 @@ matching `deepagents==0.7.11`'s `FilesystemBackend` (`app/core/agentfs.py`
 lists the deliberate differences). A failure the agent should read back is
 `422 {"detail": code, "message": "<deepagents' wording>", …}`.
 
+*Version check (M22-09).* `/write`, `/content` and `/edit` take an optional
+`if_version` (body field; a query parameter for `/content`), a file's
+`version` from stat, read or an earlier write. If the file is missing or
+its version differs, the answer is `409 {"detail": "changed"}` and nothing
+is written. Without `if_version` nothing changes. A version check and its
+write hold a per-file lock (the platform runs one worker), so of two saves
+from the same version only one succeeds.
+
 | Method + path | Need | Request | Success | Errors (`422` unless noted) |
 |---|---|---|---|---|
-| `POST /api/platform/files/read` | read | `{"path", "offset": 0, "limit": 2000}` | text: `200 {"path", "content", "encoding": "utf-8", "total_lines", "start_line", "end_line", "next_offset"}` (lines `offset`… raw, no gutters; `next_offset` omitted at the end). Empty or whitespace-only: `content` is `EMPTY_CONTENT_WARNING`. `limit: 0`: `"no_lines_requested": true`. Images/video/audio/pdf/ppt(x) by extension: `{"content": base64, "encoding": "base64"}`. | `not_text` (not UTF-8), `offset_out_of_range` (+ `total_lines`), `file_too_large` (video > 1 GiB); `404 not_found` |
-| `POST /api/platform/files/write` | write | `{"path", "content"}` | `200 {"path"}` — create or overwrite, parents created | `409 is_a_directory` |
-| `PUT /api/platform/files/content` | write | `?path=`, raw body | `200 {"path"}` — same, for bytes (`upload_files`) | `409 is_a_directory` |
-| `POST /api/platform/files/edit` | write | `{"path", "old_string", "new_string", "replace_all": false}` | `200 {"path", "occurrences"}`; CRLF/CR normalized to LF | `string_not_found`, `string_not_unique` (+ `occurrences`), `trailing_newline_mismatch`, `not_text`; `404 not_found` |
+| `POST /api/platform/files/read` | read | `{"path", "offset": 0, "limit": 2000}` | text: `200 {"path", "content", "encoding": "utf-8", "total_lines", "start_line", "end_line", "next_offset", "version"}` (lines `offset`… raw, no gutters; `next_offset` omitted at the end). Empty or whitespace-only: `content` is `EMPTY_CONTENT_WARNING`. `limit: 0`: `"no_lines_requested": true`. Images/video/audio/pdf/ppt(x) by extension: `{"content": base64, "encoding": "base64"}`. | `not_text` (not UTF-8), `offset_out_of_range` (+ `total_lines`), `file_too_large` (video > 1 GiB); `404 not_found` |
+| `POST /api/platform/files/write` | write | `{"path", "content", "if_version"?}` | `200 {"path", "version"}` — create or overwrite, parents created | `409 is_a_directory`, `409 changed` |
+| `PUT /api/platform/files/content` | write | `?path=&if_version=`, raw body | `200 {"path", "version"}` — same, for bytes (`upload_files`) | `409 is_a_directory`, `409 changed` |
+| `POST /api/platform/files/edit` | write | `{"path", "old_string", "new_string", "replace_all": false, "if_version"?}` | `200 {"path", "occurrences", "version"}`; CRLF/CR normalized to LF | `409 changed`, `string_not_found`, `string_not_unique` (+ `occurrences`), `trailing_newline_mismatch`, `not_text`; `404 not_found` |
 | `POST /api/platform/files/grep` | read | `{"pattern", "path"?, "glob"?, "max_count"?}` | `200 {"matches": [{"path", "line", "text"}], "truncated", "error": str|null}` — literal substring per line, path order; files > 10 MiB and symlinks skipped; 15 s budget | `invalid_glob` |
 | `POST /api/platform/files/glob` | read | `{"pattern", "path"?}` | `200 {"matches": [{"path", "is_dir": false, "size", "modified_at"}], "truncated", "truncation_reason": "budget"|null}` — regular files only, sorted; 5 s budget | `invalid_glob` (incl. `..`) |
 | `POST /api/platform/files/search` (M21-03) | read | `{"query", "path": "/", "limit": 10}` (`limit` 1–50) | `200 {"results": [{"kind": "file", "path", "line_start", "line_end", "snippet", "score"} \| {"kind": "app_row", "app_row": {"instance_id", "app": {"slug", "name"}, "space": {"id", "slug", "name", "kind"}, "table", "row_id", "title"}, "snippet", "score"}], "semantic"}` — best first: the file index's vector and full-text rankings merged by reciprocal rank fusion; app rows (M22-07, `homeai.index`) only when `path` covers whole spaces, ranked with the files; `snippet` ≤ ~400 chars; `semantic: false` when the embeddings service is unreachable (full-text only) | `invalid_query` (blank); `404 not_found` |

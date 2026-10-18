@@ -108,7 +108,9 @@ async def test_list_nested(world: World) -> None:
     body = (await _get(world, "alice", "/personal/sub")).json()
     assert body["path"] == "/personal/sub"
     (entry,) = body["entries"]
+    st = (home / "sub" / "nested.txt").stat()
     assert entry | {"mtime": None} == {
+        "version": f"{st.st_mtime_ns}-2",
         "name": "nested.txt",
         "path": "/personal/sub/nested.txt",
         "type": "file",

@@ -312,6 +312,12 @@ this is host work.
   (mtime in nanoseconds plus size). `/write`, `/content` and `/edit` take an
   optional `if_version`; a mismatch is `409 changed`, nothing written. The
   agent and the memory routine write these files too.
+
+  > **As built (M22-09):** `version` is `"<mtime ns>-<size>"` on file
+  > entries (stat and listings), read responses, and the responses of
+  > `/write`, `/content` and `/edit`, so an editor can save again without
+  > another stat. A missing file also counts as changed. ARCHITECTURE.md §3
+  > "Files" has the routes.
 - **Text and markdown:** tapping a text file opens a viewer (markdown
   rendered with the chat's `Markdown` component; other text monospace).
   Edit switches to a plain editor; Save writes with `if_version`. On `409`:
