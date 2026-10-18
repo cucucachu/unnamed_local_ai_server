@@ -706,10 +706,15 @@ what another doc says it should be.
   - A missing or empty note freezes as no block. A platform error
     freezes nothing, logs, and the next turn tries again; it never fails
     a turn.
+  - For a user with the Memory routine, the same first turn writes
+    `/personal/Memory/README.md` (the routine's layout conventions,
+    `memory_prompt.README`) if it's missing, once per user per process;
+    an edited one is kept.
   - The static `MEMORY_GUIDE` paragraph (`prompts.py`) is the same for
     every user: it says what `/personal/Memory/` is, says to search it
-    with `search_files`/`grep` when the user's past matters, and answers
-    "remember X" with "it will be added overnight". Docs:
+    with `search_files`/`grep` when the user's past matters, and lets
+    "remember X" either edit the notes (asking, with default settings) or
+    wait for the nightly run. Docs:
     `docs/MEMORY.md` §3.
 - **System prompt** (`app/agent/prompts.py`): paths start with
   `/personal/` or `/spaces/<slug>/` (`ls /spaces` lists the user's
@@ -4280,7 +4285,6 @@ M7-03; the recipe below is what it actually does, not a plan):**
   `tls internal`.
 - MCP integrations (M18, #259): designed, not built; see
   `docs/INTEGRATIONS.md`.
-- Memory (M21, #333): designed, not built; see `docs/MEMORY.md`.
 - GPU-sharing/queueing if multiple concurrent chats saturate the iGPU.
 - EAS Build for a standalone, app-icon-branded iOS/Android app; app-store or sideload distribution. M15-06 landed the Android **dev client** (`expo-dev-client`, package `ai.homeai.host`) plus `eas.json` development profile and `scripts/build_host_app_android.sh` (debug APK via throwaway Docker Android image; no `eas login` from an agent). iOS ipa is later.
 - ffmpeg transcode sidecar if you ever need to play back non-browser-native media formats (e.g. exotic codecs, HDR).

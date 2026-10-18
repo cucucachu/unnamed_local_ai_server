@@ -136,6 +136,8 @@ class FakePlatform:
     file_requests: list[tuple[str, str, str | None]] = field(default_factory=list)
     # bearer per read of /personal/Memory/memory.md by `MemoryCoreMiddleware` (M21-06)
     memory_core_reads: list[str | None] = field(default_factory=list)
+    # Stats and writes of /personal/Memory/README.md, kept out of `file_requests` too.
+    memory_readme_requests: list[tuple[str, str]] = field(default_factory=list)
     # `POST /files/search` (M21-04): (bearer, body) per call, and what it answers.
     search_requests: list[tuple[str | None, dict]] = field(default_factory=list)
     search_results: list[dict] = field(default_factory=list)

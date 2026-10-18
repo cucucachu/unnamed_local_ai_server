@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.agent.memory_core import CORE_MAX_CHARS, CUT_NOTE, STALE_NOTE, memory_block
 from app.agent.prompts import MEMORY_GUIDE
 from app.db.routines import NewRoutine
+from app.routines.memory_prompt import README
 from tests.fake_identity import TEST_USER_ID
 from tests.fake_model.scripting import FakeModel, TextTurn
 from tests.fake_platform.scripting import AGENT_TOKEN, FakePlatform
@@ -169,3 +170,31 @@ async def test_the_note_says_when_the_routine_is_off(
     assert user_off.endswith(memory_block("Sister: Ingrid.", stale=True))
     assert admin_off.endswith(memory_block("Sister: Ingrid.", stale=True))
     assert STALE_NOTE in admin_off
+
+
+async def test_the_readme_is_written_once_for_a_user_with_the_routine(
+    fake_model: FakeModel, fake_platform: FakePlatform
+) -> None:
+    readme = "Memory/README.md"
+    fake_model.queue(TextTurn("a"), TextTurn("b"), TextTurn("c"), TextTurn("d"))
+    with _make_client(fake_model, fake_platform) as client:
+        with client.websocket_connect("/ws/chat/readme-no-routine") as ws:
+            _turn(ws, "hi")
+        assert readme not in fake_platform.personal(TEST_USER_ID)
+        assert fake_platform.memory_readme_requests == []
+
+        client.portal.call(lambda: _memory_routine(client, enabled=True))
+        with client.websocket_connect("/ws/chat/readme-first") as ws:
+            _turn(ws, "hi")
+        assert fake_platform.personal(TEST_USER_ID)[readme].decode() == README
+        assert "one file per subject" in README and "Leave this README as it is." in README
+
+        fake_platform.personal(TEST_USER_ID)[readme] = b"my own notes on notes"
+        with client.websocket_connect("/ws/chat/readme-again") as ws:
+            _turn(ws, "hi")
+        client.app.state.memory_readme_users.clear()  # as after a restart
+        with client.websocket_connect("/ws/chat/readme-restart") as ws:
+            _turn(ws, "hi")
+
+    assert fake_platform.personal(TEST_USER_ID)[readme] == b"my own notes on notes"
+    assert [m for m, _ in fake_platform.memory_readme_requests] == ["GET", "POST", "GET"]

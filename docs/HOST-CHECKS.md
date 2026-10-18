@@ -390,3 +390,34 @@ space with an app in it.
       space. Opening an app and coming back keeps the page.
 - [ ] (M19-06) A day of normal use: nothing from the old Home, Files tab
       or Settings tab is missing.
+
+## M21
+
+Web G21 is `scripts/e2e/gate_m21.sh` (stack health; `embeddings` healthy
+and without egress; the M21 pytest and jest; the search, chats and
+memory-core smokes; then `g21_memory_smoke.sh`: deleting the Memory
+routine is refused; a chat states a fact and the conventions README
+appears; Run now on Memory puts the fact in `/personal/Memory/` with no
+web or integration call; a new chat recalls it; another user can't see it
+or find it with `search_files`). The real-model eval is
+`scripts/eval/memory/run.sh` (results on #398). Setup: stack up from
+`main`, the release APK rebuilt from `main` and installed, signed in as
+yourself, with the Memory routine on.
+
+- [ ] (M21-09, M21-10) Routines lists **Memory**, marked Built in. Its
+      screen makes clear what it does, what it can't use ("Search the web,
+      Read web pages, Integrations") and how to turn it off; there's no
+      Delete. The fixed part is under "Always included".
+- [ ] (M21-08) As admin, Settings → Agent tools → Delivered routines turns
+      Memory off for everyone: its screen says "Turned off by your admin"
+      with the switch locked, and Run now is disabled. Turn it back on.
+- [ ] (M21-10, #398) A few days of normal use: the Memory folder reads
+      sensibly in Files (one page per person, place, thing or interest,
+      `memory.md` short, a README with the conventions); nothing wrong or
+      unwanted got saved, or it was easy to fix in Files; the nightly runs
+      stay out of the chats list unless one needs you.
+- [ ] (M21-06) Recall shows up unprompted where it helps (a new chat knows
+      your partner's name or where you live), without the agent looking it
+      up every time.
+- [ ] (M21-12) "Remember that …" either shows an edit to your notes to
+      approve or says the nightly routine will pick it up; either is fine.

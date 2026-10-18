@@ -5,12 +5,9 @@
 (M21-11).
 """
 
-FIXED = """\
-You are updating the user's memory: notes about them in /personal/Memory/ that \
-the assistant reads in every new chat. Cover their chats from {since} to now \
-({now}).
-
-How the notes are laid out:
+# How the notes are laid out: in the routine's prompt, and in
+# /personal/Memory/README.md for anyone else who writes there.
+LAYOUT = """\
 - /personal/Memory/memory.md is the core: who the user is, the people closest \
 to them, standing preferences (including how they like answers) and current \
 plans. Each line is short and links to its page for detail, e.g. \
@@ -29,7 +26,37 @@ joined by hyphens. Pages link to each other with file: links.
 line: "- Lives in Seattle (Mar 2027; Portland until then)".
 - Write dates as dates: work out "on Saturday" or "in March" from when the chat \
 happened, so "in March" said in October is March of next year.
+"""
 
+README = f"""\
+# Memory
+
+Notes about you, kept by the Memory routine from your chats. The assistant reads \
+memory.md at the start of every new chat and searches the rest when it helps. \
+You can read, edit or delete anything here; the routine keeps your changes.
+
+## Conventions
+
+For anyone writing here, the routine included:
+
+{LAYOUT.replace("unless the instructions below say otherwise", "unless the routine's instructions say otherwise")}\
+- Only what the user said about themselves and their life, never what the \
+assistant suggested. No secrets: passwords, codes, card or account numbers.
+- Look for an existing page before creating one, and edit pages rather than \
+rewriting them.
+- Leave this README as it is.
+"""
+
+FIXED = (
+    """\
+You are updating the user's memory: notes about them in /personal/Memory/ that \
+the assistant reads in every new chat. Cover their chats from {since} to now \
+({now}).
+
+How the notes are laid out:
+"""
+    + LAYOUT
+    + """
 Steps:
 1. Read /personal/Memory/memory.md and list /personal/Memory/ (either may not \
 exist yet).
@@ -49,7 +76,7 @@ under /personal/Memory/). Edit pages rather than rewriting them, and keep \
 changes the user or a chat made since the last run. On a conflict, the user's \
 newest statement wins; keep the old one in the same line.
 6. Delete a page only after moving its content into another one.
-7. Make all your writes together at the end, in as few steps as possible: \
+7. Leave README.md as it is. Make all your writes together at the end, in as few steps as possible: \
 call write_file and edit_file for every change in one step.
 8. If nothing worth keeping came up, change nothing.
 9. Reply with a short list of what changed, each as a file: link, e.g. \
@@ -57,6 +84,7 @@ call write_file and edit_file for every change in one step.
 contradiction you couldn't settle.
 
 What to keep:"""
+)
 
 DEFAULT = """\
 Worth remembering:

@@ -15,7 +15,7 @@ from pathlib import PurePosixPath
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.agent.memory_core import MEMORY_PATH
+from app.agent.memory_core import MEMORY_PATH, README_PATH
 from app.core.delegation import DelegationDenied, DelegationUnavailable, Grant
 
 from .scripting import AGENT_TOKEN, FakePlatform, Minted
@@ -103,6 +103,8 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
         bearer = _bearer(request)
         if request.url.path.endswith("/download") and path == MEMORY_PATH:
             fake.memory_core_reads.append(bearer)
+        elif path == README_PATH:
+            fake.memory_readme_requests.append((request.method, request.url.path))
         else:
             fake.file_requests.append((request.method, request.url.path, bearer))
         who = fake.principal(bearer)
