@@ -2,13 +2,15 @@ import { createElement, type ComponentProps, type ReactElement, type ReactNode }
 import { Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MarkdownDisplay, { MarkdownIt, type ASTNode } from '@ronradtke/react-native-markdown-display';
 
-import { filePathFromHref } from '@/lib/fileLink';
+import { linkPathFrom } from '@/lib/fileLink';
 import { monospaceFontFamily, theme } from '@/lib/theme';
 
 export interface MarkdownProps {
   children: string;
   /** File-tool-root-relative path from a `file:` link (already normalized). */
   onFileLink?: (path: string) => void;
+  /** The folder of the file being shown; relative links resolve against it. */
+  baseDir?: string;
 }
 
 /** `markdown-it` does not treat `- [ ]` / `- [x]` as task items. Rewrite the
@@ -126,7 +128,7 @@ function LineBreak({ nodeKey }: { nodeKey: string }): ReactElement {
   return <View key={nodeKey} style={styles.lineBreak} testID="markdown-line-break" />;
 }
 
-export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement {
+export function Markdown({ children, onFileLink, baseDir }: MarkdownProps): ReactElement {
   const rules = {
     // Chat text puts one item per line without blank lines or list markers,
     // so a single newline (a softbreak) is a line break here too.
@@ -144,7 +146,7 @@ export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement 
     ),
     link: (node: ASTNode, children: ReactNode[]) => {
       const href = typeof node.attributes?.href === 'string' ? node.attributes.href : '';
-      const filePath = filePathFromHref(href);
+      const filePath = linkPathFrom(href, baseDir);
       const open = () => {
         if (filePath !== null) {
           onFileLink?.(filePath);
@@ -297,7 +299,7 @@ export function Markdown({ children, onFileLink }: MarkdownProps): ReactElement 
         mergeStyle
         rules={rules}
         onLinkPress={(url: string) => {
-          const path = filePathFromHref(url);
+          const path = linkPathFrom(url, baseDir);
           if (path !== null) {
             onFileLink?.(path);
             return false;

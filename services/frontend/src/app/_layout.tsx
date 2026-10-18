@@ -62,6 +62,8 @@ function AppStack() {
               Router modal presentation" spec — a sibling of the implicit
               `(tabs)` group route, not nested inside it. */}
           <Stack.Screen name="media" options={{ presentation: 'modal', headerShown: false }} />
+          {/* M22-10: a text file's viewer and editor, over the Files tab. */}
+          <Stack.Screen name="file" options={{ headerShown: false }} />
         </Stack.Protected>
         <Stack.Protected guard={user === null}>
           <Stack.Screen name="login" />
