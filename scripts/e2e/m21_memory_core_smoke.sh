@@ -4,8 +4,8 @@
 # As a throwaway `e2e-m21m-*` user (`lib/auth.sh`): writes
 # /personal/Memory/memory.md, then in a new chat asks "what do you know about
 # me?"; the agent must answer from the note without looking it up (it's in
-# the prompt). Then "remember X" must not write a file and must say it's
-# added overnight. Two GPU turns; takes about a minute.
+# the prompt). Then "remember X" may ask to edit the note or leave it for
+# the nightly routine; any card is rejected and the note must be unchanged. Two GPU turns; takes about a minute.
 #
 # Never completes bootstrap. Never recreates model-runner or postgres.
 # Deletes the user (and with it the chat and the note) on exit. Takes

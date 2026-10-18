@@ -93,6 +93,11 @@
 #      drawer's "needs you" order, + for a new chat, the Apps grid, a swipe
 #      to a shared space, Files/Routines/Settings from their tiles — plus
 #      the launcher, runner and chat smokes again)
+#   -> gate_m21.sh (M21-12: M21 pytest and jest, embeddings without egress,
+#      the search/chats/memory-core smokes, then the G21 scenario: a fact
+#      goes into Memory on Run now with no web or integration call, a new
+#      chat recalls it, another user can't see or find it, and the Memory
+#      routine can't be deleted - a few GPU turns and one Memory run)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and allows every tool for the e2e user (`ensure_hitl.sh false`, #342).
@@ -330,6 +335,10 @@ main() {
   # smokes above, plus frontend jest and the G19 shell scenario; same
   # idempotent reasoning.
   run_step "gate_m19.sh"             bash "${SCRIPT_DIR}/gate_m19.sh"
+  # M21-12: gate_m21.sh runs the M21 pytest/jest, the embeddings isolation
+  # check, the M21 smokes and the G21 memory scenario (a few GPU turns and
+  # one Memory run); its own users, so the same idempotent reasoning.
+  run_step "gate_m21.sh"             bash "${SCRIPT_DIR}/gate_m21.sh"
 
   print_summary
 
