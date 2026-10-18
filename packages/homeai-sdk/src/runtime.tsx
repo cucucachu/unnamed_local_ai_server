@@ -80,6 +80,7 @@ export const modules: Record<string, unknown> = {
     useQuery: SDK.useQuery,
     runAction: SDK.runAction,
     askAgent: SDK.askAgent,
+    search: SDK.search,
     useSpace: SDK.useSpace,
     useUser: SDK.useUser,
     useMembers: SDK.useMembers,

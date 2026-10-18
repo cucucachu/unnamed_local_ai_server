@@ -37,7 +37,7 @@ import anyio.to_thread
 import httpx
 from psycopg_pool import AsyncConnectionPool
 
-from app.core import beneath, vfs
+from app.core import appindex, beneath, vfs
 from app.core.errors import NotFound
 from app.core.storage import SpaceStorage
 
@@ -364,6 +364,36 @@ class HttpEmbedder:
 # --- the indexer ----------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _Chunks:
+    """A chunk table to embed: `select` takes the model and yields `keys`, content,
+    content_hash and the title the model is given; `update` takes model, vector, keys."""
+
+    select: str
+    update: str
+    keys: tuple[str, ...]
+
+
+_FILE_CHUNKS = _Chunks(
+    select="SELECT space_id, path, chunk_no, content, content_hash, path AS title "
+    "FROM file_chunks WHERE model IS DISTINCT FROM %s ORDER BY space_id, path, chunk_no "
+    "LIMIT 256",
+    update="UPDATE file_chunks SET model = %s, embedding = %s::vector "
+    "WHERE space_id = %s AND path = %s AND chunk_no = %s AND content_hash = %s",
+    keys=("space_id", "path", "chunk_no"),
+)
+_APP_ROW_CHUNKS = _Chunks(
+    select="SELECT c.instance_id, c.tbl, c.row_id, c.chunk_no, c.content, c.content_hash, "
+    "r.title FROM app_row_chunks c JOIN indexed_app_rows r USING (instance_id, tbl, row_id) "
+    "WHERE c.model IS DISTINCT FROM %s ORDER BY c.instance_id, c.tbl, c.row_id, c.chunk_no "
+    "LIMIT 256",
+    update="UPDATE app_row_chunks SET model = %s, embedding = %s::vector "
+    "WHERE instance_id = %s AND tbl = %s AND row_id = %s AND chunk_no = %s "
+    "AND content_hash = %s",
+    keys=("instance_id", "tbl", "row_id", "chunk_no"),
+)
+
+
 class FileIndex:
     def __init__(
         self,
@@ -380,6 +410,7 @@ class FileIndex:
         self.scan_interval_s = scan_interval_s
         self.enabled = enabled
         self._pending: set[tuple[UUID, tuple[str, ...]]] = set()
+        self._apps_pending: set[UUID] = set()
         self._wake = asyncio.Event()
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
@@ -391,6 +422,35 @@ class FileIndex:
         if self.enabled:
             self._pending.add((space_id, rel))
             self._wake.set()
+
+    def app_changed(self, instance_id: UUID) -> None:
+        """Queue an app instance's rows (`homeai.index`) for re-indexing; returns at once."""
+        if self.enabled:
+            self._apps_pending.add(instance_id)
+            self._wake.set()
+
+    async def search_instance(
+        self, instance_id: UUID, space_id: UUID, query: str, limit: int
+    ) -> list[dict]:
+        """An app's `search` RPC: its own indexed rows, best first."""
+        query = query.strip()
+        if not query:
+            return []
+        hits, _ = await search(
+            self.pool, self.embedder, [space_id], "", query, limit,
+            files=False, apps=True, instance=instance_id,
+        )  # fmt: skip
+        return [
+            {
+                "table": h.app_row.table,
+                "id": h.app_row.row_id,
+                "title": h.app_row.title,
+                "snippet": h.snippet,
+                "score": h.score,
+            }
+            for h in hits
+            if h.app_row is not None
+        ]
 
     def start(self) -> None:
         if self.enabled and self._task is None:
@@ -432,26 +492,34 @@ class FileIndex:
             await self._embed_pending()
 
     async def scan(self) -> None:
-        """Reconcile every active space with disk, drop archived spaces' rows, then drain."""
+        """Reconcile every active space with disk and every app instance with its database,
+        drop archived spaces' and dead instances' rows, then drain."""
         async with self._lock:
             async with self.pool.connection() as conn:
                 await conn.execute(
                     "DELETE FROM indexed_files WHERE space_id IN "
                     "(SELECT id FROM spaces WHERE archived_at IS NOT NULL)"
                 )
+                await appindex.drop_dead(conn)
                 cur = await conn.execute(
                     "SELECT id FROM spaces WHERE archived_at IS NULL ORDER BY created_at, id"
                 )
                 space_ids = [row["id"] for row in await cur.fetchall()]
+                instance_ids = await appindex.instances_to_scan(conn)
             for space_id in space_ids:
                 await self._reconcile(space_id, ())
+            for instance_id in instance_ids:
+                await appindex.reconcile(self.pool, self.storage, instance_id)
             await self._process_pending()
             await self._embed_pending()
 
     async def _process_pending(self) -> None:
-        while self._pending:
-            space_id, rel = self._pending.pop()
-            await self._reconcile(space_id, rel)
+        while self._pending or self._apps_pending:
+            if self._pending:
+                space_id, rel = self._pending.pop()
+                await self._reconcile(space_id, rel)
+            else:
+                await appindex.reconcile(self.pool, self.storage, self._apps_pending.pop())
 
     async def _reconcile(self, space_id: UUID, rel: tuple[str, ...]) -> None:
         found = await anyio.to_thread.run_sync(stat_tree, self.storage, space_id, rel)
@@ -523,21 +591,17 @@ class FileIndex:
             return
         try:
             model = await self.embedder.model()
-            while True:
-                async with self.pool.connection() as conn:
-                    cur = await conn.execute(
-                        "SELECT space_id, path, chunk_no, content, content_hash FROM file_chunks "
-                        "WHERE model IS DISTINCT FROM %s ORDER BY space_id, path, chunk_no "
-                        "LIMIT 256",
-                        (model,),
-                    )
-                    todo = await cur.fetchall()
-                if not todo:
-                    break
-                for batch in batched(todo, EMBED_BATCH):
-                    await self._embed_batch(model, list(batch))
-                    if self._pending:
-                        await self._process_pending()
+            for table in (_FILE_CHUNKS, _APP_ROW_CHUNKS):
+                while True:
+                    async with self.pool.connection() as conn:
+                        cur = await conn.execute(table.select, (model,))
+                        todo = await cur.fetchall()
+                    if not todo:
+                        break
+                    for batch in batched(todo, EMBED_BATCH):
+                        await self._embed_batch(model, table, list(batch))
+                        if self._pending or self._apps_pending:
+                            await self._process_pending()
         except EmbeddingsUnavailable as exc:
             self._embed_retry_at = time.monotonic() + EMBED_RETRY_S
             if not self._embed_failing:
@@ -548,80 +612,124 @@ class FileIndex:
             logger.info("file index: embeddings available again")
         self._embed_failing = False
 
-    async def _embed_batch(self, model: str, rows: list[dict]) -> None:
+    async def _embed_batch(self, model: str, table: _Chunks, rows: list[dict]) -> None:
         try:
-            vectors = await self.embedder.embed_documents([(r["path"], r["content"]) for r in rows])
+            vectors = await self.embedder.embed_documents(
+                [(r["title"], r["content"]) for r in rows]
+            )
         except EmbeddingRejected as exc:
             if len(rows) > 1:
                 for row in rows:
-                    await self._embed_batch(model, [row])
+                    await self._embed_batch(model, table, [row])
                 return
             # Marked done without a vector: full-text search still finds it.
-            logger.warning("file index: %s chunk %d not embedded: %s",
-                           rows[0]["path"], rows[0]["chunk_no"], exc)  # fmt: skip
+            logger.warning("file index: %s not embedded: %s",
+                           [rows[0][k] for k in table.keys], exc)  # fmt: skip
             vectors = [None]
         updates = [
             (
                 model,
                 vector_literal(v) if v is not None else None,
-                *(r["space_id"], r["path"], r["chunk_no"], r["content_hash"]),
+                *(r[k] for k in table.keys),
+                r["content_hash"],
             )
             for r, v in zip(rows, vectors, strict=True)
         ]
         async with self.pool.connection() as conn, conn.cursor() as cur:
-            await cur.executemany(
-                "UPDATE file_chunks SET model = %s, embedding = %s::vector "
-                "WHERE space_id = %s AND path = %s AND chunk_no = %s AND content_hash = %s",
-                updates,
-            )
+            await cur.executemany(table.update, updates)
 
 
 # --- search ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
+class AppRowRef:
+    instance_id: UUID
+    table: str
+    row_id: int
+    title: str
+
+
+@dataclass(frozen=True)
 class Hit:
     space_id: UUID
-    path: str
-    line_start: int
-    line_end: int
+    # A file's chunk: path and lines; an app row's: `app_row`.
+    path: str | None
+    line_start: int | None
+    line_end: int | None
     snippet: str
     score: float
+    app_row: AppRowRef | None = None
 
+
+# Each ranking's candidates come from file chunks (`files`, under `prefix`) and app
+# rows' chunks (`apps`: of live instances, `instance` alone if set), ranked together.
+_FILE_WHERE = """%(files)s AND space_id = ANY(%(ids)s)
+          AND (%(prefix)s = '' OR path = %(prefix)s OR starts_with(path, %(prefix)s || '/'))"""
+_APP_WHERE = """%(apps)s AND space_id = ANY(%(ids)s)
+          AND (%(instance)s::uuid IS NULL OR instance_id = %(instance)s::uuid)
+          AND instance_id IN (SELECT i.id FROM app_instances i JOIN apps a ON a.id = i.app_id
+                              WHERE i.uninstalled_at IS NULL AND a.archived_at IS NULL)"""
+_KEYS = "kind, space_id, path, instance_id, tbl, row_id, chunk_no"
 
 _FTS = f"""
+tq AS (
+    SELECT replace(plainto_tsquery('english', %(query)s)::text, ' & ', ' | ')::tsquery AS q
+),
 fts AS (
-    SELECT space_id, path, chunk_no, row_number() OVER (ORDER BY r DESC) AS rank
+    SELECT {_KEYS}, row_number() OVER (ORDER BY r DESC) AS rank
     FROM (
-        SELECT space_id, path, chunk_no, ts_rank_cd(tsv, q) AS r
-        FROM file_chunks,
-             (SELECT replace(plainto_tsquery('english', %(query)s)::text, ' & ', ' | ')::tsquery
-              AS q) tq
-        WHERE tsv @@ q AND space_id = ANY(%(ids)s)
-          AND (%(prefix)s = '' OR path = %(prefix)s OR starts_with(path, %(prefix)s || '/'))
+        (SELECT 'file' AS kind, space_id, path, NULL::uuid AS instance_id, NULL::text AS tbl,
+                NULL::bigint AS row_id, chunk_no, ts_rank_cd(tsv, q) AS r
+         FROM file_chunks, tq
+         WHERE tsv @@ q AND {_FILE_WHERE}
+         ORDER BY r DESC LIMIT {CANDIDATES})
+        UNION ALL
+        (SELECT 'app_row', space_id, NULL, instance_id, tbl, row_id, chunk_no,
+                ts_rank_cd(tsv, q)
+         FROM app_row_chunks, tq
+         WHERE tsv @@ q AND {_APP_WHERE}
+         ORDER BY 8 DESC LIMIT {CANDIDATES})
         ORDER BY r DESC LIMIT {CANDIDATES}
     ) f
 )"""
 
 _VEC = f"""
 vec AS (
-    SELECT space_id, path, chunk_no, row_number() OVER (ORDER BY d) AS rank
+    SELECT {_KEYS}, row_number() OVER (ORDER BY d) AS rank
     FROM (
-        SELECT space_id, path, chunk_no, embedding <=> %(vector)s::vector AS d
-        FROM file_chunks
-        WHERE model = %(model)s AND embedding IS NOT NULL AND space_id = ANY(%(ids)s)
-          AND (%(prefix)s = '' OR path = %(prefix)s OR starts_with(path, %(prefix)s || '/'))
-        ORDER BY embedding <=> %(vector)s::vector LIMIT {CANDIDATES}
+        (SELECT 'file' AS kind, space_id, path, NULL::uuid AS instance_id, NULL::text AS tbl,
+                NULL::bigint AS row_id, chunk_no, embedding <=> %(vector)s::vector AS d
+         FROM file_chunks
+         WHERE model = %(model)s AND embedding IS NOT NULL AND {_FILE_WHERE}
+         ORDER BY embedding <=> %(vector)s::vector LIMIT {CANDIDATES})
+        UNION ALL
+        (SELECT 'app_row', space_id, NULL, instance_id, tbl, row_id, chunk_no,
+                embedding <=> %(vector)s::vector
+         FROM app_row_chunks
+         WHERE model = %(model)s AND embedding IS NOT NULL AND {_APP_WHERE}
+         ORDER BY embedding <=> %(vector)s::vector LIMIT {CANDIDATES})
+        ORDER BY d LIMIT {CANDIDATES}
     ) v
 )"""
 
 _FUSE = f"""
-SELECT c.space_id, c.path, c.line_start, c.line_end, c.content,
-       sum(1.0 / ({RRF_K} + r.rank))::float8 AS score
-FROM ranked r JOIN file_chunks c USING (space_id, path, chunk_no)
-GROUP BY c.space_id, c.path, c.chunk_no
-ORDER BY score DESC, c.path, c.chunk_no
-LIMIT %(limit)s"""
+fused AS (
+    SELECT {_KEYS}, sum(1.0 / ({RRF_K} + rank))::float8 AS score
+    FROM ranked GROUP BY {_KEYS}
+    ORDER BY score DESC, kind, path, instance_id, tbl, row_id, chunk_no
+    LIMIT %(limit)s
+)
+SELECT f.*, fc.line_start, fc.line_end, COALESCE(fc.content, ac.content) AS content,
+       ar.title
+FROM fused f
+LEFT JOIN file_chunks fc ON f.kind = 'file' AND fc.space_id = f.space_id
+    AND fc.path = f.path AND fc.chunk_no = f.chunk_no
+LEFT JOIN app_row_chunks ac ON f.kind = 'app_row' AND ac.instance_id = f.instance_id
+    AND ac.tbl = f.tbl AND ac.row_id = f.row_id AND ac.chunk_no = f.chunk_no
+LEFT JOIN indexed_app_rows ar ON f.kind = 'app_row' AND ar.instance_id = f.instance_id
+    AND ar.tbl = f.tbl AND ar.row_id = f.row_id
+ORDER BY f.score DESC, f.kind, f.path, f.instance_id, f.tbl, f.row_id, f.chunk_no"""
 
 
 def snippet(content: str, query: str) -> str:
@@ -643,11 +751,19 @@ async def search(
     prefix: str,
     query: str,
     limit: int,
+    *,
+    files: bool = True,
+    apps: bool = False,
+    instance: UUID | None = None,
 ) -> tuple[list[Hit], bool]:
-    """(hits best first, whether the vector half ran) over `space_ids`, under `prefix`."""
-    if not space_ids:
+    """(hits best first, whether the vector half ran) over `space_ids`: files under
+    `prefix`, and with `apps` the indexed rows of their live app instances (`instance`'s alone)."""
+    if not space_ids or not (files or apps):
         return [], False
-    params: dict = {"query": query, "ids": space_ids, "prefix": prefix, "limit": limit}
+    params: dict = {
+        "query": query, "ids": space_ids, "prefix": prefix, "limit": limit,
+        "files": files, "apps": apps, "instance": instance,
+    }  # fmt: skip
     semantic = False
     if embedder is not None:
         try:
@@ -658,7 +774,7 @@ async def search(
             logger.warning("file search: full-text only: %s", exc)
     ctes = [_FTS, _VEC] if semantic else [_FTS]
     union = "SELECT * FROM fts UNION ALL SELECT * FROM vec" if semantic else "SELECT * FROM fts"
-    sql = f"WITH {','.join(ctes)}, ranked AS ({union}) {_FUSE}"
+    sql = f"WITH {','.join(ctes)}, ranked AS ({union}), {_FUSE}"
     async with pool.connection() as conn, conn.transaction():
         if semantic:
             await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
@@ -670,8 +786,13 @@ async def search(
             path=r["path"],
             line_start=r["line_start"],
             line_end=r["line_end"],
-            snippet=snippet(r["content"], query),
+            snippet=snippet(r["content"] or "", query),
             score=round(r["score"], 6),
+            app_row=(
+                AppRowRef(r["instance_id"], r["tbl"], r["row_id"], r["title"] or "")
+                if r["kind"] == "app_row"
+                else None
+            ),
         )
         for r in rows
     ]

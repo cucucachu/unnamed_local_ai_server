@@ -3,7 +3,7 @@
 // types/homeai.d.ts.
 import { createElement, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { on, rpc } from './bridge';
-import type { ActionResult, Member, RunResult, SqlParams, Space, User } from './protocol';
+import type { ActionResult, Member, RunResult, SearchResult, SqlParams, Space, User } from './protocol';
 
 export type Database = {
   getAllAsync<T = any>(sql: string, ...params: unknown[]): Promise<T[]>;
@@ -89,6 +89,15 @@ export async function runAction(name: string, params: Record<string, unknown> = 
   const r = await rpc('action', { name, params });
   if (r.changes) changed();
   return r;
+}
+
+/**
+ * This instance's rows that app.json's `homeai.index` declares, by meaning and by words, best
+ * first (M22-07). New and changed rows show up a moment after they're written.
+ */
+export function search(query: string, limit = 10): Promise<SearchResult[]> {
+  if (!query.trim()) return Promise.resolve([]);
+  return rpc('search', { query, limit: Math.max(1, Math.min(50, Math.floor(limit) || 10)) });
 }
 
 /** Open the host's "Ask the agent" panel with `prompt` (M13-04). Resolves once the host has the request. */

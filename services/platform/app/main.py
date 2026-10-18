@@ -224,6 +224,8 @@ def create_app(
                 pool, storage, embedder,
                 scan_interval_s=s.file_index_scan_interval_s, enabled=s.file_index_enabled,
             )  # fmt: skip
+            app.state.appdata.on_change = app.state.file_index.app_changed
+            app.state.appdata.searcher = app.state.file_index.search_instance
             app.state.file_index.start()
             yield
         finally:

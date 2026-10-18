@@ -37,7 +37,7 @@ import os
 import re
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 Row = dict[str, Any]
 
-READ_OPS = frozenset({"getAll", "getFirst"})
+READ_OPS = frozenset({"getAll", "getFirst", "search"})
 ACTION_NAME_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 MAX_ACTION_BYTES = 64 * 1024
 PUBLISH_INTERVAL_S = 1.0
@@ -209,6 +209,10 @@ class AppData:
         self._locks: dict[UUID, asyncio.Lock] = {}
         self._publishing: dict[UUID, asyncio.Task] = {}
         self._published_at: dict[UUID, float] = {}
+        # Told the instance whose rows, declaration or install changed (the file index, M22-07).
+        self.on_change: Callable[[UUID], None] | None = None
+        # `search` RPCs: (instance id, space id, query, limit) -> results (the file index).
+        self.searcher: Callable[[UUID, UUID, str, int], Awaitable[list[dict]]] | None = None
 
     # --- plumbing ---------------------------------------------------------------------
 
@@ -356,8 +360,13 @@ class AppData:
         except UnicodeDecodeError as exc:
             raise InvalidInput("invalid_action") from exc
 
+    def _notify(self, instance_id: UUID) -> None:
+        if self.on_change is not None:
+            self.on_change(instance_id)
+
     def _changed(self, target: Target) -> None:
         self.hub.db_changed(target.space_id, target.id)
+        self._notify(target.id)
         if target.id in self._publishing:
             return
         last = self._published_at.get(target.id)
@@ -536,6 +545,14 @@ class AppData:
             target = await self._target(
                 conn, principal, instance_id, "read" if op in READ_OPS else "write"
             )
+            if op == "search":
+                if self.searcher is None:
+                    return {"results": []}
+                return {
+                    "results": await self.searcher(
+                        target.id, target.space_id, req["query"], req["limit"]
+                    )
+                }
             action_sql = (
                 await self._read_action(conn, principal, target, req["name"])
                 if op == "action"
@@ -669,6 +686,7 @@ class AppData:
             except PlatformError as exc:
                 result["error"] = exc.code
             results.append(result)
+            self._notify(instance_id)
         self.hub.app_built([app["source_space_id"]], app["id"], version)
         return results
 
@@ -676,6 +694,7 @@ class AppData:
         """`apps.uninstall_app` once no write or migration of the instance is running."""
         async with self._lock(instance_id), self.pool.connection() as conn:
             await apps.uninstall_app(conn, principal, self.storage, space_id, instance_id)
+        self._notify(instance_id)
 
     async def pending(self, principal: Principal, instance_id: UUID, migration_id: UUID) -> Row:
         """The migration, if `principal` could approve it now (write access, still pending)."""

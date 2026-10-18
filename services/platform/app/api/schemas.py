@@ -463,10 +463,34 @@ class SearchBody(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class SearchAppOut(BaseModel):
+    slug: str
+    name: str
+
+
+class SearchSpaceOut(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    kind: str
+
+
+class SearchAppRowOut(BaseModel):
+    instance_id: UUID
+    app: SearchAppOut
+    space: SearchSpaceOut
+    table: str
+    row_id: int
+    title: str
+
+
 class SearchHitOut(BaseModel):
-    path: str
-    line_start: int
-    line_end: int
+    # `file`: path and lines are set; `app_row` (M22-07): a row an app declared in `homeai.index`.
+    kind: Literal["file", "app_row"] = "file"
+    path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    app_row: SearchAppRowOut | None = None
     snippet: str
     score: float
 
@@ -907,8 +931,16 @@ class RpcExportAction(BaseModel):
     params: Annotated[dict[Short, SqlValue], Field(max_length=1000)] = {}
 
 
+class RpcSearch(BaseModel):
+    """The instance's own rows its `homeai.index` declares, by meaning and by words (M22-07)."""
+
+    op: Literal["search"]
+    query: Annotated[str, Field(min_length=1, max_length=2000)]
+    limit: int = Field(default=10, ge=1, le=50)
+
+
 RpcRequest = Annotated[
-    RpcGetAll | RpcGetFirst | RpcRun | RpcTransaction | RpcAction | RpcExportAction,
+    RpcGetAll | RpcGetFirst | RpcRun | RpcTransaction | RpcAction | RpcExportAction | RpcSearch,
     Field(discriminator="op"),
 ]
 

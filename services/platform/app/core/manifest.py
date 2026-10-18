@@ -143,6 +143,34 @@ _READ_ITEM: dict[str, Any] = {
     "errorMessage": 'each read needs "app" (the exporting slug), "export" and "version"',
 }
 
+MAX_INDEX_ENTRIES = 16
+MAX_INDEX_COLUMNS = 16
+_COLUMN_NAME = {"type": "string", "minLength": 1, "maxLength": 64}
+_COLUMN_LIST = {
+    "type": "array",
+    "items": _COLUMN_NAME,
+    "maxItems": MAX_INDEX_COLUMNS,
+    "uniqueItems": True,
+}
+_INDEX_ITEM: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["table", "title"],
+    "properties": {
+        "table": {"description": "A table in schema.sql.", **_COLUMN_NAME},
+        "title": {"description": "The column that names a row in results.", **_COLUMN_NAME},
+        "text": {"description": "Columns of text to search, in this order.", **_COLUMN_LIST},
+        "fields": {
+            "description": 'Short columns shown and searched as "name: value".',
+            **_COLUMN_LIST,
+        },
+    },
+    "errorMessage": (
+        'each index entry is {"table", "title", "text"?, "fields"?}: a table in schema.sql '
+        "and its column names"
+    ),
+}
+
 # `errorMessage` (the ajv-errors keyword) replaces the generic message for
 # that node's own errors; validators ignore it.
 SCHEMA: dict[str, Any] = {
@@ -245,6 +273,19 @@ SCHEMA: dict[str, Any] = {
                     "items": _READ_ITEM,
                     "errorMessage": "reads must be an array of {app, export, version}",
                 },
+                "index": {
+                    "description": (
+                        "Tables whose rows search finds (the user's search, the agent's "
+                        "search_files, and the app's own search())."
+                    ),
+                    "type": "array",
+                    "items": _INDEX_ITEM,
+                    "maxItems": MAX_INDEX_ENTRIES,
+                    "errorMessage": (
+                        f"index must be an array of at most {MAX_INDEX_ENTRIES} "
+                        '{"table", "title", "text"?, "fields"?}'
+                    ),
+                },
                 "template": {
                     "description": (
                         "The shipped template this app was installed from (set by the "
@@ -289,7 +330,7 @@ _SHIPPED_VALIDATOR = Draft202012Validator(SHIPPED_SCHEMA)
 
 # homeai keys that Expo doesn't use at the top level (its icon and description
 # are), so finding one there is a misplaced homeai key, not an Expo one.
-_HOMEAI_ONLY = ("sdk", "permissions", "exports", "reads")
+_HOMEAI_ONLY = ("sdk", "permissions", "exports", "reads", "index")
 
 
 @dataclass(frozen=True)
@@ -366,6 +407,81 @@ def homeai_exports(doc: Any) -> list[Any]:
 
 def homeai_reads(doc: Any) -> list[Any]:
     return homeai_list(doc, "reads")
+
+
+def homeai_index(doc: Any) -> list[dict[str, Any]]:
+    """`homeai.index`'s well-formed entries (the schema already rejected the rest)."""
+    return [
+        item
+        for item in homeai_list(doc, "index")
+        if isinstance(item, dict)
+        and isinstance(item.get("table"), str)
+        and isinstance(item.get("title"), str)
+    ]
+
+
+def index_diagnostics(doc: Any, schema_sql: str | None) -> list[Diagnostic]:
+    """Each `homeai.index` entry names a rowid table of `schema_sql`, once, and its columns."""
+    entries = homeai_list(doc, "index")
+    if not entries or schema_sql is None:
+        return []
+    try:
+        con = appschema.scratch_from(schema_sql)
+    except appschema.SchemaError:
+        return []  # reported as a schema diagnostic
+    try:
+        tables = appschema.describe(con)["tables"]
+    finally:
+        con.close()
+    out: list[Diagnostic] = []
+    seen: set[str] = set()
+    for i, item in enumerate(entries):
+        if not isinstance(item, dict) or not isinstance(item.get("table"), str):
+            continue
+        table = item["table"]
+        at = ["homeai", "index", i]
+        if table in seen:
+            out.append(
+                Diagnostic(
+                    MANIFEST_FILE, _pointer([*at, "table"]), f'table "{table}" is indexed twice'
+                )
+            )
+            continue
+        seen.add(table)
+        info = tables.get(table)
+        if info is None:
+            out.append(
+                Diagnostic(
+                    MANIFEST_FILE,
+                    _pointer([*at, "table"]),
+                    f'table "{table}" is not created in schema.sql',
+                )
+            )
+            continue
+        if "without rowid" in info["parsed"]["options"]:
+            out.append(
+                Diagnostic(
+                    MANIFEST_FILE,
+                    _pointer([*at, "table"]),
+                    f'table "{table}" is WITHOUT ROWID; only rowid tables can be indexed',
+                )
+            )
+        columns = set(info["cols"])
+        named = [("title", item.get("title"))]
+        for key in ("text", "fields"):
+            values = item.get(key) if isinstance(item.get(key), list) else []
+            named += [((key, j), v) for j, v in enumerate(values)]
+        for where, column in named:
+            if isinstance(column, str) and column not in columns:
+                path = [*at, *(where if isinstance(where, tuple) else (where,))]
+                out.append(
+                    Diagnostic(
+                        MANIFEST_FILE,
+                        _pointer(path),
+                        f'"{column}" is not a column of {table}',
+                    )
+                )
+    return out
 
 
 def find_export(doc: Any, name: str) -> dict[str, Any] | None:
@@ -797,6 +913,7 @@ def validate_package(
         out.append(Diagnostic("actions", "", f"actions must be a folder of {kind}"))
     if isinstance(manifest, dict):
         out += _export_layout_diagnostics(pkg, manifest)
+        out += index_diagnostics(manifest, read_schema_sql(pkg))
     if walk.truncated:
         out.append(
             Diagnostic(

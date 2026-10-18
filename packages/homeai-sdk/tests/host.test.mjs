@@ -60,6 +60,21 @@ test('other methods, bad params and viewer writes are refused without forwarding
   );
 });
 
+test('search is a read: viewers may, with a query and a limit of 1 to 50, extra fields dropped', async () => {
+  const h = harness({ readOnly: true });
+  h.host.receive(req(1, 'search', { query: 'soup', limit: 5, instance: 'other' }));
+  h.host.receive(req(2, 'search', { query: '  ' }));
+  h.host.receive(req(3, 'search', { query: 'soup', limit: 51 }));
+  h.host.receive(req(4, 'search', { query: 'x'.repeat(2001) }));
+  h.host.receive(req(5, 'search', { query: 'soup' }));
+  await tick();
+  assert.deepEqual(h.forwarded, [
+    { method: 'search', params: { query: 'soup', limit: 5 } },
+    { method: 'search', params: { query: 'soup', limit: 10 } },
+  ]);
+  assert.deepEqual([2, 3, 4].map((id) => h.res(id).error.code), ['bad_request', 'bad_request', 'bad_request']);
+});
+
 test('agent.ask is handled by the host and never forwarded, including for viewers', async () => {
   const asked = [];
   const h = harness({
@@ -144,12 +159,14 @@ test('platformForward maps each method onto the instance RPC and back', async ()
     { status: 200, body: { row: null } },
     { status: 200, body: { changes: 2, lastInsertRowId: 5 } },
     { status: 200, body: { changes: 1, lastInsertRowId: 3, rows: [{ n: 1 }] } },
+    { status: 200, body: { results: [{ table: 't', id: 1, title: 'a', snippet: 'a', score: 0.5 }] } },
   ]);
   const forward = H.platformForward(INSTANCE_ID, { baseUrl: 'http://homeai.local', fetch: f.fetch, headers: { Authorization: 'Bearer t' } });
   assert.deepEqual(await forward('db.getAll', { sql: 'SELECT a', params: [] }), [{ a: 1 }]);
   assert.equal(await forward('db.getFirst', { sql: 'SELECT a', params: { $a: 1 } }), null);
   assert.deepEqual(await forward('db.run', { sql: 'UPDATE t SET a = 1', params: [] }), { changes: 2, lastInsertRowId: 5 });
   assert.deepEqual(await forward('action', { name: 'go', params: { x: 1 } }), { changes: 1, lastInsertRowId: 3, rows: [{ n: 1 }] });
+  assert.deepEqual(await forward('search', { query: 'a', limit: 5 }), [{ table: 't', id: 1, title: 'a', snippet: 'a', score: 0.5 }]);
   const url = `http://homeai.local/api/platform/apps/instances/${INSTANCE_ID}/rpc`;
   assert.ok(f.calls.every((c) => c.url === url && c.method === 'POST' && c.headers.Authorization === 'Bearer t' && c.headers['Content-Type'] === 'application/json'));
   assert.deepEqual(
@@ -159,6 +176,7 @@ test('platformForward maps each method onto the instance RPC and back', async ()
       { op: 'getFirst', sql: 'SELECT a', params: { $a: 1 } },
       { op: 'run', sql: 'UPDATE t SET a = 1', params: [] },
       { op: 'action', name: 'go', params: { x: 1 } },
+      { op: 'search', query: 'a', limit: 5 },
     ],
   );
 });

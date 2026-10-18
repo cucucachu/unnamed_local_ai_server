@@ -143,6 +143,10 @@ export function stubPlatform(appDir = FIXTURE, { instanceId = INSTANCE_ID } = {}
         const st = db.prepare(body.sql);
         return { status: 200, body: body.op === 'getAll' ? { rows: st.all(...bind(body.params)) } : { row: st.get(...bind(body.params)) ?? null } };
       }
+      if (body.op === 'search') {
+        const rows = db.prepare('SELECT id, name FROM items WHERE name LIKE ? ORDER BY id LIMIT ?').all(`%${body.query}%`, body.limit);
+        return { status: 200, body: { results: rows.map((r) => ({ table: 'items', id: r.id, title: r.name, snippet: r.name, score: 1 })) } };
+      }
       if (body.op === 'run') {
         if (!isWrite(body.sql)) return { status: 422, body: { detail: 'sql_not_allowed', message: 'not authorized' } };
         const r = run(body.sql, body.params);

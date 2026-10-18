@@ -22,7 +22,13 @@ export type PlatformOptions = {
 
 export type Bundle = { app_id: string; version: string; sdk: string; bundle_id: string; code: string };
 
-const OPS: Record<PlatformMethod, string> = { 'db.getAll': 'getAll', 'db.getFirst': 'getFirst', 'db.run': 'run', action: 'action' };
+const OPS: Record<PlatformMethod, string> = {
+  'db.getAll': 'getAll',
+  'db.getFirst': 'getFirst',
+  'db.run': 'run',
+  action: 'action',
+  search: 'search',
+};
 
 function withError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
@@ -65,6 +71,7 @@ export function platformForward(instanceId: string, opts: PlatformOptions = {}):
     if (method === 'db.getAll') return doc.rows;
     if (method === 'db.getFirst') return doc.row;
     if (method === 'db.run') return { changes: doc.changes, lastInsertRowId: doc.lastInsertRowId };
+    if (method === 'search') return doc.results;
     return { changes: doc.changes, lastInsertRowId: doc.lastInsertRowId, rows: doc.rows };
   }) as Forward;
 }
