@@ -15,21 +15,28 @@ agent file tools' (`read`, `write`, `edit`, `grep`, `glob`, `content`),
 which mirror deepagents' `FilesystemBackend` via `app.core.agentfs`, plus
 `search` over the file index (`app.core.fileindex`), which every route that
 changes a file feeds. Blocking filesystem work runs in a worker thread.
+
+`/write`, `/content` and `/edit` take an optional `if_version` (a file's
+`version` from stat, read or an earlier write: mtime in nanoseconds and
+size); if the file is missing or has another version, the route answers
+`409 changed` and writes nothing (M22-09).
 """
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import mimetypes
 import os
 import stat
-from collections.abc import Iterator
-from contextlib import contextmanager
+import weakref
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
-from typing import BinaryIO
+from typing import Annotated, BinaryIO
 
 import anyio.to_thread
-from fastapi import APIRouter, File, Form, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -69,6 +76,11 @@ router = APIRouter(prefix="/files")
 
 _CHUNK_SIZE = 1024 * 1024
 _MISSING = (FileNotFoundError, NotADirectoryError)
+
+# Held across a write's version check and the write; the platform runs one worker.
+_write_locks: weakref.WeakValueDictionary[tuple[str, tuple[str, ...]], asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
 
 
 async def resolve(
@@ -112,6 +124,31 @@ def _owner(principal: Principal, r: vfs.Resolved) -> fsops.Owner:
     return fsops.Owner(principal.uid, r.space["gid"])
 
 
+def version_of(st: os.stat_result) -> str:
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+@asynccontextmanager
+async def _writing(r: vfs.Resolved) -> AsyncIterator[None]:
+    key = (str(r.space["id"]), r.rel)
+    lock = _write_locks.get(key)
+    if lock is None:
+        lock = _write_locks[key] = asyncio.Lock()
+    async with lock:
+        yield
+
+
+def _check_version(root: Root, parts: tuple[str, ...], if_version: str | None) -> None:
+    if if_version is None:
+        return
+    try:
+        st = beneath.stat_at(root, parts)
+    except _MISSING as exc:
+        raise Conflict("changed") from exc
+    if not stat.S_ISREG(st.st_mode) or version_of(st) != if_version:
+        raise Conflict("changed")
+
+
 @contextmanager
 def _fs_errors() -> Iterator[None]:
     try:
@@ -145,6 +182,7 @@ def _entry(vpath: str, name: str, st: os.stat_result) -> FileEntryOut:
         size=0 if is_dir else st.st_size,
         mtime=_mtime(st.st_mtime),
         mime=None if is_dir else mimetypes.guess_type(name)[0],
+        version=version_of(st) if stat.S_ISREG(st.st_mode) else None,
     )
 
 
@@ -301,7 +339,12 @@ async def download(request: Request, principal: CurrentUser, path: str) -> FileR
     )
 
 
-@router.post("/mkdir", status_code=status.HTTP_201_CREATED, response_model=PathOut)
+@router.post(
+    "/mkdir",
+    status_code=status.HTTP_201_CREATED,
+    response_model=PathOut,
+    response_model_exclude_none=True,
+)
 async def mkdir(body: PathBody, request: Request, principal: CurrentUser) -> PathOut:
     """`mkdir -p`: parents are created, an existing directory is fine, a file in the way is 409."""
     r = await resolve(request, principal, body.path, "write")
@@ -423,51 +466,67 @@ async def delete(request: Request, principal: CurrentUser, path: str) -> None:
 @router.post("/read", response_model=ReadOut, response_model_exclude_none=True)
 async def read(body: ReadBody, request: Request, principal: CurrentUser) -> ReadOut:
     r, f = await open_file(request, principal, body.path)
+    version = version_of(os.fstat(f.fileno()))
     with _fs_errors():
         result = await anyio.to_thread.run_sync(
             agentfs.read_file, f, r.vpath, body.offset, body.limit
         )
-    return ReadOut(path=r.vpath, **result)
+    return ReadOut(path=r.vpath, version=version, **result)
 
 
-def _write_text(r: vfs.Resolved, owner: fsops.Owner, content: bytes) -> None:
+def _write_text(r: vfs.Resolved, owner: fsops.Owner, content: bytes, if_version: str | None) -> str:
     with r.open_root() as root, _fs_errors():
+        _check_version(root, r.rel, if_version)
         fsops.make_dirs(root, r.rel[:-1], owner)
         with fsops.open_for_write(root, r.rel, owner) as f:
             f.write(content)
+            f.flush()
+            return version_of(os.fstat(f.fileno()))
 
 
-@router.post("/write", response_model=PathOut)
+@router.post("/write", response_model=PathOut, response_model_exclude_none=True)
 async def write(body: WriteBody, request: Request, principal: CurrentUser) -> PathOut:
     """Create or overwrite a text file, creating missing parent directories."""
     r = await resolve(request, principal, body.path, "write")
     if r.is_space_root:
         raise Conflict("is_a_directory")
-    await anyio.to_thread.run_sync(
-        _write_text, r, _owner(principal, r), body.content.encode("utf-8")
-    )
+    async with _writing(r):
+        version = await anyio.to_thread.run_sync(
+            _write_text, r, _owner(principal, r), body.content.encode("utf-8"), body.if_version
+        )
     _reindex(request, r)
-    return PathOut(path=r.vpath)
+    return PathOut(path=r.vpath, version=version)
 
 
-@router.put("/content", response_model=PathOut)
-async def put_content(request: Request, principal: CurrentUser, path: str) -> PathOut:
+@router.put("/content", response_model=PathOut, response_model_exclude_none=True)
+async def put_content(
+    request: Request,
+    principal: CurrentUser,
+    path: str,
+    if_version: Annotated[str | None, Query(max_length=64)] = None,
+) -> PathOut:
     """Raw request body -> file (create or overwrite, parents created): deepagents' upload_files."""
     r = await resolve(request, principal, path, "write")
     if r.is_space_root:
         raise Conflict("is_a_directory")
     owner = _owner(principal, r)
-    with r.open_root() as root, _fs_errors():
-        await anyio.to_thread.run_sync(fsops.make_dirs, root, r.rel[:-1], owner)
-        with fsops.open_for_write(root, r.rel, owner) as f:
-            async for chunk in request.stream():
-                f.write(chunk)
+    async with _writing(r):
+        with r.open_root() as root, _fs_errors():
+            await anyio.to_thread.run_sync(_check_version, root, r.rel, if_version)
+            await anyio.to_thread.run_sync(fsops.make_dirs, root, r.rel[:-1], owner)
+            with fsops.open_for_write(root, r.rel, owner) as f:
+                async for chunk in request.stream():
+                    f.write(chunk)
+                f.flush()
+                version = version_of(os.fstat(f.fileno()))
     _reindex(request, r)
-    return PathOut(path=r.vpath)
+    return PathOut(path=r.vpath, version=version)
 
 
-def _edit(r: vfs.Resolved, f: BinaryIO, body: EditBody) -> agentfs.Edit:
+def _edit(r: vfs.Resolved, f: BinaryIO, body: EditBody) -> tuple[agentfs.Edit, str]:
     with f:
+        if body.if_version is not None and version_of(os.fstat(f.fileno())) != body.if_version:
+            raise Conflict("changed")
         raw = f.read()
         try:
             content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
@@ -477,16 +536,18 @@ def _edit(r: vfs.Resolved, f: BinaryIO, body: EditBody) -> agentfs.Edit:
         f.seek(0)
         f.truncate()
         f.write(result.content.encode("utf-8"))
-    return result
+        f.flush()
+        return result, version_of(os.fstat(f.fileno()))
 
 
 @router.post("/edit", response_model=EditOut, response_model_exclude_none=True)
 async def edit(body: EditBody, request: Request, principal: CurrentUser) -> EditOut:
     r, f = await open_file(request, principal, body.path, writable=True)
-    with _fs_errors():
-        result = await anyio.to_thread.run_sync(_edit, r, f, body)
+    async with _writing(r):
+        with _fs_errors():
+            result, version = await anyio.to_thread.run_sync(_edit, r, f, body)
     _reindex(request, r)
-    return EditOut(path=r.vpath, occurrences=result.occurrences, note=result.note)
+    return EditOut(path=r.vpath, occurrences=result.occurrences, note=result.note, version=version)
 
 
 async def _trees(request: Request, principal: Principal, path: str | None):
