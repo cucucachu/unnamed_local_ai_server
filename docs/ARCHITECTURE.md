@@ -2910,7 +2910,9 @@ that export's tables (and the TEMP merged views on `temp`). Everything else is `
 matches `reads.app`, in spaces the caller can read, whose export `name`+`version`
 match; each is ATTACHed `mode=ro` via `/proc/self/fd/…`; a TEMP VIEW
 `{app}_{export}` is `UNION ALL` of each copy plus `_space` and `_instance`
-(the exporter's instance id, M22-16a). Missing exporters are skipped.
+(the exporter's instance id, M22-16a), and `homeai_exports(_instance,
+_space, app, export)` lists every attached copy, rows or not (M22-16b).
+Missing exporters are skipped.
 Cross-app writes use `op: "exportAction"` with that `_instance`
 (`runExportAction` in `@homeai/sdk`).
 

@@ -605,6 +605,10 @@ async def _reads_stand_ins(
                 names = ", ".join(appschema.quote(c) for c in (*cols[table], "_space", "_instance"))
                 statements.append(f"CREATE TABLE {appschema.quote(view)} ({names});")
             break
+    if statements:
+        statements.append(
+            f'CREATE TABLE {appdb.EXPORTS_VIEW} ("_instance", "_space", "app", "export");'
+        )
     return "".join(f"{s}\n" for s in statements)
 
 
