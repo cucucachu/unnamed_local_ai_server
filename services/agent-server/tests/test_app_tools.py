@@ -283,6 +283,25 @@ async def test_build_app_reports_diagnostics_then_success_with_a_pending_migrati
     assert fake_platform.approvals == [] and fake_platform.hitl_mints == []
 
 
+async def test_build_app_says_when_the_migration_failed(fake_model, fake_platform):
+    _family(fake_platform)
+    _, inst = fake_platform.seed_app("family", "groceries")
+    failed = fake_platform.migration(inst["id"], status="failed", steps=[])
+    failed["error"] = "OperationalError: error in table items after add column: incomplete input"
+    fake_platform.next_migration[inst["id"]] = failed
+    fake_model.queue(ToolCallTurn("build_app", {"app": "groceries"}), TextTurn("built"))
+    with (
+        _client(fake_model, fake_platform, ToolPolicy.allow_all()) as client,
+        client.websocket_connect("/ws/chat/build-failed-migration") as ws,
+    ):
+        ws.send_json({"type": "user_message", "content": "build it"})
+        _assert_turn_end(_drain_turn(ws)[-1], "completed")
+    out = _tool_results(fake_model)[-1]
+    assert out.startswith("Build succeeded: Groceries")
+    assert "But the database migration FAILED for 1 instance(s)" in out
+    assert "migration failed: OperationalError: error in table items" in out
+
+
 # --- app_query / app_update / app_action --------------------------------------------------------------------
 
 

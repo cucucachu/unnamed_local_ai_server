@@ -9,6 +9,23 @@ the smoke render) **and** a scripted check of the data model succeeds
 Bar: **≥ 7/10**. Below 5/10: stop and escalate, do not claim the gate
 passed.
 
+**Customize cases (M22-19).** Six more cases (`"kind": "customize"` in
+`cases.json`) install a template from the catalog and then ask for a
+change the way the runner's "Ask the agent" panel does: a thread titled
+`Ask: <app>` whose first message is the app context (instance, space,
+`app.json`, `AGENT.md`, `schema.sql`; `seedUserMessage` in
+`services/frontend/lib/appAgent.ts`) followed by the prompt. Two each of:
+
+- `field`: a new column. Pass when the column is in the instance's
+  database and a source file uses it.
+- `screen`: a new route file under `app/`.
+- `chart`: a source file uses a `@homeai/ui` chart (the templates chosen
+  have none).
+
+All of them also need the turn's last `build_app` to have succeeded. They
+are reported separately (`summary.customize`); the 7/10 bar is for the ten
+create cases.
+
 ## Run
 
 Needs the live stack (GPU model, platform, agent-server with the templates
@@ -26,5 +43,6 @@ user / personal space / app bundles on exit. Never completes bootstrap.
 Never recreates `model-runner` or `postgres`.
 
 Report: `scripts/eval/app_authoring/last-report.json` (gitignored) with
-pass rate, failure taxonomy, which template `create_app` used, and whether
-the generated source called `useDatabase` and/or `useSQLiteContext`.
+pass rate, failure taxonomy, which template `create_app` used, whether
+the generated source called `useDatabase` and/or `useSQLiteContext`, and
+the customize cases' results.

@@ -107,6 +107,23 @@ def test_matrix(live, case, kinds, desired, applies) -> None:
         assert not live.in_transaction
 
 
+def test_new_last_column_with_a_trailing_comment(live) -> None:
+    desired = (
+        "-- What's on the list.\nCREATE TABLE items (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n"
+        "  done INTEGER NOT NULL DEFAULT 0,\n  note TEXT, -- anything else\n"
+        "  brand TEXT NOT NULL DEFAULT '' -- who made it, e.g. \"Acme\"\n);\n"
+        f"{IDX}\n{LISTS}"
+    )
+    plan = appschema.plan(live, desired)
+    assert [(s.kind, s.op) for s in plan.steps] == [("additive", "add_column")]
+    appschema.apply(live, plan.steps, desired)
+    first = live.execute("SELECT name, brand FROM items ORDER BY id LIMIT 1").fetchone()
+    assert first == ("Milk", "")
+    assert appschema.plan(live, desired).steps == []
+    docs = {d["name"]: d for d in appschema.table_docs(desired)}
+    assert docs["items"]["columns"]["brand"] == 'who made it, e.g. "Acme"'
+
+
 def test_reasons_are_readable(live) -> None:
     (step,) = appschema.plan(live, CASES[11][2]).steps
     assert step.op == "rebuild"

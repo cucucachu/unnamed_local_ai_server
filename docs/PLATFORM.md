@@ -1157,6 +1157,16 @@ The sandbox config (`window.__homeai_config`, in the document) is
   plan runs in one transaction; `foreign_key_check` and a re-diff that must
   come back empty gate the commit, otherwise it rolls back and returns a
   diagnostic.
+
+  > **M22-19:** an ADD COLUMN step uses the column's text without its
+  > comments. SQLite pastes that text into the stored `CREATE TABLE` just
+  > before the closing `)`, so a new last column with a trailing
+  > `-- comment` (as every template's `AGENT.md` suggests) commented out the
+  > `)` and the migration failed with "incomplete input". The data map
+  > reads its descriptions from `schema.sql`, so nothing is lost. The
+  > agent's `build_app` now says up front when a migration failed (the new
+  > code is running against the old tables) instead of only in the
+  > per-instance line under "Build succeeded".
 - **Exec read-only access (D12)**: exec containers never see the live
   database (WAL `mode=ro` fails whenever the platform has no open
   connection, and a read-only reader can still pin the WAL; `immutable=1` on
