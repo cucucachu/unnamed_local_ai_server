@@ -253,6 +253,11 @@ it already keeps:
 - Search finds timeline files like any note, so "what was I doing last
   March?" is a search plus a read.
 
+  > **As built (M22-13):** the day file is a step of the nightly run's
+  > fixed prompt, and `LAYOUT` describes it (the prompt includes `LAYOUT`,
+  > so a user whose README predates the timeline still gets it). The
+  > Memory eval's "timeline" case has the results on #425.
+
 ### 6.3 Weekly, monthly and yearly reviews
 
 Three more delivered routines, quiet like the nightly one, with the same
