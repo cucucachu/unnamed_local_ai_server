@@ -1,0 +1,12 @@
+{
+  "name": "Chores",
+  "slug": "chores",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "home-outline",
+    "description": "Household chores that repeat, taking turns between the space's members, with who did what.",
+    "permissions": {}
+  }
+}

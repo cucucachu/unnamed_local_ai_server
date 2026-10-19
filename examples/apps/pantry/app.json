@@ -1,0 +1,13 @@
+{
+  "name": "Pantry",
+  "slug": "pantry",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "basket-outline",
+    "description": "What's in the cupboards, fridge and freezer: how much is left, where it is, and when it expires.",
+    "permissions": {},
+    "index": [{ "table": "items", "title": "name", "text": ["note"], "fields": ["location"] }]
+  }
+}

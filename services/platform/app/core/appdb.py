@@ -264,12 +264,11 @@ def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> No
     """ATTACH granted exporter DBs read-only and create merged TEMP views.
 
     Missing or unreadable exporters are skipped. `SQLITE_LIMIT_ATTACHED` is
-    raised only far enough for the databases that actually attached.
+    raised only far enough for the databases that actually attached. Call it
+    for any app with granted reads: `homeai_exports` exists even when nothing
+    attached, so "no copies yet" is an empty result rather than an error.
     """
-    if not grants:
-        _set_attached(con, 0)
-        return
-    cap = _attached_cap(con)
+    cap = _attached_cap(con) if grants else 0
     attached: list[tuple[AttachGrant, str]] = []
     for grant in grants:
         if len(attached) >= cap:
@@ -289,8 +288,6 @@ def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> No
             continue
         attached.append((grant, schema))
     _set_attached(con, len(attached))
-    if not attached:
-        return
     groups: dict[tuple[str, str], list[tuple[AttachGrant, str]]] = {}
     tables_by_schema: dict[str, frozenset[str]] = {}
     schemas: set[str] = set()
@@ -323,10 +320,8 @@ def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> No
         f"{_sql_str(g.app_slug)}, {_sql_str(g.export_name)})"
         for g, _ in attached
     ]
-    con.execute(
-        f"CREATE TEMP VIEW {EXPORTS_VIEW} (_instance, _space, app, export) AS VALUES "
-        + ", ".join(copies)
-    )
+    rows = "VALUES " + ", ".join(copies) if copies else "SELECT NULL, NULL, NULL, NULL WHERE 0"
+    con.execute(f"CREATE TEMP VIEW {EXPORTS_VIEW} (_instance, _space, app, export) AS {rows}")
     views.add(EXPORTS_VIEW)
     _ATTACH_STATE[id(con)] = _AttachState(
         schemas=frozenset(schemas), tables=tables_by_schema, views=frozenset(views)

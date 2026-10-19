@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -16,7 +16,7 @@ from app.routines import delivered, review_prompts
 from app.routines.runs import RUN_MARKER
 from tests.fake_model.scripting import FakeModel, TextTurn
 from tests.fake_platform.scripting import AGENT_TOKEN, FakePlatform
-from tests.test_delivered_routines import OFF, _first_message, _run_scheduled, _set_timezone
+from tests.test_delivered_routines import OFF, ZONE, _first_message, _run_scheduled, _set_timezone
 from tests.test_hitl_approvals import _bound_tools
 from tests.test_routine_scheduler import (  # noqa: F401
     ALICE,
@@ -230,10 +230,16 @@ def test_a_review_run_reads_notes_and_never_chats_app_rows_or_the_web(
     message = _first_message(client, run["thread_id"])
     assert message.startswith(f'{RUN_MARKER} "Memory: weekly review" (space /personal)')
     # A first run covers only the week that just ended.
-    assert "2026-W40" not in message
+    today = datetime.now(ZoneInfo(ZONE)).date()
+    monday = today - timedelta(days=today.weekday() + 7)
+    sunday = monday + timedelta(days=6)
+    year, week, _ = monday.isocalendar()
+    label = f"{year}-W{week:02d}"
+    before = "{}-W{:02d}".format(*(monday - timedelta(days=7)).isocalendar()[:2])
+    assert before not in message
     assert (
-        "- 2026-W41, Mon 2026-10-05 to Sun 2026-10-11: write /personal/Memory/timeline/2026/2026-W41.md"
-        in message
+        f"- {label}, Mon {monday} to Sun {sunday}: "
+        f"write /personal/Memory/timeline/{year}/{label}.md" in message
     )
     assert message.endswith(review_prompts.DEFAULT["week"])
     tools = _bound_tools(fake_model.requests[0])

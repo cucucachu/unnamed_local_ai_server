@@ -6,6 +6,7 @@
     "sdk": "1",
     "icon": "cart-outline",
     "description": "A shared shopping list: add items, check them off in the store, clear what's in the cart.",
-    "permissions": {}
+    "permissions": {},
+    "exports": [{ "name": "items", "version": "1", "tables": ["items"], "actions": ["addItem"] }]
   }
 }

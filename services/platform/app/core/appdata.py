@@ -306,7 +306,7 @@ class AppData:
                             space_path=src.space_path,
                         )
                     )
-                if grants:
+                if sources is not None:
                     appdb.attach_exports(con, grants)
                 return fn(con, fd)
         finally:
@@ -445,10 +445,11 @@ class AppData:
 
     async def _export_sources(
         self, conn: AsyncConnection, principal: Principal, target: Target
-    ) -> list[ExportSource]:
+    ) -> list[ExportSource] | None:
+        """The exporter copies to attach; None when the instance has no granted reads."""
         granted = target.instance.get("granted_reads") or []
         if not isinstance(granted, list) or not granted:
-            return []
+            return None
         out: list[ExportSource] = []
         for read in granted:
             if not isinstance(read, dict):

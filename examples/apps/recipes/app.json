@@ -1,0 +1,14 @@
+{
+  "name": "Recipes",
+  "slug": "recipes",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "restaurant-outline",
+    "description": "Recipes with ingredients and steps, and a weekly meal plan; sends ingredients to the grocery list.",
+    "permissions": {},
+    "index": [{ "table": "recipes", "title": "name", "text": ["ingredients", "steps"], "fields": ["cuisine"] }],
+    "reads": [{ "app": "grocery-list", "export": "items", "version": "1" }]
+  }
+}

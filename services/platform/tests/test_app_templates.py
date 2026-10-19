@@ -178,7 +178,17 @@ async def test_install_builds_by_default(world: World) -> None:
 # --- every shipped template -------------------------------------------------------------
 
 # A value for each :param by name, so every action can run; add to it with new templates.
-SAMPLE = {"day": "2026-10-18", "date": "2026-10-18", "time": "08:30"}
+SAMPLE = {
+    "day": "2026-10-18",
+    "date": "2026-10-18",
+    "today": "2026-10-18",
+    "next_due": "2026-10-18",
+    "expires_on": "2026-10-25",
+    "time": "08:30",
+    "every_days": 7,
+    "quantity": 2,
+    "amount": 1,
+}
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
 
