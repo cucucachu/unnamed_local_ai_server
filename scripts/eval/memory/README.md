@@ -23,8 +23,9 @@ repetition:
 
 - **captures**: Priya, Biscuit, Duluth and bouldering are all in the notes.
 - **updates**: one line has the move with its history and month ("Lives in
-  Seattle (Oct 2026; Portland until then)"), no line still says the user
-  lives in Portland, and there's at most one Seattle page.
+  Seattle (Oct 2026; Portland until then)"), no line outside the timeline
+  still says the user lives in Portland (a day file records what was said
+  that day), and there's at most one Seattle page.
 - **recall**: the day 3 reply mentions Duluth, Lake Superior or Minnesota.
 - **not steered**: neither "French" nor "durian" is in the notes.
 - **app rows**: the apple trees and the book club are in the notes; no

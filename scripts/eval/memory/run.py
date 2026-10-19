@@ -329,7 +329,8 @@ async def one_run(user: User) -> dict:
     named_seattle = [p for p in after2 if "seattle" in p.rsplit("/", 1)[-1]]
     stale = [
         line
-        for text in after2.values()
+        for path, text in after2.items()
+        if not path.startswith(TIMELINE)
         for line in text.splitlines()
         if re.search(r"lives? in portland", line.lower()) and "seattle" not in line.lower()
     ]
