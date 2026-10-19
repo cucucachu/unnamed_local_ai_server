@@ -457,3 +457,94 @@ describe('a delivered routine', () => {
     expect(exists(renderer, 'routine-prompt-reset')).toBe(false);
   });
 });
+
+describe('a Memory review (M22-14)', () => {
+  const review = (overrides: Partial<Routine> = {}) =>
+    routine({
+      id: 'w1',
+      name: 'Memory: weekly review',
+      prompt: 'Worth keeping in a week: what the user did.',
+      schedule: { kind: 'weekly', days: ['mon'], time: '06:07:00' },
+      delivered: true,
+      fixed_prompt: 'You are reviewing the user’s memory. Cover:\n- 2026-W42',
+      prompt_is_default: true,
+      min_period: 7,
+      unavailable_tools: [
+        { name: 'list_chats', label: 'List chats', group: 'Chats' },
+        { name: 'read_chat', label: 'Read chats', group: 'Chats' },
+        { name: 'web_search', label: 'Search the web', group: 'Web' },
+        { name: 'web_fetch', label: 'Read web pages', group: 'Web' },
+        { name: 'list_app_changes', label: 'Read app changes', group: 'Apps' },
+      ],
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    mockParams = { routineId: 'w1' };
+  });
+
+  it('offers only schedules at most once a week, and refuses two days a week', async () => {
+    const fetchMock = mockFetchRoutes({
+      'GET /api/routines/w1': { body: review() },
+      'GET /api/platform/spaces': { body: { spaces: SPACES } },
+      'PATCH /api/routines/w1': { body: review() },
+    });
+    renderer = await render(RoutineEditScreen);
+
+    for (const kind of ['once', 'daily', 'weekdays']) expect(exists(renderer, `routine-kind-${kind}`)).toBe(false);
+    for (const kind of ['weekly', 'monthly', 'yearly']) expect(exists(renderer, `routine-kind-${kind}`)).toBe(true);
+    expect(textOf(renderer)).toContain('Mondays at 6:07');
+
+    await press(renderer, 'routine-day-thu');
+    await press(renderer, 'routine-save');
+    expect(textOf(renderer)).toContain("It covers a week, so it can't run more often than once a week.");
+    expect(requestsTo(fetchMock, 'PATCH', '/api/routines/w1')).toEqual([]);
+
+    await press(renderer, 'routine-day-mon');
+    await press(renderer, 'routine-save');
+    expect(requestsTo(fetchMock, 'PATCH', '/api/routines/w1')).toEqual([
+      { schedule: { kind: 'weekly', days: ['thu'], time: '06:07' } },
+    ]);
+  });
+
+  it('saves a yearly schedule for the yearly review', async () => {
+    const yearly = review({
+      name: 'Memory: yearly review',
+      schedule: { kind: 'yearly', month: 1, day: 1, time: '08:07:00' },
+      min_period: 365,
+    });
+    const fetchMock = mockFetchRoutes({
+      'GET /api/routines/w1': { body: yearly },
+      'GET /api/platform/spaces': { body: { spaces: SPACES } },
+      'PATCH /api/routines/w1': { body: yearly },
+    });
+    renderer = await render(RoutineEditScreen);
+
+    expect(exists(renderer, 'routine-kind-monthly')).toBe(false);
+    expect(textOf(renderer)).toContain('Every year on Jan 1 at 8:07');
+    await type(renderer, 'routine-month', '12');
+    await type(renderer, 'routine-month-day', '31');
+    await type(renderer, 'routine-time', '20:00');
+    expect(textOf(renderer)).toContain('Every year on Dec 31 at 20:00');
+    await press(renderer, 'routine-save');
+    expect(requestsTo(fetchMock, 'PATCH', '/api/routines/w1')).toEqual([
+      { schedule: { kind: 'yearly', month: 12, day: 31, time: '20:00' } },
+    ]);
+  });
+
+  it('shows the review like the nightly run: built in, what it can’t use, its fixed part', async () => {
+    mockFetchRoutes({
+      'GET /api/routines/w1': { body: review() },
+      'GET /api/routines/w1/runs': { body: [] },
+      'GET /api/platform/spaces': { body: { spaces: SPACES } },
+    });
+    renderer = await render(RoutineDetailScreen);
+
+    expect(exists(renderer, 'routine-delete')).toBe(false);
+    expect(textOf(renderer)).toContain('Mondays at 6:07');
+    expect(textOf(renderer)).toContain("This routine can't use: List chats, Read chats, Search the web");
+    await press(renderer, 'routine-fixed-toggle');
+    expect(textOf(renderer)).toContain('2026-W42');
+  });
+});
+

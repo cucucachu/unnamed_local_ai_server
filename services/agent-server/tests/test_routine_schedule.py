@@ -6,7 +6,14 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import ValidationError
 
-from app.routines.schedule import dump_schedule, next_run, parse_schedule, zone
+from app.routines.schedule import (
+    describe,
+    dump_schedule,
+    next_run,
+    parse_schedule,
+    period_days,
+    zone,
+)
 
 LA = "America/Los_Angeles"
 
@@ -94,7 +101,11 @@ def test_dst_keeps_local_time_across_the_change_in_europe() -> None:
 
 def test_dump_round_trips() -> None:
     raw = {"kind": "weekly", "days": ["fri"], "time": "07:05"}
-    assert dump_schedule(parse_schedule(raw)) == {"kind": "weekly", "days": ["fri"], "time": "07:05:00"}
+    assert dump_schedule(parse_schedule(raw)) == {
+        "kind": "weekly",
+        "days": ["fri"],
+        "time": "07:05:00",
+    }
 
 
 @pytest.mark.parametrize(
@@ -120,3 +131,29 @@ def test_malformed_schedules_are_refused(raw: dict) -> None:
 def test_unknown_timezones_are_refused(name: str) -> None:
     with pytest.raises(ValueError):
         zone(name)
+
+
+def test_yearly_runs_once_a_year_and_feb_29_falls_back_to_the_28th() -> None:
+    start = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    new_year = {"kind": "yearly", "month": 1, "day": 1, "time": "08:00"}
+    assert _runs(new_year, LA, start, 2) == ["Fri 2027-01-01 08:00 PST", "Sat 2028-01-01 08:00 PST"]
+    leap = {"kind": "yearly", "month": 2, "day": 29, "time": "08:00"}
+    assert _runs(leap, LA, start, 2) == ["Sun 2027-02-28 08:00 PST", "Tue 2028-02-29 08:00 PST"]
+    assert describe(parse_schedule(new_year)) == "Every year on Jan 1 at 8:00"
+    assert describe(parse_schedule(leap)) == "Every year on Feb 29 (or Feb 28) at 8:00"
+    assert dump_schedule(parse_schedule(new_year)) == new_year | {"time": "08:00:00"}
+    for bad in ({"month": 4, "day": 31}, {"month": 13, "day": 1}, {"month": 2, "day": 30}):
+        with pytest.raises(ValidationError):
+            parse_schedule({"kind": "yearly", "time": "08:00", **bad})
+
+
+def test_period_days_says_how_often_a_schedule_runs_at_most() -> None:
+    def days(raw: dict) -> int | None:
+        return period_days(parse_schedule({"time": "08:00", **raw}))
+
+    assert days({"kind": "daily"}) == days({"kind": "weekdays"}) == 1
+    assert days({"kind": "weekly", "days": ["mon"]}) == 7
+    assert days({"kind": "weekly", "days": ["mon", "fri"]}) == 1
+    assert days({"kind": "monthly", "day": 1}) == 28
+    assert days({"kind": "yearly", "month": 1, "day": 1}) == 365
+    assert period_days(parse_schedule({"kind": "once", "at": "2026-11-02T08:30"})) is None

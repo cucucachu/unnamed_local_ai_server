@@ -35,8 +35,9 @@ def _now(monkeypatch) -> None:
 
 def _memory(client) -> dict:
     _set_timezone(client)
-    (routine,) = client.get("/api/routines", headers=HEADERS).json()
-    return routine
+    return next(
+        r for r in client.get("/api/routines", headers=HEADERS).json() if r["name"] == "Memory"
+    )
 
 
 def test_every_user_gets_it_quiet_at_night_without_the_web_or_integrations(client) -> None:
@@ -47,7 +48,8 @@ def test_every_user_gets_it_quiet_at_night_without_the_web_or_integrations(clien
     assert routine["prompt"] == memory_prompt.DEFAULT and routine["prompt_is_default"]
     assert {t["name"] for t in routine["unavailable_tools"]} == OFF
     assert delivered.MEMORY.quiet
-    assert set(delivered.DEFINITIONS) == {"memory"}
+    assert set(delivered.DEFINITIONS) == {"memory", *delivered.REVIEW_KEYS}
+    assert routine["min_period"] is None
 
 
 def test_the_prompt_fills_in_only_since_and_now() -> None:

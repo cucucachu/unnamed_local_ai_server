@@ -1,8 +1,11 @@
 import { formToInput, initialForm, type RoutineFormState } from '@/components/RoutineForm';
 import type { Space } from '@/lib/platform';
 import {
+  allowedKinds,
   clockTime,
+  minPeriodProblem,
   nextRunLabel,
+  periodDays,
   ordinal,
   routineSpaces,
   scheduleSummary,
@@ -129,3 +132,59 @@ describe('routine form', () => {
     expect('input' in checked && checked.input.schedule).toEqual({ kind: 'daily', time: '07:05' });
   });
 });
+
+describe('yearly schedules and the reviews’ minimum period (M22-14)', () => {
+  it('says a yearly schedule in words, Feb 29 falling back to the 28th', () => {
+    expect(scheduleSummary({ kind: 'yearly', month: 1, day: 1, time: '08:07:00' })).toBe('Every year on Jan 1 at 8:07');
+    expect(scheduleSummary({ kind: 'yearly', month: 2, day: 29, time: '08:00' })).toBe(
+      'Every year on Feb 29 (or Feb 28) at 8:00',
+    );
+  });
+
+  it('counts how often a schedule runs like the server', () => {
+    expect(periodDays({ kind: 'daily', time: '08:00' })).toBe(1);
+    expect(periodDays({ kind: 'weekly', days: ['mon'], time: '08:00' })).toBe(7);
+    expect(periodDays({ kind: 'weekly', days: ['mon', 'thu'], time: '08:00' })).toBe(1);
+    expect(periodDays({ kind: 'monthly', day: 1, time: '08:00' })).toBe(28);
+    expect(periodDays({ kind: 'yearly', month: 1, day: 1, time: '08:00' })).toBe(365);
+    expect(periodDays({ kind: 'once', at: '2026-11-02T08:30' })).toBeNull();
+  });
+
+  it('offers only the kinds a review can use, and says why one runs too often', () => {
+    expect(allowedKinds(null)).toEqual(['once', 'daily', 'weekdays', 'weekly', 'monthly', 'yearly']);
+    expect(allowedKinds(7)).toEqual(['weekly', 'monthly', 'yearly']);
+    expect(allowedKinds(28)).toEqual(['monthly', 'yearly']);
+    expect(allowedKinds(365)).toEqual(['yearly']);
+    expect(minPeriodProblem({ kind: 'weekly', days: ['mon', 'thu'], time: '06:00' }, 7)).toBe(
+      "It covers a week, so it can't run more often than once a week.",
+    );
+    expect(minPeriodProblem({ kind: 'weekly', days: ['sun'], time: '06:00' }, 7)).toBeNull();
+    expect(minPeriodProblem({ kind: 'daily', time: '06:00' }, null)).toBeNull();
+  });
+
+  it('round-trips a yearly routine through the form', () => {
+    const yearly = { kind: 'yearly', month: 12, day: 31, time: '20:00:00' } as const;
+    const form = initialForm({ ...routineFor(yearly) });
+    expect([form.kind, form.month, form.monthDay]).toEqual(['yearly', '12', '31']);
+    const result = formToInput({ ...form, month: '13' });
+    expect(result).toEqual({ error: 'Pick a month from 1 to 12.' });
+    const ok = formToInput(form);
+    expect('input' in ok && ok.input.schedule).toEqual({ kind: 'yearly', month: 12, day: 31, time: '20:00' });
+  });
+});
+
+function routineFor(schedule: Routine['schedule']): Routine {
+  return {
+    id: 'r',
+    name: 'New year',
+    prompt: 'Plan the year.',
+    space: '/personal',
+    schedule,
+    timezone: 'UTC',
+    enabled: true,
+    next_run_at: null,
+    last_run_at: null,
+    created_at: '',
+    updated_at: '',
+  };
+}

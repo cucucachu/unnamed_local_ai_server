@@ -21,6 +21,11 @@ waits until the user's timezone is known, and runs at most once per user
 per process, unless `forget` says a grant was lost: the next request then
 issues a new one. It never fails the request.
 
+The Memory reviews (M22-14, `review_prompts`) are three more: weekly,
+monthly and yearly, each with a `min_period` its schedule can't beat (a
+weekly review run daily would rewrite the same week) and its `review` kind,
+which fills in the periods a run covers.
+
 The admin can turn each definition off for the whole household (M21-08):
 the platform keeps the switch, agent-server registers its definitions there
 at startup (`register`) and reads the switches with its service token
@@ -33,7 +38,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -43,13 +48,14 @@ from app.agent.approvals import ToolPolicy
 from app.agent.tool_catalog import CATALOG, NAMES
 from app.core.delegation import Caller
 from app.db.routines import RoutineRecord
-from app.routines import memory_prompt, service
+from app.routines import memory_prompt, review_prompts, service
 from app.routines import schedule as sched
 
 logger = logging.getLogger(__name__)
 
 SPACE = "/personal"
 MEMORY_KEY = "memory"
+REVIEW_KEYS = ("memory_weekly", "memory_monthly", "memory_yearly")
 REGISTER_RETRY_S = 15.0
 _SWITCHES_TIMEOUT_S = 10.0
 FIRST_SINCE = timedelta(days=14)
@@ -63,7 +69,8 @@ class Definition:
     name: str
     # One line for the admin's switch in Settings.
     description: str
-    # Local time of the default daily run, before the per-user offset.
+    # Local time of the default run, before the per-user offset (which never
+    # takes it past midnight: every `time` here is before 22:00).
     time: str
     # The mechanics, with `{since}` and `{now}`; users can't change it.
     fixed_prompt: str
@@ -71,6 +78,11 @@ class Definition:
     default_prompt: str
     unavailable_tools: frozenset[str] = frozenset()
     quiet: bool = False
+    # The default schedule but its time, e.g. {"kind": "weekly", "days": ["mon"]}.
+    repeat: dict[str, Any] = field(default_factory=lambda: {"kind": "daily"})
+    # Fewest days between runs (`schedule.period_days`) a schedule may have.
+    min_period: int | None = None
+    review: review_prompts.Review | None = None
 
 
 MEMORY = Definition(
@@ -93,7 +105,56 @@ MEMORY = Definition(
     quiet=True,
 )
 
-DEFINITIONS: dict[str, Definition] = {d.key: d for d in (MEMORY,)}
+_REVIEW_OFF = MEMORY.unavailable_tools | {"list_chats", "read_chat", "list_app_changes"}
+
+
+def _review(
+    key: str, kind: review_prompts.Review, name: str, about: str, time: str, repeat: dict, days: int
+) -> Definition:
+    return Definition(
+        key=key,
+        name=name,
+        description=about,
+        time=time,
+        fixed_prompt=review_prompts.FIXED[kind],
+        default_prompt=review_prompts.DEFAULT[kind],
+        unavailable_tools=_REVIEW_OFF,
+        quiet=True,
+        repeat=repeat,
+        min_period=days,
+        review=kind,
+    )
+
+
+WEEKLY = _review(
+    "memory_weekly",
+    "week",
+    "Memory: weekly review",
+    "Each Monday, sums up the past week from the Memory notes and tidies the core notes.",
+    "06:00",
+    {"kind": "weekly", "days": ["mon"]},
+    7,
+)
+MONTHLY = _review(
+    "memory_monthly",
+    "month",
+    "Memory: monthly review",
+    "On the 1st, sums up the past month, tidies the core notes and the pages.",
+    "07:00",
+    {"kind": "monthly", "day": 1},
+    28,
+)
+YEARLY = _review(
+    "memory_yearly",
+    "year",
+    "Memory: yearly review",
+    "On January 1, sums up the past year, tidies the core notes and the pages.",
+    "08:00",
+    {"kind": "yearly", "month": 1, "day": 1},
+    365,
+)
+
+DEFINITIONS: dict[str, Definition] = {d.key: d for d in (MEMORY, WEEKLY, MONTHLY, YEARLY)}
 
 
 def definition_of(routine: RoutineRecord | None) -> Definition | None:
@@ -111,7 +172,22 @@ def offset_minutes(user_id: str) -> int:
 def default_schedule(definition: Definition, user_id: str) -> sched.Schedule:
     hour, minute = map(int, definition.time.split(":"))
     total = (hour * 60 + minute + offset_minutes(user_id)) % (24 * 60)
-    return sched.parse_schedule({"kind": "daily", "time": f"{total // 60:02d}:{total % 60:02d}"})
+    return sched.parse_schedule(
+        {**definition.repeat, "time": f"{total // 60:02d}:{total % 60:02d}"}
+    )
+
+
+def check_schedule(definition: Definition, schedule: sched.Schedule) -> str | None:
+    """Why `schedule` is too frequent for `definition`, or None if it isn't."""
+    if definition.min_period is None:
+        return None
+    period = sched.period_days(schedule)
+    if period is None or period < definition.min_period:
+        every = {7: "a week", 28: "a month", 365: "a year"}.get(
+            definition.min_period, f"{definition.min_period} days"
+        )
+        return f'"{definition.name}" covers {every}: it can\'t run more often than once {every}'
+    return None
 
 
 def editable_prompt(routine: RoutineRecord, definition: Definition) -> str:
@@ -139,9 +215,17 @@ async def run_body(
     app_state: Any, routine: RoutineRecord, definition: Definition, now: datetime
 ) -> str:
     """The fixed part filled in, then the editable part: what follows the run framing."""
+    start = await since(app_state, routine, now)
+    zone = sched.zone(routine.timezone)
+    periods = ""
+    if definition.review is not None:
+        periods = review_prompts.periods(
+            definition.review, start.astimezone(zone), now.astimezone(zone)
+        )
     fixed = definition.fixed_prompt.format(
-        since=_local(await since(app_state, routine, now), routine.timezone),
+        since=_local(start, routine.timezone),
         now=_local(now, routine.timezone),
+        periods=periods,
     )
     return f"{fixed}\n\n{editable_prompt(routine, definition)}"
 

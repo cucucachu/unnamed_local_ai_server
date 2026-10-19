@@ -26,7 +26,8 @@ export type Schedule =
   | { kind: 'daily'; time: string }
   | { kind: 'weekdays'; time: string }
   | { kind: 'weekly'; days: Weekday[]; time: string }
-  | { kind: 'monthly'; day: number; time: string };
+  | { kind: 'monthly'; day: number; time: string }
+  | { kind: 'yearly'; month: number; day: number; time: string };
 
 export type ScheduleKind = Schedule['kind'];
 
@@ -67,6 +68,8 @@ export interface Routine {
   fixed_prompt?: string | null;
   prompt_is_default?: boolean;
   unavailable_tools?: UnavailableTool[];
+  /** Fewest days apart its runs may be (M22-14, the Memory reviews): 7, 28 or 365. */
+  min_period?: number | null;
 }
 
 export interface RoutineRun {
@@ -187,7 +190,48 @@ export function scheduleSummary(schedule: Schedule): string {
       const lastDay = schedule.day > 28 ? ' (or the last day)' : '';
       return `Monthly on the ${ordinal(schedule.day)}${lastDay} at ${clockTime(schedule.time)}`;
     }
+    case 'yearly': {
+      const leap = schedule.month === 2 && schedule.day === 29 ? ' (or Feb 28)' : '';
+      return `Every year on ${MONTHS[schedule.month - 1]} ${schedule.day}${leap} at ${clockTime(schedule.time)}`;
+    }
   }
+}
+
+/** About how many days apart its runs are at least, as the server's
+ * `schedule.period_days`; null for a one-off. Weekly on more than one day
+ * runs more often than once a week, so it counts as daily. */
+export function periodDays(schedule: Schedule): number | null {
+  switch (schedule.kind) {
+    case 'once':
+      return null;
+    case 'weekly':
+      return schedule.days.length === 1 ? 7 : 1;
+    case 'monthly':
+      return 28;
+    case 'yearly':
+      return 365;
+    default:
+      return 1;
+  }
+}
+
+const KIND_PERIODS: Record<ScheduleKind, number> = { once: 0, daily: 1, weekdays: 1, weekly: 7, monthly: 28, yearly: 365 };
+
+/** The schedule kinds a routine with `minPeriod` can use (all of them without one). */
+export function allowedKinds(minPeriod: number | null | undefined): ScheduleKind[] {
+  const kinds = Object.keys(KIND_PERIODS) as ScheduleKind[];
+  return minPeriod ? kinds.filter((kind) => KIND_PERIODS[kind] >= minPeriod) : kinds;
+}
+
+const PERIOD_WORDS: Record<number, string> = { 7: 'a week', 28: 'a month', 365: 'a year' };
+
+/** Why `schedule` runs too often for a routine with `minPeriod`, or null. */
+export function minPeriodProblem(schedule: Schedule, minPeriod: number | null | undefined): string | null {
+  if (!minPeriod) return null;
+  const period = periodDays(schedule);
+  if (period !== null && period >= minPeriod) return null;
+  const every = PERIOD_WORDS[minPeriod] ?? `${minPeriod} days`;
+  return `It covers ${every}, so it can't run more often than once ${every}.`;
 }
 
 /** When it next runs, in the routine's own timezone. */

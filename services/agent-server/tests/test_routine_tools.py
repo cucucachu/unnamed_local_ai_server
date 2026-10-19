@@ -276,3 +276,20 @@ async def test_the_fake_platform_refuses_a_routine_runs_delegation(fake_platform
     minted = fake_platform.exchange_routine_grant(grant, "r1", "t1")
     with pytest.raises(DelegationDenied, match="routine_run"):
         fake_platform.space_role(Caller(delegation_token=minted.token), "/personal")
+
+
+def test_a_yearly_schedule_needs_a_month_and_a_day() -> None:
+    from app.agent.routine_tools import _build_schedule
+    from app.routines import schedule as sched
+
+    built = _build_schedule("yearly", "08:00", None, None, 1, 1)
+    assert sched.dump_schedule(built) == {
+        "kind": "yearly",
+        "month": 1,
+        "day": 1,
+        "time": "08:00:00",
+    }
+    assert _build_schedule("yearly", "08:00", None, None, 1).startswith(
+        "Error: a yearly routine needs"
+    )
+    assert _build_schedule("yearly", "08:00", None, None, 31, 4).startswith("Error: that schedule")

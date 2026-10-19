@@ -1633,7 +1633,8 @@ their threads as plain chats (`ON DELETE SET NULL`).
   `{"kind": "once", "at": "YYYY-MM-DDTHH:MM"}`, `{"kind": "daily"|"weekdays",
   "time": "HH:MM"}`, `{"kind": "weekly", "days": ["mon".."sun"], "time"}`,
   `{"kind": "monthly", "day": 1-31, "time"}` (a day the month lacks runs on
-  its last day). `next_run_at` is UTC: a local time skipped by a DST jump
+  its last day), `{"kind": "yearly", "month": 1-12, "day": 1-31, "time"}`
+  (M22-14; Feb 29 runs on Feb 28 in other years). `next_run_at` is UTC: a local time skipped by a DST jump
   runs just after it (02:30 → 03:30), a repeated one at its first
   occurrence. Null while disabled, or once a one-shot has run.
 - `GET /api/routines` → `200 [{routine}, ...]` by name, after creating
@@ -1754,10 +1755,16 @@ their threads as plain chats (`ON DELETE SET NULL`).
   default local time, a fixed prompt with `{since}`/`{now}`, a default
   editable prompt, `unavailable_tools`, `quiet`). Every user gets one
   `routines` row per definition, marked by `system_key` (unique per
-  owner). The only one is `memory` (M21-10, "Memory", daily at 03:00
-  plus the per-user offset, quiet, no web or integrations; its prompt is
+  owner). `memory` (M21-10, "Memory", daily at 03:00 plus the per-user
+  offset, quiet, no web or integrations; its prompt is
   `app/routines/memory_prompt.py`). Its live check is
-  `scripts/e2e/m21_memory_routine_smoke.sh`.
+  `scripts/e2e/m21_memory_routine_smoke.sh`. The reviews (M22-14,
+  docs/MEMORY.md §4.9): `memory_weekly`, `memory_monthly` and
+  `memory_yearly`, whose prompts are `app/routines/review_prompts.py`. A
+  definition can set a `repeat` (the default schedule's kind and fields)
+  and a `min_period` in days: the service refuses a schedule that runs
+  more often (`422`), and `{routine}` carries `"min_period"` (null for
+  others) so the edit screen offers only the kinds that fit.
   - **Creating each copy.** `GET /api/threads` and `GET /api/routines`
     create any missing copy, at most once per user per process, as an
     ordinary routine created through `app/routines/service.py` on the
