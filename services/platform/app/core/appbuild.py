@@ -571,11 +571,13 @@ async def _reads_stand_ins(
 ) -> str:  # fmt: skip
     """`CREATE TABLE`s standing in for the merged views of `doc`'s `homeai.reads`, for the
     smoke render: each export's columns plus `_space`, taken from the schema an instance of
-    the exporter visible to `principal` was built with. Reads with none are left out."""
-    if history is None:
+    the exporter visible to `principal` was built with. Reads with none are left out, but
+    `homeai_exports` is there whenever the app declares reads."""
+    reads = manifest.homeai_reads(doc)
+    if history is None or not reads:
         return ""
     statements: list[str] = []
-    for read in manifest.homeai_reads(doc):
+    for read in reads:
         if not isinstance(read, dict):
             continue
         slug, name, version = read.get("app"), read.get("export"), read.get("version")
@@ -605,10 +607,9 @@ async def _reads_stand_ins(
                 names = ", ".join(appschema.quote(c) for c in (*cols[table], "_space", "_instance"))
                 statements.append(f"CREATE TABLE {appschema.quote(view)} ({names});")
             break
-    if statements:
-        statements.append(
-            f'CREATE TABLE {appdb.EXPORTS_VIEW} ("_instance", "_space", "app", "export");'
-        )
+    statements.append(
+        f'CREATE TABLE {appdb.EXPORTS_VIEW} ("_instance", "_space", "app", "export");'
+    )
     return "".join(f"{s}\n" for s in statements)
 
 

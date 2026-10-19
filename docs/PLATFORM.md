@@ -1248,6 +1248,11 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > `homeai_exports(_instance, _space, app, export)`, one row per attached
 > copy, so a reader finds an exporter with no rows yet (an empty grocery
 > list). The build's smoke render gets an empty stand-in for it.
+>
+> **M22-16:** `homeai_exports` exists for every app with granted reads, empty
+> when no exporter is installed, and so does its stand-in for any app that
+> declares reads; before, querying it with nothing installed was a SQL
+> error, which failed the reader's smoke render.
 
 > **As built (M13-02), exec read-only mounts:** `POST /internal/exec-grants`
 > adds one read-only bind per live instance in every space the user is a

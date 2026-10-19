@@ -262,7 +262,7 @@ async def test_a_readers_smoke_render_gets_stand_ins_for_the_views_it_reads(worl
     await build(ids["planner_app"]["id"])
 
     assert seen == [
-        None,
+        'CREATE TABLE homeai_exports ("_instance", "_space", "app", "export");\n',
         None,
         (
             'CREATE TABLE "calendar_events" ("id", "title", "_created_by", "_created_at", '
@@ -357,6 +357,22 @@ async def test_homeai_exports_lists_every_copy_even_an_empty_one(world: World) -
         {"op": "getAll", "sql": "SELECT * FROM homeai_exports"},
     )
     assert plain.status_code == 422, plain.text
+
+
+async def test_homeai_exports_is_empty_for_a_reader_with_nothing_to_read(world: World) -> None:
+    _write_planner(world.family_root / "Apps" / "planner")
+    app = (await _register(world, world.headers["alice"], "/spaces/family/Apps/planner")).json()[
+        "app"
+    ]
+    inst = (await _install(world, world.headers["alice"], world.family["id"], app["id"])).json()
+    assert inst["granted_reads"] == [{"app": "calendar", "export": "events", "version": "1"}]
+    r = await _migrate(world, inst["id"])
+    assert r.status_code == 200, r.text
+    seen = await _rpc(
+        world, inst["id"], "alice", {"op": "getAll", "sql": "SELECT * FROM homeai_exports"}
+    )
+    assert seen.status_code == 200, seen.text
+    assert seen.json()["rows"] == []
 
 
 async def test_the_merged_view_names_each_rows_instance_for_export_actions(world: World) -> None:

@@ -413,6 +413,27 @@ Each has an `AGENT.md`, `schema.sql` comments, an `index` declaration
 where it holds text, and its smoke. Gaps a template finds become framework
 issues in this milestone, or are written down for M23.
 
+> **As built (M22-16):** `examples/apps/chores`, `pantry`, `recipes` and
+> `contacts`. Chores has three tabs (Due, with a badge of what's due; All;
+> History) and a rota in `chore_assignees`. The rota is ordered by
+> position, `turn` indexes it with `ROW_NUMBER()`, and `completeChore`
+> moves `next_due` and the turn; who did it is the completion's
+> `_created_by`. Pantry's `addItem` tops up the same thing in the same
+> place (name in any case, unit, expiry date) instead of adding a row, and
+> `useSome` deletes it at zero. Recipes has `(tabs)/index` and `plan`,
+> nested `recipe/[id]/index` and `edit`, and modals `new` and
+> `plan/[day]`. Contacts keeps phone numbers and addresses in
+> `contact_details`, which isn't exported, and `mergePeople` folds a
+> duplicate in. The grocery list now exports `items` v1 with `addItem`.
+> The templates found three framework gaps, fixed here. An export action
+> needs the target copy (#448: `runExportAction` and `_instance` on merged
+> views). A copy with no rows yet is invisible in the merged view (#450:
+> `homeai_exports`). And `homeai_exports` only existed once something was
+> attached, so a reader with nothing installed got a SQL error at runtime
+> and failed its smoke render at build: it now always exists, empty, for
+> an app with reads, both in the build's `reads.sql` and in the runtime
+> connection. Smoke: `scripts/e2e/m22_household_templates_smoke.sh`.
+
 ## 10. M23
 
 Reaching outside an app's own database:

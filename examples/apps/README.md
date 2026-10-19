@@ -9,7 +9,11 @@ expo-sqlite-shaped API from `@homeai/sdk`.
 
 | App | What it shows |
 |---|---|
-| [`grocery-list/`](grocery-list/) | Default `create_app` template. One `items` table with quantity/note, two actions (`addItem`, `clearChecked`), a list screen with live data (`useQuery`), a detail screen (`app/item/[id].tsx`), and read-only UI for viewers. Start with its `AGENT.md`. |
+| [`grocery-list/`](grocery-list/) | Default `create_app` template. One `items` table with quantity/note, two actions (`addItem`, `clearChecked`), a list screen with live data (`useQuery`), a detail screen (`app/item/[id].tsx`), and read-only UI for viewers. Exports `items` v1 (with `addItem`) to other apps. Start with its `AGENT.md`. |
+| [`chores/`](chores/) | Household chores: `chores` repeating every N days, a rota of members (`chore_assignees`, `useMembers()`) and `completions` stamped with who did it. Tabs (Due, with a badge; All; History), a modal to add one, `completeChore` moves the due date and the turn. |
+| [`pantry/`](pantry/) | What's at home: `items` with quantity, unit, place and best-before. Search (`homeai.index` + `search()`), a "Use soon" section, place chips; `addItem` tops up a matching row, `useSome` deletes it when it's used up. |
+| [`recipes/`](recipes/) | Recipes and a weekly meal plan: tabs, nested `recipe/[id]/index` + `edit`, two modals, search, `planMeal`. Reads the grocery list's `items` export and adds a recipe's ingredients with `runExportAction`. |
+| [`contacts/`](contacts/) | People with phone/email/address details, birthdays coming up (Feb 29 handled), search, `mergePeople` for duplicates. Exports `people` v1 (id, name, birthday, notes) read-only. |
 | [`list/`](list/) | Generic checklist: `items` with `done`, `addItem` / `clearDone`, list + detail. |
 | [`notes/`](notes/) | Notes: `title` / `body` / `pinned`, `addNote`, list + `app/note/[id].tsx`; `homeai.index` makes the notes searchable (chat and the search box, `search()`). |
 | [`tracker/`](tracker/) | Habit tracker: `habits` + `checkins` (one row per habit per day), `addHabit` / `checkIn`, list + `app/habit/[id].tsx`. |
@@ -59,9 +63,9 @@ build command, so build it with the script above or
 
 ## Checks
 
-- `cd services/app-builder && npm test` builds `grocery-list`, `list`,
-  `notes` and `tracker` with the builder (zero diagnostics, every route
-  renders), and fails if a folder here isn't in that list.
+- `cd services/app-builder && npm test` builds every template here with
+  the builder (zero diagnostics, every route renders), and fails if a
+  folder here isn't in its `TEMPLATE_ROUTES`.
 - `services/platform/tests/test_app_templates.py` validates every template
   and runs its actions against a scratch database.
 - `scripts/e2e/app_template_smoke.sh` creates one from the catalog on the
@@ -70,3 +74,8 @@ build command, so build it with the script above or
   shared space on the live stack and drives it in a browser (add, check,
   detail screen, clear checked, reload, live updates between members, a
   viewer can't write).
+- `scripts/e2e/m22_household_templates_smoke.sh` installs chores, pantry,
+  recipes, contacts and the grocery list from the catalog API into a shared
+  space and drives each in a browser: add, edit and its main flow, with a
+  second member taking a chore turn and a recipe's ingredients landing on
+  the grocery list.

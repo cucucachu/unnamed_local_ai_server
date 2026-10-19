@@ -107,10 +107,24 @@ test('a screen querying a merged view renders against the reads.sql stand-in', a
 // The reference app (M12-07) and the M13-03 templates. Not in the image,
 // which copies only tests/.
 const TEMPLATES = path.resolve(here, '../../../examples/apps');
+// `reads`: the reads.sql the platform writes for a template with homeai.reads
+// when nothing it reads is installed yet.
+const NO_EXPORTERS = 'CREATE TABLE homeai_exports ("_instance", "_space", "app", "export");\n';
 const TEMPLATE_ROUTES = {
+  chores: {
+    names: ['(tabs)/all', '(tabs)/history', '(tabs)/index', 'chore/[id]', 'new'],
+    paths: ['/all', '/history', '/', '/chore/1', '/new'],
+  },
+  contacts: { names: ['index', 'new', 'person/[id]'], paths: ['/', '/new', '/person/1'] },
   'grocery-list': { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
   list: { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
   notes: { names: ['index', 'note/[id]'], paths: ['/', '/note/1'] },
+  pantry: { names: ['index', 'item/[id]', 'new'], paths: ['/', '/item/1', '/new'] },
+  recipes: {
+    names: ['(tabs)/index', '(tabs)/plan', 'new', 'plan/[day]', 'recipe/[id]/edit', 'recipe/[id]/index'],
+    paths: ['/', '/plan', '/new', '/plan/1', '/recipe/1/edit', '/recipe/1'],
+    reads: NO_EXPORTERS,
+  },
   tracker: { names: ['habit/[id]', 'index'], paths: ['/habit/1', '/'] },
 };
 
@@ -128,7 +142,8 @@ for (const [slug, expect] of Object.entries(TEMPLATE_ROUTES)) {
         expect.names,
       );
       writeResult(out, compiled);
-      const smoke = await smokePhase(dir, out);
+      if (expect.reads) fs.writeFileSync(path.join(out, 'reads.sql'), expect.reads);
+      const smoke = await smokePhase(dir, out, out);
       assert.deepEqual(smoke.diagnostics, []);
       assert.deepEqual(
         smoke.routes.map((r) => [r.path, r.timed_out]),

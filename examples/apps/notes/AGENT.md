@@ -77,9 +77,11 @@ Single-row edits (save, pin, delete) are one statement each, so they use
 - **New screen**: add a file under `app/` (`app/note/[id].tsx` is
   `/note/<id>`), give it a title in `app/_layout.tsx`, and link to it with
   `<Link href={{ pathname: '/note/[id]', params: { id: String(id) } }}>`.
-  Route groups `(x)`, nested `_layout` files and tabs aren't supported.
+  Tabs go in an `app/(tabs)/` group with its own `_layout.tsx`; helpers
+  and components live outside `app/`.
 - Imports are limited to `react`, `react-native`, `expo-router`,
-  `expo-sqlite` and `@homeai/sdk`, plus relative files in this folder.
+  `expo-sqlite`, `@homeai/sdk`, `@homeai/ui` and `@expo/vector-icons`,
+  plus relative files in this folder.
   There is no network (`fetch`) and no DOM (`window`, `document`).
 - Keep this file up to date when you change the schema, actions or
   screens.

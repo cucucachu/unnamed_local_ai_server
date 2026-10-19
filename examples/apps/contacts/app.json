@@ -1,0 +1,14 @@
+{
+  "name": "Contacts",
+  "slug": "contacts",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "people-outline",
+    "description": "The people you know: phone numbers, emails, addresses, birthdays and notes.",
+    "permissions": {},
+    "index": [{ "table": "people", "title": "name", "text": ["notes"] }],
+    "exports": [{ "name": "people", "version": "1", "tables": ["people"], "actions": [] }]
+  }
+}

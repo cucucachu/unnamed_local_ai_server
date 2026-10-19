@@ -46,6 +46,18 @@ transaction. Call them with `runAction(name, params)`; params are `:named`.
 Single-row edits (check/uncheck, save, delete) are one statement each, so
 they use `db.runAsync` directly.
 
+## Exports and reads
+
+`homeai.exports` in `app.json` offers `items` v1 to other apps: the `items`
+table (read-only) and the `addItem` action. Recipes uses it for "Add
+ingredients to the grocery list". A reader sees the items of every
+grocery list it can reach as one view, `grocery_list_items`, and calls
+`runExportAction(instance, 'items', 'addItem', { name })` to add one.
+
+So **don't rename or remove** `items`' columns or change `addItem`'s
+params without bumping the export to `version: "2"`. Adding a column is
+fine.
+
 ## How the code talks to the database
 
 - `useQuery(sql, params)` for anything shown on screen. It re-runs by
@@ -76,9 +88,11 @@ they use `db.runAsync` directly.
   `app/store/[id].tsx` is `/store/<id>`), give it a title in
   `app/_layout.tsx`, and link to it with
   `<Link href={{ pathname: '/store/[id]', params: { id: String(id) } }}>`.
-  Route groups `(x)`, nested `_layout` files and tabs aren't supported.
+  Tabs go in an `app/(tabs)/` group with its own `_layout.tsx`; helpers
+  and components live outside `app/`.
 - Imports are limited to `react`, `react-native`, `expo-router`,
-  `expo-sqlite` and `@homeai/sdk`, plus relative files in this folder.
+  `expo-sqlite`, `@homeai/sdk`, `@homeai/ui` and `@expo/vector-icons`,
+  plus relative files in this folder.
   There is no network (`fetch`) and no DOM (`window`, `document`).
 - Keep this file up to date when you change the schema, actions or
   screens.
