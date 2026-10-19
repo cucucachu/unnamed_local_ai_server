@@ -19,7 +19,8 @@ A delivered routine (M21-07, `app.routines.delivered`) is listed with
 missing delivered routines first. `disabled_by_admin` (M21-08) says the
 admin has it off for everyone: it doesn't run, Run now included (`409
 disabled_by_admin`), and the user's own `enabled` is kept for when it's
-back on.
+back on. `min_period` (M22-14, the Memory reviews) is the fewest days apart
+its runs may be; a more frequent schedule is `422`.
 
 A run follows its owner's tool permissions like any chat (#342,
 `app.agent.approvals`). A run is a chat: the chats list puts runs that need
@@ -117,6 +118,7 @@ class RoutineOut(BaseModel):
     fixed_prompt: str | None = None
     prompt_is_default: bool = False
     unavailable_tools: list[UnavailableTool] = []
+    min_period: int | None = None
 
 
 _OWN_FIELDS = frozenset(
@@ -127,6 +129,7 @@ _OWN_FIELDS = frozenset(
         "fixed_prompt",
         "prompt_is_default",
         "unavailable_tools",
+        "min_period",
     }
 )
 
@@ -162,6 +165,7 @@ def _out(
             fixed_prompt=definition.fixed_prompt,
             prompt_is_default=not record.prompt,
             unavailable_tools=delivered.unavailable_tool_labels(definition),
+            min_period=definition.min_period,
         )
     if last_run is not None:
         fields["last_run"] = LastRun(

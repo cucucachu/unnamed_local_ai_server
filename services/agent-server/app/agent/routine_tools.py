@@ -50,7 +50,7 @@ ROUTINE_TOOL_NAMES: tuple[str, ...] = (
     "delete_routine",
 )
 
-Repeat = Literal["once", "daily", "weekdays", "weekly", "monthly"]
+Repeat = Literal["once", "daily", "weekdays", "weekly", "monthly", "yearly"]
 
 _NO_DELEGATION = "Error: routines are unavailable for this run (no delegation)."
 _IN_ROUTINE = (
@@ -83,6 +83,7 @@ def _build_schedule(
     date_: str | None,
     days: list[str] | None,
     day_of_month: int | None,
+    month: int | None = None,
 ) -> sched.Schedule | str:
     """A schedule from the tools' flat arguments, or an error for the model."""
     if not time_:
@@ -100,6 +101,10 @@ def _build_schedule(
         if day_of_month is None:
             return "Error: a monthly routine needs `day_of_month` (1-31)."
         raw["day"] = day_of_month
+    elif repeat == "yearly":
+        if month is None or day_of_month is None:
+            return "Error: a yearly routine needs `month` (1-12) and `day_of_month`."
+        raw |= {"month": month, "day": day_of_month}
     try:
         return sched.parse_schedule(raw)
     except ValidationError as exc:
@@ -221,6 +226,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         date: str | None = None,
         days: list[sched.Weekday] | None = None,
         day_of_month: int | None = None,
+        month: int | None = None,
         space: str = "/personal",
         timezone: str | None = None,
     ) -> str:
@@ -229,8 +235,9 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         Each run is a new chat in the user's chats list. name: short title. prompt:
         what to do, written as the user's own request, complete on its own.
         repeat: "once" (with date YYYY-MM-DD), "daily", "weekdays", "weekly"
-        (with days, e.g. ["mon", "thu"]) or "monthly" (with day_of_month 1-31;
-        a short month uses its last day). time: HH:MM, 24-hour, local to
+        (with days, e.g. ["mon", "thu"]), "monthly" (with day_of_month 1-31;
+        a short month uses its last day) or "yearly" (with month 1-12 and
+        day_of_month). time: HH:MM, 24-hour, local to
         timezone (an IANA name; leave it out for the user's own). space: where
         the run works ("/personal" or "/spaces/<slug>"). A run uses the user's own
         tool settings: whatever they haven't allowed, it stops and asks in its chat.
@@ -240,7 +247,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         if isinstance(context, str):
             return context
         caller, user_id = context
-        schedule = _build_schedule(repeat, time, date, days, day_of_month)
+        schedule = _build_schedule(repeat, time, date, days, day_of_month, month)
         if isinstance(schedule, str):
             return schedule
         zone = timezone or await _user_timezone(state, user_id)
@@ -293,6 +300,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
         date: str | None = None,
         days: list[sched.Weekday] | None = None,
         day_of_month: int | None = None,
+        month: int | None = None,
         space: str | None = None,
         timezone: str | None = None,
         enabled: bool | None = None,
@@ -301,7 +309,7 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
 
         routine: its id (or exact name) from list_routines. To change when it
         runs, pass the whole new schedule (repeat and time, plus date / days /
-        day_of_month as for create_routine). enabled: false pauses it, true
+        day_of_month / month as for create_routine). enabled: false pauses it, true
         turns it back on. prompt="" resets a delivered routine's prompt to its
         default. May need the user's approval.
         """
@@ -323,11 +331,11 @@ def make_routine_tools(state: Any) -> list[BaseTool]:
             if value is not None
         }
         if repeat is not None:
-            schedule = _build_schedule(repeat, time, date, days, day_of_month)
+            schedule = _build_schedule(repeat, time, date, days, day_of_month, month)
             if isinstance(schedule, str):
                 return schedule
             changes["schedule"] = schedule
-        elif time or date or days or day_of_month is not None:
+        elif time or date or days or day_of_month is not None or month is not None:
             return "Error: to change when it runs, pass `repeat` with the whole new schedule."
         if not changes and space is None:
             return "Nothing to change."

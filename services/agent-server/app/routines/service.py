@@ -8,7 +8,8 @@ runs: issued when it's created or enabled or moves space, revoked when it's
 disabled or deleted. Failures are `RoutineError`s carrying an HTTP status.
 
 A delivered routine (M21-07, `app.routines.delivered`) can't be deleted
-(`409 delivered_routine`), renamed or moved (`422`); its `prompt` is the
+(`409 delivered_routine`), renamed or moved (`422`), or (M22-14) scheduled
+more often than its definition's `min_period` (`422`); its `prompt` is the
 editable part, `''` (or the default's text) meaning the default.
 """
 
@@ -150,6 +151,8 @@ def check_changes(current: RoutineRecord, changes: dict) -> dict:
         )
     if "prompt" in changes:
         changes["prompt"] = delivered.stored_prompt(changes["prompt"], definition)
+    if "schedule" in changes and (why := delivered.check_schedule(definition, changes["schedule"])):
+        raise RoutineError(422, why)
     return changes
 
 

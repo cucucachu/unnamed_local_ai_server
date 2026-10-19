@@ -300,6 +300,24 @@ would rewrite the same week).
 
 These replace M21's "memory tidy-up routine" (#338, closed unshipped).
 
+  > **As built (M22-14):** the three are `memory_weekly`,
+  > `memory_monthly` and `memory_yearly` in
+  > `app/routines/delivered.py`, with prompts in
+  > `app/routines/review_prompts.py`. The run works out which periods it
+  > covers in code (every period that ended since the last successful
+  > run; for a first run, or a Run now mid-period, the last one that
+  > ended) and puts
+  > them in the fixed prompt as file paths, so the model does no calendar
+  > arithmetic. "Pages changed that period" became **the pages the
+  > period's files link to**: `ls` shows no modification times, and the
+  > day files already link every page the nightly run touched. Besides
+  > the nightly run's unavailable tools, the reviews can't use
+  > `list_chats`, `read_chat` or `list_app_changes`. `min_period` (7, 28
+  > or 365 days) is on the routine: the API refuses a more frequent
+  > schedule with a 422, the routine tools say why, and the edit screen
+  > only offers the kinds that fit. The admin switch is per routine (§4.4
+  > of `docs/MEMORY.md`), like the nightly run's.
+
 ## 7. Shared entities
 
 People, places and dates show up in many apps. There's no platform-wide

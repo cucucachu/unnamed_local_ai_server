@@ -5,7 +5,9 @@ import { ActionButton, Card, ErrorText, SectionTitle, settingsStyles } from '@/c
 import type { Space } from '@/lib/platform';
 import {
   WEEKDAYS,
+  allowedKinds,
   deviceTimezone,
+  minPeriodProblem,
   routineSpaces,
   scheduleSummary,
   spacePath,
@@ -23,6 +25,7 @@ const KIND_LABELS: Record<ScheduleKind, string> = {
   weekdays: 'Weekdays',
   weekly: 'Weekly',
   monthly: 'Monthly',
+  yearly: 'Yearly',
 };
 const DAY_LETTERS: Record<Weekday, string> = {
   mon: 'Mon',
@@ -43,6 +46,7 @@ export interface RoutineFormState {
   date: string;
   days: Weekday[];
   monthDay: string;
+  month: string;
   timezone: string;
   enabled: boolean;
 }
@@ -63,6 +67,7 @@ export function initialForm(routine: Routine | null): RoutineFormState {
     date: today(),
     days: ['mon'],
     monthDay: '1',
+    month: '1',
     timezone: deviceTimezone(),
     enabled: true,
   };
@@ -84,6 +89,10 @@ export function initialForm(routine: Routine | null): RoutineFormState {
   form.time = schedule.time.slice(0, 5);
   if (schedule.kind === 'weekly') form.days = schedule.days;
   if (schedule.kind === 'monthly') form.monthDay = String(schedule.day);
+  if (schedule.kind === 'yearly') {
+    form.month = String(schedule.month);
+    form.monthDay = String(schedule.day);
+  }
   return form;
 }
 
@@ -91,10 +100,11 @@ const TIME = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 const DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 /** The form as a request body, or what's wrong with it. A delivered
- * routine's prompt may be empty: that puts back its default. */
+ * routine's prompt may be empty: that puts back its default; one with a
+ * `minPeriod` (the Memory reviews) can't be scheduled more often. */
 export function formToInput(
   form: RoutineFormState,
-  { delivered = false }: { delivered?: boolean } = {},
+  { delivered = false, minPeriod = null }: { delivered?: boolean; minPeriod?: number | null } = {},
 ): { input: RoutineInput } | { error: string } {
   const name = form.name.trim();
   const prompt = form.prompt.trim();
@@ -119,9 +129,19 @@ export function formToInput(
       schedule = { kind: 'monthly', day, time: hhmm };
       break;
     }
+    case 'yearly': {
+      const month = Number(form.month);
+      const day = Number(form.monthDay);
+      if (!Number.isInteger(month) || month < 1 || month > 12) return { error: 'Pick a month from 1 to 12.' };
+      if (!Number.isInteger(day) || day < 1 || day > 31) return { error: 'Pick a day of the month from 1 to 31.' };
+      schedule = { kind: 'yearly', month, day, time: hhmm };
+      break;
+    }
     default:
       schedule = { kind: form.kind, time: hhmm };
   }
+  const tooOften = minPeriodProblem(schedule, minPeriod);
+  if (tooOften) return { error: tooOften };
   const timezone = form.timezone.trim();
   if (!timezone) return { error: 'Enter a timezone, e.g. America/Los_Angeles.' };
   return {
@@ -170,7 +190,9 @@ export function RoutineForm({
     // Archived, or edit rights lost: still shown, so saving doesn't move it.
     choices.push({ value: form.space, label: form.space, testID: 'routine-space-current' });
   }
-  const checked = formToInput(form, { delivered });
+  const minPeriod = routine?.min_period ?? null;
+  const kinds = allowedKinds(minPeriod);
+  const checked = formToInput(form, { delivered, minPeriod });
   const preview = 'input' in checked ? scheduleSummary(checked.input.schedule) : null;
 
   const submit = () => {
@@ -227,7 +249,7 @@ export function RoutineForm({
 
       <SectionTitle>When</SectionTitle>
       <View style={styles.chips}>
-        {(Object.keys(KIND_LABELS) as ScheduleKind[]).map((kind) => (
+        {kinds.map((kind) => (
           <Chip
             key={kind}
             label={KIND_LABELS[kind]}
@@ -263,7 +285,17 @@ export function RoutineForm({
             containerStyle={styles.grow}
           />
         ) : null}
-        {form.kind === 'monthly' ? (
+        {form.kind === 'yearly' ? (
+          <Field
+            label="Month (1-12)"
+            value={form.month}
+            onChangeText={(v) => set('month', v)}
+            keyboardType="number-pad"
+            testID="routine-month"
+            containerStyle={styles.grow}
+          />
+        ) : null}
+        {form.kind === 'monthly' || form.kind === 'yearly' ? (
           <Field
             label="Day of month"
             value={form.monthDay}

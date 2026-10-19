@@ -316,6 +316,36 @@ That keeps a household's runs from all starting at once on a 4-slot model
 server. Runs go through the scheduler's existing worker pool
 (`max_concurrent`).
 
+### 4.9 Reviews (M22-14)
+
+Three more delivered routines, each quiet and with its own admin switch,
+summarize the timeline a level up and curate `memory.md`
+(`docs/APP_TEMPLATES.md` §6.3):
+
+| Key | Name | Default | Covers | Writes |
+|---|---|---|---|---|
+| `memory_weekly` | Memory: weekly review | Mondays 06:00 | the ISO week | `timeline/<yyyy>/<yyyy>-Www.md` |
+| `memory_monthly` | Memory: monthly review | the 1st, 07:00 | the month | `timeline/<yyyy>/<yyyy-mm>.md` |
+| `memory_yearly` | Memory: yearly review | Jan 1, 08:00 | the year | `timeline/<yyyy>/<yyyy>.md` |
+
+The per-user offset applies to all three. `review_prompts.periods` lists
+the periods that ended since the last successful run (several after
+missed runs; the last one that ended for a first run or a Run now) with
+each one's file
+and the files below it, and that goes into the fixed prompt. A run reads
+those files and the pages they link to, writes each period's file (none
+if nothing is worth keeping), and curates `memory.md`: a short
+**Lately** section kept by the weekly and monthly runs, past plans out,
+recurring things up, quiet ones down into their pages, under 6,000
+characters. The monthly and yearly runs also tidy pages: merge
+duplicates, fix links, and mark "- Not mentioned since <Mon yyyy>".
+
+They read notes only: on top of §4.5's list, `list_chats`, `read_chat`
+and `list_app_changes` are unavailable, so facts enter memory in the
+nightly run alone. A review's schedule can't be more frequent than its
+period (`min_period` 7, 28 or 365 days; the scheduler gained a `yearly`
+kind for the last).
+
 ## 5. File search
 
 ### 5.1 The tool
