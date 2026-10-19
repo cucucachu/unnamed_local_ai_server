@@ -140,8 +140,10 @@ _TIDY = """\
 5. Tidy the pages: merge two pages about the same subject (move everything into \
 one, point links at it, then delete the other); fix file: links to files that \
 don't exist; and on the page of a person, place or interest that hasn't come up \
-in the timeline for {stale}, add or update one line "- Not mentioned since <Mon \
-yyyy>" rather than deleting anything.
+for {stale}, add or update one line "- Not mentioned since <Mon yyyy>" rather \
+than deleting anything. Go by the newest date about it anywhere: its page, \
+memory.md and the files you read, not only the period you're reviewing. Without \
+a date, leave it.
 """
 
 _RULES = """\

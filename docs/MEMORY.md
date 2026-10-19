@@ -542,6 +542,14 @@ forget, the user deletes pages, `memory.md` or the folder in Files.
     didn't say.
 
   The bar is agreed with the PM.
+- **The reviews eval** (`scripts/eval/memory_reviews/run.sh`, M22-15,
+  results on #427): seeded day, month and person files and a `memory.md`
+  with past plans, a duplicate page and a stale interest, then the
+  weekly, monthly and yearly reviews; plus a user whose week is empty.
+  Cases: each period file exists and links down; a short Lately; past
+  plans out; the duplicate merged; only the stale page marked; under
+  6,000 characters; no broken links; nothing invented; the empty week
+  writes nothing.
 - **Gate G21** (`gate_m21.sh`, appended to `gate_full.sh`): stack
   healthy, the suites above, and a live smoke with a throwaway user. A
   chat states a fact; Run now on the Memory routine with writes allowed
