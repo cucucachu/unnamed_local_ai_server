@@ -5,6 +5,13 @@ Pass for a case = the agent created an app that **builds** (the platform
 build includes the smoke render) **and** a scripted check of the data model
 succeeds (expected columns exist; insert a row and read it back).
 
+M22-19 adds `"kind": "customize"` cases: install a template, then ask for a
+change the way the runner's "Ask the agent" panel does (a thread titled
+"Ask: <app>" whose first message is the app context, then the prompt).
+Pass = the turn's last `build_app` succeeded **and** the change is there:
+`field` (the column exists and the source uses it), `screen` (a new route
+file under `app/`) or `chart` (a source file uses a `@homeai/ui` chart).
+
 Env: E2E_AUTH_COOKIE, E2E_BASE (default http://localhost). Optional:
 EVAL_ONLY=<id>, EVAL_LIMIT=<n>, EVAL_TURN_TIMEOUT_S (default 1500),
 EVAL_OUT (default this directory), EVAL_AGENT=candidate (M16: send every
@@ -267,6 +274,151 @@ def scan_hooks(source_path: str) -> dict[str, bool]:
     return found
 
 
+CHART = re.compile(r"\b(BarChart|LineChart|PieChart)\b")
+CONTEXT_FILES = ("app.json", "AGENT.md", "schema.sql")
+
+
+def personal_space() -> dict:
+    status, spaces = api("GET", "/api/platform/spaces")
+    if status != 200:
+        fail(f"GET /spaces: HTTP {status} {spaces!r}")
+    return next(s for s in spaces["spaces"] if s["kind"] == "personal")
+
+
+def read_text(path: str) -> str:
+    status, data = download(path)
+    return data.decode("utf-8", "replace") if status == 200 else ""
+
+
+def source_texts(source_path: str) -> dict[str, str]:
+    return {p: read_text(p) for p in walk_files(source_path) if p.endswith((".ts", ".tsx", ".js", ".jsx"))}
+
+
+def context_message(space: dict, app: dict, instance_id: str, prompt: str) -> str:
+    """The panel's first message: services/frontend/lib/appAgent.ts `seedUserMessage`."""
+    source = app.get("source_path")
+    lines = [
+        "App context for this thread",
+        f"Instance: {instance_id}",
+        f"Space: {space['slug']} ({space['name']}, role {space.get('role') or 'none'})",
+        f"App: {app['name']} ({app['id']})",
+    ]
+    if source:
+        lines.append(f"Source: {source}")
+    for name in CONTEXT_FILES:
+        lines += [f"--- {name} ---", (read_text(f"{source}/{name}") if source else "") or "(empty or unavailable)"]
+    return "\n".join(lines) + "\n---\n" + prompt
+
+
+def last_build(frames: list[dict]) -> str | None:
+    """The result of the turn's last `build_app` call, or None if it never built."""
+    builds = [f for f in frames if f.get("type") == "tool_end" and f.get("name") == "build_app"]
+    return (builds[-1].get("result_preview") or "") if builds else None
+
+
+def tool_log(frames: list[dict]) -> list[dict]:
+    return [
+        {
+            "name": f.get("name"),
+            "status": f.get("status"),
+            "args": next(
+                (s.get("args") for s in frames if s.get("type") == "tool_start" and s.get("tool_call_id") == f.get("tool_call_id")),
+                None,
+            ),
+            "preview": (f.get("result_preview") or "")[:500],
+        }
+        for f in frames
+        if f.get("type") == "tool_end"
+    ]
+
+
+def change_check(case: dict, inst_id: str, source: str, before: set[str]) -> tuple[str | None, dict]:
+    """(failure, details) for a customize case's requested change."""
+    texts = source_texts(source)
+    if case["change"] == "field":
+        err, tables = user_tables(inst_id)
+        if err:
+            return f"schema_error: {err}", {}
+        cols = [str(c["name"]) for c in tables.get(case["table"], [])]
+        if case["column"] not in cols:
+            return f"schema_mismatch: no {case['table']}.{case['column']} (have {cols})", {"columns": cols}
+        used = sorted(p for p, t in texts.items() if case["column"] in t)
+        if not used:
+            return f"not_in_source: nothing under {source} uses {case['column']}", {"columns": cols}
+        return None, {"columns": cols, "used_in": used}
+    if case["change"] == "screen":
+        added = sorted(
+            p
+            for p in set(walk_files(source)) - before
+            if p.startswith(f"{source}/app/") and p.endswith((".tsx", ".ts", ".jsx", ".js")) and not p.rsplit("/", 1)[-1].startswith("_")
+        )
+        return (None if added else "no_new_screen"), {"added": added}
+    charts = sorted(p for p, t in texts.items() if CHART.search(t) and "@homeai/ui" in t)
+    return (None if charts else "no_chart"), {"charts_in": charts}
+
+
+async def run_customize(case: dict, seen_ids: set[str]) -> dict:
+    result: dict[str, Any] = {
+        "id": case["id"],
+        "kind": "customize",
+        "change": case["change"],
+        "template": case["template"],
+        "prompt": case["prompt"],
+        "pass": False,
+        "failure": None,
+        "app_id": None,
+        "instance_id": None,
+        "source_path": None,
+        "details": {},
+        "duration_ms": None,
+        "tools": [],
+    }
+    space = personal_space()
+    status, out = api("POST", f"/api/platform/spaces/{space['id']}/app-templates/{case['template']}/install", {}, timeout=600)
+    if status not in (200, 201) or not (out or {}).get("build", {}).get("ok"):
+        result["failure"] = f"install_failed: HTTP {status} {str(out)[:300]}"
+        return result
+    app, inst = out["app"], out["instance"]
+    seen_ids.add(app["id"])
+    result.update(app_id=app["id"], instance_id=inst["id"], source_path=app.get("source_path"))
+    source = app["source_path"]
+    before = set(walk_files(source))
+
+    status, thread = api("POST", "/api/threads", {"title": f"Ask: {app['name']}"})
+    if status != 201:
+        result["failure"] = f"create_thread HTTP {status}"
+        return result
+    try:
+        frames = await turn(thread["id"], context_message(space, app, inst["id"], case["prompt"]))
+    except TimeoutError:
+        result["failure"] = "timeout"
+        preview_frames(case["id"], case["prompt"], [])
+        return result
+    except Exception as exc:
+        result["failure"] = f"turn_exception: {exc!r}"
+        return result
+    result["duration_ms"] = (frames[-1] if frames else {}).get("duration_ms")
+    result["tools"] = tool_log(frames)
+    preview_frames(case["id"], case["prompt"], frames)
+
+    turn_fail = classify_turn(frames)
+    if turn_fail:
+        result["failure"] = turn_fail
+        return result
+    build = last_build(frames)
+    if build is None:
+        result["failure"] = "no_build"
+        return result
+    if not build.startswith("Build succeeded"):
+        result["failure"] = f"build_failed: {build[:200]}"
+        return result
+    failure, details = change_check(case, inst["id"], source, before)
+    result["details"] = details
+    result["failure"] = failure
+    result["pass"] = failure is None
+    return result
+
+
 def classify_turn(frames: list[dict]) -> str | None:
     if not frames:
         return "empty_turn"
@@ -295,8 +447,11 @@ def build_succeeded(frames: list[dict], app: dict | None) -> bool:
 
 
 async def run_case(case: dict, seen_ids: set[str]) -> dict:
+    if case.get("kind") == "customize":
+        return await run_customize(case, seen_ids)
     result: dict[str, Any] = {
         "id": case["id"],
+        "kind": "create",
         "prompt": case["prompt"],
         "pass": False,
         "failure": None,
@@ -326,19 +481,7 @@ async def run_case(case: dict, seen_ids: set[str]) -> dict:
 
     end = frames[-1] if frames else {}
     result["duration_ms"] = end.get("duration_ms")
-    result["tools"] = [
-        {
-            "name": f.get("name"),
-            "status": f.get("status"),
-            "args": next(
-                (s.get("args") for s in frames if s.get("type") == "tool_start" and s.get("tool_call_id") == f.get("tool_call_id")),
-                None,
-            ),
-            "preview": (f.get("result_preview") or "")[:500],
-        }
-        for f in frames
-        if f.get("type") == "tool_end"
-    ]
+    result["tools"] = tool_log(frames)
     for frame in frames:
         if frame.get("type") == "tool_start" and frame.get("name") == "create_app":
             result["template"] = (frame.get("args") or {}).get("template") or "grocery-list"
@@ -386,7 +529,9 @@ async def run_case(case: dict, seen_ids: set[str]) -> dict:
     return result
 
 
-def summarize(results: list[dict]) -> dict[str, Any]:
+def summarize(all_results: list[dict]) -> dict[str, Any]:
+    results = [r for r in all_results if r.get("kind") != "customize"]
+    customize = [r for r in all_results if r.get("kind") == "customize"]
     passed = sum(1 for r in results if r["pass"])
     taxonomy: dict[str, list[str]] = {}
     hooks = {"useDatabase": 0, "useSQLiteContext": 0, "both": 0, "neither": 0}
@@ -416,6 +561,12 @@ def summarize(results: list[dict]) -> dict[str, Any]:
         "taxonomy": {k: v for k, v in taxonomy.items()},
         "hooks": hooks,
         "templates": templates,
+        "customize": {
+            "passed": sum(1 for r in customize if r["pass"]),
+            "total": len(customize),
+            "rate": f"{sum(1 for r in customize if r['pass'])}/{len(customize)}",
+            "by_case": {r["id"]: "pass" if r["pass"] else (r["failure"] or "unknown") for r in customize},
+        },
     }
 
 
@@ -469,7 +620,7 @@ async def main() -> int:
         print("\n=== summary ===")
         print(json.dumps(summary, indent=2))
         print(f"wrote {out_dir / 'last-report.json'}")
-    return 0 if summary["passed"] >= 7 else 1
+    return 0 if summary["passed"] >= 7 or not summary["total"] else 1
 
 
 if __name__ == "__main__":

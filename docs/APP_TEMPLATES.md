@@ -117,6 +117,22 @@ gzip today; the kit should add under ~100 KB.
 The authoring guide (`APP_AUTHORING_GUIDE`) and templates show the kit
 first. It's part of the static system prompt, so its size matters (#341).
 
+> **As built (M22-19):** `scripts/eval/app_authoring/` reran with the
+> M22 guide and the sixteen templates on Ornith 1.5 35B Q8_0, plus six
+> customize cases. Each installs a template and asks for a change the way
+> the runner's "Ask the agent" panel does: two add a field, two a screen,
+> two a chart. The ten create cases passed 10/10 (M13-03: 9/10; the M16
+> comparison, same model: 30/30 over three runs), and the customize cases
+> 5/6. The miss was `screen-recipes-quick`: the model replied "No response
+> requested." and made no tool calls. Two findings. First, the model takes
+> `create_app`'s `grocery-list` default instead of the closest template
+> (8 of 10, including habit tracker, notes and chores), because the guide
+> no longer names the templates. The cases still pass, but take about
+> 600 s at the median against 210 s in M16 (#455). Second, adding a last
+> column with a trailing comment failed its migration. That's fixed here
+> (PLATFORM.md §7 "Apps", Migrations, M22-19), and `build_app` now flags a failed
+> migration in its first line.
+
 ## 5. The agent and app data
 
 The agent can query any app it can see (`app_query`), but nothing tells it

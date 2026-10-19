@@ -225,7 +225,10 @@ def parse_table(sql: str) -> dict:
             cur, raw = [], []
             continue
         cur.append(t)
-        raw.append(t)
+        # ADD COLUMN pastes this text into the stored CREATE TABLE before its ")",
+        # so a trailing "-- comment" would swallow the ")".
+        if not t.startswith(("--", "/*")):
+            raw.append(t)
     parts.append(cur)
     raw_parts.append("".join(raw).strip())
     columns, constraints = {}, []

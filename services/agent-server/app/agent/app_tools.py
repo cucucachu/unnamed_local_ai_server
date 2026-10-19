@@ -673,6 +673,8 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
         build = body.get("build") or {}
         version = ((body.get("app") or {}).get("working_version") or {}).get("version")
         commit = build.get("commit")
+        migrations = body.get("migrations") or []
+        failed = [m for m in migrations if (m.get("migration") or {}).get("status") == "failed"]
         head = (
             f"Build succeeded: {found['name']}"
             + (f" {version}" if version else "")
@@ -680,10 +682,14 @@ def make_app_tools(settings: Settings) -> list[BaseTool]:
             + (f", commit {commit[:7]}" if commit else "")
             + f", {build.get('duration_ms')} ms). The app now runs the new version."
         )
+        if failed:
+            head += (
+                f" But the database migration FAILED for {len(failed)} instance(s), so the new "
+                "code is running against the old tables. Fix schema.sql (the error is below) "
+                "and call build_app again."
+            )
         by_id = {i["id"]: i for i in cat.instances}
-        lines = [
-            _migration_line(m, by_id.get(m["instance_id"])) for m in body.get("migrations") or []
-        ]
+        lines = [_migration_line(m, by_id.get(m["instance_id"])) for m in migrations]
         return head + ("\n" + "\n".join(lines) if lines else "\nNo installed instance to migrate.")
 
     def _sql_refusal(sql: str) -> str | None:

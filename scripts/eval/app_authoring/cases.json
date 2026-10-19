@@ -2,51 +2,212 @@
   {
     "id": "grocery-quantities",
     "prompt": "Make me a grocery list app with quantities in my personal space. Use create_app with slug \"eval-grocery-quantities\" and the closest template, edit the source if it isn't already a shopping list with quantities, then call build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "item"], ["quantity", "qty", "amount"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "item"
+      ],
+      [
+        "quantity",
+        "qty",
+        "amount"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "habit-tracker",
     "prompt": "Make me a habit tracker in my personal space. Use create_app with slug \"eval-habit-tracker\" and the closest template, edit if needed so I can add habits and check them off each day, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "habit"], ["day", "date"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "habit"
+      ],
+      [
+        "day",
+        "date"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "notes",
     "prompt": "Make me a notes app in my personal space: each note has a title and a body. Use create_app with slug \"eval-notes\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["title", "name"], ["body", "content", "text"]]
+    "need_column_groups": [
+      [
+        "title",
+        "name"
+      ],
+      [
+        "body",
+        "content",
+        "text"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "todo-list",
     "prompt": "Make me a todo list / checklist app in my personal space. Use create_app with slug \"eval-todo-list\" and the closest template, edit if needed so I can add items and tick them off, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "item"], ["done", "checked", "completed"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "item"
+      ],
+      [
+        "done",
+        "checked",
+        "completed"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "shopping-list",
     "prompt": "Make me a shopping list app in my personal space. Use create_app with slug \"eval-shopping-list\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "item"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "item"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "chore-chart",
     "prompt": "Make me a chore chart app in my personal space: a list of chores we can tick off. Use create_app with slug \"eval-chore-chart\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "chore", "item"], ["done", "checked", "completed"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "chore",
+        "item"
+      ],
+      [
+        "done",
+        "checked",
+        "completed"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "packing-list",
     "prompt": "Make me a packing list app in my personal space for a trip: add things to pack and mark them packed. Use create_app with slug \"eval-packing-list\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "item"], ["packed", "done", "checked"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "item"
+      ],
+      [
+        "packed",
+        "done",
+        "checked"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "recipe-notebook",
     "prompt": "Make me a recipe notebook in my personal space: each recipe has a title and the recipe text. Use create_app with slug \"eval-recipe-notebook\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["title", "name"], ["body", "content", "text", "recipe", "ingredients"]]
+    "need_column_groups": [
+      [
+        "title",
+        "name"
+      ],
+      [
+        "body",
+        "content",
+        "text",
+        "recipe",
+        "ingredients"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "reading-list",
     "prompt": "Make me a reading list app in my personal space: books I want to read, with a way to mark them read. Use create_app with slug \"eval-reading-list\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["title", "name", "book"], ["read", "done", "checked", "status"]]
+    "need_column_groups": [
+      [
+        "title",
+        "name",
+        "book"
+      ],
+      [
+        "read",
+        "done",
+        "checked",
+        "status"
+      ]
+    ],
+    "kind": "create"
   },
   {
     "id": "water-tracker",
     "prompt": "Make me a daily water / habit tracker in my personal space: add a habit and check it in each day. Use create_app with slug \"eval-water-tracker\" and the closest template, edit if needed, then build_app until it succeeds. Don't ask questions — just build it.",
-    "need_column_groups": [["name", "title", "habit"], ["day", "date"]]
+    "need_column_groups": [
+      [
+        "name",
+        "title",
+        "habit"
+      ],
+      [
+        "day",
+        "date"
+      ]
+    ],
+    "kind": "create"
+  },
+  {
+    "id": "field-pantry-brand",
+    "kind": "customize",
+    "template": "pantry",
+    "change": "field",
+    "table": "items",
+    "column": "brand",
+    "prompt": "Add a brand to pantry items so I can note which brand I bought. Put it on the add form and the item screen, and show it in the list. Rebuild it when you're done, and don't ask me questions."
+  },
+  {
+    "id": "field-contacts-nickname",
+    "kind": "customize",
+    "template": "contacts",
+    "change": "field",
+    "table": "people",
+    "column": "nickname",
+    "prompt": "Add a nickname for each person. Show it on their screen and next to their name in the list. Rebuild it when you're done, and don't ask me questions."
+  },
+  {
+    "id": "screen-workouts-records",
+    "kind": "customize",
+    "template": "workouts",
+    "change": "screen",
+    "prompt": "Add a Records screen that lists my heaviest set for each exercise, with a button on the Exercises tab that opens it. Rebuild it when you're done, and don't ask me questions."
+  },
+  {
+    "id": "screen-recipes-quick",
+    "kind": "customize",
+    "template": "recipes",
+    "change": "screen",
+    "prompt": "Add a screen that lists only the recipes that take 30 minutes or less, opened from a button on the Recipes tab. Rebuild it when you're done, and don't ask me questions."
+  },
+  {
+    "id": "chart-tracker-weekly",
+    "kind": "customize",
+    "template": "tracker",
+    "change": "chart",
+    "prompt": "On each habit's screen, add a bar chart of how many check-ins it had each week for the last 8 weeks. Rebuild it when you're done, and don't ask me questions."
+  },
+  {
+    "id": "chart-chores-weekly",
+    "kind": "customize",
+    "template": "chores",
+    "change": "chart",
+    "prompt": "On the History tab, add a bar chart of how many chores were done each week for the last 8 weeks. Rebuild it when you're done, and don't ask me questions."
   }
 ]
