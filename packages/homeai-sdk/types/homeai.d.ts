@@ -49,6 +49,17 @@ declare module '@homeai/sdk' {
   export function useQuery<T = any>(sql: string, ...params: SQLValue[]): QueryResult<T>;
   /** Runs the named action from actions/<name>.sql in one transaction; `rows` are the last result set's. */
   export function runAction(name: string, params?: Record<string, SQLValue>): Promise<ActionResult>;
+  /**
+   * Runs action `name` of another app's export (listed in this app's `homeai.reads`) on one copy
+   * of it: `instance` is the `_instance` column of the export's view, e.g.
+   * `SELECT _instance, _space FROM grocery_list_items`. Needs edit rights on that copy's space.
+   */
+  export function runExportAction(
+    instance: string,
+    exportName: string,
+    name: string,
+    params?: Record<string, SQLValue>,
+  ): Promise<ActionResult>;
   /** Opens the host's "Ask the agent" panel with this prompt (a new thread pre-seeded with this app's context). */
   export function askAgent(prompt: string): Promise<void>;
   /** A row `search` found: `id` is its rowid (the INTEGER PRIMARY KEY), `snippet` a bit of its text. */

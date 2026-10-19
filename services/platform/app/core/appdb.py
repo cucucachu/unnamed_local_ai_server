@@ -302,7 +302,8 @@ def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> No
             view = merged_view_name(slug, export_name, table, tables)
             selects = [
                 (
-                    f"SELECT *, {_sql_str(grant.space_path)} AS {appschema.quote('_space')} "
+                    f"SELECT *, {_sql_str(grant.space_path)} AS {appschema.quote('_space')}, "
+                    f"{_sql_str(str(grant.instance_id))} AS {appschema.quote('_instance')} "
                     f"FROM {appschema.quote(schema)}.{appschema.quote(table)}"
                 )
                 for grant, schema in copies

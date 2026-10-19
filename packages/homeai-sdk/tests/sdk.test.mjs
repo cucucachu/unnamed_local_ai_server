@@ -185,6 +185,30 @@ test('search() reaches the instance RPC, also read-only; a blank query makes no 
   s.close();
 });
 
+test('runExportAction sends another app’s action through the instance RPC, also read-only', async () => {
+  const index = fs.readFileSync(new URL('./fixtures/runtime-check/app/index.tsx', import.meta.url), 'utf8');
+  const edited = index
+    .replace('askAgent, runAction,', 'askAgent, runAction, runExportAction,')
+    .replace(
+      '<Text testID="status">',
+      `<Pressable testID="to-list" onPress={() => void runExportAction('i-grocery', 'items', 'addItem', { name }).then((r) => setStatus('added #' + r.lastInsertRowId), (e) => setStatus(e.code))}>
+        <Text>To list</Text>
+      </Pressable>
+      <Pressable testID="to-nowhere" onPress={() => void runExportAction('i-grocery', 'nope', 'addItem').then(() => setStatus('?'), (e) => setStatus(e.code))}>
+        <Text>Nowhere</Text>
+      </Pressable>
+      <Text testID="status">`,
+    );
+  const s = await boot({ readOnly: true, edits: { 'app/index.tsx': edited } });
+  s.type('new-item', 'Flour');
+  s.click('to-list');
+  await until('added', () => s.text('status') === 'added #41');
+  assert.deepEqual(s.platform.calls.at(-1), { op: 'exportAction', instance: 'i-grocery', export: 'items', name: 'addItem', params: { name: 'Flour' } });
+  s.click('to-nowhere');
+  await until('refused', () => s.text('status') === 'unknown_export');
+  s.close();
+});
+
 test('Link, params, getFirstAsync (variadic and named binds), back, nav.changed', async () => {
   const s = await boot();
   s.platform.externalWrite("INSERT INTO items (name) VALUES ('Eggs')");
@@ -262,7 +286,7 @@ test('the runtime provides exactly modules.json, and the typings declare the non
   for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
   for (const m of ['react-dom', 'react-dom/client', 'react-native-web', 'fs']) assert.throws(() => req(m), /not available in the app sandbox/);
   const sdk = req('@homeai/sdk');
-  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'runAction', 'search', 'useDatabase', 'useMember', 'useMembers', 'useQuery', 'useSQLiteContext', 'useSpace', 'useUser']);
+  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'runAction', 'runExportAction', 'search', 'useDatabase', 'useMember', 'useMembers', 'useQuery', 'useSQLiteContext', 'useSpace', 'useUser']);
   assert.equal(sdk.useSQLiteContext, sdk.useDatabase);
   await assert.rejects(sdk.useDatabase().withTransactionAsync(async () => {}), /not available in SDK 1: put multi-statement writes in an action/);
   assert.deepEqual(Object.keys(req('expo-sqlite')).sort(), ['SQLiteProvider', 'openDatabaseAsync', 'useSQLiteContext']);

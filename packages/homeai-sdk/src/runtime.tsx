@@ -79,6 +79,7 @@ export const modules: Record<string, unknown> = {
     useSQLiteContext: SDK.useSQLiteContext,
     useQuery: SDK.useQuery,
     runAction: SDK.runAction,
+    runExportAction: SDK.runExportAction,
     askAgent: SDK.askAgent,
     search: SDK.search,
     useSpace: SDK.useSpace,

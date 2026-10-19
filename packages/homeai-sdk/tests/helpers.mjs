@@ -143,6 +143,11 @@ export function stubPlatform(appDir = FIXTURE, { instanceId = INSTANCE_ID } = {}
         const st = db.prepare(body.sql);
         return { status: 200, body: body.op === 'getAll' ? { rows: st.all(...bind(body.params)) } : { row: st.get(...bind(body.params)) ?? null } };
       }
+      if (body.op === 'exportAction') {
+        // Another instance's action: nothing changes here.
+        if (body.export !== 'items') return { status: 404, body: { detail: 'unknown_export' } };
+        return { status: 200, body: { changes: 1, lastInsertRowId: 41, rows: [] } };
+      }
       if (body.op === 'search') {
         const rows = db.prepare('SELECT id, name FROM items WHERE name LIKE ? ORDER BY id LIMIT ?').all(`%${body.query}%`, body.limit);
         return { status: 200, body: { results: rows.map((r) => ({ table: 'items', id: r.id, title: r.name, snippet: r.name, score: 1 })) } };

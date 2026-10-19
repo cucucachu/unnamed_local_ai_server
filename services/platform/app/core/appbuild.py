@@ -602,7 +602,7 @@ async def _reads_stand_ins(
                 continue
             for table in tables:
                 view = appdb.merged_view_name(slug, name, table, tables)
-                names = ", ".join(appschema.quote(c) for c in (*cols[table], "_space"))
+                names = ", ".join(appschema.quote(c) for c in (*cols[table], "_space", "_instance"))
                 statements.append(f"CREATE TABLE {appschema.quote(view)} ({names});")
             break
     return "".join(f"{s}\n" for s in statements)
