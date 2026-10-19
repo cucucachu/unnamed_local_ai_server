@@ -246,6 +246,9 @@ def attach_schema_name(instance_id: UUID) -> str:
     return "exp" + instance_id.hex
 
 
+EXPORTS_VIEW = "homeai_exports"
+
+
 def merged_view_name(app_slug: str, export_name: str, table: str, tables: Sequence[str]) -> str:
     """Stable TEMP VIEW name: `{app}_{export}` when the export has one table."""
     if len(tables) == 1:
@@ -314,6 +317,17 @@ def attach_exports(con: sqlite3.Connection, grants: Sequence[AttachGrant]) -> No
             except sqlite3.Error:
                 continue
             views.add(view)
+    # One row per attached copy, even one with no rows yet: where an export action can go.
+    copies = [
+        f"({_sql_str(str(g.instance_id))}, {_sql_str(g.space_path)}, "
+        f"{_sql_str(g.app_slug)}, {_sql_str(g.export_name)})"
+        for g, _ in attached
+    ]
+    con.execute(
+        f"CREATE TEMP VIEW {EXPORTS_VIEW} (_instance, _space, app, export) AS VALUES "
+        + ", ".join(copies)
+    )
+    views.add(EXPORTS_VIEW)
     _ATTACH_STATE[id(con)] = _AttachState(
         schemas=frozenset(schemas), tables=tables_by_schema, views=frozenset(views)
     )

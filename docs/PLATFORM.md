@@ -1243,6 +1243,11 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > doesn't count it as a write for a viewer of the reader's space: the
 > platform checks write on the owner's space. The phone app forwards it once
 > it's rebuilt with this SDK.
+>
+> **M22-16b:** a connection with granted reads also has the TEMP VIEW
+> `homeai_exports(_instance, _space, app, export)`, one row per attached
+> copy, so a reader finds an exporter with no rows yet (an empty grocery
+> list). The build's smoke render gets an empty stand-in for it.
 
 > **As built (M13-02), exec read-only mounts:** `POST /internal/exec-grants`
 > adds one read-only bind per live instance in every space the user is a

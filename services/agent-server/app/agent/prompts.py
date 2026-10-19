@@ -117,8 +117,9 @@ homeai.reads [{app: <slug>, export, version}] and is granted that list when inst
 from a catalog, or by each build_app for an app in its own space's Apps folder.
 The reader queries the merged view <app>_<export>, named after the EXPORTING app (a
 read of calendar's events export is SELECT ... FROM calendar_events; rows include
-_space and _instance). To write to the exporter, call one of the export's actions:
-runExportAction(row._instance, '<export>', '<action>', params) from @homeai/sdk.
+_space and _instance; SELECT _instance, _space FROM homeai_exports WHERE app = '<slug>'
+lists every copy, even an empty one). To write to the exporter, call one of the export's
+actions: runExportAction(_instance, '<export>', '<action>', params) from @homeai/sdk.
 build_app's render test gives the view the exporter's columns and no rows.
 Bump export version when tables or columns change.
 Tables of text worth finding (recipes, notes, journal entries; not numbers) go in

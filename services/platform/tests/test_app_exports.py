@@ -267,6 +267,7 @@ async def test_a_readers_smoke_render_gets_stand_ins_for_the_views_it_reads(worl
         (
             'CREATE TABLE "calendar_events" ("id", "title", "_created_by", "_created_at", '
             '"_updated_by", "_updated_at", "_space", "_instance");\n'
+            'CREATE TABLE homeai_exports ("_instance", "_space", "app", "export");\n'
         ),
     ]
 
@@ -313,6 +314,49 @@ async def test_viewer_reads_merged_view_but_cannot_export_action(world: World) -
         world, family_cal, "alice", {"op": "getAll", "sql": "SELECT title FROM events ORDER BY id"}
     )
     assert "FromPlanner" in [r["title"] for r in rows.json()["rows"]]
+
+
+async def test_homeai_exports_lists_every_copy_even_an_empty_one(world: World) -> None:
+    ids = await _setup(world)
+    planner, personal = ids["planner"]["id"], ids["personal_cal"]["id"]
+    cleared = await _rpc(world, personal, "alice", {"op": "run", "sql": "DELETE FROM events"})
+    assert cleared.status_code == 200, cleared.text
+    seen = await _rpc(
+        world,
+        planner,
+        "alice",
+        {"op": "getAll", "sql": "SELECT * FROM homeai_exports ORDER BY _space"},
+    )
+    assert seen.status_code == 200, seen.text
+    assert seen.json()["rows"] == [
+        {"_instance": personal, "_space": "/personal", "app": "calendar", "export": "events"},
+        {
+            "_instance": ids["family_cal"]["id"],
+            "_space": "/spaces/family",
+            "app": "calendar",
+            "export": "events",
+        },
+    ]
+    ok = await _rpc(
+        world,
+        planner,
+        "alice",
+        {
+            "op": "exportAction",
+            "instance": personal,
+            "export": "events",
+            "name": "addEvent",
+            "params": {"title": "First"},
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    plain = await _rpc(
+        world,
+        ids["family_cal"]["id"],
+        "alice",
+        {"op": "getAll", "sql": "SELECT * FROM homeai_exports"},
+    )
+    assert plain.status_code == 422, plain.text
 
 
 async def test_the_merged_view_names_each_rows_instance_for_export_actions(world: World) -> None:
