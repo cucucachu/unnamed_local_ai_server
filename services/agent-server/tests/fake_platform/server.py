@@ -306,6 +306,36 @@ def create_fake_platform_app(fake: FakePlatform) -> FastAPI:
                 )  # fmt: skip
         return JSONResponse({"instances": out})
 
+    @app.get("/api/platform/apps/changes")
+    async def app_changes(request: Request) -> JSONResponse:
+        params = dict(request.query_params)
+        fake.app_changes_requests.append((_bearer(request), params))
+        who = _who(request)
+        since = datetime.fromisoformat(params["since"])
+        offset, limit = int(params.get("offset", 0)), int(params.get("limit", 50))
+        spaces = {s["key"]: s for s in fake.spaces_for(who.user_id)}
+
+        def person(user_id: str | None) -> dict | None:
+            if user_id is None:
+                return None
+            return {"id": user_id, "username": user_id, "you": user_id == who.user_id,
+                    "display_name": fake.user_names.get(user_id)}  # fmt: skip
+
+        found = sorted(
+            (r for r in fake.app_changes
+             if r["space_key"] in spaces and datetime.fromisoformat(r["updated_at"]) > since),
+            key=lambda r: r["updated_at"],
+        )  # fmt: skip
+        rows = [
+            {"instance_id": "inst-" + r["space_key"], "app": {"slug": r["app"].lower(),
+             "name": r["app"]}, "space": _public_space(spaces[r["space_key"]]),
+             "table": r["table"], "row_id": r["row_id"], "title": r["title"], "text": r["text"],
+             "updated_at": r["updated_at"], "created_by": person(r.get("created_by")),
+             "updated_by": person(r.get("updated_by"))}
+            for r in found[offset : offset + limit]
+        ]  # fmt: skip
+        return JSONResponse({"total": len(found), "offset": offset, "rows": rows})
+
     @app.get("/api/platform/spaces/{space_id}/instances")
     async def list_instances(request: Request, space_id: str) -> JSONResponse:
         _space(_who(request), space_id)

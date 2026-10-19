@@ -57,6 +57,8 @@ function statusForTool(name: string, args: Record<string, unknown>): string {
     case 'list_chats':
     case 'read_chat':
       return 'Reading chats…';
+    case 'list_app_changes':
+      return 'Reading app changes…';
     case 'web_search':
       return 'Searching the web…';
     case 'web_fetch': {

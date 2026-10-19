@@ -697,6 +697,18 @@ what another doc says it should be.
     - Pages are about 12,000 characters, cut on turn boundaries, and each
       ends with the next `offset`.
   - Catalog group "Chats", both read-only. Docs: `docs/MEMORY.md` §6.
+- **`list_app_changes` (M22-12)** (`app/agent/app_changes_tool.py`):
+  `list_app_changes(since, offset=0)` calls `GET /api/platform/apps/changes`
+  with the run's delegation, `since` read in the user's timezone and sent as
+  UTC. The nightly Memory run uses it after the chats (docs/MEMORY.md §4.6).
+  - One block per row, oldest change first: `[time] App (Space) table #id,
+    by you: title`, or `by Bob`, or `added by Bob, last changed by you`,
+    then the row's indexed fields indented. A row's body is cut at 2,000
+    characters (app_query reads the rest).
+  - Pages are about 12,000 characters (50 rows fetched at a time) and end
+    with the next `offset`, like `read_chat`.
+  - Catalog group Apps, "Read app changes", read-only, so allowed by
+    default; not in the Memory routine's unavailable list.
 - **Memory core (M21-06)** (`app/agent/memory_core.py`,
   `MemoryCoreMiddleware`, last in the middleware list so it comes after
   the integrations list; the task helper gets it too).
@@ -2682,6 +2694,7 @@ All routes: guard *user* — an agent delegation has its user's rights here
 | `POST /api/platform/apps/{id}/fork` | write on the destination space | `{"space_id", "slug"?}` | `201 {"app", "instance"}`. Copies live source if the caller can read it, else the latest published snapshot, into `<dest>/Apps/<slug>/` (default the original slug; `app.json` slug rewritten if different), registers it, and installs tracking `working`. | `404 not_found`, space errors, `409 app_exists`, `422 not_published` (no source access and no snapshot), `422 invalid_app` |
 | `GET /api/platform/spaces/{id}/catalog` | read | — | `200 {"entries": [CatalogEntry]}` — latest published version of each listed app, by name | space errors |
 | `GET /api/platform/spaces/{id}/instances` | read | — | `200 {"instances": [Instance]}` — live ones, oldest first | space errors |
+| `GET /api/platform/apps/changes` (M22-12) | read | `?since=<ISO time>&offset=0&limit=50` (`limit` 1–200; a time without an offset is UTC) | `200 {"total", "offset", "rows": [{"instance_id", "app": {"slug", "name"}, "space": {"id", "slug", "name", "kind"}, "table", "row_id", "title", "text", "updated_at", "created_by"?, "updated_by"?: {"id", "username", "display_name", "you"}}]}` — indexed rows (`homeai.index`) whose `_updated_at` is after `since`, oldest first; `text` is the row as the index renders it (title, `name: value` fields, text columns). Every row in the caller's spaces; a routine run sees its own space's rows and, in the user's other spaces, only the rows the user changed last (`_updated_by`), so the Memory run (scoped to /personal) never reads other members' rows. `created_by`/`updated_by` are missing for rows written before attribution | `422` (no or bad `since`) |
 | `GET /api/platform/data-map` | — | — | `200 {"instances": [...]}` — every live instance in the caller's spaces with `homeai.description` and its tables (row counts, `schema.sql` descriptions); PLATFORM.md §7 "The data map" (M22-06) | — |
 | `POST /api/platform/apps/instances/{id}/export` | read on the instance's space; write on the destination | `{folder?}` | `201 {"folder", "tables": [{name, file, rows}]}` — every table as `<table>.csv` plus `schema.sql` in a new folder (default `Exports/<slug>-<UTC time>` in the instance's space, `/personal` for a viewer); PLATFORM.md §7 "CSV export and import" (M22-08) | `exists` 409, `invalid_path` / `export_too_large` 422 |
 | `POST /api/platform/apps/instances/{id}/import` | write on the instance's space; read on `path` | `{table, path, mapping?, delimiter: "," \| ";" \| "\t", dry_run?}` | `200 {"table", "rows", "mapping", "skipped", "dry_run", "headers", "columns", "unmatched"}` — one CSV file into one table, one transaction, stamped and audited; a dry run rolls back (M22-08) | `import_failed` 422 `{message, line, column}`, `unknown_table` / `not_a_file` / `file_too_large` 422 |

@@ -181,6 +181,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   app_action: 'app',
   app_export: 'app',
   app_import: 'app',
+  list_app_changes: 'app',
   approve_migration: 'app',
   current_time: 'plan',
   list_chats: 'plan',

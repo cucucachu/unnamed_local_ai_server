@@ -76,6 +76,7 @@ from langchain_core.messages import ToolCall
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import approvals
+from app.agent.app_changes_tool import make_app_changes_tool
 from app.agent.app_tools import make_app_tools
 from app.agent.chat_tools import make_chat_tools
 from app.agent.data_map import DataMapMiddleware
@@ -223,6 +224,7 @@ def build_agent(settings: Settings, checkpointer, app_state: Any = None) -> Comp
             *make_symbol_tools(backend),
             make_search_files_tool(settings),
             *make_app_tools(settings),
+            make_app_changes_tool(settings, app_state),
             *routine_tools,
             *chat_tools,
             *make_integration_tools(settings),

@@ -2,7 +2,8 @@
 # M21-11: the Memory routine eval on the real model (README.md here).
 #
 # One throwaway e2e-* user and one shared space per repetition (EVAL_RUNS,
-# default 3). Each plays three simulated days of chats with a Memory run
+# default 3), plus a second user who is a member of that space (M22-12's
+# app-rows case). Each plays three simulated days of chats with a Memory run
 # after each, then a recall chat; run.py scores the cases. Hits the GPU for
 # a long time: takes /tmp/homeai-stack.lock itself if the caller hasn't.
 #
@@ -27,6 +28,7 @@ source "$REPO_ROOT/scripts/e2e/lib/auth.sh"
 
 RUNS="${EVAL_RUNS:-3}"
 USERS_FILE="$(mktemp)"
+EVAL_APP_STATE="$(mktemp)"
 SLUGS=()
 
 cleanup() {
@@ -38,7 +40,11 @@ cleanup() {
       [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf "/data/spaces/$id" || true
     done
   done
-  rm -f "$USERS_FILE"
+  while read -r id || [ -n "$id" ]; do
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] && _e2e_compose exec -T platform rm -rf \
+      "/data/platform/app-bundles/$id" "/data/platform/app-git/$id.git" </dev/null || true
+  done <"$EVAL_APP_STATE"
+  rm -f "$USERS_FILE" "$EVAL_APP_STATE"
   e2e_auth_end
 }
 trap cleanup EXIT
@@ -46,11 +52,14 @@ trap cleanup EXIT
 for i in $(seq 1 "$RUNS"); do
   e2e_auth_create_user memeval
   cookie="$(e2e_auth_login "$E2E_NEW_USER" "$E2E_NEW_PASSWORD")"
+  user="$E2E_NEW_USER"
+  e2e_auth_create_user memevalb
+  other_cookie="$(e2e_auth_login "$E2E_NEW_USER" "$E2E_NEW_PASSWORD")"
   slug="memeval-$(openssl rand -hex 4)"
   SLUGS+=("$slug")
-  printf '%s\t%s\t%s\n' "$E2E_NEW_USER" "$cookie" "$slug" >>"$USERS_FILE"
-  echo "==> run $i: user $E2E_NEW_USER, space $slug"
+  printf '%s\t%s\t%s\t%s\n' "$user" "$cookie" "$slug" "$other_cookie" >>"$USERS_FILE"
+  echo "==> run $i: user $user, space $slug, member $E2E_NEW_USER"
 done
 
-export E2E_BASE EVAL_USERS_FILE="$USERS_FILE"
+export E2E_BASE EVAL_USERS_FILE="$USERS_FILE" EVAL_APP_STATE
 uvx --quiet --from websockets python3 "$SCRIPT_DIR/run.py" "$@"
