@@ -1,0 +1,13 @@
+{
+  "name": "Books and media",
+  "slug": "books",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "library-outline",
+    "description": "Books, films, shows and games: what you want to get to, what you're on, and what you thought of it.",
+    "permissions": {},
+    "index": [{ "table": "items", "title": "title", "text": ["creator", "notes"], "fields": ["kind", "status"] }]
+  }
+}

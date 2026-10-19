@@ -452,6 +452,25 @@ issues in this milestone, or are written down for M23.
 > No framework gaps this time. Smoke:
 > `scripts/e2e/m22_money_health_templates_smoke.sh`.
 
+> **As built (M22-18):** `examples/apps/flashcards`, `kanban`, `books`
+> (named "Books and media") and `calculator` ("Calculator and units").
+> Flashcards schedules in `actions/grade.sql`, SM-2 style: one `UPDATE`
+> with `CASE` on the grade for interval, ease, reps and lapses, then
+> `due = date(:today, '+N days')`. The buttons show the same intervals
+> from `nextInterval` in `lib/flashcards.ts`, and the smoke checks the two
+> agree. The study queue puts cards already seen today last, so one graded
+> Again comes back after the rest. Kanban keeps card and column positions
+> dense (0, 1, 2, …) through `moveCard`, `deleteCard`, `moveColumn` and
+> `deleteColumn`, and refuses a move to another board. Its swipe actions
+> are `ListRow`'s `actions`, driven in the smoke by a real mouse drag as
+> well as a long press. Books stamps `started_on` and `finished_on` in
+> `setStatus`; the edit form does the same when the status changes. The
+> calculator has a `schema.sql` holding only a comment, since the file is
+> required but may be empty. No framework gaps. One rough edge: a typed
+> icon field (an array of row actions built with a spread, a table of
+> kinds) needs `IconName` from `@expo/vector-icons`. Smoke:
+> `scripts/e2e/m22_learning_boards_templates_smoke.sh`.
+
 ## 10. M23
 
 Reaching outside an app's own database:

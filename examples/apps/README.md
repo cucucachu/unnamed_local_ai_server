@@ -18,6 +18,10 @@ expo-sqlite-shaped API from `@homeai/sdk`.
 | [`workouts/`](workouts/) | `exercises`, `workouts` and their `sets` (reps and weight). `addSet`, `repeatWorkout` copies a workout to today, and each exercise has a line chart of its top weight. |
 | [`health-log/`](health-log/) | Any measure over time (weight, sleep, water): `measures` say whether a day's readings add up, average or keep the last one, `entries` hold the readings. Line or bar charts by range with a goal line. |
 | [`countdowns/`](countdowns/) | Days until or since a date, yearly ones counting the anniversary, plus contacts' birthdays read from the Contacts `people` export (hideable). |
+| [`flashcards/`](flashcards/) | Decks of cards with spaced repetition scheduled in SQL (`grade`: Again, Hard, Good, Easy), a study session, search, and Progress charts (reviews per day, cards coming due). |
+| [`kanban/`](kanban/) | Boards with columns and cards, swipe actions to move a card along or delete it, card limits per column, due dates and assignees (`useMembers()`); `moveCard` and friends keep positions dense. |
+| [`books/`](books/) | Books and media: books, films, shows, games, albums and podcasts with a status (dates stamped by `setStatus`), 1–5 stars, notes, search, and a This year tab. |
+| [`calculator/`](calculator/) | Calculator and units: a keypad calculator (a small parser, no `eval`), unit conversions and a tip splitter. No tables at all. |
 | [`list/`](list/) | Generic checklist: `items` with `done`, `addItem` / `clearDone`, list + detail. |
 | [`notes/`](notes/) | Notes: `title` / `body` / `pinned`, `addNote`, list + `app/note/[id].tsx`; `homeai.index` makes the notes searchable (chat and the search box, `search()`). |
 | [`tracker/`](tracker/) | Habit tracker: `habits` + `checkins` (one row per habit per day), `addHabit` / `checkIn`, list + `app/habit/[id].tsx`. |
@@ -89,3 +93,8 @@ build command, so build it with the script above or
   App info with a bad line refused, rules, charts, sets and a repeated
   workout, readings that add up or keep the last, and a contact's birthday
   counting down.
+- `scripts/e2e/m22_learning_boards_templates_smoke.sh` installs
+  flashcards, kanban, books and calculator in a personal space and drives
+  each in a browser: a study session whose buttons and SQL agree on the
+  schedule, cards swiped across a board with the mouse, a shelf moved
+  along by swipes and chips, and the calculator, conversions and tip.

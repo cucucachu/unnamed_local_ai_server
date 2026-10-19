@@ -1,0 +1,3 @@
+-- No tables: the calculator, the conversions and the tip splitter work
+-- on what's on screen and keep nothing. Add a table here (with a comment
+-- line above it) to remember something, e.g. the calculator's history.

@@ -1,0 +1,13 @@
+{
+  "name": "Kanban",
+  "slug": "kanban",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "albums-outline",
+    "description": "Boards of cards in columns (To do, Doing, Done): swipe a card to move it along.",
+    "permissions": {},
+    "index": [{ "table": "cards", "title": "title", "text": ["note"] }]
+  }
+}
