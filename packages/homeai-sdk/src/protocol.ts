@@ -34,6 +34,11 @@ export type PlatformMethods = {
   'db.getFirst': { params: { sql: string; params: SqlParams }; result: Record<string, unknown> | null };
   'db.run': { params: { sql: string; params: SqlParams }; result: RunResult };
   action: { params: { name: string; params: Record<string, unknown> }; result: ActionResult };
+  /** Another app's action through an export this app reads (M22-16a); `instance` is the view's `_instance`. */
+  exportAction: {
+    params: { instance: string; export: string; name: string; params: Record<string, unknown> };
+    result: ActionResult;
+  };
   /** The instance's own rows its app.json `homeai.index` declares (M22-07). */
   search: { params: { query: string; limit: number }; result: SearchResult[] };
 };
@@ -47,8 +52,9 @@ export type PlatformMethod = keyof PlatformMethods;
 export type HostMethod = keyof HostMethods;
 export type Method = keyof Methods;
 
-export const METHODS: readonly PlatformMethod[] = ['db.getAll', 'db.getFirst', 'db.run', 'action', 'search'];
+export const METHODS: readonly PlatformMethod[] = ['db.getAll', 'db.getFirst', 'db.run', 'action', 'exportAction', 'search'];
 export const HOST_METHODS: readonly HostMethod[] = ['agent.ask'];
+// Not exportAction: it writes another app, and the platform checks write on that app's space.
 export const WRITE_METHODS: readonly PlatformMethod[] = ['db.run', 'action'];
 
 /** Host -> sandbox events. */

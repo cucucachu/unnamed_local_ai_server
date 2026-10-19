@@ -2909,8 +2909,10 @@ that export's tables (and the TEMP merged views on `temp`). Everything else is `
 (then it is set to that count). Granted reads: live instances whose app slug
 matches `reads.app`, in spaces the caller can read, whose export `name`+`version`
 match; each is ATTACHed `mode=ro` via `/proc/self/fd/…`; a TEMP VIEW
-`{app}_{export}` is `UNION ALL` of each copy plus `_space`. Missing exporters
-are skipped. Cross-app writes use `op: "exportAction"`.
+`{app}_{export}` is `UNION ALL` of each copy plus `_space` and `_instance`
+(the exporter's instance id, M22-16a). Missing exporters are skipped.
+Cross-app writes use `op: "exportAction"` with that `_instance`
+(`runExportAction` in `@homeai/sdk`).
 
 Access is the instance's space's (§3 "Spaces authorization"): `read` for
 `getAll`/`getFirst` and the migration list, `write` for everything else; a

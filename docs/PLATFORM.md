@@ -1235,6 +1235,14 @@ The sandbox config (`window.__homeai_config`, in the document) is
 > Changing an export's tables or columns without bumping `version` is a
 > validate/build diagnostic. Tests: `tests/test_app_exports.py`,
 > `tests/test_appdb.py`, `tests/test_manifest.py`.
+>
+> **M22-16a:** the merged views also have `_instance`, the exporting
+> instance's id, so a reader can pick the copy to write to. App code calls
+> `runExportAction(instance, export, name, params)` from `@homeai/sdk`, which
+> goes over the bridge as `exportAction` (`packages/homeai-sdk`). The host
+> doesn't count it as a write for a viewer of the reader's space: the
+> platform checks write on the owner's space. The phone app forwards it once
+> it's rebuilt with this SDK.
 
 > **As built (M13-02), exec read-only mounts:** `POST /internal/exec-grants`
 > adds one read-only bind per live instance in every space the user is a

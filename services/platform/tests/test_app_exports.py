@@ -266,7 +266,7 @@ async def test_a_readers_smoke_render_gets_stand_ins_for_the_views_it_reads(worl
         None,
         (
             'CREATE TABLE "calendar_events" ("id", "title", "_created_by", "_created_at", '
-            '"_updated_by", "_updated_at", "_space");\n'
+            '"_updated_by", "_updated_at", "_space", "_instance");\n'
         ),
     ]
 
@@ -313,6 +313,45 @@ async def test_viewer_reads_merged_view_but_cannot_export_action(world: World) -
         world, family_cal, "alice", {"op": "getAll", "sql": "SELECT title FROM events ORDER BY id"}
     )
     assert "FromPlanner" in [r["title"] for r in rows.json()["rows"]]
+
+
+async def test_the_merged_view_names_each_rows_instance_for_export_actions(world: World) -> None:
+    ids = await _setup(world)
+    planner = ids["planner"]["id"]
+    seen = await _rpc(
+        world,
+        planner,
+        "alice",
+        {
+            "op": "getAll",
+            "sql": "SELECT title, _space, _instance FROM calendar_events ORDER BY title",
+        },
+    )
+    assert seen.status_code == 200, seen.text
+    assert seen.json()["rows"] == [
+        {"title": "Family", "_space": "/spaces/family", "_instance": ids["family_cal"]["id"]},
+        {"title": "Personal", "_space": "/personal", "_instance": ids["personal_cal"]["id"]},
+    ]
+    ok = await _rpc(
+        world,
+        planner,
+        "alice",
+        {
+            "op": "exportAction",
+            "instance": seen.json()["rows"][1]["_instance"],
+            "export": "events",
+            "name": "addEvent",
+            "params": {"title": "Mine"},
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    rows = await _rpc(
+        world,
+        ids["personal_cal"]["id"],
+        "alice",
+        {"op": "getAll", "sql": "SELECT title FROM events ORDER BY id"},
+    )
+    assert [r["title"] for r in rows.json()["rows"]] == ["Personal", "Mine"]
 
 
 async def test_outsider_does_not_see_planner(world: World) -> None:

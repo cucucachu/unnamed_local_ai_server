@@ -117,7 +117,9 @@ homeai.reads [{app: <slug>, export, version}] and is granted that list when inst
 from a catalog, or by each build_app for an app in its own space's Apps folder.
 The reader queries the merged view <app>_<export>, named after the EXPORTING app (a
 read of calendar's events export is SELECT ... FROM calendar_events; rows include
-_space). build_app's render test gives the view the exporter's columns and no rows.
+_space and _instance). To write to the exporter, call one of the export's actions:
+runExportAction(row._instance, '<export>', '<action>', params) from @homeai/sdk.
+build_app's render test gives the view the exporter's columns and no rows.
 Bump export version when tables or columns change.
 Tables of text worth finding (recipes, notes, journal entries; not numbers) go in
 homeai.index [{table, title: <column>, text?: [columns], fields?: [columns]}]: search_files
@@ -145,6 +147,7 @@ host's dark mode); then never hard-code text or background colors: use useTheme(
     getAllAsync, getFirstAsync, runAsync — one statement, ? placeholders + an array
   useQuery(sql, params)  live SELECT; do not copy rows into state
   runAction(name, params)  actions/<name>.sql
+  runExportAction(instance, export, name, params)  another app's exported action
   search(query, limit?)  this app's homeai.index rows by meaning: [{table, id, title, snippet}]
   useSpace()?.role  'owner' | 'editor' | 'viewer' — hide writes from viewers
   useUser() {id, username, name}; useMembers() [{id, username, name, role}]

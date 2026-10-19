@@ -73,6 +73,14 @@ export function checkParams<M extends Method>(method: M, raw: unknown): Methods[
     if (!isRecord(params)) throw hostError('bad_request', 'action params must be an object');
     return { name: raw.name, params } as Methods[M]['params'];
   }
+  if (method === 'exportAction') {
+    for (const key of ['instance', 'export', 'name'] as const) {
+      if (typeof raw[key] !== 'string' || !raw[key]) throw hostError('bad_request', `exportAction needs ${key}`);
+    }
+    const params = raw.params ?? {};
+    if (!isRecord(params)) throw hostError('bad_request', 'exportAction params must be an object');
+    return { instance: raw.instance, export: raw.export, name: raw.name, params } as Methods[M]['params'];
+  }
   if (method === 'search') {
     if (typeof raw.query !== 'string' || !raw.query.trim() || raw.query.length > MAX_QUERY_CHARS) {
       throw hostError('bad_request', 'search needs a query (at most 2000 characters)');

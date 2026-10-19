@@ -33,11 +33,13 @@ test('allowed methods are forwarded with only their known params', async () => {
   h.host.receive(req(1, 'db.getAll', { sql: 'SELECT 1', params: [1], instance_id: 'other', url: 'http://x' }));
   h.host.receive(req(2, 'action', { name: 'addItem', params: { name: 'x' }, instance: 'other' }));
   h.host.receive(req(3, 'db.run', { sql: 'DELETE FROM items' }));
+  h.host.receive(req(4, 'exportAction', { instance: 'i1', export: 'items', name: 'addItem', params: { name: 'x' }, sql: 'y' }));
   await tick();
   assert.deepEqual(h.forwarded, [
     { method: 'db.getAll', params: { sql: 'SELECT 1', params: [1] } },
     { method: 'action', params: { name: 'addItem', params: { name: 'x' } } },
     { method: 'db.run', params: { sql: 'DELETE FROM items', params: [] } },
+    { method: 'exportAction', params: { instance: 'i1', export: 'items', name: 'addItem', params: { name: 'x' } } },
   ]);
   assert.deepEqual(h.res(1), { homeai: 1, kind: 'res', id: 1, ok: true, result: [{ n: 1 }] });
 });
@@ -58,6 +60,18 @@ test('other methods, bad params and viewer writes are refused without forwarding
     [1, 2, 3, 4, 5, 6, 7, 8].map((id) => h.res(id).error.code),
     ['method_not_allowed', 'read_only', 'read_only', 'bad_request', 'bad_request', 'bad_request', 'bad_request', 'method_not_allowed'],
   );
+});
+
+test('exportAction needs an instance, an export and a name; the platform, not the host, decides a viewer', async () => {
+  const h = harness({ readOnly: true });
+  h.host.receive(req(1, 'exportAction', { export: 'items', name: 'addItem' }));
+  h.host.receive(req(2, 'exportAction', { instance: 'i1', name: 'addItem' }));
+  h.host.receive(req(3, 'exportAction', { instance: 'i1', export: 'items', name: '' }));
+  h.host.receive(req(4, 'exportAction', { instance: 'i1', export: 'items', name: 'addItem', params: [1] }));
+  h.host.receive(req(5, 'exportAction', { instance: 'i1', export: 'items', name: 'addItem' }));
+  await tick();
+  assert.deepEqual([1, 2, 3, 4].map((id) => h.res(id).error.code), ['bad_request', 'bad_request', 'bad_request', 'bad_request']);
+  assert.deepEqual(h.forwarded, [{ method: 'exportAction', params: { instance: 'i1', export: 'items', name: 'addItem', params: {} } }]);
 });
 
 test('search is a read: viewers may, with a query and a limit of 1 to 50, extra fields dropped', async () => {
@@ -160,6 +174,7 @@ test('platformForward maps each method onto the instance RPC and back', async ()
     { status: 200, body: { changes: 2, lastInsertRowId: 5 } },
     { status: 200, body: { changes: 1, lastInsertRowId: 3, rows: [{ n: 1 }] } },
     { status: 200, body: { results: [{ table: 't', id: 1, title: 'a', snippet: 'a', score: 0.5 }] } },
+    { status: 200, body: { changes: 1, lastInsertRowId: 9, rows: [] } },
   ]);
   const forward = H.platformForward(INSTANCE_ID, { baseUrl: 'http://homeai.local', fetch: f.fetch, headers: { Authorization: 'Bearer t' } });
   assert.deepEqual(await forward('db.getAll', { sql: 'SELECT a', params: [] }), [{ a: 1 }]);
@@ -167,6 +182,7 @@ test('platformForward maps each method onto the instance RPC and back', async ()
   assert.deepEqual(await forward('db.run', { sql: 'UPDATE t SET a = 1', params: [] }), { changes: 2, lastInsertRowId: 5 });
   assert.deepEqual(await forward('action', { name: 'go', params: { x: 1 } }), { changes: 1, lastInsertRowId: 3, rows: [{ n: 1 }] });
   assert.deepEqual(await forward('search', { query: 'a', limit: 5 }), [{ table: 't', id: 1, title: 'a', snippet: 'a', score: 0.5 }]);
+  assert.deepEqual(await forward('exportAction', { instance: 'i1', export: 'items', name: 'addItem', params: { name: 'Eggs' } }), { changes: 1, lastInsertRowId: 9, rows: [] });
   const url = `http://homeai.local/api/platform/apps/instances/${INSTANCE_ID}/rpc`;
   assert.ok(f.calls.every((c) => c.url === url && c.method === 'POST' && c.headers.Authorization === 'Bearer t' && c.headers['Content-Type'] === 'application/json'));
   assert.deepEqual(
@@ -177,6 +193,7 @@ test('platformForward maps each method onto the instance RPC and back', async ()
       { op: 'run', sql: 'UPDATE t SET a = 1', params: [] },
       { op: 'action', name: 'go', params: { x: 1 } },
       { op: 'search', query: 'a', limit: 5 },
+      { op: 'exportAction', instance: 'i1', export: 'items', name: 'addItem', params: { name: 'Eggs' } },
     ],
   );
 });

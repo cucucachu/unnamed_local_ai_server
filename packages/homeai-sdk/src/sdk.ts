@@ -92,6 +92,19 @@ export async function runAction(name: string, params: Record<string, unknown> = 
 }
 
 /**
+ * Runs `name` from another app's export (one this app's `homeai.reads` lists) on the copy
+ * `instance`, the `_instance` column of the export's view (M22-16a).
+ */
+export function runExportAction(
+  instance: string,
+  exportName: string,
+  name: string,
+  params: Record<string, unknown> = {},
+): Promise<ActionResult> {
+  return rpc('exportAction', { instance, export: exportName, name, params });
+}
+
+/**
  * This instance's rows that app.json's `homeai.index` declares, by meaning and by words, best
  * first (M22-07). New and changed rows show up a moment after they're written.
  */

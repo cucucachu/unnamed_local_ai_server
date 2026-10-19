@@ -27,6 +27,7 @@ const OPS: Record<PlatformMethod, string> = {
   'db.getFirst': 'getFirst',
   'db.run': 'run',
   action: 'action',
+  exportAction: 'exportAction',
   search: 'search',
 };
 
