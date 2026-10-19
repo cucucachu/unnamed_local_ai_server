@@ -75,6 +75,7 @@ Contents:
   places/...
   things/...
   interests/...
+  timeline/2026/2026-10-18.md   what happened that day (M22-13)
 ```
 
 The routine creates folders and pages as it needs them. The kinds above
@@ -94,6 +95,13 @@ Portland (Oct 2026)`). A changed fact keeps its history in one line
 (`- Lives in Seattle (Mar 2027; Portland until then)`). Pages link to each
 other with `file:` links. File names are lower-case words joined by
 hyphens.
+
+**The timeline** (M22-13, docs/APP_TEMPLATES.md §6.2):
+`timeline/<yyyy>/<yyyy-mm-dd>.md` is one day, a `#` title with the date
+and short bullets of events, decisions, plans made or changed and notable
+app activity, each linking the pages involved. Facts still go in pages and
+`memory.md`; the timeline is when things happened. Only days with
+something worth noting get a file.
 
 There's no index file: search (§5) finds pages, and `memory.md` links the
 important ones.
@@ -260,12 +268,18 @@ or waited unanswered doesn't move it, so the next run covers the gap.
    conflict, the user's newest statement wins; keep the old one in the
    same line (§2).
 7. Keep `memory.md` under 6,000 characters by moving detail into pages.
-8. Delete a page only after moving its content into another one (with
+8. The timeline (M22-13): each day in the window with something worth
+   noting gets bullets in its day file, created or added to, filed by when
+   it happened or was said (the turn's or row's time), not the day a plan
+   is for. No file for a day with nothing worth noting. `LAYOUT` describes
+   the timeline, so the prompt has it even for a user whose README
+   predates it (the README is never overwritten).
+9. Delete a page only after moving its content into another one (with
    default settings, deleting asks).
-9. Make the writes together at the end, in as few steps as possible: with
+10. Make the writes together at the end, in as few steps as possible: with
    default settings they ask, and calls made in one step share one
    approval card.
-10. Reply with a short list of what changed, as `file:` links, and ask
+11. Reply with a short list of what changed, as `file:` links, and ask
    about any contradiction it couldn't settle.
 
 **The default editable part** lists what's worth remembering: the user

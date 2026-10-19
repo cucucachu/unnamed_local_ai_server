@@ -17,8 +17,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from websockets.asyncio.client import connect
 
@@ -26,6 +28,8 @@ BASE = os.environ.get("E2E_BASE", "http://localhost").rstrip("/")
 WEB_URL = os.environ.get("EVAL_WEB_URL", "")
 REPORT = Path(__file__).with_name("last-report.json")
 MEMORY = "/personal/Memory"
+TIMELINE = f"{MEMORY}/timeline/"
+TIMEZONE = "America/Los_Angeles"
 CAP = 8000
 TARGET = 6000
 TURN_TIMEOUT_S = 600
@@ -207,6 +211,43 @@ def app_rows(user: User, space: dict) -> None:
         time.sleep(2)
 
 
+def today() -> str:
+    return datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
+
+
+def timeline_case(notes: dict[str, str], dates: set[str], quiet_before: dict, quiet_after: dict) -> dict:
+    """M22-13: a day file for the day the chats happened, with links to pages that exist; no
+    file for the window's empty days, none empty; a run with nothing new changes none."""
+    days = {p: t for p, t in notes.items() if p.startswith(TIMELINE)}
+    named = {p.rsplit("/", 1)[-1].removesuffix(".md"): p for p in days}
+    wanted = [named[d] for d in sorted(dates) if d in named]
+    links = re.findall(r"\(file:([^)\s]+)\)", "".join(days[p] for p in wanted))
+    quiet = {p: t for p, t in quiet_after.items() if p.startswith(TIMELINE)}
+    case = {
+        "day_files": sorted(days),
+        "day_file_bullets": sum(t.count("\n- ") + t.startswith("- ") for p in wanted for t in [days[p]]),
+        "day_file_links": links,
+        "links_to_missing_pages": [link for link in links if link not in notes],
+        "other_days": sorted(d for d in named if d not in dates),
+        "empty_files": [p for p, t in days.items() if not re.search(r"^\s*[-*] \S", t, re.M)],
+        "quiet_run_changed": sorted(
+            p for p in set(quiet) | {p for p in quiet_before if p.startswith(TIMELINE)}
+            if quiet.get(p) != quiet_before.get(p)
+        ),
+        "quiet_run_changed_any_note": quiet_after != quiet_before,
+    }
+    case["ok"] = bool(
+        wanted
+        and case["day_file_bullets"]
+        and links
+        and not case["links_to_missing_pages"]
+        and not case["other_days"]
+        and not case["empty_files"]
+        and not case["quiet_run_changed"]
+    )
+    return case
+
+
 def memory_writes(chat: dict) -> list[str]:
     """Paths under Memory a chat (not the routine) wrote or edited."""
     return [
@@ -240,7 +281,7 @@ def day_prompts(chats: dict) -> list[str]:
 
 async def one_run(user: User) -> dict:
     result: dict[str, Any] = {"user": user.name, "chats": {}, "runs": [], "cases": {}}
-    user.api("PUT", "/api/settings", {"timezone": "America/Los_Angeles"})
+    user.api("PUT", "/api/settings", {"timezone": TIMEZONE})
     user.api(
         "PATCH",
         "/api/platform/tools",
@@ -257,11 +298,13 @@ async def one_run(user: User) -> dict:
     day1 |= {"home": HOME, "secret": SECRET, "shared_file": f"Summarize {shared} in one line."}
     if WEB_URL:
         day1["web_page"] = f"Read {WEB_URL} and summarize it in one line."
+    dates = {today()}
     for key, prompt in day1.items():
         result["chats"][key] = await user.chat(prompt)
         log(f"{user.name} day 1 {key}: {result['chats'][key]['reply'].strip()[:100]!r}")
     result["runs"].append(user.run_memory(routine["id"]))
     log(f"{user.name} run 1: {result['runs'][-1]['status']} in {result['runs'][-1]['seconds']}s")
+    dates.add(today())
     after1 = user.notes()
 
     # Day 2: the user moved.
@@ -269,6 +312,12 @@ async def one_run(user: User) -> dict:
     result["runs"].append(user.run_memory(routine["id"]))
     log(f"{user.name} run 2: {result['runs'][-1]['status']} in {result['runs'][-1]['seconds']}s")
     after2 = user.notes()
+
+    # A quiet night: nothing new since run 2.
+    quiet_run = user.run_memory(routine["id"])
+    log(f"{user.name} quiet run: {quiet_run['status']} in {quiet_run['seconds']}s")
+    dates.add(today())
+    after_quiet = user.notes()
 
     # Day 3: does a new chat use it?
     recall = await user.chat(RECALL)
@@ -323,6 +372,7 @@ async def one_run(user: User) -> dict:
             "web_case": bool(WEB_URL),
         },
         "app_rows": rows_case,
+        "timeline": timeline_case(after1, dates, after2, after_quiet),
         "tidy": {
             "ok": len(core) < CAP and not any(s in everything for s in SECRETS),
             "core_chars": len(core),
@@ -331,7 +381,7 @@ async def one_run(user: User) -> dict:
         },
     }
     result["observations"] = {
-        "runs_succeeded": all(r["status"] == "succeeded" for r in result["runs"]),
+        "runs_succeeded": all(r["status"] == "succeeded" for r in [*result["runs"], quiet_run]),
         "run_used_unavailable_tools": run_off,
         "chats_wrote_memory": chat_writes,
         "words_only_the_assistant_said": borrowed(
@@ -339,6 +389,7 @@ async def one_run(user: User) -> dict:
         ),
         "run_replies_link_files": all("file:" in r["reply"] for r in result["runs"] if r["status"] == "succeeded"),
     }
+    result["quiet_run"] = quiet_run
     result["notes_day1"] = after1
     result["notes"] = after2
     return result
@@ -354,7 +405,7 @@ def main() -> None:
         except Exception as exc:  # one broken run shouldn't lose the others
             log(f"{user.name}: run broke: {exc!r}")
             results.append({"user": user.name, "error": repr(exc), "cases": {}})
-    cases = ("captures", "updates", "recall", "not_steered", "app_rows", "tidy")
+    cases = ("captures", "updates", "recall", "not_steered", "app_rows", "timeline", "tidy")
     summary = {c: f"{sum(r['cases'].get(c, {}).get('ok', False) for r in results)}/{len(results)}" for c in cases}
     REPORT.write_text(json.dumps({"summary": summary, "web_case": bool(WEB_URL), "runs": results}, indent=2))
     for r in results:

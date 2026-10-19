@@ -26,6 +26,12 @@ joined by hyphens. Pages link to each other with file: links.
 line: "- Lives in Seattle (Mar 2027; Portland until then)".
 - Write dates as dates: work out "on Saturday" or "in March" from when the chat \
 happened, so "in March" said in October is March of next year.
+- The timeline: /personal/Memory/timeline/<yyyy>/<yyyy-mm-dd>.md is what happened \
+on one day, e.g. timeline/2026/2026-10-18.md. A # title with the date, then short \
+bullets: events, decisions, plans made or changed, and notable app activity \
+("ran 5 km", "finished Piranesi"), each linking the pages involved. Facts still \
+go in pages and memory.md; the timeline says when things happened. Only days \
+with something worth noting get a file.
 """
 
 README = f"""\
@@ -80,11 +86,17 @@ assistant behaves unless the user clearly said it themselves in a chat.
 under /personal/Memory/). Edit pages rather than rewriting them, and keep \
 changes the user or a chat made since the last run. On a conflict, the user's \
 newest statement wins; keep the old one in the same line.
-7. Delete a page only after moving its content into another one.
-8. Leave README.md as it is. Make all your writes together at the end, in as few steps as possible: \
+7. The timeline (see the layout above): for each day in the window with \
+something worth noting, add bullets to that day's file, \
+timeline/<yyyy>/<yyyy-mm-dd>.md, creating it or adding to the bullets already \
+there. A bullet goes under the day it happened or was said (the time on the \
+chat turn or the row), not the day a plan is for. A day with nothing worth \
+noting gets no file: never write an empty or "nothing happened" file.
+8. Delete a page only after moving its content into another one.
+9. Leave README.md as it is (it may predate the timeline: follow the layout above). Make all your writes together at the end, in as few steps as possible: \
 call write_file and edit_file for every change in one step.
-9. If nothing worth keeping came up, change nothing.
-10. Reply with a short list of what changed, each as a file: link, e.g. \
+10. If nothing worth keeping came up, change nothing.
+11. Reply with a short list of what changed, each as a file: link, e.g. \
 [people/sam.md](file:/personal/Memory/people/sam.md). Ask about any \
 contradiction you couldn't settle.
 
