@@ -305,7 +305,8 @@ These replace M21's "memory tidy-up routine" (#338, closed unshipped).
   > `app/routines/delivered.py`, with prompts in
   > `app/routines/review_prompts.py`. The run works out which periods it
   > covers in code (every period that ended since the last successful
-  > run, or the last one that ended for a Run now mid-period) and puts
+  > run; for a first run, or a Run now mid-period, the last one that
+  > ended) and puts
   > them in the fixed prompt as file paths, so the model does no calendar
   > arithmetic. "Pages changed that period" became **the pages the
   > period's files link to**: `ls` shows no modification times, and the

@@ -10,7 +10,7 @@ place (the nightly run) and its injection rules stay there.
 `periods` works out which periods a run covers in code, so the model never
 does the calendar arithmetic: every period that ended between the last
 successful run and now (more than one after missed runs), or the last one
-that ended if none did (Run now mid-week). `FIXED[kind]` is filled in with
+that ended if none did (a first run, or Run now mid-week). `FIXED[kind]` is filled in with
 `{periods}`.
 """
 
@@ -171,9 +171,10 @@ FIXED: dict[Review, str] = {
     "week": _fixed(
         "weekly",
         'e.g. "# Week 42, 2026 (Oct 12-18)"',
-        'Keep a short "## Lately" section near the top: a line or two each for this '
-        "week and the week before, linking their week files, and one for the month so "
-        "far. Replace older Lately lines rather than adding to them.",
+        'Keep a short "## Lately" section near the top: a line or two each for the '
+        "week reviewed and the week before, linking their week files, and one for the "
+        "month so far. Leave out a week with nothing worth keeping rather than saying "
+        "so. Replace older Lately lines rather than adding to them.",
         "a month or more",
         None,
     ),

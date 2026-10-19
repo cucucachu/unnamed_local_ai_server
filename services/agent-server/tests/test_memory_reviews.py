@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.agent.approvals import ToolPolicy
+from app.db.routines import InMemoryRoutineStore, NewRoutine
 from app.routines import delivered, review_prompts
 from app.routines.runs import RUN_MARKER
 from tests.fake_model.scripting import FakeModel, TextTurn
@@ -188,6 +190,34 @@ def test_a_run_covers_each_period_that_ended_since_the_last(kind, since, now, co
         assert "/timeline/2026/2026-W53.md" in text and "/timeline/2027/2027-01-03.md" in text
 
 
+async def test_a_first_review_covers_only_the_period_that_just_ended() -> None:
+    store = InMemoryRoutineStore()
+    state = SimpleNamespace(routine_store=store)
+    weekly = delivered.DEFINITIONS["memory_weekly"]
+    routine = await store.create(
+        ALICE,
+        NewRoutine(
+            "/personal",
+            weekly.name,
+            "",
+            {"kind": "weekly", "days": ["mon"], "time": "06:00"},
+            "UTC",
+            True,
+        ),
+    )
+    now = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)  # a Sunday
+    body = await delivered.run_body(state, routine, weekly, now)
+    assert "2026-W41" in body
+    assert "2026-W40" not in body
+
+    last = datetime(2026, 10, 1, 6, 0, tzinfo=UTC)
+    run = await store.create_run(routine, "schedule", "running", started_at=last)
+    await store.update_run(run.id, ALICE, {"status": "succeeded"})
+    body = await delivered.run_body(state, routine, weekly, now)
+    assert "2026-W40" in body
+    assert "2026-W41" in body
+
+
 def test_a_review_run_reads_notes_and_never_chats_app_rows_or_the_web(
     client, harness, fake_model: FakeModel, tool_policies
 ) -> None:
@@ -199,8 +229,8 @@ def test_a_review_run_reads_notes_and_never_chats_app_rows_or_the_web(
 
     message = _first_message(client, run["thread_id"])
     assert message.startswith(f'{RUN_MARKER} "Memory: weekly review" (space /personal)')
-    # First run on Mon Oct 12: the 14 days before cover weeks 40 and 41.
-    assert "- 2026-W40, Mon 2026-09-28 to Sun 2026-10-04" in message
+    # A first run covers only the week that just ended.
+    assert "2026-W40" not in message
     assert (
         "- 2026-W41, Mon 2026-10-05 to Sun 2026-10-11: write /personal/Memory/timeline/2026/2026-W41.md"
         in message

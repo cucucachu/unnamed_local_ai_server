@@ -330,7 +330,8 @@ summarize the timeline a level up and curate `memory.md`
 
 The per-user offset applies to all three. `review_prompts.periods` lists
 the periods that ended since the last successful run (several after
-missed runs; the last one that ended for a Run now) with each one's file
+missed runs; the last one that ended for a first run or a Run now) with
+each one's file
 and the files below it, and that goes into the fixed prompt. A run reads
 those files and the pages they link to, writes each period's file (none
 if nothing is worth keeping), and curates `memory.md`: a short

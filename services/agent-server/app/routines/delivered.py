@@ -199,12 +199,16 @@ def stored_prompt(prompt: str, definition: Definition) -> str:
     return "" if prompt.strip() == definition.default_prompt.strip() else prompt
 
 
-async def since(app_state: Any, routine: RoutineRecord, now: datetime) -> datetime:
-    """When the last successful run started; for the first run, `FIRST_SINCE` back."""
+async def last_success(app_state: Any, routine: RoutineRecord) -> datetime | None:
     for run in await app_state.routine_store.list_runs(routine.id, routine.owner_user_id):
         if run.status == "succeeded" and run.started_at is not None:
             return run.started_at
-    return now - FIRST_SINCE
+    return None
+
+
+async def since(app_state: Any, routine: RoutineRecord, now: datetime) -> datetime:
+    """When the last successful run started; for the first run, `FIRST_SINCE` back."""
+    return await last_success(app_state, routine) or now - FIRST_SINCE
 
 
 def _local(at: datetime, timezone: str) -> str:
@@ -215,12 +219,14 @@ async def run_body(
     app_state: Any, routine: RoutineRecord, definition: Definition, now: datetime
 ) -> str:
     """The fixed part filled in, then the editable part: what follows the run framing."""
-    start = await since(app_state, routine, now)
+    last = await last_success(app_state, routine)
+    start = last or now - FIRST_SINCE
     zone = sched.zone(routine.timezone)
     periods = ""
     if definition.review is not None:
+        # A first review covers only the period that just ended.
         periods = review_prompts.periods(
-            definition.review, start.astimezone(zone), now.astimezone(zone)
+            definition.review, (last or now).astimezone(zone), now.astimezone(zone)
         )
     fixed = definition.fixed_prompt.format(
         since=_local(start, routine.timezone),
