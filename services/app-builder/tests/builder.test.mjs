@@ -111,12 +111,18 @@ const TEMPLATES = path.resolve(here, '../../../examples/apps');
 // when nothing it reads is installed yet.
 const NO_EXPORTERS = 'CREATE TABLE homeai_exports ("_instance", "_space", "app", "export");\n';
 const TEMPLATE_ROUTES = {
+  budget: {
+    names: ['(tabs)/categories', '(tabs)/index', '(tabs)/transactions', '(tabs)/trends', 'category/[id]', 'new', 'transaction/[id]'],
+    paths: ['/categories', '/', '/transactions', '/trends', '/category/1', '/new', '/transaction/1'],
+  },
   chores: {
     names: ['(tabs)/all', '(tabs)/history', '(tabs)/index', 'chore/[id]', 'new'],
     paths: ['/all', '/history', '/', '/chore/1', '/new'],
   },
   contacts: { names: ['index', 'new', 'person/[id]'], paths: ['/', '/new', '/person/1'] },
+  countdowns: { names: ['countdown/[id]', 'index', 'new'], paths: ['/countdown/1', '/', '/new'], reads: NO_EXPORTERS },
   'grocery-list': { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
+  'health-log': { names: ['index', 'log', 'measure/[id]', 'new-measure'], paths: ['/', '/log', '/measure/1', '/new-measure'] },
   list: { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
   notes: { names: ['index', 'note/[id]'], paths: ['/', '/note/1'] },
   pantry: { names: ['index', 'item/[id]', 'new'], paths: ['/', '/item/1', '/new'] },
@@ -126,6 +132,10 @@ const TEMPLATE_ROUTES = {
     reads: NO_EXPORTERS,
   },
   tracker: { names: ['habit/[id]', 'index'], paths: ['/habit/1', '/'] },
+  workouts: {
+    names: ['(tabs)/exercises', '(tabs)/index', 'exercise/[id]', 'workout/[id]'],
+    paths: ['/exercises', '/', '/exercise/1', '/workout/1'],
+  },
 };
 
 for (const [slug, expect] of Object.entries(TEMPLATE_ROUTES)) {

@@ -1,0 +1,14 @@
+{
+  "name": "Countdowns",
+  "slug": "countdowns",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "hourglass-outline",
+    "description": "Days until trips, anniversaries and deadlines, plus birthdays from Contacts.",
+    "permissions": {},
+    "index": [{ "table": "countdowns", "title": "title", "text": ["note"] }],
+    "reads": [{ "app": "contacts", "export": "people", "version": "1" }]
+  }
+}

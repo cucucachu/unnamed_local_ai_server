@@ -14,6 +14,10 @@ expo-sqlite-shaped API from `@homeai/sdk`.
 | [`pantry/`](pantry/) | What's at home: `items` with quantity, unit, place and best-before. Search (`homeai.index` + `search()`), a "Use soon" section, place chips; `addItem` tops up a matching row, `useSome` deletes it when it's used up. |
 | [`recipes/`](recipes/) | Recipes and a weekly meal plan: tabs, nested `recipe/[id]/index` + `edit`, two modals, search, `planMeal`. Reads the grocery list's `items` export and adds a recipe's ingredients with `runExportAction`. |
 | [`contacts/`](contacts/) | People with phone/email/address details, birthdays coming up (Feb 29 handled), search, `mergePeople` for duplicates. Exports `people` v1 (id, name, birthday, notes) read-only. |
+| [`budget/`](budget/) | Money in and out: `categories` with monthly budgets, `transactions` (signed amounts) and `rules` that categorize by description (`applyRules`, `categorize`). Month view with a pie chart and budget bars, a six-month trend, and bank statements imported as CSV from App info. |
+| [`workouts/`](workouts/) | `exercises`, `workouts` and their `sets` (reps and weight). `addSet`, `repeatWorkout` copies a workout to today, and each exercise has a line chart of its top weight. |
+| [`health-log/`](health-log/) | Any measure over time (weight, sleep, water): `measures` say whether a day's readings add up, average or keep the last one, `entries` hold the readings. Line or bar charts by range with a goal line. |
+| [`countdowns/`](countdowns/) | Days until or since a date, yearly ones counting the anniversary, plus contacts' birthdays read from the Contacts `people` export (hideable). |
 | [`list/`](list/) | Generic checklist: `items` with `done`, `addItem` / `clearDone`, list + detail. |
 | [`notes/`](notes/) | Notes: `title` / `body` / `pinned`, `addNote`, list + `app/note/[id].tsx`; `homeai.index` makes the notes searchable (chat and the search box, `search()`). |
 | [`tracker/`](tracker/) | Habit tracker: `habits` + `checkins` (one row per habit per day), `addHabit` / `checkIn`, list + `app/habit/[id].tsx`. |
@@ -79,3 +83,9 @@ build command, so build it with the script above or
   space and drives each in a browser: add, edit and its main flow, with a
   second member taking a chore turn and a recipe's ingredients landing on
   the grocery list.
+- `scripts/e2e/m22_money_health_templates_smoke.sh` installs budget,
+  workouts, health-log and countdowns (and later contacts) in a personal
+  space and drives each in a browser: a bank statement imported through
+  App info with a bad line refused, rules, charts, sets and a repeated
+  workout, readings that add up or keep the last, and a contact's birthday
+  counting down.

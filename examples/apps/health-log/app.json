@@ -1,0 +1,12 @@
+{
+  "name": "Health log",
+  "slug": "health-log",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "pulse-outline",
+    "description": "Any measurement over time (weight, sleep, water), with a chart per measurement.",
+    "permissions": {}
+  }
+}

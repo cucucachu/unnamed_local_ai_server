@@ -1,0 +1,13 @@
+{
+  "name": "Budget",
+  "slug": "budget",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "wallet-outline",
+    "description": "Spending and income by category and month, with budgets and bank statement imports.",
+    "permissions": {},
+    "index": [{ "table": "transactions", "title": "description", "text": ["note"] }]
+  }
+}

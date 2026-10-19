@@ -1,0 +1,12 @@
+{
+  "name": "Workouts",
+  "slug": "workouts",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "barbell-outline",
+    "description": "Workouts as sets and reps per exercise, with progress charts.",
+    "permissions": {}
+  }
+}

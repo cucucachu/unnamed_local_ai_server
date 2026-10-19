@@ -188,6 +188,9 @@ SAMPLE = {
     "every_days": 7,
     "quantity": 2,
     "amount": 1,
+    "pattern": "sample",
+    "reps": 5,
+    "weight": 60,
 }
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
