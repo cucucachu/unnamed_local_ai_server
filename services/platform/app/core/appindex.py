@@ -14,6 +14,10 @@ with what was indexed: new and changed rows are rendered again, rows that
 are gone are dropped, and a changed declaration re-indexes the instance from
 scratch. An instance that's uninstalled, or whose app or space is archived,
 loses its rows.
+
+Each indexed row also keeps its rendered text and who created and last
+changed it (migration 0023), for `changes`: the rows changed since a time,
+which the nightly Memory run reads (M22-12, docs/APP_TEMPLATES.md §6.1).
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -40,6 +45,7 @@ MAX_ROW_CHARS = 64 * 1024
 MAX_TITLE_CHARS = 200
 FETCH_BATCH = 500
 _ROWID = "__homeai_rowid"
+_UNATTRIBUTED = "(indexed before attribution)"
 
 # Live instances: installed, app and space not archived, with the tracked version's manifest.
 _LIVE = """
@@ -84,6 +90,9 @@ class RowDoc:
     row_id: int
     updated_at: str | None
     title: str
+    text: str
+    created_by: str | None
+    updated_by: str | None
     chunks: list[fileindex.Chunk]
 
 
@@ -150,7 +159,12 @@ def read_instance(
                         changed.append(row_id)
                 wanted = [entry["title"], *(entry.get("fields") or []), *(entry.get("text") or [])]
                 select = ", ".join(
-                    appschema.quote(c) for c in dict.fromkeys(wanted) if c in columns
+                    [appschema.quote(c) for c in dict.fromkeys(wanted) if c in columns]
+                    + [
+                        f'"{c}" AS {_ROWID}{c}'
+                        for c in ("_created_by", "_updated_by")
+                        if c in columns
+                    ]
                 )
                 for start in range(0, len(changed), FETCH_BATCH):
                     batch = changed[start : start + FETCH_BATCH]
@@ -171,6 +185,9 @@ def read_instance(
                                 row[_ROWID],
                                 row["_stamp"],
                                 title,
+                                text,
+                                _text(row.get(f"{_ROWID}_created_by")) or None,
+                                _text(row.get(f"{_ROWID}_updated_by")) or None,
                                 fileindex.chunk_text(text, markdown=False),
                             )
                         )
@@ -234,9 +251,11 @@ async def reconcile(pool: AsyncConnectionPool, storage: SpaceStorage, instance_i
             stored = None
         known: dict[tuple[str, int], str | None] = {}
         if stored is not None:
+            # Rows indexed before migration 0023 never match, so they're rendered again.
             cur = await conn.execute(
-                "SELECT tbl, row_id, row_updated_at FROM indexed_app_rows WHERE instance_id = %s",
-                (instance_id,),
+                "SELECT tbl, row_id, CASE WHEN attributed THEN row_updated_at "
+                "ELSE %s END AS row_updated_at FROM indexed_app_rows WHERE instance_id = %s",
+                (_UNATTRIBUTED, instance_id),
             )
             known = {(r["tbl"], r["row_id"]): r["row_updated_at"] for r in await cur.fetchall()}
     snap = await anyio.to_thread.run_sync(
@@ -272,10 +291,23 @@ async def _store(conn: AsyncConnection, instance_id: UUID, space_id: UUID, doc: 
     )
     reuse = {r["content_hash"]: (r["model"], r["embedding"]) for r in await cur.fetchall()}
     await conn.execute(
-        "INSERT INTO indexed_app_rows (instance_id, space_id, tbl, row_id, row_updated_at, title) "
-        "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (instance_id, tbl, row_id) DO UPDATE SET "
-        "row_updated_at = EXCLUDED.row_updated_at, title = EXCLUDED.title, indexed_at = now()",
-        (*key[:1], space_id, *key[1:], doc.updated_at, doc.title),
+        "INSERT INTO indexed_app_rows (instance_id, space_id, tbl, row_id, row_updated_at, title, "
+        "text, created_by, updated_by, attributed) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true) "
+        "ON CONFLICT (instance_id, tbl, row_id) DO UPDATE SET "
+        "row_updated_at = EXCLUDED.row_updated_at, title = EXCLUDED.title, text = EXCLUDED.text, "
+        "created_by = EXCLUDED.created_by, updated_by = EXCLUDED.updated_by, attributed = true, "
+        "indexed_at = now()",
+        (
+            *key[:1],
+            space_id,
+            *key[1:],
+            doc.updated_at,
+            doc.title,
+            doc.text,
+            doc.created_by,
+            doc.updated_by,
+        ),
     )
     await conn.execute(
         "DELETE FROM app_row_chunks WHERE instance_id = %s AND tbl = %s AND row_id = %s", key
@@ -295,3 +327,53 @@ async def _store(conn: AsyncConnection, instance_id: UUID, space_id: UUID, doc: 
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)",
                 rows,
             )
+
+
+# --- what changed (M22-12) ----------------------------------------------------------------
+
+
+def stamp(at: datetime) -> str:
+    """A time as `_updated_at` writes it (`appdb._now`), so the two compare as text."""
+    return at.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+async def changes(
+    conn: AsyncConnection,
+    spaces: list[UUID],
+    own_rows_in: list[UUID],
+    user_id: UUID,
+    since: datetime,
+    offset: int,
+    limit: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """(total, page) of indexed rows changed after `since`, oldest change first.
+
+    Every row in `spaces`; in `own_rows_in` only the rows `user_id` changed last. Each
+    row has its instance, app, table, row id, title, text, `updated_at`, and the
+    `created_by` / `updated_by` user ids (None for rows written before attribution).
+    """
+    where = (
+        "r.row_updated_at > %(since)s AND (r.space_id = ANY(%(spaces)s) "
+        "OR (r.space_id = ANY(%(own)s) AND r.updated_by = %(user)s))"
+    )
+    params = {
+        "since": stamp(since),
+        "spaces": spaces,
+        "own": own_rows_in,
+        "user": str(user_id),
+    }
+    live = f"JOIN ({_LIVE}) live ON live.id = r.instance_id"
+    cur = await conn.execute(
+        f"SELECT count(*) AS n FROM indexed_app_rows r {live} WHERE {where}", params
+    )
+    total = (await cur.fetchone())["n"]
+    cur = await conn.execute(
+        "SELECT r.instance_id, r.space_id, r.tbl, r.row_id, r.title, r.text, "
+        "r.row_updated_at, r.created_by, r.updated_by, a.slug AS app_slug, a.name AS app_name "
+        f"FROM indexed_app_rows r {live} "
+        "JOIN app_instances i ON i.id = r.instance_id JOIN apps a ON a.id = i.app_id "
+        f"WHERE {where} ORDER BY r.row_updated_at, r.instance_id, r.tbl, r.row_id "
+        "OFFSET %(offset)s LIMIT %(limit)s",
+        params | {"offset": offset, "limit": limit},
+    )
+    return total, list(await cur.fetchall())

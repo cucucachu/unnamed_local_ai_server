@@ -178,6 +178,11 @@ class FakePlatform:
     # answers `import_plan` (unmatched headers etc.), and `import_error` (status, body)
     # fails the real import instead.
     export_calls: list[tuple[str, dict]] = field(default_factory=list)
+    # `GET /apps/changes` (M22-12): rows as `{space_key, app, table, row_id, title, text,
+    # updated_at, created_by, updated_by}` (user ids); `user_names` gives display names.
+    app_changes: list[dict] = field(default_factory=list)
+    app_changes_requests: list[tuple[str | None, dict]] = field(default_factory=list)
+    user_names: dict[str, str] = field(default_factory=dict)
     import_calls: list[tuple[str, dict]] = field(default_factory=list)
     import_plan: dict = field(default_factory=dict)
     import_error: tuple[int, dict] | None = None

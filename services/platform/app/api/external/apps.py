@@ -4,6 +4,7 @@ Contract: docs/ARCHITECTURE.md §3 "Apps"; rules: `app.core.apps`. Every
 route takes an agent delegation too (D6).
 """
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Query, Request, status
 
 from app.api.schemas import (
     AppBuildOut,
+    AppChangesOut,
     AppHistoryOut,
     AppList,
     AppOut,
@@ -33,7 +35,7 @@ from app.api.schemas import (
     UpdateInstanceOut,
     UpdateInstanceRequest,
 )
-from app.core import appbuild, apphistory, apps, apptemplates, datamap, manifest
+from app.core import appbuild, apphistory, appindex, apps, apptemplates, datamap, manifest, spaces
 from app.core.errors import Unavailable
 from app.core.principal import CurrentUser
 
@@ -44,6 +46,78 @@ router = APIRouter()
 async def app_schema(principal: CurrentUser) -> dict:
     """The `app.json` JSON Schema (draft 2020-12)."""
     return manifest.SCHEMA
+
+
+@router.get("/apps/changes", response_model=AppChangesOut, response_model_exclude_none=True)
+async def app_changes(
+    request: Request,
+    principal: CurrentUser,
+    since: datetime,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    """Indexed app rows changed after `since`, oldest first (M22-12, docs/APP_TEMPLATES.md §6.1).
+
+    Rows in the user's spaces. A routine run sees its own space's rows, and in the user's
+    other spaces only the rows the user changed last: the nightly Memory run is scoped to
+    /personal but reads what the user wrote in shared apps, never other members' rows.
+    """
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    async with request.app.state.db_pool.connection() as conn:
+        scoped = await spaces.list_user_spaces(conn, principal.user_id, only=principal.space_scope)
+        others = []
+        if principal.space_scope is not None:
+            every = await spaces.list_user_spaces(conn, principal.user_id)
+            others = [row for row in every if row["id"] != principal.space_scope]
+        total, rows = await appindex.changes(
+            conn,
+            [row["id"] for row in scoped],
+            [row["id"] for row in others],
+            principal.user_id,
+            since,
+            offset,
+            limit,
+        )
+        ids = list({u for r in rows for u in (r["created_by"], r["updated_by"]) if u})
+        cur = await conn.execute(
+            "SELECT id::text AS id, username, display_name FROM users WHERE id::text = ANY(%s)",
+            (ids,),
+        )
+        users = {u["id"]: u for u in await cur.fetchall()}
+    by_id = {row["id"]: row for row in [*scoped, *others]}
+    me = str(principal.user_id)
+
+    def who(user_id: str | None) -> dict | None:
+        if not user_id:
+            return None
+        known = users.get(user_id) or {}
+        return {
+            "id": user_id,
+            "username": known.get("username"),
+            "display_name": known.get("display_name"),
+            "you": user_id == me,
+        }
+
+    return AppChangesOut(
+        total=total,
+        offset=offset,
+        rows=[
+            {
+                "instance_id": r["instance_id"],
+                "app": {"slug": r["app_slug"], "name": r["app_name"]},
+                "space": {key: by_id[r["space_id"]][key] for key in ("id", "slug", "name", "kind")},
+                "table": r["tbl"],
+                "row_id": r["row_id"],
+                "title": r["title"],
+                "text": r["text"],
+                "updated_at": r["row_updated_at"],
+                "created_by": who(r["created_by"]),
+                "updated_by": who(r["updated_by"]),
+            }
+            for r in rows
+        ],
+    )
 
 
 @router.get("/apps", response_model=AppList)

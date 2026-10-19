@@ -496,6 +496,26 @@ class SearchAppRowOut(BaseModel):
     title: str
 
 
+class AppChangeUserOut(BaseModel):
+    id: str
+    username: str | None = None
+    display_name: str | None = None
+    you: bool
+
+
+class AppChangeOut(SearchAppRowOut):
+    text: str
+    updated_at: str
+    created_by: AppChangeUserOut | None = None
+    updated_by: AppChangeUserOut | None = None
+
+
+class AppChangesOut(BaseModel):
+    total: int
+    offset: int
+    rows: list[AppChangeOut]
+
+
 class SearchHitOut(BaseModel):
     # `file`: path and lines are set; `app_row` (M22-07): a row an app declared in `homeai.index`.
     kind: Literal["file", "app_row"] = "file"

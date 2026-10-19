@@ -29,6 +29,7 @@ SHIPPED = [
     (20, "delivered_routines"),
     (21, "app_tables_doc"),
     (22, "app_row_index"),
+    (23, "app_row_changes"),
 ]
 
 
@@ -88,6 +89,7 @@ async def test_fresh_database_gets_initial_schema(pg_database):
             "0020_delivered_routines.sql",
             "0021_app_tables_doc.sql",
             "0022_app_row_index.sql",
+            "0023_app_row_changes.sql",
         ]
         tables = {"schema_migrations", "platform_state", "users", "sessions", "invites"}
         tables |= {"spaces", "space_members", "apps", "app_versions", "app_instances"}

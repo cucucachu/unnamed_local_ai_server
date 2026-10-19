@@ -83,6 +83,12 @@ CATALOG: tuple[CatalogTool, ...] = (
         "Apps",
         ("list_apps", "List apps", True, "See your apps and what they can do."),
         ("app_query", "Read app data", True, "Look up data in an app."),
+        (
+            "list_app_changes",
+            "Read app changes",
+            True,
+            "See what was added or changed in your apps' data since a time.",
+        ),
         ("create_app", "Create apps", False, "Start a new app from a template."),
         ("build_app", "Build apps", False, "Build an app's code and switch it to the new version."),
         ("app_update", "Change app data", False, "Add, change or remove data in an app."),

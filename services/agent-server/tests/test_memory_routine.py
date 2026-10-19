@@ -67,15 +67,17 @@ def test_a_run_reads_chats_and_files_but_not_the_web(
 
     message = _first_message(client, run["thread_id"])
     assert message.startswith(f'{RUN_MARKER} "Memory" (space /personal)')
-    window = re.search(r"Cover their chats from (\S+) to now \((\S+)\)\.", message)
+    window = re.search(r"Cover their chats and app changes from (\S+) to now \((\S+)\)\.", message)
     assert window, message
     since, now = map(datetime.fromisoformat, window.groups())
     assert now - since == timedelta(days=14)
     assert f'list_chats with since="{window[1]}"' in message
-    assert "Facts about the user come only from the user's own messages." in message
+    assert f'list_app_changes with since="{window[1]}"' in message
+    assert "Facts about the user come only from the user's own messages and rows." in message
     assert message.endswith(memory_prompt.DEFAULT)
 
     tools = _bound_tools(fake_model.requests[0])
-    assert {"list_chats", "read_chat", "search_files", "read_file", "ls", "grep"} <= tools
+    assert {"list_chats", "read_chat", "list_app_changes", "search_files", "read_file"} <= tools
+    assert {"ls", "grep"} <= tools
     assert {"write_file", "edit_file", "delete", "execute_code"} <= tools
     assert OFF.isdisjoint(tools)

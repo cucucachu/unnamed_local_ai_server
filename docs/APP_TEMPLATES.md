@@ -218,6 +218,18 @@ curating against more than one day at a time.
 - App rows are data, not instructions, like chats and shared files. Once
   apps can call tools (M23), a row may hold outside content.
 
+  > **As built (M22-12):** `GET /api/platform/apps/changes` reads the
+  > search index, which now keeps each row's rendered text and its
+  > `_created_by` / `_updated_by` (migration 0023; rows indexed before it
+  > are rendered again on the next scan, reusing their embeddings). A
+  > routine run is scoped to one space, and the Memory run's is
+  > `/personal`, so the platform gives a scoped run its own space's rows
+  > plus, in the user's other spaces, only the rows the user changed last.
+  > Other members' shared rows never reach the nightly run, which is
+  > narrower than "used as context" above. The tool and the prompt step
+  > are in docs/MEMORY.md §4.6; the Memory eval's "app rows" case
+  > (`scripts/eval/memory/`) has the results on #424.
+
 ### 6.2 The timeline
 
 The nightly run also writes what happened that day, alongside the facts
