@@ -111,10 +111,12 @@ const TEMPLATES = path.resolve(here, '../../../examples/apps');
 // when nothing it reads is installed yet.
 const NO_EXPORTERS = 'CREATE TABLE homeai_exports ("_instance", "_space", "app", "export");\n';
 const TEMPLATE_ROUTES = {
+  books: { names: ['(tabs)/index', '(tabs)/year', 'item/[id]', 'new'], paths: ['/', '/year', '/item/1', '/new'] },
   budget: {
     names: ['(tabs)/categories', '(tabs)/index', '(tabs)/transactions', '(tabs)/trends', 'category/[id]', 'new', 'transaction/[id]'],
     paths: ['/categories', '/', '/transactions', '/trends', '/category/1', '/new', '/transaction/1'],
   },
+  calculator: { names: ['(tabs)/index', '(tabs)/tip', '(tabs)/units'], paths: ['/', '/tip', '/units'] },
   chores: {
     names: ['(tabs)/all', '(tabs)/history', '(tabs)/index', 'chore/[id]', 'new'],
     paths: ['/all', '/history', '/', '/chore/1', '/new'],
@@ -123,6 +125,11 @@ const TEMPLATE_ROUTES = {
   countdowns: { names: ['countdown/[id]', 'index', 'new'], paths: ['/countdown/1', '/', '/new'], reads: NO_EXPORTERS },
   'grocery-list': { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
   'health-log': { names: ['index', 'log', 'measure/[id]', 'new-measure'], paths: ['/', '/log', '/measure/1', '/new-measure'] },
+  flashcards: {
+    names: ['(tabs)/index', '(tabs)/stats', 'card/[id]', 'deck/[id]/edit', 'deck/[id]/index', 'study/[deck]'],
+    paths: ['/', '/stats', '/card/1', '/deck/1/edit', '/deck/1', '/study/1'],
+  },
+  kanban: { names: ['board/[id]/columns', 'board/[id]/index', 'card/[id]', 'index'], paths: ['/board/1/columns', '/board/1', '/card/1', '/'] },
   list: { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
   notes: { names: ['index', 'note/[id]'], paths: ['/', '/note/1'] },
   pantry: { names: ['index', 'item/[id]', 'new'], paths: ['/', '/item/1', '/new'] },

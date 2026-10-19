@@ -1,0 +1,13 @@
+{
+  "name": "Flashcards",
+  "slug": "flashcards",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "layers-outline",
+    "description": "Decks of flashcards with spaced repetition: each card comes back just before you'd forget it.",
+    "permissions": {},
+    "index": [{ "table": "cards", "title": "front", "text": ["back"] }]
+  }
+}

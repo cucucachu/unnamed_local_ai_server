@@ -1,0 +1,12 @@
+{
+  "name": "Calculator and units",
+  "slug": "calculator",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "calculator-outline",
+    "description": "A calculator, unit conversions (kitchen, distance, weight, temperature) and a tip splitter. Keeps no data.",
+    "permissions": {}
+  }
+}

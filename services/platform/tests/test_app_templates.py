@@ -191,6 +191,9 @@ SAMPLE = {
     "pattern": "sample",
     "reps": 5,
     "weight": 60,
+    "grade": 2,
+    "position": 0,
+    "status": "finished",
 }
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
