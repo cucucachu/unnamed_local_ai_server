@@ -434,6 +434,24 @@ issues in this milestone, or are written down for M23.
 > an app with reads, both in the build's `reads.sql` and in the runtime
 > connection. Smoke: `scripts/e2e/m22_household_templates_smoke.sh`.
 
+> **As built (M22-17):** `examples/apps/budget`, `workouts`, `health-log`
+> and `countdowns`. Budget stores signed amounts (spending negative) and
+> categorizes through `rules`: a description containing a rule's pattern,
+> in any case, goes in its category, the longest pattern winning.
+> "Always use this category" suggests the description without trailing
+> store numbers ("TRADER JOE'S #552" gives "TRADER JOE'S"). Bank
+> statements come in through the existing CSV import in App info, mapping
+> their headers; a row the table refuses (a US-style date, say) fails at
+> its line and nothing is imported. Workouts keeps `sets` per workout and
+> exercise, and `repeatWorkout` copies one to a new day. Health log has
+> one table of readings for any number of `measures`, each saying how a
+> day's readings combine (`last`, `sum`, `average`); the screens group by
+> day in SQL from that. Countdowns reads Contacts' `people` v1 and checks
+> `homeai_exports` before touching `contacts_people`, which only exists
+> once a copy is attached; hidden birthdays are kept per copy and person.
+> No framework gaps this time. Smoke:
+> `scripts/e2e/m22_money_health_templates_smoke.sh`.
+
 ## 10. M23
 
 Reaching outside an app's own database:
