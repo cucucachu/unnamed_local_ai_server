@@ -126,7 +126,8 @@ async def test_forged_expired_and_threadless_delegations_are_refused(world):
     expired = tokens.issue_token(base | {"thr": "t-1"}, timedelta(seconds=-1))
     threadless = tokens.issue_token(base, timedelta(minutes=5))
     header, payload, signature = good.split(".")
-    tampered = f"{header}.{payload}.{signature[:-2]}AA"
+    flipped = "B" if signature[10] == "A" else "A"
+    tampered = f"{header}.{payload}.{signature[:10]}{flipped}{signature[11:]}"
     for delegation in (expired, threadless, tampered, "not-a-jwt"):
         response = await _grants(world, delegation)
         assert response.status_code == 401, delegation

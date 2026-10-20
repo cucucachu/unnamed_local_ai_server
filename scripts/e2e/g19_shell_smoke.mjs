@@ -193,8 +193,11 @@ try {
   await sharedPage.getByTestId('apps-add').click();
   await page.waitForURL((url) => url.pathname === '/apps/catalog', { timeout: TIMEOUT });
   check(new URL(page.url()).searchParams.get('spaceId') === shared.id, "Add app opens that space's catalog", page.url());
-  await page.getByTestId('catalog-empty').getByText(`Nothing to add to ${SPACE_NAME} yet`).waitFor({ timeout: TIMEOUT });
-  ok('with nothing published there, it says so for that space');
+  await page.getByTestId('catalog-templates').waitFor({ timeout: TIMEOUT });
+  check(
+    (await page.locator('[data-testid^="catalog-space-"]').count()) === 0,
+    'with nothing published there, it offers only the templates',
+  );
   check(await page.getByRole('heading', { name: `Add to ${SPACE_NAME}` }).first().isVisible(), 'the catalog is titled for the space');
   await page.goBack();
   await page.waitForURL((url) => url.pathname === '/', { timeout: TIMEOUT });

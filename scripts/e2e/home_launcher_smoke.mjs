@@ -122,8 +122,8 @@ try {
   ok('tapping the Personal dot returns to Personal');
 
   await personalPage.getByTestId('apps-add').click();
-  await page.getByTestId('catalog-empty').waitFor({ timeout: TIMEOUT_MS });
-  ok("Add app opens Personal's catalog");
+  await page.getByTestId('catalog-templates').waitFor({ timeout: TIMEOUT_MS });
+  ok("Add app opens Personal's catalog (its templates)");
 
   const backToApps = async (button) => {
     await button.click();
