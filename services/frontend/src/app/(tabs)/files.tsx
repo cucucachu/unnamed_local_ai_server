@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -117,6 +117,8 @@ function errorDetail(error: unknown, fallback: string): string {
   return error instanceof ApiError ? describeFilesError(error.detail) : fallback;
 }
 
+const BACK_ACTIONS = new Set(['GO_BACK', 'POP', 'POP_TO']);
+
 /** Which multi-step flow (if any) is in progress for a given entry — drives
  * the rename/new-folder prompt and the move/copy destination picker. */
 type PendingAction =
@@ -213,6 +215,20 @@ export default function FilesScreen() {
   }, [highlightedPath]);
 
   const refresh = useCallback(() => load(dirPath), [load, dirPath]);
+
+  // Back (the gesture, the hardware button, the header arrow) goes up a
+  // folder until the root, then leaves Files. Other removals, like signing
+  // out, aren't back.
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (dirPath === ROOT_PATH) return;
+    return navigation.addListener('beforeRemove', (event) => {
+      if (!BACK_ACTIONS.has(event.data.action.type)) return;
+      event.preventDefault();
+      const up = parentPath(dirPath);
+      setBrowsePath(up === '/spaces' ? ROOT_PATH : up);
+    });
+  }, [navigation, dirPath, setBrowsePath]);
 
   // Shared by both the direct-tap route below and `FileActionSheet`'s
   // "Play"/"View" action, so there's exactly one place that knows the
