@@ -1588,6 +1588,51 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > copied. The catalog's "Start from a template" section (when one of the
 > listed spaces is writable) opens a New app sheet: name (the slug follows
 > it), space, Create app, then the runner.
+>
+> **The catalog (M22-16 to M22-18).** Sixteen templates: grocery-list,
+> list, notes and tracker (M13), chores, pantry, recipes and contacts
+> (household), budget, workouts, health-log and countdowns (money and
+> health), flashcards, kanban, books ("Books and media") and calculator
+> ("Calculator and units"). What each one's design leans on:
+> - **chores**: a rota in `chore_assignees` ordered by position; `turn`
+>   indexes it with `ROW_NUMBER()`, `completeChore` moves `next_due` and
+>   the turn, and who did it is the completion's `_created_by`.
+> - **pantry**: `addItem` tops up the same thing in the same place (name in
+>   any case, unit, expiry) instead of adding a row; `useSome` deletes at
+>   zero.
+> - **recipes**: "Add ingredients to the grocery list" is an export action
+>   into grocery-list's `items` v1 (`addItem`).
+> - **contacts**: exports `people` v1; phone numbers and addresses stay in
+>   `contact_details`, which isn't exported; `mergePeople` folds a
+>   duplicate in.
+> - **budget**: signed amounts (spending negative), categorized through
+>   `rules` (a description containing the pattern, in any case; the longest
+>   pattern wins). "Always use this category" suggests the description
+>   without trailing store numbers. Bank statements come in through the
+>   CSV import, mapping their headers.
+> - **workouts**: `sets` per workout and exercise; `repeatWorkout` copies
+>   one to a new day.
+> - **health-log**: one table of readings for any number of `measures`,
+>   each saying how a day's readings combine (`last`, `sum`, `average`).
+> - **countdowns**: reads Contacts' `people` v1 for birthdays, checking
+>   `homeai_exports` before touching `contacts_people`; hidden birthdays
+>   are kept per copy and person.
+> - **flashcards**: SM-2 scheduling in `actions/grade.sql` (one `UPDATE`
+>   with `CASE` on the grade, then `due = date(:today, '+N days')`), which
+>   `nextInterval` in `lib/flashcards.ts` mirrors for the buttons. Cards
+>   seen today go to the back of the queue.
+> - **kanban**: card and column positions stay dense through `moveCard`,
+>   `deleteCard`, `moveColumn` and `deleteColumn`; a move to another board
+>   is refused. Swipe actions are `ListRow`'s `actions`.
+> - **books**: `setStatus` stamps `started_on` and `finished_on`; indexed
+>   for search.
+> - **calculator**: no data (a `schema.sql` holding only a comment).
+>
+> Building them found three framework gaps, fixed in M22-16: an export
+> action needs the target copy (#448), a copy with no rows was invisible in
+> the merged view (#450), and `homeai_exports` must exist, empty, before
+> anything is attached (both above, under the merged views). Each group has
+> a browser smoke (`scripts/e2e/m22_*_templates_smoke.sh`).
 > - `build_app(app)`: `POST /apps/{id}/build`; returns the diagnostics
 >   (step, file:line:column, message, source excerpt) or success plus each
 >   instance's migration. A pending destructive migration is reported with

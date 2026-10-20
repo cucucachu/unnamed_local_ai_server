@@ -10,6 +10,11 @@ microphone capture, and messages for shared spaces.
 The apps runtime, SDK, data and registry are in `docs/PLATFORM.md` §7 and
 `docs/ARCHITECTURE.md` §3 "Apps". This note only describes what changes.
 
+**Status:** built in M22 (GATE G22, `scripts/e2e/gate_m22.sh`). This is
+now the design record; what was built, and how it differs, is in
+PLATFORM.md §7, ARCHITECTURE.md and MEMORY.md, and the "As built" lines
+below point there.
+
 Contents:
 
 1. [Principles](#1-principles)
@@ -117,21 +122,8 @@ gzip today; the kit should add under ~100 KB.
 The authoring guide (`APP_AUTHORING_GUIDE`) and templates show the kit
 first. It's part of the static system prompt, so its size matters (#341).
 
-> **As built (M22-19):** `scripts/eval/app_authoring/` reran with the
-> M22 guide and the sixteen templates on Ornith 1.5 35B Q8_0, plus six
-> customize cases. Each installs a template and asks for a change the way
-> the runner's "Ask the agent" panel does: two add a field, two a screen,
-> two a chart. The ten create cases passed 10/10 (M13-03: 9/10; the M16
-> comparison, same model: 30/30 over three runs), and the customize cases
-> 5/6. The miss was `screen-recipes-quick`: the model replied "No response
-> requested." and made no tool calls. Two findings. First, the model takes
-> `create_app`'s `grocery-list` default instead of the closest template
-> (8 of 10, including habit tracker, notes and chores), because the guide
-> no longer names the templates. The cases still pass, but take about
-> 600 s at the median against 210 s in M16 (#455). Second, adding a last
-> column with a trailing comment failed its migration. That's fixed here
-> (PLATFORM.md §7 "Apps", Migrations, M22-19), and `build_app` now flags a failed
-> migration in its first line.
+> **As built (M22-19):** the authoring eval's results are on #431 and in
+> ARCHITECTURE.md (the eval row); template choice is #455.
 
 ## 5. The agent and app data
 
@@ -206,11 +198,7 @@ An app declares which tables hold text worth finding:
   statement import uses it. The agent gets it as `app_import(instance,
   table, path, mapping)`, since many single-row `app_update`s are slow.
 
-> **As built (M22-08):** `POST /apps/instances/{id}/export` and `/import`
-> (PLATFORM.md §7 "CSV export and import"), the Data section of the app info
-> screen, and the agent's `app_export` / `app_import`. An import's dry run
-> reports headers that match no column, so the UI and the agent can map
-> them before importing.
+> **As built (M22-08):** PLATFORM.md §7 "CSV export and import".
 
 ## 6. Memory over time
 
@@ -234,17 +222,8 @@ curating against more than one day at a time.
 - App rows are data, not instructions, like chats and shared files. Once
   apps can call tools (M23), a row may hold outside content.
 
-  > **As built (M22-12):** `GET /api/platform/apps/changes` reads the
-  > search index, which now keeps each row's rendered text and its
-  > `_created_by` / `_updated_by` (migration 0023; rows indexed before it
-  > are rendered again on the next scan, reusing their embeddings). A
-  > routine run is scoped to one space, and the Memory run's is
-  > `/personal`, so the platform gives a scoped run its own space's rows
-  > plus, in the user's other spaces, only the rows the user changed last.
-  > Other members' shared rows never reach the nightly run, which is
-  > narrower than "used as context" above. The tool and the prompt step
-  > are in docs/MEMORY.md §4.6; the Memory eval's "app rows" case
-  > (`scripts/eval/memory/`) has the results on #424.
+  > **As built (M22-12):** docs/MEMORY.md §4.6 and ARCHITECTURE.md
+  > (`list_app_changes`); results on #424.
 
 ### 6.2 The timeline
 
@@ -269,10 +248,7 @@ it already keeps:
 - Search finds timeline files like any note, so "what was I doing last
   March?" is a search plus a read.
 
-  > **As built (M22-13):** the day file is a step of the nightly run's
-  > fixed prompt, and `LAYOUT` describes it (the prompt includes `LAYOUT`,
-  > so a user whose README predates the timeline still gets it). The
-  > Memory eval's "timeline" case has the results on #425.
+  > **As built (M22-13):** docs/MEMORY.md (the timeline); results on #425.
 
 ### 6.3 Weekly, monthly and yearly reviews
 
@@ -316,23 +292,7 @@ would rewrite the same week).
 
 These replace M21's "memory tidy-up routine" (#338, closed unshipped).
 
-  > **As built (M22-14):** the three are `memory_weekly`,
-  > `memory_monthly` and `memory_yearly` in
-  > `app/routines/delivered.py`, with prompts in
-  > `app/routines/review_prompts.py`. The run works out which periods it
-  > covers in code (every period that ended since the last successful
-  > run; for a first run, or a Run now mid-period, the last one that
-  > ended) and puts
-  > them in the fixed prompt as file paths, so the model does no calendar
-  > arithmetic. "Pages changed that period" became **the pages the
-  > period's files link to**: `ls` shows no modification times, and the
-  > day files already link every page the nightly run touched. Besides
-  > the nightly run's unavailable tools, the reviews can't use
-  > `list_chats`, `read_chat` or `list_app_changes`. `min_period` (7, 28
-  > or 365 days) is on the routine: the API refuses a more frequent
-  > schedule with a 422, the routine tools say why, and the edit screen
-  > only offers the kinds that fit. The admin switch is per routine (§4.4
-  > of `docs/MEMORY.md`), like the nightly run's.
+  > **As built (M22-14):** docs/MEMORY.md §4.9; the eval's results on #427.
 
 ## 7. Shared entities
 
@@ -364,46 +324,18 @@ this is host work.
   optional `if_version`; a mismatch is `409 changed`, nothing written. The
   agent and the memory routine write these files too.
 
-  > **As built (M22-09):** `version` is `"<mtime ns>-<size>"` on file
-  > entries (stat and listings), read responses, and the responses of
-  > `/write`, `/content` and `/edit`, so an editor can save again without
-  > another stat. A missing file also counts as changed. ARCHITECTURE.md §3
-  > "Files" has the routes.
+  > **As built (M22-09):** ARCHITECTURE.md §3 "Files" (version check).
 - **Text and markdown:** tapping a text file opens a viewer (markdown
   rendered with the chat's `Markdown` component; other text monospace).
   Edit switches to a plain editor; Save writes with `if_version`. On `409`:
   reload, keep mine (overwrite), or save as a copy. Up to 1 MiB, the same
   limit as the search index.
 
-  > **As built (M22-10):** `src/app/file.tsx` (route `/file?path=`, a stack
-  > screen over the tabs). Files opens it for a known text or code
-  > extension, or a name with no extension, up to 1 MiB; the content must
-  > decode as UTF-8 without NULs or the screen says it isn't text. It stats
-  > first (version, writable), then reads the whole file from
-  > `/files/stream`. Markdown links resolve relative to the file's folder,
-  > never above its space (`linkPathFrom` in `lib/fileLink.ts`), and open
-  > in Files with `router.dismissTo`. Save is `/files/write` with
-  > `if_version`. On `409 changed` it offers Reload theirs, Keep mine
-  > (written without `if_version`) and Save as copy (`name (copy).md`, then
-  > `(copy 2)` and so on, opened after saving). Leaving with unsaved changes
-  > asks first (`beforeRemove`, and `beforeunload` on web). Smoke:
-  > `scripts/e2e/m22_text_editor_smoke.sh`.
+  > **As built (M22-10, M22-11):** ARCHITECTURE.md §3, "File viewer and
+  > editor".
 - **Then:** CSV as a table, JSON and code in monospace with line numbers,
   and PDF opened in the browser's or phone's own viewer.
 
-  > **As built (M22-11):** the same `/file` screen picks the view from the
-  > extension (`textViewOf` in `lib/textFiles.ts`). `.csv`/`.tsv` render
-  > as a table (`components/CsvTable.tsx`): RFC 4180 quoting, tab for
-  > `.tsv`, `;` when the header has more semicolons than commas, the first
-  > 5,000 rows with "Showing 5,000 of N rows". `.md` is rendered markdown;
-  > `.txt`, `.log` and names without an extension are plain monospace;
-  > everything else (JSON, YAML, source) is `components/CodeView.tsx`,
-  > monospace with a line-number gutter, no wrapping. Edit works the same
-  > in every view. PDFs (`openPdf` in `lib/files.ts`) open the stream URL
-  > in a new tab on web; on the phone they're downloaded to the cache and
-  > handed to the system viewer: an `ACTION_VIEW` intent on Android
-  > (`expo-intent-launcher`, a new native module, so the phone app needs a
-  > rebuild) and the share sheet on iOS.
 - "Open with" an app is M23 (it needs the files bridge).
 
 ## 9. The templates
@@ -429,63 +361,8 @@ Each has an `AGENT.md`, `schema.sql` comments, an `index` declaration
 where it holds text, and its smoke. Gaps a template finds become framework
 issues in this milestone, or are written down for M23.
 
-> **As built (M22-16):** `examples/apps/chores`, `pantry`, `recipes` and
-> `contacts`. Chores has three tabs (Due, with a badge of what's due; All;
-> History) and a rota in `chore_assignees`. The rota is ordered by
-> position, `turn` indexes it with `ROW_NUMBER()`, and `completeChore`
-> moves `next_due` and the turn; who did it is the completion's
-> `_created_by`. Pantry's `addItem` tops up the same thing in the same
-> place (name in any case, unit, expiry date) instead of adding a row, and
-> `useSome` deletes it at zero. Recipes has `(tabs)/index` and `plan`,
-> nested `recipe/[id]/index` and `edit`, and modals `new` and
-> `plan/[day]`. Contacts keeps phone numbers and addresses in
-> `contact_details`, which isn't exported, and `mergePeople` folds a
-> duplicate in. The grocery list now exports `items` v1 with `addItem`.
-> The templates found three framework gaps, fixed here. An export action
-> needs the target copy (#448: `runExportAction` and `_instance` on merged
-> views). A copy with no rows yet is invisible in the merged view (#450:
-> `homeai_exports`). And `homeai_exports` only existed once something was
-> attached, so a reader with nothing installed got a SQL error at runtime
-> and failed its smoke render at build: it now always exists, empty, for
-> an app with reads, both in the build's `reads.sql` and in the runtime
-> connection. Smoke: `scripts/e2e/m22_household_templates_smoke.sh`.
-
-> **As built (M22-17):** `examples/apps/budget`, `workouts`, `health-log`
-> and `countdowns`. Budget stores signed amounts (spending negative) and
-> categorizes through `rules`: a description containing a rule's pattern,
-> in any case, goes in its category, the longest pattern winning.
-> "Always use this category" suggests the description without trailing
-> store numbers ("TRADER JOE'S #552" gives "TRADER JOE'S"). Bank
-> statements come in through the existing CSV import in App info, mapping
-> their headers; a row the table refuses (a US-style date, say) fails at
-> its line and nothing is imported. Workouts keeps `sets` per workout and
-> exercise, and `repeatWorkout` copies one to a new day. Health log has
-> one table of readings for any number of `measures`, each saying how a
-> day's readings combine (`last`, `sum`, `average`); the screens group by
-> day in SQL from that. Countdowns reads Contacts' `people` v1 and checks
-> `homeai_exports` before touching `contacts_people`, which only exists
-> once a copy is attached; hidden birthdays are kept per copy and person.
-> No framework gaps this time. Smoke:
-> `scripts/e2e/m22_money_health_templates_smoke.sh`.
-
-> **As built (M22-18):** `examples/apps/flashcards`, `kanban`, `books`
-> (named "Books and media") and `calculator` ("Calculator and units").
-> Flashcards schedules in `actions/grade.sql`, SM-2 style: one `UPDATE`
-> with `CASE` on the grade for interval, ease, reps and lapses, then
-> `due = date(:today, '+N days')`. The buttons show the same intervals
-> from `nextInterval` in `lib/flashcards.ts`, and the smoke checks the two
-> agree. The study queue puts cards already seen today last, so one graded
-> Again comes back after the rest. Kanban keeps card and column positions
-> dense (0, 1, 2, …) through `moveCard`, `deleteCard`, `moveColumn` and
-> `deleteColumn`, and refuses a move to another board. Its swipe actions
-> are `ListRow`'s `actions`, driven in the smoke by a real mouse drag as
-> well as a long press. Books stamps `started_on` and `finished_on` in
-> `setStatus`; the edit form does the same when the status changes. The
-> calculator has a `schema.sql` holding only a comment, since the file is
-> required but may be empty. No framework gaps. One rough edge: a typed
-> icon field (an array of row actions built with a spread, a table of
-> kinds) needs `IconName` from `@expo/vector-icons`. Smoke:
-> `scripts/e2e/m22_learning_boards_templates_smoke.sh`.
+> **As built (M22-16 to M22-18):** PLATFORM.md §7 "Templates", "The
+> catalog".
 
 ## 10. M23
 

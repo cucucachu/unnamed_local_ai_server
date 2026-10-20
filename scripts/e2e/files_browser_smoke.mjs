@@ -116,8 +116,9 @@ async function runFullFlow(page, cookie, { folderName, fileName, renamedFileName
   await waitForVisibleText(page, fileName);
   console.log(`  OK uploaded "${fileName}"`);
 
-  // --- tap the file -> action sheet -> Rename ------------------------------
-  await page.getByText(fileName, { exact: true }).click();
+  // --- right-click the file -> action sheet -> Rename ----------------------
+  // (A tap on a text file opens the viewer since M22-10.)
+  await page.getByText(fileName, { exact: true }).click({ button: 'right' });
   await page.getByTestId('file-action-rename').click();
   await page.getByTestId('prompt-modal-input').fill(renamedFileName);
   await page.getByTestId('prompt-modal-submit').click();
@@ -137,7 +138,7 @@ async function runFullFlow(page, cookie, { folderName, fileName, renamedFileName
 
   // --- cross-space move through the destination picker ---------------------
   if (moveToSpace) {
-    await page.getByText(renamedFileName, { exact: true }).click();
+    await page.getByText(renamedFileName, { exact: true }).click({ button: 'right' });
     await page.getByTestId('file-action-move').click();
     // The picker opens in the current folder; up twice reaches the root.
     await page.getByTestId('destination-picker-up').click();
