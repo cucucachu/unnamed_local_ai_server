@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ImageViewer } from '@/components/ImageViewer';
 import { MediaPlayer } from '@/components/MediaPlayer';
@@ -28,14 +29,15 @@ import { theme } from '@/lib/theme';
 export default function MediaScreen() {
   const { path } = useLocalSearchParams<{ path: string; kind: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const decodedPath = path ?? '';
   const kind = previewKind(decodedPath);
   const filename = decodedPath.split('/').pop() || decodedPath;
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <Pressable
           onPress={() => router.back()}
           style={styles.closeButton}
