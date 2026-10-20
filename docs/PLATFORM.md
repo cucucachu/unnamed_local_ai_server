@@ -1606,11 +1606,12 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > listed spaces is writable) opens a New app sheet: name (the slug follows
 > it), space, Create app, then the runner.
 >
-> **The catalog (M22-16 to M22-18).** Sixteen templates: grocery-list,
+> **The catalog (M22-16 to M22-18).** Eighteen templates: grocery-list,
 > list, notes and tracker (M13), chores, pantry, recipes and contacts
 > (household), budget, workouts, health-log and countdowns (money and
 > health), flashcards, kanban, books ("Books and media") and calculator
-> ("Calculator and units"). What each one's design leans on:
+> ("Calculator and units"), then group-chat (#467) and calendar (#477).
+> What each one's design leans on:
 > - **chores**: a rota in `chore_assignees` ordered by position; `turn`
 >   indexes it with `ROW_NUMBER()`, `completeChore` moves `next_due` and
 >   the turn, and who did it is the completion's `_created_by`.
@@ -1644,6 +1645,14 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > - **books**: `setStatus` stamps `started_on` and `finished_on`; indexed
 >   for search.
 > - **calculator**: no data (a `schema.sql` holding only a comment).
+> - **group-chat**: one `messages` table; the sender and time are the
+>   platform's `_created_by` / `_created_at`, deletes are soft, and the
+>   room is one live `useQuery` with a rising `LIMIT`.
+> - **calendar**: a repeating event is one row; `occurrenceDates` expands
+>   it for the dates on screen, and "this event only" edits and deletes
+>   are `event_skips` rows (an edit also saves the copy as its own event,
+>   in the same `saveEvent`). Reads Contacts' `people` v1 for birthdays,
+>   as countdowns does.
 >
 > Building them found three framework gaps, fixed in M22-16: an export
 > action needs the target copy (#448), a copy with no rows was invisible in

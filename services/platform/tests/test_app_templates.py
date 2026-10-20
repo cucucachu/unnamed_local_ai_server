@@ -198,6 +198,18 @@ SAMPLE = {
     "addresses": json.dumps([{"label": "home", "street1": "1 Main St", "city": "Springfield"}]),
     "websites": json.dumps([{"label": "personal", "url": "example.com"}]),
     "dates": json.dumps([{"label": "anniversary", "date": "2015-06-01"}]),
+    "all_day": 0,
+    "start_date": "2026-10-18",
+    "start_time": "09:00",
+    "end_date": "2026-10-18",
+    "end_time": "10:00",
+    "repeat": "weekly",
+    "repeat_every": 1,
+    "repeat_days": "1,3",
+    "repeat_until": None,
+    "people": json.dumps(["00000000-0000-0000-0000-000000000001"]),
+    "skip_event_id": None,
+    "skip_date": None,
 }
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
