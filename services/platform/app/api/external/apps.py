@@ -15,6 +15,7 @@ from app.api.schemas import (
     AppChangesOut,
     AppHistoryOut,
     AppList,
+    AppOrder,
     AppOut,
     AppRegisterRequest,
     AppRevertOut,
@@ -35,7 +36,17 @@ from app.api.schemas import (
     UpdateInstanceOut,
     UpdateInstanceRequest,
 )
-from app.core import appbuild, apphistory, appindex, apps, apptemplates, datamap, manifest, spaces
+from app.core import (
+    appbuild,
+    apphistory,
+    appindex,
+    apporder,
+    apps,
+    apptemplates,
+    datamap,
+    manifest,
+    spaces,
+)
 from app.core.errors import Unavailable
 from app.core.principal import CurrentUser
 
@@ -263,6 +274,18 @@ async def get_data_map(request: Request, principal: CurrentUser):
 async def list_instances(space_id: UUID, request: Request, principal: CurrentUser):
     async with request.app.state.db_pool.connection() as conn:
         return InstanceList(instances=await apps.list_instances(conn, principal, space_id))
+
+
+@router.get("/spaces/{space_id}/app-order", response_model=AppOrder)
+async def get_app_order(space_id: UUID, request: Request, principal: CurrentUser):
+    async with request.app.state.db_pool.connection() as conn:
+        return AppOrder(items=await apporder.get_order(conn, principal, space_id))
+
+
+@router.put("/spaces/{space_id}/app-order", response_model=AppOrder)
+async def set_app_order(space_id: UUID, body: AppOrder, request: Request, principal: CurrentUser):
+    async with request.app.state.db_pool.connection() as conn:
+        return AppOrder(items=await apporder.set_order(conn, principal, space_id, body.items))
 
 
 @router.post(

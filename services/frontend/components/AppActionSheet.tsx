@@ -22,6 +22,8 @@ export interface AppActionSheetProps {
   onRebuild: () => void;
   onInfo: () => void;
   onUninstall: () => void;
+  /** Start arranging the space's page (#465). */
+  onArrange: () => void;
   onClose: () => void;
 }
 
@@ -37,6 +39,7 @@ export function AppActionSheet({
   onRebuild,
   onInfo,
   onUninstall,
+  onArrange,
   onClose,
 }: AppActionSheetProps) {
   const styles = useStyles();
@@ -75,6 +78,7 @@ export function AppActionSheet({
             testID="app-sheet-rebuild"
           />
         ) : null}
+        <SheetItem icon="apps-outline" label="Arrange apps" onPress={onArrange} testID="app-sheet-arrange" />
         <SheetItem
           icon="information-circle-outline"
           label="History and publishing"

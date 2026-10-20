@@ -8,7 +8,7 @@ import { themedStyles } from '@/lib/theme';
  * The title bar of a home pager page (M19-08). Each page draws its own, so
  * it slides with the page: the history pushes Chat's aside as it opens.
  */
-export function PageHeader({ title, left }: { title: string; left?: ReactNode }) {
+export function PageHeader({ title, left, right }: { title: string; left?: ReactNode; right?: ReactNode }) {
   const styles = useStyles();
   const insets = useSafeAreaInsets();
   return (
@@ -17,6 +17,7 @@ export function PageHeader({ title, left }: { title: string; left?: ReactNode })
       <Text style={[styles.title, !left && styles.titleAlone]} numberOfLines={1} accessibilityRole="header">
         {title}
       </Text>
+      {right}
     </View>
   );
 }

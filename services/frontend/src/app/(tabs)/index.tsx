@@ -22,7 +22,7 @@ import { ChatPage, type PagedHistory } from '@/components/ChatPage';
 import { SpacePage, spaceLabel } from '@/components/SpacePage';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
-import { buildApp, getApp, listInstalledApps, uninstallInstance, type Instance } from '@/lib/apps';
+import { buildApp, getApp, listInstalledApps, setAppOrder, uninstallInstance, type Instance } from '@/lib/apps';
 import { useChatAttention } from '@/lib/chatAttention';
 import { pageSwiped, showPage, useCurrentPage, type HomePage } from '@/lib/currentPage';
 import { isReadOnly, type Space } from '@/lib/platform';
@@ -74,6 +74,9 @@ export default function HomeScreen() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [busy, setBusy] = useState<'rebuild' | 'uninstall' | null>(null);
   const { message: toast, showToast } = useToast();
+  // The space being arranged (#465), and orders saved since the last load.
+  const [arranging, setArranging] = useState<string | null>(null);
+  const [savedOrders, setSavedOrders] = useState<Record<string, string[]>>({});
 
   // A phone has the history page first; its snap points aren't a page
   // width apart, so it snaps to offsets rather than paging.
@@ -175,6 +178,11 @@ export default function HomeScreen() {
     }
   };
 
+  const saveOrder = (space: Space, keys: string[]) => {
+    setSavedOrders((current) => ({ ...current, [space.id]: keys }));
+    setAppOrder(space.id, keys).catch(() => showToast("Couldn't save the order"));
+  };
+
   const handleUninstall = async () => {
     if (menu === null) return;
     const { instance, space } = menu;
@@ -197,6 +205,7 @@ export default function HomeScreen() {
       <ScrollView
         ref={pager}
         horizontal
+        scrollEnabled={arranging === null}
         pagingEnabled={!historyPage}
         snapToOffsets={snapTo}
         decelerationRate={historyPage ? 'fast' : undefined}
@@ -210,14 +219,19 @@ export default function HomeScreen() {
         testID="home-pages"
       >
         <ChatPage width={width} paged={paged} />
-        {groups.map(({ space, instances }) => (
+        {groups.map(({ space, instances, order }) => (
           <SpacePage
             key={space.id}
             space={space}
             instances={instances}
+            order={savedOrders[space.id] ?? order}
             width={width}
+            arranging={arranging === space.id}
             onRefresh={reload}
             onLongPressApp={openMenu}
+            onArrange={(target) => setArranging(target.id)}
+            onDoneArranging={() => setArranging(null)}
+            onSaveOrder={saveOrder}
           />
         ))}
       </ScrollView>
@@ -293,6 +307,10 @@ export default function HomeScreen() {
             router.push({ pathname: '/apps/info/[appId]', params: { appId: menu.instance.app_id, instanceId: menu.instance.id } });
           }}
           onUninstall={() => void handleUninstall()}
+          onArrange={() => {
+            setArranging(menu.space.id);
+            setMenu(null);
+          }}
         />
       ) : null}
       <Toast message={toast} testID="apps-toast" />
