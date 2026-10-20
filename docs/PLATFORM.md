@@ -899,7 +899,9 @@ swipe left or a long press), `EmptyState`; `TextField`, `NumberField`
 browser's own inputs, `Select` (a `<select>`), `Toggle`, `Stepper`,
 `SearchField`, `Button` (primary, secondary, destructive, plain; `loading`),
 `IconButton`, `Chip`; `Icon`, `ProgressBar`, `Badge`, `Money` /
-`formatMoney`, `Duration` / `formatDuration`. Icon props are `IconName`s.
+`formatMoney`, `Duration` / `formatDuration`; `Photo` (a stored photo by
+id, square, `round` for avatars) and `PhotoField` (take / choose / remove;
+removing only clears the field) (#468). Icon props are `IconName`s.
 Charts (M22-04, `src/charts.tsx`): `BarChart` and `LineChart` take `data`
 rows, `x` (the field labelling each point, in order) and `y` (a field, or
 several for one series each, with a legend; `names` renames them), plus
@@ -947,6 +949,17 @@ dark the default colour of plain `Text` and `TextInput` (the outermost
   instance's `homeai.index` rows by meaning and by words (M22-07, the RPC
   op `search`; §5 "File search", "App rows"). A read, so viewers can too;
   a blank query resolves `[]` without a call.
+- `pickImage(source?)` → `{ id, width, height } | null` (#468): the user
+  takes (`'camera'`) or chooses (`'library'`) a photo; the host shrinks it
+  to a JPEG of at most 1280 px and 512 KB and stores it with the instance
+  (`apps/<instance>/images/`, `POST /api/platform/apps/instances/{id}/images`).
+  `imageUri(id)` / `useImage(id)` give it back as a `data:` URL (a host
+  `image.get`; the host keeps the last 40), `deleteImage(id)` removes it.
+  Ids are the platform's own (`<32 hex>.jpg|png|webp`), so a message can't
+  name a path, and they only resolve within the instance that stored them.
+  Pick and delete are writes (viewers get `read_only`); no manifest
+  permission, since every photo comes from the user's own pick. Photos
+  aren't in CSV exports and leave with the instance when it's uninstalled.
 - Later: cross-instance reads, capability shims.
 
 > **As built (M12-05)** — `packages/homeai-sdk/` holds everything
@@ -1039,6 +1052,9 @@ a string `method`, `evt` with a string `event`).
 | `db.run` | `{sql, params}` | `{changes, lastInsertRowId}` |
 | `action` | `{name, params: {…}}` | `{changes, lastInsertRowId, rows}` |
 | `agent.ask` | `{prompt}` | `{}` — host-local (M13-04): open the runner's agent panel. Not forwarded to the instance RPC. Viewers may ask. |
+| `image.pick` | `{source: 'camera' \| 'library'}` | `{id, width, height}` or `null` (cancelled) — host-local (#468): the host's picker, shrunk and uploaded to `…/images`. A write; one picker at a time (`busy`). |
+| `image.get` | `{id}` | `{dataUrl}` — host-local: `GET …/images/{id}`. |
+| `image.delete` | `{id}` | `{}` — host-local: `DELETE …/images/{id}`. A write. |
 
 `params` of the `db.*` methods is a list (`?` placeholders) or an object
 (named); values and results are as in the platform's RPC

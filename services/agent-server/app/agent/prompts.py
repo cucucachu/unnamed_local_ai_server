@@ -139,6 +139,8 @@ actions=[{label, onPress}] (swipe), EmptyState, Card, TextField, NumberField (nu
 DateField ('YYYY-MM-DD'|null), TimeField ('HH:MM'|null), Select options=[{label,value}],
 Toggle, Stepper, SearchField, Button variant=primary|secondary|destructive|plain, IconButton,
 Chip, ProgressBar (0-1), Badge, Money amount, Duration seconds, useTheme() for colors.
+Photos: PhotoField label value={id|null} onChange (take/choose/remove) and Photo id size round;
+keep the id in a TEXT column, and deleteImage(id) from @homeai/sdk when a row or photo goes.
 Charts: <BarChart|LineChart data={rows} x="month" y="total" (or y={['a','b']}) title=…/>,
 <PieChart data={rows} label="category" value="total"/>; pass useQuery rows straight in.
 Apps follow the device's light/dark setting ("userInterfaceStyle" in app.json is "automatic"
@@ -152,6 +154,7 @@ when left out), so never hard-code text, border or background colors: use useThe
   search(query, limit?)  this app's homeai.index rows by meaning: [{table, id, title, snippet}]
   useSpace()?.role  'owner' | 'editor' | 'viewer' — hide writes from viewers
   useUser() {id, username, name}; useMembers() [{id, username, name, role}]
+  pickImage('camera'|'library') -> {id, width, height} | null; useImage(id) {uri}; deleteImage(id)
 Who wrote a row: the platform adds _created_by, _created_at, _updated_by, _updated_at
 (user id / UTC ISO time) to every table and sets them on every write. Never declare or
 write them, and never add your own sender/author/user column or pass a name in:

@@ -52,6 +52,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.core import (
     appcsv,
     appdb,
+    appimages,
     apps,
     appschema,
     audit,
@@ -644,6 +645,48 @@ class AppData:
         if changes:
             self._changed(target)
         return result
+
+    # --- photos (#468) --------------------------------------------------------------------
+
+    async def _with_instance_fd[R](
+        self,
+        principal: Principal,
+        instance_id: UUID,
+        need: spaces.Need,
+        fn: Callable[[int, int], R],
+    ) -> R:
+        """`fn(instance_fd, gid)` in a worker thread, once `principal` has `need` on the instance."""
+        async with self.pool.connection() as conn:
+            target = await self._target(conn, principal, instance_id, need)
+
+        def run() -> R:
+            try:
+                fd = self.storage.open_instance(
+                    target.space_id, target.gid, target.id, create=False
+                )
+            except FileNotFoundError:
+                raise NotFound("not_found") from None
+            try:
+                return fn(fd, target.gid)
+            finally:
+                os.close(fd)
+
+        return await anyio.to_thread.run_sync(run)
+
+    async def save_image(self, principal: Principal, instance_id: UUID, data: bytes) -> str:
+        return await self._with_instance_fd(
+            principal, instance_id, "write", lambda fd, gid: appimages.save(fd, gid, data)
+        )
+
+    async def read_image(self, principal: Principal, instance_id: UUID, image_id: str) -> bytes:
+        return await self._with_instance_fd(
+            principal, instance_id, "read", lambda fd, _gid: appimages.read(fd, image_id)
+        )
+
+    async def delete_image(self, principal: Principal, instance_id: UUID, image_id: str) -> None:
+        await self._with_instance_fd(
+            principal, instance_id, "write", lambda fd, _gid: appimages.delete(fd, image_id)
+        )
 
     # --- CSV export and import (M22-08) ---------------------------------------------------
 

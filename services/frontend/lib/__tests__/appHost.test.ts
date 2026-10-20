@@ -1,6 +1,7 @@
 import { PROTOCOL } from '@homeai/sdk/host';
 
 import { instanceBridge, isReadOnly, loadInstanceDocument, sandboxSpace } from '../appHost';
+import { pickPhoto } from '../pickPhoto';
 import type { Space } from '../platform';
 import { onUnauthorized, setSessionToken } from '../session';
 
@@ -41,6 +42,9 @@ function openBridge(readOnly = false) {
   };
   return { host, sent, answered };
 }
+
+jest.mock('../pickPhoto', () => ({ pickPhoto: jest.fn() }));
+const mockPick = pickPhoto as jest.MockedFunction<typeof pickPhoto>;
 
 beforeEach(() => setSessionToken(TOKEN));
 afterEach(() => setSessionToken(null));
@@ -128,6 +132,50 @@ describe('instanceBridge: forwarding is bound to the instance the host opened', 
     await answered(1);
     unsubscribe();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('instanceBridge: photos (image.*) are this instance’s', () => {
+  const IMG = 'c'.repeat(32) + '.jpg';
+
+  it('uploads the shrunk photo to that instance and answers its id; get and delete name it too', async () => {
+    mockPick.mockResolvedValueOnce({ base64: 'AAAA', width: 1280, height: 960 }).mockResolvedValueOnce(null);
+    const calls = mockPlatform((call) =>
+      call.init.method === 'POST' ? { status: 201, body: { id: IMG } } : call.init.method === 'DELETE' ? { status: 204 } : { body: { data_url: 'data:image/jpeg;base64,AAAA' } },
+    );
+    const { host, answered } = openBridge();
+    host.receive(req(1, 'image.pick', { source: 'camera', instance_id: OTHER }));
+    await answered(1);
+    host.receive(req(2, 'image.pick', { source: 'library' }));
+    host.receive(req(3, 'image.get', { id: IMG, instance_id: OTHER }));
+    host.receive(req(4, 'image.delete', { id: IMG }));
+    const replies = await answered(4);
+    const byId = (id: number) => replies.find((r) => r.id === id);
+    expect(mockPick.mock.calls).toEqual([['camera'], ['library']]);
+    expect(byId(1)).toMatchObject({ ok: true, result: { id: IMG, width: 1280, height: 960 } });
+    expect(byId(2)).toMatchObject({ ok: true, result: null });
+    expect(byId(3)).toMatchObject({ ok: true, result: { dataUrl: 'data:image/jpeg;base64,AAAA' } });
+    expect(byId(4)).toMatchObject({ ok: true, result: {} });
+    const base = `${BASE}/api/platform/apps/instances/${FIXED}/images`;
+    expect(calls.map((c) => [c.init.method, c.url])).toEqual([
+      ['POST', base],
+      ['GET', `${base}/${IMG}`],
+      ['DELETE', `${base}/${IMG}`],
+    ]);
+    expect(JSON.parse(calls[0].init.body!)).toEqual({ data: 'AAAA' });
+    expect(calls.every((c) => c.init.headers?.Authorization === `Bearer ${TOKEN}`)).toBe(true);
+  });
+
+  it('opens one picker at a time', async () => {
+    let finish: (v: null) => void = () => {};
+    mockPick.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    mockPlatform();
+    const { host, answered } = openBridge();
+    host.receive(req(1, 'image.pick', { source: 'library' }));
+    host.receive(req(2, 'image.pick', { source: 'library' }));
+    expect((await answered(1))[0]).toMatchObject({ id: 2, ok: false, error: { code: 'busy' } });
+    finish(null);
+    expect((await answered(2))[1]).toMatchObject({ id: 1, ok: true, result: null });
   });
 });
 

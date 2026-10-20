@@ -3,6 +3,6 @@
 // `@homeai/sdk/host/web`, and native passes `injectScriptFor(wire)` to
 // WebView.injectJavaScript as `send`.
 export * from '../protocol';
-export { MAX_IN_FLIGHT, checkParams, createBridgeHost, type BridgeHost, type BridgeHostOptions, type Forward } from './bridge-host';
+export { MAX_IN_FLIGHT, checkParams, createBridgeHost, type BridgeHost, type BridgeHostOptions, type Forward, type ImageHost } from './bridge-host';
 export { SANDBOX_CSP, injectScriptFor, sandboxDocument } from './document';
-export { fetchBundle, fetchRuntime, platformEventRelay, platformForward, runtimeUrl, type Bundle, type FetchLike, type PlatformOptions } from './platform';
+export { fetchBundle, fetchRuntime, platformEventRelay, platformForward, platformImages, runtimeUrl, type Bundle, type FetchLike, type PlatformOptions } from './platform';

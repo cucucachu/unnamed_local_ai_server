@@ -3,7 +3,7 @@
 // types/homeai.d.ts.
 import { createElement, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { on, rpc } from './bridge';
-import type { ActionResult, Member, RunResult, SearchResult, SqlParams, Space, User } from './protocol';
+import type { ActionResult, ImageRef, ImageSource, Member, RunResult, SearchResult, SqlParams, Space, User } from './protocol';
 
 export type Database = {
   getAllAsync<T = any>(sql: string, ...params: unknown[]): Promise<T[]>;
@@ -116,6 +116,57 @@ export function search(query: string, limit = 10): Promise<SearchResult[]> {
 /** Open the host's "Ask the agent" panel with `prompt` (M13-04). Resolves once the host has the request. */
 export function askAgent(prompt: string): Promise<Record<string, never>> {
   return rpc('agent.ask', { prompt });
+}
+
+// --- photos (#468) ---------------------------------------------------------
+
+/** The picker stays open as long as the user likes. */
+const PICK_TIMEOUT_MS = 30 * 60 * 1000;
+/** Each is up to ~700 K characters, so only the most recently used are kept. */
+const IMAGE_CACHE_SIZE = 40;
+const imageCache = new Map<string, Promise<string>>();
+
+/** The user takes (`camera`) or chooses (`library`) a photo; the host shrinks and stores it. Null if they cancel. */
+export function pickImage(source: ImageSource = 'library'): Promise<ImageRef | null> {
+  return rpc('image.pick', { source }, PICK_TIMEOUT_MS);
+}
+
+/** A stored photo as a `data:` URL, for `<Image source={{ uri }} />`. */
+export function imageUri(id: string): Promise<string> {
+  let p = imageCache.get(id);
+  if (p) {
+    imageCache.delete(id);
+  } else {
+    p = rpc('image.get', { id }).then((r) => r.dataUrl);
+    p.catch(() => imageCache.delete(id));
+  }
+  imageCache.set(id, p);
+  while (imageCache.size > IMAGE_CACHE_SIZE) imageCache.delete(imageCache.keys().next().value as string);
+  return p;
+}
+
+export async function deleteImage(id: string): Promise<void> {
+  imageCache.delete(id);
+  await rpc('image.delete', { id });
+}
+
+/** `imageUri(id)` as state: `uri` is null while loading, without an id, or on `error`. */
+export function useImage(id: string | null | undefined): { uri: string | null; loading: boolean; error: Error | null } {
+  const [state, setState] = useState<{ id: string | null; uri: string | null; error: Error | null }>({ id: null, uri: null, error: null });
+  useEffect(() => {
+    if (!id) return;
+    let live = true;
+    imageUri(id).then(
+      (uri) => live && setState({ id, uri, error: null }),
+      (error) => live && setState({ id, uri: null, error }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  if (!id) return { uri: null, loading: false, error: null };
+  if (state.id !== id) return { uri: null, loading: true, error: null };
+  return { uri: state.uri, loading: false, error: state.error };
 }
 
 let space: Space | null = null;

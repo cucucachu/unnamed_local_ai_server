@@ -3,11 +3,13 @@ import {
   fetchBundle,
   fetchRuntime,
   platformForward,
+  platformImages,
   sandboxDocument,
   type BridgeHost,
   type BridgeHostOptions,
   type FetchLike,
   type Forward,
+  type ImageHost,
   type PlatformOptions,
   type Member as SandboxMember,
   type Space as SandboxSpace,
@@ -15,6 +17,7 @@ import {
 } from '@homeai/sdk/host';
 
 import { apiBase } from './api';
+import { pickPhoto } from './pickPhoto';
 import { getMe, isReadOnly, listMembers, type Space } from './platform';
 import { authHeaders, notifyUnauthorized } from './session';
 
@@ -44,12 +47,34 @@ export function instanceForward(instanceId: string): Forward {
   return platformForward(instanceId, platformOptions());
 }
 
+let picking = false;
+
+/** The bridge's photo store (`image.*`), bound to `instanceId`: one picker open at a time. */
+export function instanceImages(instanceId: string): ImageHost {
+  const store = platformImages(instanceId, platformOptions());
+  return {
+    async pick(source) {
+      if (picking) throw Object.assign(new Error('a photo picker is already open'), { code: 'busy' });
+      picking = true;
+      try {
+        const photo = await pickPhoto(source);
+        if (!photo) return null;
+        return { id: await store.upload(photo.base64), width: photo.width, height: photo.height };
+      } finally {
+        picking = false;
+      }
+    },
+    get: store.dataUrl,
+    remove: store.remove,
+  };
+}
+
 /** A bridge host for `instanceId` (native: `send` injects into the WebView). */
 export function instanceBridge(
   instanceId: string,
-  options: Omit<BridgeHostOptions, 'forward'>,
+  options: Omit<BridgeHostOptions, 'forward' | 'images'>,
 ): BridgeHost {
-  return createBridgeHost({ ...options, forward: instanceForward(instanceId) });
+  return createBridgeHost({ ...options, forward: instanceForward(instanceId), images: instanceImages(instanceId) });
 }
 
 /** `components/AppSandbox` (the iframe on web, the WebView on native). */

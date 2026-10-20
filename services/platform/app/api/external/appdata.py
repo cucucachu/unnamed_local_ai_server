@@ -5,14 +5,17 @@ Contract: docs/ARCHITECTURE.md §3 "App data" and "App runtime"; rules:
 Every route takes an agent delegation too (D6).
 """
 
+import base64
+import binascii
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Request, status
 
 from app.api.schemas import (
     ExportBody,
     ExportOut,
+    ImageIn,
     ImportBody,
     ImportOut,
     InstanceBundleOut,
@@ -20,7 +23,8 @@ from app.api.schemas import (
     MigrationOut,
     RpcRequest,
 )
-from app.core import appbuild, hitl
+from app.core import appbuild, appimages, hitl
+from app.core.errors import InvalidInput
 from app.core.principal import CurrentUser
 
 router = APIRouter(prefix="/apps/instances/{instance_id}")
@@ -39,6 +43,37 @@ async def rpc(
     instance_id: UUID, body: Annotated[RpcRequest, Body()], request: Request, principal: CurrentUser
 ) -> dict:
     return await request.app.state.appdata.rpc(principal, instance_id, body.model_dump())
+
+
+@router.post("/images", status_code=status.HTTP_201_CREATED)
+async def save_image(
+    instance_id: UUID, body: ImageIn, request: Request, principal: CurrentUser
+) -> dict:
+    """A photo the user picked (#468), base64: a JPEG, PNG or WebP of at most 512 KB, so it
+    still fits the bridge as a data URL."""
+    try:
+        data = base64.b64decode(body.data, validate=True)
+    except binascii.Error:
+        raise InvalidInput("not_an_image") from None
+    image_id = await request.app.state.appdata.save_image(principal, instance_id, data)
+    return {"id": image_id}
+
+
+@router.get("/images/{image_id}")
+async def get_image(
+    instance_id: UUID, image_id: str, request: Request, principal: CurrentUser
+) -> dict:
+    """The photo as a `data:` URL, which is how the host hands it to the sandbox."""
+    data = await request.app.state.appdata.read_image(principal, instance_id, image_id)
+    encoded = base64.b64encode(data).decode("ascii")
+    return {"data_url": f"data:{appimages.mime_of(image_id)};base64,{encoded}"}
+
+
+@router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_image(
+    instance_id: UUID, image_id: str, request: Request, principal: CurrentUser
+) -> None:
+    await request.app.state.appdata.delete_image(principal, instance_id, image_id)
 
 
 @router.post("/export", response_model=ExportOut, status_code=201)

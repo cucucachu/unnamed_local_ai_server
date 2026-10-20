@@ -35,12 +35,12 @@ function withError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
 }
 
-async function call(opts: PlatformOptions, path: string, body?: unknown) {
+async function call(opts: PlatformOptions, path: string, body?: unknown, method?: string) {
   const doFetch = opts.fetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
   let r: Awaited<ReturnType<FetchLike>>;
   try {
     r = await doFetch(`${opts.baseUrl ?? ''}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
+      method: method ?? (body === undefined ? 'GET' : 'POST'),
       headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...opts.headers },
       body: body === undefined ? undefined : JSON.stringify(body),
       credentials: 'same-origin',
@@ -75,6 +75,21 @@ export function platformForward(instanceId: string, opts: PlatformOptions = {}):
     if (method === 'search') return doc.results;
     return { changes: doc.changes, lastInsertRowId: doc.lastInsertRowId, rows: doc.rows };
   }) as Forward;
+}
+
+/**
+ * The instance's photo store over HTTP (#468). `upload` takes the shrunk photo as base64 (the
+ * host's picker makes it); the sandbox only ever sees ids and `data:` URLs.
+ */
+export function platformImages(instanceId: string, opts: PlatformOptions = {}) {
+  const base = `${instancePath(instanceId)}/images`;
+  return {
+    upload: async (base64: string): Promise<string> => (await call(opts, base, { data: base64 })).id,
+    dataUrl: async (id: string): Promise<string> => (await call(opts, `${base}/${encodeURIComponent(id)}`)).data_url,
+    remove: async (id: string): Promise<void> => {
+      await call(opts, `${base}/${encodeURIComponent(id)}`, undefined, 'DELETE');
+    },
+  };
 }
 
 export function fetchBundle(instanceId: string, opts: PlatformOptions = {}): Promise<Bundle> {
