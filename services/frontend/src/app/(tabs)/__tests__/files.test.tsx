@@ -10,11 +10,19 @@ import type { FileEntry } from '@/lib/files';
 const mockPush = jest.fn();
 const mockSetParams = jest.fn();
 let mockSearchParams: { path?: string } = {};
+type MockRemoveEvent = { data: { action: { type: string } }; preventDefault: () => void };
+const mockRemoveListeners: ((event: MockRemoveEvent) => void)[] = [];
 jest.mock('expo-router', () => {
   const ReactActual = jest.requireActual('react');
   return {
     useRouter: () => ({ push: mockPush, setParams: mockSetParams }),
     useLocalSearchParams: () => mockSearchParams,
+    useNavigation: () => ({
+      addListener: (_name: string, listener: (event: MockRemoveEvent) => void) => {
+        mockRemoveListeners.push(listener);
+        return () => mockRemoveListeners.splice(mockRemoveListeners.indexOf(listener), 1);
+      },
+    }),
     useFocusEffect: (callback: () => void | (() => void)) => {
       ReactActual.useEffect(() => {
         const cleanup = callback();
@@ -428,6 +436,33 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
     });
 
     expect(mockSetParams).toHaveBeenCalledWith({ path: NOTES_DIR.path });
+  });
+
+  it('back in a folder goes up one; at the root it leaves Files', async () => {
+    const back = (type: string) => {
+      const event = { data: { action: { type } }, preventDefault: jest.fn() };
+      mockRemoveListeners.forEach((listener) => listener(event));
+      return event.preventDefault;
+    };
+    mockSearchParams = { path: '/personal/notes' };
+    mockFilesApiByPath({ '/personal/notes': [LINK_TEST_FILE] });
+    let renderer = await renderScreen();
+    expect(back('GO_BACK')).toHaveBeenCalled();
+    expect(mockSetParams).toHaveBeenLastCalledWith({ path: '/personal' });
+    expect(back('RESET')).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+
+    mockSearchParams = { path: '/spaces/family' };
+    mockFilesApiByPath({ '/spaces/family': { entries: [], label: 'Family' } });
+    renderer = await renderScreen();
+    expect(back('POP_TO')).toHaveBeenCalled();
+    expect(mockSetParams).toHaveBeenLastCalledWith({ path: '/' });
+    act(() => renderer.unmount());
+
+    mockSearchParams = {};
+    mockFilesApiByPath({ '/': [PERSONAL_SPACE, SHARED_SPACES], '/spaces': [FAMILY_SPACE] });
+    renderer = await renderScreen();
+    expect(back('GO_BACK')).not.toHaveBeenCalled();
   });
 });
 
