@@ -381,7 +381,9 @@ test('@homeai/ui screens and charts type-check and render, and userInterfaceStyl
   const smoke = await build(edits);
   assert.deepEqual(smoke.diagnostics, []);
   assert.deepEqual(smoke.routes.filter((r) => ['/kit', '/charts'].includes(r.path)).map((r) => r.timed_out), [false, false]);
-  const light = await compileOnly();
+  const unset = await compileOnly();
+  assert.match(fs.readFileSync(path.join(unset.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "automatic"/);
+  const light = await compileOnly({ 'app.json': (old) => JSON.stringify({ ...JSON.parse(old), userInterfaceStyle: 'light' }) });
   assert.match(fs.readFileSync(path.join(light.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "light"/);
 });
 

@@ -100,13 +100,14 @@ function outputs(result) {
  * `prod` is what the platform stores; `dev` (unminified, development React
  * warnings) is what the smoke render evaluates.
  */
-/** app.json's top-level `userInterfaceStyle` (Expo's key), for the runtime's theme; the platform validated app.json. */
+/** app.json's top-level `userInterfaceStyle` (Expo's key), for the runtime's theme; the platform validated
+ * app.json. Without one the app follows the device, so every app gets dark mode unless it opts out. */
 function userInterfaceStyle(appRoot) {
   try {
     const v = JSON.parse(fs.readFileSync(path.join(appRoot, 'app.json'), 'utf8')).userInterfaceStyle;
-    return ['light', 'dark', 'automatic'].includes(v) ? v : 'light';
+    return ['light', 'dark', 'automatic'].includes(v) ? v : 'automatic';
   } catch {
-    return 'light';
+    return 'automatic';
   }
 }
 

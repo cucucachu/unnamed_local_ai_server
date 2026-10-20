@@ -1,8 +1,9 @@
-// The theme apps and the router chrome draw with (M22-03). An app opts into
-// following the host with Expo's top-level app.json key `userInterfaceStyle`:
-// "automatic" uses the host's scheme (config `colorScheme`, then `theme`
-// events); "dark" is always dark; missing or "light" stays light, so apps
-// written before the theme existed look as they did.
+// The theme apps and the router chrome draw with (M22-03). Expo's top-level
+// app.json key `userInterfaceStyle` picks it: "automatic" uses the host's
+// scheme, the device's (config `colorScheme`, then `theme` events); "dark" is
+// always dark; "light" stays light. The builder puts "automatic" in the bundle
+// when app.json has none; a bundle built before M22-03 has none and stays
+// light, as it looked then.
 import { useSyncExternalStore } from 'react';
 import { on } from './bridge';
 

@@ -913,12 +913,13 @@ last, highest and lowest points, or each slice's percent).
 
 The theme (`src/theme.ts`, `useTheme()`: colors, spacing, radius, font)
 is chosen by Expo's top-level app.json key `userInterfaceStyle`, which the
-builder bakes into the bundle and the platform's schema checks: missing or
-`"light"` is light, so apps written before the kit look exactly as they
-did; `"dark"` is dark; `"automatic"` follows the host's scheme, which the
-host passes as sandbox config `colorScheme` and can change with the
-`theme` event (`{colorScheme}`). The web host is dark-only and says
-`"dark"`. The router's header, modal sheet and tab bar, the kit, and in
+builder bakes into the bundle and the platform's schema checks:
+`"automatic"`, and missing (the builder writes `"automatic"`), follows the
+host's scheme, which the host passes as sandbox config `colorScheme` and
+can change with the `theme` event (`{colorScheme}`); `"light"` and
+`"dark"` pin one. Bundles built before the kit carry no value and stay
+light. The phone host passes the device's setting and sends `theme` when
+it changes; the web host is dark-only and says `"dark"`. The router's header, modal sheet and tab bar, the kit, and in
 dark the default colour of plain `Text` and `TextInput` (the outermost
 `Text` only, so nesting still inherits) follow the theme;
 `useColorScheme()` answers for the app, not the browser. The kit added

@@ -47,7 +47,7 @@ export async function bundleApp(appDir = FIXTURE, { dev = true, edits = {}, lega
   lines.push(`export const routes = [${routes.join(', ')}];`);
   if (!legacy) {
     const style = JSON.parse(edits['app.json'] ?? fs.readFileSync(path.join(appDir, 'app.json'), 'utf8')).userInterfaceStyle;
-    lines.push(`export const userInterfaceStyle = ${JSON.stringify(style ?? 'light')};`);
+    lines.push(`export const userInterfaceStyle = ${JSON.stringify(style ?? 'automatic')};`);
   }
   const res = await esbuild.build({
     stdin: { contents: lines.join('\n'), resolveDir: appDir, loader: 'js' },

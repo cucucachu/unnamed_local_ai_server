@@ -88,12 +88,17 @@ async function sandboxPeople(space: Space): Promise<{ user: SandboxUser | null; 
   };
 }
 
-/** The instance's current bundle and its SDK's runtime, as one sandbox document. */
-export async function loadInstanceDocument(instanceId: string, space: Space): Promise<InstanceDocument> {
+/** The instance's current bundle and its SDK's runtime, as one sandbox document. `colorScheme` is
+ * the device's, which apps follow unless their app.json pins a `userInterfaceStyle`. */
+export async function loadInstanceDocument(
+  instanceId: string,
+  space: Space,
+  colorScheme: 'light' | 'dark' = 'light',
+): Promise<InstanceDocument> {
   const options = platformOptions();
   const [bundle, people] = await Promise.all([fetchBundle(instanceId, options), sandboxPeople(space)]);
   const runtime = await fetchRuntime(bundle.sdk, options);
-  const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space), ...people, colorScheme: 'dark' } });
+  const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space), ...people, colorScheme } });
   return { appId: bundle.app_id, version: bundle.version, html };
 }
 

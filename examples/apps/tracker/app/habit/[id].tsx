@@ -1,7 +1,8 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { runAction, useDatabase, useQuery, useSpace } from '@homeai/sdk';
-import { useState } from 'react';
+import { useTheme } from '@homeai/ui';
+import { useMemo, useState } from 'react';
 
 type Habit = { id: number; name: string; created_at: string };
 type Checkin = { id: number; day: string };
@@ -11,6 +12,7 @@ function today(): string {
 }
 
 export default function HabitScreen() {
+  const styles = useStyles();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data, loading } = useQuery<Habit>('SELECT id, name, created_at FROM habits WHERE id = ?', [
     Number(id),
@@ -29,6 +31,7 @@ export default function HabitScreen() {
 }
 
 function HabitDetail({ habit }: { habit: Habit }) {
+  const styles = useStyles();
   const db = useDatabase();
   const router = useRouter();
   const canEdit = useSpace()?.role !== 'viewer';
@@ -98,15 +101,23 @@ function HabitDetail({ habit }: { habit: Habit }) {
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, padding: 16, gap: 8 },
-  buttons: { flexDirection: 'row', gap: 8, marginTop: 16 },
-  button: { backgroundColor: '#208AEF', borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10 },
-  buttonText: { color: 'white', fontWeight: '600' },
-  secondaryButton: { borderWidth: 1, borderColor: '#999', borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10 },
-  secondaryButtonText: { color: '#208AEF', fontWeight: '600' },
-  deleteText: { color: 'crimson', fontWeight: '600' },
-  day: { fontSize: 16 },
-  muted: { color: '#666' },
-  error: { color: 'crimson' },
-});
+// Colors come from the theme, so the app follows the device's light/dark setting.
+function useStyles() {
+  const t = useTheme();
+  return useMemo(
+    () =>
+      StyleSheet.create({
+        screen: { flex: 1, padding: 16, gap: 8 },
+        buttons: { flexDirection: 'row', gap: 8, marginTop: 16 },
+        button: { backgroundColor: t.colors.tint, borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10 },
+        buttonText: { color: t.colors.onTint, fontWeight: '600' },
+        secondaryButton: { borderWidth: 1, borderColor: t.colors.border, borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10 },
+        secondaryButtonText: { color: t.colors.tint, fontWeight: '600' },
+        deleteText: { color: t.colors.danger, fontWeight: '600' },
+        day: { fontSize: 16 },
+        muted: { color: t.colors.textMuted },
+        error: { color: t.colors.danger },
+      }),
+    [t],
+  );
+}
