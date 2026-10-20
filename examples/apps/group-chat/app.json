@@ -1,0 +1,13 @@
+{
+  "name": "Group chat",
+  "slug": "group-chat",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "chatbubbles-outline",
+    "description": "A group chat for everyone in the space: post, edit or delete your messages, search what was said.",
+    "permissions": {},
+    "index": [{ "table": "messages", "title": "body" }]
+  }
+}
