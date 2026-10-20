@@ -1,5 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Modal, Pressable, StyleSheet, Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { FileEntry } from '@/lib/files';
 import { previewKind } from '@/lib/media';
@@ -71,6 +72,7 @@ export function FileActionSheet({
   onPlay,
   canWrite = true,
 }: FileActionSheetProps) {
+  const insets = useSafeAreaInsets();
   if (!entry) return null;
 
   const kind = entry.type === 'file' ? previewKind(entry.name) : null;
@@ -98,7 +100,7 @@ export function FileActionSheet({
       <Pressable style={styles.overlay} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
         {/* `stopPropagation` keeps a tap inside the sheet itself from also
             triggering the overlay's own dismiss-on-press-outside handler. */}
-        <Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}>
+        <Pressable style={[styles.sheet, { paddingBottom: 24 + insets.bottom }]} onPress={(event) => event.stopPropagation()}>
           <Text style={styles.title} numberOfLines={1}>
             {entry.name}
           </Text>
