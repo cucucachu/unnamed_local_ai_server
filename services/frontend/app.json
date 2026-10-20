@@ -38,6 +38,14 @@
       "expo-sharing",
       "expo-video",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Home AI lets you choose photos for your apps.",
+          "cameraPermission": "Home AI uses the camera when you take a photo in an app.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-audio",
         {
           "microphonePermission": false,

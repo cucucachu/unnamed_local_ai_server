@@ -9,7 +9,7 @@ const H = await importHost();
 const req = (id, method, params) => JSON.stringify({ homeai: 1, kind: 'req', id, method, params });
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-function harness({ readOnly = false, forward, onAskAgent } = {}) {
+function harness({ readOnly = false, forward, onAskAgent, images } = {}) {
   const sent = [];
   const forwarded = [];
   const events = [];
@@ -24,6 +24,7 @@ function harness({ readOnly = false, forward, onAskAgent } = {}) {
     readOnly,
     onEvent: (event, data) => events.push({ event, data }),
     onAskAgent,
+    images,
   });
   return { host, sent, forwarded, events, res: (id) => sent.find((m) => m.kind === 'res' && m.id === id) };
 }
@@ -106,6 +107,58 @@ test('agent.ask is handled by the host and never forwarded, including for viewer
   assert.equal(h.res(2).error.code, 'bad_request');
   assert.equal(h.res(3).error.code, 'bad_request');
   assert.equal(h.res(4).error.code, 'bad_request');
+});
+
+const IMG = 'a'.repeat(32) + '.jpg';
+
+function imageStore() {
+  const calls = [];
+  return {
+    calls,
+    pick: async (source) => (calls.push(['pick', source]), source === 'camera' ? null : { id: IMG, width: 640, height: 480 }),
+    get: async (id) => (calls.push(['get', id]), 'data:image/jpeg;base64,AAAA'),
+    remove: async (id) => void calls.push(['remove', id]),
+  };
+}
+
+test('image.* go to the host’s photo store, never the platform forward', async () => {
+  const images = imageStore();
+  const h = harness({ images });
+  h.host.receive(req(1, 'image.pick', { source: 'library', instance_id: 'other' }));
+  h.host.receive(req(2, 'image.pick', { source: 'camera' }));
+  h.host.receive(req(3, 'image.get', { id: IMG, url: 'http://x' }));
+  h.host.receive(req(4, 'image.delete', { id: IMG }));
+  for (const [id, method, params] of [
+    [5, 'image.pick', { source: 'files' }],
+    [6, 'image.get', { id: '../data.sqlite' }],
+    [7, 'image.delete', {}],
+    [8, 'image.get', { id: 'a'.repeat(32) + '.svg' }],
+  ]) h.host.receive(req(id, method, params));
+  await tick();
+  assert.deepEqual(images.calls, [['pick', 'library'], ['pick', 'camera'], ['get', IMG], ['remove', IMG]]);
+  assert.deepEqual(h.forwarded, []);
+  assert.deepEqual(h.res(1).result, { id: IMG, width: 640, height: 480 });
+  assert.equal(h.res(2).result, null);
+  assert.deepEqual(h.res(3).result, { dataUrl: 'data:image/jpeg;base64,AAAA' });
+  assert.deepEqual(h.res(4).result, {});
+  for (const id of [5, 6, 7, 8]) assert.equal(h.res(id).error.code, 'bad_request', String(id));
+});
+
+test('viewers can see photos but not pick or delete them; no store answers unavailable', async () => {
+  const images = imageStore();
+  const h = harness({ readOnly: true, images });
+  h.host.receive(req(1, 'image.pick', { source: 'library' }));
+  h.host.receive(req(2, 'image.delete', { id: IMG }));
+  h.host.receive(req(3, 'image.get', { id: IMG }));
+  await tick();
+  assert.equal(h.res(1).error.code, 'read_only');
+  assert.equal(h.res(2).error.code, 'read_only');
+  assert.equal(h.res(3).ok, true);
+  assert.deepEqual(images.calls, [['get', IMG]]);
+  const bare = harness();
+  bare.host.receive(req(1, 'image.get', { id: IMG }));
+  await tick();
+  assert.equal(bare.res(1).error.code, 'unavailable');
 });
 
 test('forward errors keep their code; the in-flight cap answers busy', async () => {
@@ -211,6 +264,17 @@ test('platform errors become {code, message}', async () => {
   assert.deepEqual(await codeOf(forward('db.getAll', { sql: 'x', params: [] })), { code: 'not_found', message: 'not_found' });
   assert.deepEqual(await codeOf(forward('db.getAll', { sql: 'x', params: [] })), { code: 'http_502', message: 'http_502' });
   assert.equal((await codeOf(forward('db.getAll', { sql: 'x', params: [] }))).code, 'unavailable');
+});
+
+test('platformImages: upload, data URL and delete under the instance', async () => {
+  const f = fakeFetch([{ status: 201, body: { id: IMG } }, { status: 200, body: { data_url: 'data:image/jpeg;base64,AAAA' } }, { status: 204 }]);
+  const images = H.platformImages(INSTANCE_ID, { fetch: f.fetch, headers: { Authorization: 'Bearer t' } });
+  assert.equal(await images.upload('AAAA'), IMG);
+  assert.equal(await images.dataUrl(IMG), 'data:image/jpeg;base64,AAAA');
+  await images.remove(IMG);
+  const base = `/api/platform/apps/instances/${INSTANCE_ID}/images`;
+  assert.deepEqual(f.calls.map((c) => [c.method, c.url, c.body]), [['POST', base, { data: 'AAAA' }], ['GET', `${base}/${IMG}`, undefined], ['DELETE', `${base}/${IMG}`, undefined]]);
+  assert.ok(f.calls.every((c) => c.headers.Authorization === 'Bearer t'));
 });
 
 test('bundle and runtime URLs', async () => {

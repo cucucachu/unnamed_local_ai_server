@@ -70,6 +70,20 @@ declare module '@homeai/sdk' {
    * New and changed rows show up a moment after they're written.
    */
   export function search(query: string, limit?: number): Promise<SearchResult[]>;
+  /** A photo stored for this app (`id` goes in your table, e.g. a `photo TEXT` column). */
+  export type ImageRef = { id: string; width: number; height: number };
+  /**
+   * The user takes (`'camera'`) or chooses (`'library'`, the default) a photo; the host shrinks it
+   * (at most 1280 px) and stores it with this app's data. Null if they cancel. Editors only.
+   * For a form, `PhotoField` from `@homeai/ui` does this for you.
+   */
+  export function pickImage(source?: 'camera' | 'library'): Promise<ImageRef | null>;
+  /** A stored photo as a `data:` URL, for `<Image source={{ uri }} />` (cached). `Photo` from `@homeai/ui` shows one. */
+  export function imageUri(id: string): Promise<string>;
+  /** `imageUri` as state: `uri` is null while loading, without an id, or on error. */
+  export function useImage(id: string | null | undefined): { uri: string | null; loading: boolean; error: Error | null };
+  /** Deletes a stored photo, e.g. when its row is deleted or the photo replaced. Editors only. */
+  export function deleteImage(id: string): Promise<void>;
   /** The space this instance is installed in; null until the host has said. */
   export function useSpace(): Space | null;
   /** Who is using the app; null until the host has said. */
@@ -135,6 +149,24 @@ declare module '@homeai/ui' {
     testID?: string;
   }): El;
   export function EmptyState(props: { icon?: IconName; title: string; message?: string; action?: { title: string; onPress: () => void }; testID?: string }): El;
+
+  /** A stored photo (an id from `pickImage`), cropped square; `icon` stands in without one (default 64). */
+  export function Photo(props: { id: string | null | undefined; size?: number; round?: boolean; icon?: IconName; style?: Style; testID?: string }): El;
+  /**
+   * A photo input: Take photo / Choose photo / Remove. `value` is the image id (store it in a TEXT
+   * column). Remove only clears the field: call `deleteImage` on ids you drop when you save.
+   */
+  export function PhotoField(props: {
+    label?: string;
+    value: string | null;
+    onChange: (id: string | null) => void;
+    round?: boolean;
+    size?: number;
+    icon?: IconName;
+    hint?: string;
+    disabled?: boolean;
+    testID?: string;
+  }): El;
 
   export function TextField(props: {
     label?: string;

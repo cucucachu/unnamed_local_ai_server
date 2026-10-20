@@ -12,7 +12,10 @@ import {
   type BridgeError,
   type Envelope,
   type HostEvents,
+  IMAGE_ID,
   type HostMethod,
+  type ImageRef,
+  type ImageSource,
   type Method,
   type Methods,
   type PlatformMethod,
@@ -21,6 +24,14 @@ import {
 } from '../protocol';
 
 export type Forward = <M extends PlatformMethod>(method: M, params: Methods[M]['params']) => Promise<Methods[M]['result']>;
+
+/** The host's photo store for this one instance (`image.*`). */
+export type ImageHost = {
+  pick(source: ImageSource): Promise<ImageRef | null>;
+  /** A `data:` URL. */
+  get(id: string): Promise<string>;
+  remove(id: string): Promise<void>;
+};
 
 export type BridgeHostOptions = {
   /** Delivers one wire string to the sandbox (postMessage on web, injectJavaScript on native). */
@@ -31,6 +42,8 @@ export type BridgeHostOptions = {
   onEvent?: <E extends keyof SandboxEvents>(event: E, data: SandboxEvents[E]) => void;
   /** `agent.ask`: open the host's agent panel. Viewers may ask; writes still follow their role. */
   onAskAgent?: (prompt: string) => void | Promise<void>;
+  /** `image.pick` / `image.get` / `image.delete`; without it they answer `unavailable`. */
+  images?: ImageHost;
 };
 
 export type BridgeHost = {
@@ -67,6 +80,14 @@ export function checkParams<M extends Method>(method: M, raw: unknown): Methods[
     }
     return { prompt: raw.prompt } as Methods[M]['params'];
   }
+  if (method === 'image.pick') {
+    if (raw.source !== 'camera' && raw.source !== 'library') throw hostError('bad_request', "image.pick needs a source: 'camera' or 'library'");
+    return { source: raw.source } as Methods[M]['params'];
+  }
+  if (method === 'image.get' || method === 'image.delete') {
+    if (typeof raw.id !== 'string' || !IMAGE_ID.test(raw.id)) throw hostError('bad_request', `${method} needs an image id`);
+    return { id: raw.id } as Methods[M]['params'];
+  }
   if (method === 'action') {
     if (typeof raw.name !== 'string' || !raw.name) throw hostError('bad_request', 'action needs a name');
     const params = raw.params ?? {};
@@ -97,7 +118,7 @@ export function checkParams<M extends Method>(method: M, raw: unknown): Methods[
   return { sql: raw.sql, params } as Methods[M]['params'];
 }
 
-export function createBridgeHost({ send, forward, readOnly = false, onEvent, onAskAgent }: BridgeHostOptions): BridgeHost {
+export function createBridgeHost({ send, forward, readOnly = false, onEvent, onAskAgent, images }: BridgeHostOptions): BridgeHost {
   let closed = false;
   let heard = false;
   let inFlight = 0;
@@ -116,12 +137,24 @@ export function createBridgeHost({ send, forward, readOnly = false, onEvent, onA
     send(JSON.stringify(result.ok ? { homeai: PROTOCOL, kind: 'res', id, ok: true, result: result.value } : { homeai: PROTOCOL, kind: 'res', id, ok: false, error: result.error }));
   };
 
+  async function hostCall(method: HostMethod, raw: unknown): Promise<unknown> {
+    if (method === 'agent.ask') {
+      await onAskAgent?.(checkParams(method, raw).prompt);
+      return {};
+    }
+    if (!images) throw hostError('unavailable', 'this host has no photo store');
+    if (method === 'image.pick') return images.pick(checkParams(method, raw).source);
+    if (method === 'image.get') return { dataUrl: await images.get(checkParams(method, raw).id) };
+    await images.remove(checkParams('image.delete', raw).id);
+    return {};
+  }
+
   async function request(id: number, method: string, rawParams: unknown) {
     if (!ALLOWED_METHODS.has(method)) {
       return reply(id, { ok: false, error: { code: 'method_not_allowed', message: `the host doesn't provide ${method}` } });
     }
     const m = method as Method;
-    if (readOnly && (WRITE_METHODS as readonly string[]).includes(m)) {
+    if (readOnly && WRITE_METHODS.includes(m)) {
       return reply(id, { ok: false, error: { code: 'read_only', message: 'you can only view this app\'s data' } });
     }
     if (inFlight >= MAX_IN_FLIGHT) {
@@ -130,9 +163,7 @@ export function createBridgeHost({ send, forward, readOnly = false, onEvent, onA
     inFlight++;
     try {
       if ((HOST_METHODS as readonly string[]).includes(m)) {
-        const params = checkParams(m as HostMethod, rawParams) as Methods['agent.ask']['params'];
-        await onAskAgent?.(params.prompt);
-        reply(id, { ok: true, value: {} });
+        reply(id, { ok: true, value: await hostCall(m as HostMethod, rawParams) });
         return;
       }
       const value = await forward(m as PlatformMethod, checkParams(m as PlatformMethod, rawParams));

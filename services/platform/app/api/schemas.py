@@ -980,6 +980,13 @@ class RpcSearch(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class ImageIn(BaseModel):
+    """A photo for an app instance (#468), base64; `appimages.MAX_BYTES` once decoded."""
+
+    model_config = ConfigDict(extra="forbid")
+    data: str = Field(min_length=4, max_length=4 * (512 * 1024 // 3 + 1))
+
+
 RpcRequest = Annotated[
     RpcGetAll | RpcGetFirst | RpcRun | RpcTransaction | RpcAction | RpcExportAction | RpcSearch,
     Field(discriminator="op"),

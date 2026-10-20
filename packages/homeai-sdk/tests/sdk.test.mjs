@@ -24,7 +24,7 @@ async function until(what, fn, timeoutMs = 3000) {
 }
 
 /** A booted sandbox: `$(testID)`, `text(testID)`, `click(testID)`, `type(testID, s)`. */
-async function boot({ config = { initialPath: '/', space: SPACE }, readOnly = false, edits } = {}) {
+async function boot({ config = { initialPath: '/', space: SPACE }, readOnly = false, edits, images } = {}) {
   const host = await importHost();
   const platform = stubPlatform();
   const dom = new JSDOM('<!doctype html><html><head></head><body><div id="root"></div></body></html>', {
@@ -49,6 +49,7 @@ async function boot({ config = { initialPath: '/', space: SPACE }, readOnly = fa
     readOnly,
     onEvent: (event, data) => events.push({ event, data }),
     onAskAgent: (prompt) => asked.push(prompt),
+    images,
   });
   win.ReactNativeWebView = {
     postMessage(s) {
@@ -156,6 +157,40 @@ test('askAgent is a host-local RPC; a write elsewhere still updates the UI', asy
   assert.equal(s.platform.calls.length, s.requests('db.getAll').length);
   s.platform.externalWrite("INSERT INTO items (name) VALUES ('Milk')");
   await until('agent write shown', () => s.text('item-1') === 'Milk' && s.text('count') === '1 items');
+  s.close();
+});
+
+test('PhotoField picks through the host and Photo shows it from one cached image.get', async () => {
+  const index = fs.readFileSync(new URL('./fixtures/runtime-check/app/index.tsx', import.meta.url), 'utf8');
+  const edited = index
+    .replace("import { Link } from 'expo-router';", "import { Link } from 'expo-router';\nimport { Photo, PhotoField } from '@homeai/ui';")
+    .replace("  const [status, setStatus] = useState('');", "  const [status, setStatus] = useState('');\n  const [photo, setPhoto] = useState<string | null>(null);")
+    .replace(
+      '<Text testID="status">',
+      `<PhotoField testID="pf" label="Photo" value={photo} onChange={setPhoto} />
+      <Photo testID="again" id={photo} />
+      <Text testID="photo-id">{photo ?? 'none'}</Text>
+      <Text testID="status">`,
+    );
+  const ID = 'b'.repeat(32) + '.jpg';
+  const URI = 'data:image/jpeg;base64,/9j/AAAA';
+  const calls = [];
+  const images = {
+    pick: async (source) => (calls.push(['pick', source]), { id: ID, width: 10, height: 10 }),
+    get: async (id) => (calls.push(['get', id]), URI),
+    remove: async () => {},
+  };
+  const s = await boot({ edits: { 'app/index.tsx': edited }, images });
+  assert.ok(s.text('pf-library').endsWith('Choose photo'));
+  assert.equal(s.$('pf-remove'), null);
+  s.click('pf-library');
+  await until('picked', () => s.text('photo-id') === ID);
+  const shown = (id) => s.$(id)?.querySelector('img')?.getAttribute('src');
+  await until('shown twice', () => shown('pf-preview') === URI && shown('again') === URI);
+  assert.deepEqual(calls, [['pick', 'library'], ['get', ID]]);
+  assert.ok(s.text('pf-library').endsWith('Choose another'));
+  s.click('pf-remove');
+  await until('removed', () => s.text('photo-id') === 'none' && !shown('pf-preview'));
   s.close();
 });
 
@@ -286,7 +321,7 @@ test('the runtime provides exactly modules.json, and the typings declare the non
   for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
   for (const m of ['react-dom', 'react-dom/client', 'react-native-web', 'fs']) assert.throws(() => req(m), /not available in the app sandbox/);
   const sdk = req('@homeai/sdk');
-  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'runAction', 'runExportAction', 'search', 'useDatabase', 'useMember', 'useMembers', 'useQuery', 'useSQLiteContext', 'useSpace', 'useUser']);
+  assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'deleteImage', 'imageUri', 'pickImage', 'runAction', 'runExportAction', 'search', 'useDatabase', 'useImage', 'useMember', 'useMembers', 'useQuery', 'useSQLiteContext', 'useSpace', 'useUser']);
   assert.equal(sdk.useSQLiteContext, sdk.useDatabase);
   await assert.rejects(sdk.useDatabase().withTransactionAsync(async () => {}), /not available in SDK 1: put multi-statement writes in an action/);
   assert.deepEqual(Object.keys(req('expo-sqlite')).sort(), ['SQLiteProvider', 'openDatabaseAsync', 'useSQLiteContext']);

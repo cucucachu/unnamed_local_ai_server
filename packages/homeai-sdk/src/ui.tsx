@@ -6,6 +6,7 @@ import { createElement, useEffect, useRef, useState, type ReactNode } from 'reac
 import {
   ActivityIndicator,
   Animated,
+  Image,
   PanResponder,
   Pressable,
   ScrollView,
@@ -19,6 +20,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Ionicons } from './icons';
+import { pickImage, useImage } from './sdk';
 import { useTheme, type Theme } from './theme';
 
 type Style = StyleProp<ViewStyle>;
@@ -453,6 +455,73 @@ export function SearchField({ value, onChangeText, placeholder = 'Search', testI
       />
       {value ? <IconButton icon="close-circle-outline" accessibilityLabel="Clear search" size={18} color={t.colors.textMuted} onPress={() => onChangeText('')} testID={testID && `${testID}-clear`} /> : null}
     </View>
+  );
+}
+
+// --- photos (#468) ----------------------------------------------------------
+
+/** A stored photo (`pickImage`'s id), cropped to a square; `icon` stands in without one. */
+export function Photo({ id, size = 64, round, icon = 'image-outline', style, testID }: { id: string | null | undefined; size?: number; round?: boolean; icon?: string; style?: Style; testID?: string }) {
+  const t = useTheme();
+  const { uri, loading } = useImage(id);
+  return (
+    <View
+      testID={testID}
+      style={[{ width: size, height: size, borderRadius: round ? size / 2 : t.radius.md, backgroundColor: t.colors.surface, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }, style]}
+    >
+      {uri ? (
+        <Image testID={testID && `${testID}-image`} source={{ uri }} resizeMode="cover" style={{ width: size, height: size }} />
+      ) : loading ? (
+        <ActivityIndicator size="small" color={t.colors.textMuted} />
+      ) : (
+        <Icon name={icon} size={Math.round(size * 0.45)} color={t.colors.textMuted} />
+      )}
+    </View>
+  );
+}
+
+/**
+ * A photo input: take or choose one, or remove it. `value` is an image id. Removing only
+ * clears the field; `deleteImage` the ids you drop when you save.
+ */
+export function PhotoField({ label, value, onChange, round, size = 88, icon, hint, disabled, testID }: {
+  label?: string;
+  value: string | null;
+  onChange: (id: string | null) => void;
+  round?: boolean;
+  size?: number;
+  icon?: string;
+  hint?: string;
+  disabled?: boolean;
+  testID?: string;
+}) {
+  const t = useTheme();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pick = async (source: 'camera' | 'library') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const picked = await pickImage(source);
+      if (picked) onChange(picked.id);
+    } catch (err: any) {
+      setError(String(err?.message ?? err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const id = testID ?? 'photo';
+  return (
+    <Field label={label} error={error} hint={hint}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.spacing.md }}>
+        <Photo id={value} size={size} round={round} icon={icon} testID={`${id}-preview`} />
+        <View style={{ flex: 1, gap: t.spacing.xs, alignItems: 'flex-start' }}>
+          <Button variant="plain" icon="camera-outline" title="Take photo" disabled={disabled || busy} onPress={() => void pick('camera')} testID={`${id}-camera`} />
+          <Button variant="plain" icon="images-outline" title={value ? 'Choose another' : 'Choose photo'} disabled={disabled || busy} onPress={() => void pick('library')} testID={`${id}-library`} />
+          {value ? <Button variant="plain" icon="trash-outline" title="Remove" disabled={disabled || busy} onPress={() => onChange(null)} testID={`${id}-remove`} /> : null}
+        </View>
+      </View>
+    </Field>
   );
 }
 

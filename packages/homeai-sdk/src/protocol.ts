@@ -42,10 +42,21 @@ export type PlatformMethods = {
   /** The instance's own rows its app.json `homeai.index` declares (M22-07). */
   search: { params: { query: string; limit: number }; result: SearchResult[] };
 };
-/** Sandbox -> host requests the host handles itself (never the platform). */
+/** A photo the host stored for this instance (#468): `id` names it in `image.get` / `image.delete`. */
+export type ImageRef = { id: string; width: number; height: number };
+export type ImageSource = 'camera' | 'library';
+/** An image id as the platform makes them. */
+export const IMAGE_ID = /^[0-9a-f]{32}\.(jpg|png|webp)$/;
+
+/** Sandbox -> host requests the host handles itself (never the instance RPC). */
 export type HostMethods = {
   /** Open the host's agent panel with this prompt (M13-04). */
   'agent.ask': { params: { prompt: string }; result: Record<string, never> };
+  /** The user takes or chooses a photo; the host shrinks and stores it. Null if they cancel. */
+  'image.pick': { params: { source: ImageSource }; result: ImageRef | null };
+  /** A stored photo as a `data:` URL. */
+  'image.get': { params: { id: string }; result: { dataUrl: string } };
+  'image.delete': { params: { id: string }; result: Record<string, never> };
 };
 export type Methods = PlatformMethods & HostMethods;
 export type PlatformMethod = keyof PlatformMethods;
@@ -53,9 +64,9 @@ export type HostMethod = keyof HostMethods;
 export type Method = keyof Methods;
 
 export const METHODS: readonly PlatformMethod[] = ['db.getAll', 'db.getFirst', 'db.run', 'action', 'exportAction', 'search'];
-export const HOST_METHODS: readonly HostMethod[] = ['agent.ask'];
+export const HOST_METHODS: readonly HostMethod[] = ['agent.ask', 'image.pick', 'image.get', 'image.delete'];
 // Not exportAction: it writes another app, and the platform checks write on that app's space.
-export const WRITE_METHODS: readonly PlatformMethod[] = ['db.run', 'action'];
+export const WRITE_METHODS: readonly Method[] = ['db.run', 'action', 'image.pick', 'image.delete'];
 
 /** Host -> sandbox events. */
 export type HostEvents = {

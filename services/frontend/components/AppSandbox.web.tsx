@@ -2,7 +2,7 @@ import { mountSandboxFrame } from '@homeai/sdk/host/web';
 import { useEffect, useRef } from 'react';
 import { View } from 'react-native';
 
-import { instanceForward, type AppSandboxProps } from '@/lib/appHost';
+import { instanceForward, instanceImages, type AppSandboxProps } from '@/lib/appHost';
 import { themedStyles } from '@/lib/theme';
 
 /**
@@ -21,6 +21,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKill
     const sandbox = mountSandboxFrame(element, {
       html,
       forward: instanceForward(instanceId),
+      images: instanceImages(instanceId),
       readOnly,
       onEvent,
       onAskAgent,
