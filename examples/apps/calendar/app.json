@@ -1,0 +1,14 @@
+{
+  "name": "Calendar",
+  "slug": "calendar",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "calendar-outline",
+    "description": "A shared calendar with day, week and month views: timed, all-day and repeating events, who they're for, and birthdays from Contacts.",
+    "permissions": {},
+    "index": [{ "table": "events", "title": "title", "text": ["location", "notes"] }],
+    "reads": [{ "app": "contacts", "export": "people", "version": "1" }]
+  }
+}

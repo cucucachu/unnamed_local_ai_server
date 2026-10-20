@@ -117,6 +117,7 @@ const TEMPLATE_ROUTES = {
     paths: ['/categories', '/', '/transactions', '/trends', '/category/1', '/new', '/transaction/1'],
   },
   calculator: { names: ['(tabs)/index', '(tabs)/tip', '(tabs)/units'], paths: ['/', '/tip', '/units'] },
+  calendar: { names: ['event/[id]/edit', 'event/[id]/index', 'index', 'new'], paths: ['/event/1/edit', '/event/1', '/', '/new'], reads: NO_EXPORTERS },
   'group-chat': { names: ['index', 'search'], paths: ['/', '/search'] },
   chores: {
     names: ['(tabs)/all', '(tabs)/history', '(tabs)/index', 'chore/[id]', 'new'],
