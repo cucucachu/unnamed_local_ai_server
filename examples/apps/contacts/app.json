@@ -1,14 +1,14 @@
 {
   "name": "Contacts",
   "slug": "contacts",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "userInterfaceStyle": "automatic",
   "homeai": {
     "sdk": "1",
     "icon": "people-outline",
-    "description": "The people you know: phone numbers, emails, addresses, birthdays and notes.",
+    "description": "The people you know: phones, emails, addresses, websites, birthdays and other dates, where they work, a photo and notes.",
     "permissions": {},
-    "index": [{ "table": "people", "title": "name", "text": ["notes"] }],
+    "index": [{ "table": "people", "title": "name", "text": ["nickname", "company", "job_title", "relationship", "notes"] }],
     "exports": [{ "name": "people", "version": "1", "tables": ["people"], "actions": [] }]
   }
 }

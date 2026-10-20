@@ -16,8 +16,11 @@
 #     and "Add ingredients to the grocery list" (an export action into the
 #     Grocery list app, which then shows them; a second press doesn't
 #     duplicate them);
-#   - Contacts: add people with details and birthdays, edit, merge a
-#     duplicate, "Birthdays coming up", search.
+#   - Contacts: add people from the one New form (several phones and
+#     emails, a structured address, nickname, company, birthday), check the
+#     formatted address, edit (drop a phone, change the city, add a
+#     website), merge a duplicate, "Coming up", search by notes, company
+#     and nickname.
 # Everything it created (users, personal spaces, the shared space, the apps,
 # instances and bundles) is deleted on exit.
 #

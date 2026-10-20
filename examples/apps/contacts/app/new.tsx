@@ -1,20 +1,20 @@
 import { useRouter } from 'expo-router';
-import { useDatabase } from '@homeai/sdk';
+import { runAction } from '@homeai/sdk';
 import { Screen } from '@homeai/ui';
-import { PersonForm, type PersonValues } from '../components/PersonForm';
+import { EMPTY_PERSON, PersonForm, type PersonValues } from '../components/PersonForm';
+import { savePersonParams } from '../lib/contacts';
 
 export default function NewPersonScreen() {
-  const db = useDatabase();
   const router = useRouter();
 
   async function create(v: PersonValues) {
-    const { lastInsertRowId } = await db.runAsync('INSERT INTO people (name, birthday, notes) VALUES (?, ?, ?)', [v.name, v.birthday, v.notes]);
-    router.replace({ pathname: '/person/[id]', params: { id: String(lastInsertRowId) } });
+    const { rows } = await runAction('savePerson', savePersonParams(null, v));
+    router.replace({ pathname: '/person/[id]', params: { id: String(rows[0].id) } });
   }
 
   return (
     <Screen>
-      <PersonForm initial={{ name: '', birthday: null, notes: '' }} saveTitle="Add contact" onSave={create} />
+      <PersonForm initial={EMPTY_PERSON} saveTitle="Add contact" onSave={create} />
     </Screen>
   );
 }

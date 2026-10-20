@@ -15,7 +15,8 @@ export default function RootLayout() {
             canEdit ? <IconButton icon="person-add-outline" accessibilityLabel="New contact" onPress={() => router.push('/new')} testID="new-person" /> : null,
         }}
       />
-      <Stack.Screen name="person/[id]" options={{ title: 'Contact' }} />
+      <Stack.Screen name="person/[id]/index" options={{ title: 'Contact' }} />
+      <Stack.Screen name="person/[id]/edit" options={{ presentation: 'modal', title: 'Edit contact' }} />
       <Stack.Screen name="new" options={{ presentation: 'modal', title: 'New contact' }} />
     </Stack>
   );

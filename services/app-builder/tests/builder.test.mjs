@@ -121,7 +121,7 @@ const TEMPLATE_ROUTES = {
     names: ['(tabs)/all', '(tabs)/history', '(tabs)/index', 'chore/[id]', 'new'],
     paths: ['/all', '/history', '/', '/chore/1', '/new'],
   },
-  contacts: { names: ['index', 'new', 'person/[id]'], paths: ['/', '/new', '/person/1'] },
+  contacts: { names: ['index', 'new', 'person/[id]/edit', 'person/[id]/index'], paths: ['/', '/new', '/person/1/edit', '/person/1'] },
   countdowns: { names: ['countdown/[id]', 'index', 'new'], paths: ['/countdown/1', '/', '/new'], reads: NO_EXPORTERS },
   'grocery-list': { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },
   'health-log': { names: ['index', 'log', 'measure/[id]', 'new-measure'], paths: ['/', '/log', '/measure/1', '/new-measure'] },
