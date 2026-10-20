@@ -76,8 +76,8 @@ export type SandboxEvents = {
 
 /**
  * What the host puts in the sandbox document (`window.__homeai_config`). `colorScheme` is the
- * host's: apps whose app.json says `"userInterfaceStyle": "automatic"` follow it, and the `theme`
- * event changes it.
+ * host's (the phone's light/dark setting): apps follow it unless app.json pins `"userInterfaceStyle"`
+ * to "light" or "dark", and the `theme` event changes it.
  */
 export type SandboxConfig = { initialPath?: string; space?: Space | null; user?: User | null; members?: Member[]; colorScheme?: 'light' | 'dark' };
 

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
 import { runAction, search, useQuery, useSpace, type SearchResult } from '@homeai/sdk';
+import { useTheme } from '@homeai/ui';
 
 type Note = { id: number; title: string; body: string; pinned: number };
 
 export default function NotesScreen() {
+  const styles = useStyles();
   const space = useSpace();
   const canEdit = space?.role !== 'viewer';
   const { data: notes, loading, error } = useQuery<Note>(
@@ -113,14 +115,22 @@ export default function NotesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, padding: 16, gap: 12 },
-  addRow: { flexDirection: 'row', gap: 8 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#999', borderRadius: 6, padding: 8, fontSize: 16 },
-  button: { backgroundColor: '#208AEF', borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center' },
-  buttonText: { color: 'white', fontWeight: '600' },
-  item: { paddingVertical: 10 },
-  title: { fontSize: 18, fontWeight: '600' },
-  muted: { color: '#666' },
-  error: { color: 'crimson' },
-});
+// Colors come from the theme, so the app follows the device's light/dark setting.
+function useStyles() {
+  const t = useTheme();
+  return useMemo(
+    () =>
+      StyleSheet.create({
+        screen: { flex: 1, padding: 16, gap: 12 },
+        addRow: { flexDirection: 'row', gap: 8 },
+        input: { flex: 1, borderWidth: 1, borderColor: t.colors.border, borderRadius: 6, padding: 8, fontSize: 16 },
+        button: { backgroundColor: t.colors.tint, borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center' },
+        buttonText: { color: t.colors.onTint, fontWeight: '600' },
+        item: { paddingVertical: 10 },
+        title: { fontSize: 18, fontWeight: '600' },
+        muted: { color: t.colors.textMuted },
+        error: { color: t.colors.danger },
+      }),
+    [t],
+  );
+}

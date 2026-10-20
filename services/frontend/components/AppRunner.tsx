@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { platformEventRelay, type BridgeHost, type SandboxEvents } from '@homeai/sdk/host';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   PanResponder,
@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useColorScheme,
   useWindowDimensions,
 } from 'react-native';
 
@@ -105,10 +106,16 @@ export function AppRunner({
   const [activity, setActivity] = useState<AgentActivity>({ busy: false, needsApproval: false });
   const { width } = useWindowDimensions();
   const sheet = width < SHEET_BREAKPOINT;
+  const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
+  // A change reaches a running app as a `theme` event, not a reload.
+  const loadScheme = useRef(scheme);
+  useEffect(() => {
+    loadScheme.current = scheme;
+  }, [scheme]);
 
   useEffect(() => {
     let cancelled = false;
-    loadInstanceDocument(instanceId, space).then(
+    loadInstanceDocument(instanceId, space, loadScheme.current).then(
       (doc) => !cancelled && setLoad({ doc, error: null }),
       (error) => !cancelled && setLoad({ doc: null, error: loadErrorMessage(error) }),
     );
@@ -118,6 +125,10 @@ export function AppRunner({
   }, [instanceId, space, generation]);
 
   const { doc } = load;
+  useEffect(() => {
+    host?.event('theme', { colorScheme: scheme });
+  }, [host, scheme]);
+
   useEffect(() => {
     if (!host || !doc) return;
     const relay = platformEventRelay({

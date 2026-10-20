@@ -7,9 +7,10 @@ import { AuthGate } from '@/components/AuthGate';
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { SettingsProvider } from '@/components/SettingsProvider';
 
-// Dark is the forced/default scheme for this app (not system-following) —
-// see M2-05 ticket. `userInterfaceStyle: "dark"` in app.json handles the
-// native chrome; this ThemeProvider handles the JS-level navigation theme.
+// The host's own screens are always dark (M2-05): this ThemeProvider, the
+// light status bar and app.json's root `backgroundColor`. app.json's
+// `userInterfaceStyle` is "automatic" so `useColorScheme()` reports the
+// device's setting, which AppRunner passes to apps.
 //
 // `GestureHandlerRootView` wraps the whole app (per
 // react-native-gesture-handler's own installation docs — confirmed by

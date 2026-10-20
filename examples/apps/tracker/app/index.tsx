@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
 import { runAction, useDatabase, useQuery, useSpace } from '@homeai/sdk';
+import { useTheme } from '@homeai/ui';
 
 type Habit = { id: number; name: string; done_today: number };
 
@@ -10,6 +11,7 @@ function today(): string {
 }
 
 export default function TrackerScreen() {
+  const styles = useStyles();
   const db = useDatabase();
   const space = useSpace();
   const canEdit = space?.role !== 'viewer';
@@ -105,17 +107,25 @@ export default function TrackerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, padding: 16, gap: 12 },
-  addRow: { flexDirection: 'row', gap: 8 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#999', borderRadius: 6, padding: 8, fontSize: 16 },
-  button: { backgroundColor: '#208AEF', borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center' },
-  buttonText: { color: 'white', fontWeight: '600' },
-  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
-  checkbox: { width: 24, height: 24, borderWidth: 2, borderColor: '#208AEF', borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
-  checkboxChecked: { backgroundColor: '#208AEF' },
-  checkmark: { color: 'white', fontWeight: '700' },
-  itemName: { flex: 1, fontSize: 18 },
-  muted: { color: '#666' },
-  error: { color: 'crimson' },
-});
+// Colors come from the theme, so the app follows the device's light/dark setting.
+function useStyles() {
+  const t = useTheme();
+  return useMemo(
+    () =>
+      StyleSheet.create({
+        screen: { flex: 1, padding: 16, gap: 12 },
+        addRow: { flexDirection: 'row', gap: 8 },
+        input: { flex: 1, borderWidth: 1, borderColor: t.colors.border, borderRadius: 6, padding: 8, fontSize: 16 },
+        button: { backgroundColor: t.colors.tint, borderRadius: 6, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center' },
+        buttonText: { color: t.colors.onTint, fontWeight: '600' },
+        itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+        checkbox: { width: 24, height: 24, borderWidth: 2, borderColor: t.colors.tint, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+        checkboxChecked: { backgroundColor: t.colors.tint },
+        checkmark: { color: t.colors.onTint, fontWeight: '700' },
+        itemName: { flex: 1, fontSize: 18 },
+        muted: { color: t.colors.textMuted },
+        error: { color: t.colors.danger },
+      }),
+    [t],
+  );
+}

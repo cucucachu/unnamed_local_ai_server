@@ -141,8 +141,8 @@ Toggle, Stepper, SearchField, Button variant=primary|secondary|destructive|plain
 Chip, ProgressBar (0-1), Badge, Money amount, Duration seconds, useTheme() for colors.
 Charts: <BarChart|LineChart data={rows} x="month" y="total" (or y={['a','b']}) title=…/>,
 <PieChart data={rows} label="category" value="total"/>; pass useQuery rows straight in.
-New apps set "userInterfaceStyle": "automatic" at the top level of app.json (follows the
-host's dark mode); then never hard-code text or background colors: use useTheme().colors.
+Apps follow the device's light/dark setting ("userInterfaceStyle" in app.json is "automatic"
+when left out), so never hard-code text, border or background colors: use useTheme().colors.
 @homeai/sdk:
   useDatabase() / useSQLiteContext()  the same hook (expo-sqlite's name is an alias):
     getAllAsync, getFirstAsync, runAsync — one statement, ? placeholders + an array

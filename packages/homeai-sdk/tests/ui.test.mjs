@@ -1,6 +1,6 @@
 // @homeai/ui and the theme (M22-03) in jsdom, with the kit-check fixture:
 // the kit's inputs and rows drive app state, and the theme follows app.json's
-// userInterfaceStyle and the host's scheme, leaving light apps as they were.
+// userInterfaceStyle and the host's scheme; bundles built before it stay light.
 //   npm test    (builds dist/ first)
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -144,18 +144,19 @@ test('in dark, plain Text and TextInput default to the theme text colour', async
   s.close();
 });
 
-test('an app without userInterfaceStyle stays light on a dark host, as do bundles built before it', async () => {
+test('an app without userInterfaceStyle follows the host; bundles built before it stay light', async () => {
   const { userInterfaceStyle: _, ...noStyle } = appJson;
   const fresh = await boot({ initialPath: '/plain', config: { colorScheme: 'dark' }, edits: { 'app.json': JSON.stringify(noStyle) } });
   await until('plain', () => fresh.shown('plain-screen'));
+  assert.equal(fresh.$('scheme').textContent, 'dark');
+  assert.equal(fresh.color('plain-text'), 'rgb(230, 237, 243)');
+  fresh.close();
   const legacy = await boot({ initialPath: '/plain', config: { colorScheme: 'dark' }, legacy: true });
   await until('plain', () => legacy.shown('plain-screen'));
-  for (const s of [fresh, legacy]) {
-    assert.equal(s.$('scheme').textContent, 'light');
-    assert.equal(s.color('plain-text'), 'rgb(0, 0, 0)');
-    assert.equal(s.win.document.body.style.backgroundColor, '');
-    s.close();
-  }
+  assert.equal(legacy.$('scheme').textContent, 'light');
+  assert.equal(legacy.color('plain-text'), 'rgb(0, 0, 0)');
+  assert.equal(legacy.win.document.body.style.backgroundColor, '');
+  legacy.close();
 });
 
 // --- charts (M22-04) ---------------------------------------------------------

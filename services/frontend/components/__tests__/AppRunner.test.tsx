@@ -104,13 +104,14 @@ afterEach(() => {
 describe('AppRunner', () => {
   it('opens the fixed instance, relays its events, and hot-reloads its app’s builds', async () => {
     const r = await mount();
-    expect(mockLoadDocument).toHaveBeenCalledWith(INSTANCE, expect.objectContaining({ id: 's1' }));
+    expect(mockLoadDocument).toHaveBeenCalledWith(INSTANCE, expect.objectContaining({ id: 's1' }), 'light');
     expect(mockSandboxes).toHaveLength(1);
     expect(mockSandboxes[0]).toMatchObject({ instanceId: INSTANCE, html: '<html>v1</html>', readOnly: false });
     expect(exists(r, 'app-runner-read-only')).toBe(false);
 
     const host = fakeHost();
     await act(async () => mockSandboxes[0].onHost(host));
+    expect(host.event).toHaveBeenCalledWith('theme', { colorScheme: 'light' });
     expect(mockSockets).toHaveLength(1);
     const { onFrame } = mockSockets[0];
 
