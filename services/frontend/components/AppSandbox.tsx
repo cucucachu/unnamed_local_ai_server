@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
@@ -43,6 +43,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskA
   }, [instanceId, html, readOnly, onEvent, onAskAgent, onHost]);
 
   const source = useMemo(() => ({ html }), [html]);
+  const [loadedHtml, setLoadedHtml] = useState<string | null>(null);
 
   return (
     <WebView
@@ -64,12 +65,17 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskA
       allowUniversalAccessFromFileURLs={false}
       mixedContentMode="never"
       webviewDebuggingEnabled={__DEV__}
-      style={styles.webview}
+      onLoadEnd={() => setLoadedHtml(html)}
+      style={[styles.webview, loadedHtml !== html && styles.loading]}
+      containerStyle={styles.container}
     />
   );
 }
 
-// The app paints its own background; this only shows until it does.
+// Android's WebView paints white before the document's own background, so it
+// stays transparent over the themed container until the document has loaded.
 const useStyles = themedStyles((theme) => ({
+  container: { flex: 1, backgroundColor: theme.bg },
   webview: { flex: 1, backgroundColor: theme.bg },
+  loading: { opacity: 0 },
 }));

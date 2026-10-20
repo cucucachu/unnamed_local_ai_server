@@ -1,4 +1,5 @@
 import { PROTOCOL, type BridgeHost } from '@homeai/sdk/host';
+import { StyleSheet } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { setSessionToken } from '@/lib/session';
@@ -99,6 +100,14 @@ describe('AppSandbox (native WebView)', () => {
       expect(allowSandboxLoad({ url })).toBe(false);
       expect(load({ url })).toBe(false);
     }
+  });
+
+  it('stays transparent until the document has loaded', async () => {
+    await mount();
+    const opacity = () => StyleSheet.flatten(mockProps.style).opacity;
+    expect(opacity()).toBe(0);
+    await act(async () => mockProps.onLoadEnd());
+    expect(opacity()).toBeUndefined();
   });
 
   it('forwards the WebView’s requests to the fixed instance and answers via injectJavaScript', async () => {

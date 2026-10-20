@@ -328,6 +328,17 @@ test('the sandbox document: CSP first, scripts that cannot close their element, 
   assert.equal(vm.runInContext('r + a', ctx), '</script><b></SCRIPT>');
 });
 
+test('sandboxDocument paints the host scheme before any script runs', () => {
+  const head = (config) => {
+    const html = H.sandboxDocument({ runtime: '', app: '', config });
+    return html.slice(0, html.indexOf('<script>'));
+  };
+  assert.match(head({ colorScheme: 'dark' }), /<style>html\{background:#0e1116;color-scheme:dark\}/);
+  assert.match(head({ colorScheme: 'dark' }), /<meta name="color-scheme" content="dark">/);
+  assert.match(head({ colorScheme: 'light' }), /<style>html\{background:#ffffff;color-scheme:light\}/);
+  assert.match(head({}), /color-scheme:light/);
+});
+
 test('injectScriptFor delivers the exact wire string', () => {
   const wire = JSON.stringify({ homeai: 1, kind: 'evt', event: 'space', data: { name: `a"b'c\u2028</script>\\` } });
   const got = [];

@@ -1,7 +1,7 @@
 // The sandbox document: CSP + config + runtime + app, all inline. The iframe
 // `srcdoc` on web, WebView `source={{ html }}` on native. Without the CSP an
 // opaque-origin frame still can't read credentials but can send requests.
-import type { SandboxConfig } from '../protocol';
+import { SCHEME_BACKGROUND, type SandboxConfig } from '../protocol';
 
 export const SANDBOX_CSP = [
   "default-src 'none'",
@@ -21,11 +21,13 @@ function inlineScript(js: string) {
 
 export function sandboxDocument({ runtime, app, config = {} }: { runtime: string; app: string; config?: SandboxConfig }) {
   const json = JSON.stringify(config).replace(/</g, '\\u003c');
+  const scheme = config.colorScheme === 'dark' ? 'dark' : 'light';
   return `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body,#root{height:100%;margin:0}#root{display:flex}</style>
+<meta name="color-scheme" content="${scheme}">
+<style>html{background:${SCHEME_BACKGROUND[scheme]};color-scheme:${scheme}}html,body,#root{height:100%;margin:0}#root{display:flex}</style>
 <script>window.__homeai_config=${json};</script>
 <script>${inlineScript(runtime)}</script>
 </head><body><div id="root"></div>
