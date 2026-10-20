@@ -1,18 +1,20 @@
 import { useCallback } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import { useAuth } from '@/components/AuthProvider';
-import { ActionButton, Badge, Card, LoadState, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Badge, Card, LoadState, SettingsFrame, useSettingsStyles } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { listSessions, revokeSession, type Session } from '@/lib/platform';
 import { relativeTime } from '@/lib/relativeTime';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Settings → Sessions: every device signed in to this account, and every
  * routine allowed to run unattended, with revoke. Revoking this device's own
  * session signs out here too; revoking a routine's turns that routine off. */
 export default function SessionsScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { logout } = useAuth();
   const { message: toast, showToast } = useToast();
   const load = useCallback(() => listSessions(), []);
@@ -78,7 +80,7 @@ export default function SessionsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -89,4 +91,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-});
+}));

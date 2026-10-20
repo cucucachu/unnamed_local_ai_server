@@ -1,11 +1,11 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 
-import { ActionButton, Card, ErrorText, LoadState, SectionTitle, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Card, ErrorText, LoadState, SectionTitle, useSettingsStyles } from '@/components/SettingsUI';
 import { isReadOnly } from '@/lib/platform';
 import { describePermissions, findInstance, updateInstance } from '@/lib/apps';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /**
@@ -13,6 +13,8 @@ import { useAction, useLoad } from '@/lib/useAsync';
  * are listed and sent as `granted_permissions` with the update.
  */
 export default function UpdateScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const router = useRouter();
   const params = useLocalSearchParams<{ spaceId: string; instanceId: string }>();
   const instanceId = Array.isArray(params.instanceId) ? params.instanceId[0] : params.instanceId;
@@ -85,7 +87,7 @@ export default function UpdateScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: { flex: 1, backgroundColor: theme.bg },
   body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: 16, gap: 12 },
-});
+}));

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { StyleSheet } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
 import { injectScriptFor, type BridgeHost } from '@homeai/sdk/host';
 
 import { instanceBridge, type AppSandboxProps } from '@/lib/appHost';
+import { themedStyles } from '@/lib/theme';
 
 /** Only the initial `source={{ html }}` document (`about:blank`) may load. */
 export function allowSandboxLoad(request: Pick<ShouldStartLoadRequest, 'url'>): boolean {
@@ -22,6 +22,7 @@ export function allowSandboxLoad(request: Pick<ShouldStartLoadRequest, 'url'>): 
  * `postMessage` dispatches on `document` on Android but `window` on iOS).
  */
 export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskAgent }: AppSandboxProps) {
+  const styles = useStyles();
   const webview = useRef<WebView>(null);
   const host = useRef<BridgeHost | null>(null);
 
@@ -68,6 +69,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskA
   );
 }
 
-const styles = StyleSheet.create({
-  webview: { flex: 1, backgroundColor: '#ffffff' },
-});
+// The app paints its own background; this only shows until it does.
+const useStyles = themedStyles((theme) => ({
+  webview: { flex: 1, backgroundColor: theme.bg },
+}));

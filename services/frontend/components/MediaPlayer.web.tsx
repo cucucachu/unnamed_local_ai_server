@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 
 import { streamUrl } from '@/lib/media';
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 
 export interface MediaPlayerProps {
   path: string;
@@ -21,6 +21,7 @@ export interface MediaPlayerProps {
  * ordinary JSX intrinsics with no `as any` cast needed.
  */
 export function MediaPlayer({ path, kind }: MediaPlayerProps) {
+  const theme = useTheme();
   const src = streamUrl(path);
 
   if (kind === 'video') {
@@ -32,7 +33,7 @@ export function MediaPlayer({ path, kind }: MediaPlayerProps) {
   }
 
   return (
-    <div style={audioContainerStyle}>
+    <div style={{ ...audioContainerStyle, backgroundColor: theme.bg }}>
       <audio controls src={src} style={audioStyle} data-testid="media-player-audio" />
     </div>
   );
@@ -62,7 +63,6 @@ const audioContainerStyle: CSSProperties = {
   padding: 24,
   display: 'flex',
   justifyContent: 'center',
-  backgroundColor: theme.bg,
 };
 
 const audioStyle: CSSProperties = {

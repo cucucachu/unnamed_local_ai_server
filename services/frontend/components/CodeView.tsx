@@ -1,10 +1,11 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles } from '@/lib/theme';
 
 /** JSON and code in monospace with line numbers (M22-11). Lines don't wrap,
  * so the gutter stays aligned; long lines scroll sideways. */
 export function CodeView({ text }: { text: string }) {
+  const styles = useStyles();
   const lines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n');
   return (
     <ScrollView style={styles.container} testID="code-view">
@@ -22,7 +23,7 @@ export function CodeView({ text }: { text: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
   },
@@ -47,4 +48,4 @@ const styles = StyleSheet.create({
   code: {
     paddingHorizontal: 10,
   },
-});
+}));

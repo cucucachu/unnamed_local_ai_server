@@ -1,8 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { ComponentProps, ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, Text, useWindowDimensions, View } from 'react-native';
 
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -28,6 +28,7 @@ export function gridColumns(width: number): number {
 }
 
 export function AppIcon({ icon, slug, name, color }: { icon: string | null; slug: string; name: string; color?: string }) {
+  const styles = useStyles();
   const glyph = iconGlyph(icon);
   return (
     <View style={[styles.icon, { backgroundColor: color ?? tileColor(slug) }]}>
@@ -57,6 +58,7 @@ export interface AppTileProps {
 }
 
 export function AppTile({ slug, name, icon, color, badge, note, onPress, onLongPress, testID }: AppTileProps) {
+  const styles = useStyles();
   return (
     <Pressable
       style={styles.tile}
@@ -85,6 +87,7 @@ export function AppTile({ slug, name, icon, color, badge, note, onPress, onLongP
 
 /** Tiles in rows, 4 across on a phone and more on wider screens. */
 export function AppGrid({ children, testID }: { children: ReactNode; testID?: string }) {
+  const styles = useStyles();
   const { width } = useWindowDimensions();
   const columns = gridColumns(width);
   const items = Array.isArray(children) ? children.flat().filter(Boolean) : [children];
@@ -99,7 +102,7 @@ export function AppGrid({ children, testID }: { children: ReactNode; testID?: st
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -144,4 +147,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: -4,
   },
-});
+}));

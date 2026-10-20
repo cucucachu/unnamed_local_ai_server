@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { useAuth } from '@/components/AuthProvider';
 import {
@@ -12,7 +12,7 @@ import {
   SectionTitle,
   Segmented,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
   type SegmentOption,
 } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
@@ -31,7 +31,7 @@ import {
   type SpaceRole,
 } from '@/lib/platform';
 import { StepUpCancelledError } from '@/lib/stepUp';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 const ROLE_LABELS: Record<SpaceRole, string> = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
@@ -48,6 +48,8 @@ function roleOptions(prefix: string): SegmentOption<SpaceRole>[] {
  * shared space, adding people from the user directory, changing roles, and
  * removing members. */
 export default function SpaceDetailScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { spaceId } = useLocalSearchParams<{ spaceId: string }>();
   const router = useRouter();
   const { state } = useAuth();
@@ -180,6 +182,8 @@ function AddMemberModal({
   addWithStepUp: (userId: string, role: SpaceRole) => Promise<Member>;
   onClose: (added: boolean) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const load = useCallback(() => listDirectory(), []);
   const { data: directory, error: loadError, reload } = useLoad(load);
   const [selected, setSelected] = useState<DirectoryUser | null>(null);
@@ -250,7 +254,7 @@ function AddMemberModal({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -312,4 +316,4 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 8,
   },
-});
+}));

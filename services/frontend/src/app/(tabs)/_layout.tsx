@@ -2,10 +2,11 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, useRouter } from 'expo-router';
 import { Pressable, StyleSheet } from 'react-native';
 
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 
 /** Back to the home pager from a screen that uses this stack's own header (Files). */
 function BackHome() {
+  const theme = useTheme();
   const router = useRouter();
   return (
     <Pressable
@@ -31,6 +32,7 @@ export const unstable_settings = { initialRouteName: 'index' };
  * stack. `chat/` and `apps/index` are links to the pager's pages.
  */
 export default function ShellLayout() {
+  const theme = useTheme();
   return (
     <Stack
       screenOptions={{

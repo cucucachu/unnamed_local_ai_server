@@ -2,11 +2,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { ActionButton, Card, ErrorText, LoadState, SectionTitle, Segmented, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Card, ErrorText, LoadState, SectionTitle, Segmented, useSettingsStyles } from '@/components/SettingsUI';
 import { ApiError } from '@/lib/api';
 import { installTemplate, listAppTemplates, type AppTemplate } from '@/lib/apps';
 import { isReadOnly, listSpaces, slugify, type Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 interface TemplateTarget {
@@ -30,6 +30,9 @@ async function loadTarget(slug: string): Promise<TemplateTarget> {
  * The app's agent can then change it like any other app.
  */
 export default function TemplateScreen() {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const params = useLocalSearchParams<{ template: string; spaceId?: string }>();
   const slug = Array.isArray(params.template) ? params.template[0] : params.template;
@@ -124,7 +127,7 @@ export default function TemplateScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: { flex: 1, backgroundColor: theme.bg },
   body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: 16, gap: 12 },
   input: {
@@ -134,4 +137,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
-});
+}));

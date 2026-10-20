@@ -3,10 +3,10 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 
 import { AppGrid, AppTile } from '@/components/AppGrid';
 import { PageHeader } from '@/components/PageHeader';
-import { settingsStyles } from '@/components/SettingsUI';
+import { useSettingsStyles } from '@/components/SettingsUI';
 import type { Instance } from '@/lib/apps';
 import { isReadOnly, spacePath, type Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 
 const SYSTEM_COLOR = '#3f4756';
 
@@ -31,6 +31,8 @@ export interface SpacePageProps {
  * action sheet. Titled with the space's name.
  */
 export function SpacePage({ space, instances, width, onRefresh, onLongPressApp }: SpacePageProps) {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
   const router = useRouter();
   const readOnly = isReadOnly(space);
   const label = spaceLabel(space);

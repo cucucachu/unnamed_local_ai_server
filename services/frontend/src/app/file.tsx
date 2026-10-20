@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -19,7 +19,7 @@ import {
   textViewOf,
   type TextFile,
 } from '@/lib/textFiles';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles, useTheme } from '@/lib/theme';
 
 type Load = { state: 'loading' } | { state: 'error'; message: string } | { state: 'done'; file: TextFile };
 
@@ -56,6 +56,8 @@ function confirmDiscard(): Promise<boolean> {
  * first.
  */
 export default function FileScreen() {
+  const theme = useTheme();
+  const styles = useStyles();
   const { path: pathParam } = useLocalSearchParams<{ path?: string | string[] }>();
   const path = (Array.isArray(pathParam) ? pathParam[0] : pathParam) ?? '';
   const router = useRouter();
@@ -182,7 +184,7 @@ export default function FileScreen() {
               testID="file-save"
               style={[styles.textButton, styles.primaryButton, (saving || !dirty) && styles.disabled]}
             >
-              {saving ? <ActivityIndicator size="small" color={theme.text} /> : <Text style={styles.textButtonLabel}>Save</Text>}
+              {saving ? <ActivityIndicator size="small" color={theme.onAccent} /> : <Text style={[styles.textButtonLabel, styles.primaryButtonLabel]}>Save</Text>}
             </Pressable>
           </>
         ) : file?.writable ? (
@@ -281,6 +283,7 @@ function ConflictButton({
   testID: string;
   disabled: boolean;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       onPress={onPress}
@@ -294,7 +297,7 @@ function ConflictButton({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -327,6 +330,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  primaryButtonLabel: { color: theme.onAccent },
   primaryButton: {
     backgroundColor: theme.accent,
     borderColor: theme.accent,
@@ -407,4 +411,4 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     padding: 16,
   },
-});
+}));

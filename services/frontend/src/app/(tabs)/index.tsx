@@ -26,7 +26,7 @@ import { buildApp, getApp, listInstalledApps, uninstallInstance, type Instance }
 import { useChatAttention } from '@/lib/chatAttention';
 import { pageSwiped, showPage, useCurrentPage, type HomePage } from '@/lib/currentPage';
 import { isReadOnly, type Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { useKeyboardVisible } from '@/lib/useKeyboardVisible';
 import { useLoad } from '@/lib/useAsync';
 
@@ -61,6 +61,8 @@ interface Menu {
  * it. Reloads the apps whenever it regains focus.
  */
 export default function HomeScreen() {
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const keyboardUp = useKeyboardVisible();
@@ -298,7 +300,7 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -344,4 +346,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     padding: 12,
   },
-});
+}));

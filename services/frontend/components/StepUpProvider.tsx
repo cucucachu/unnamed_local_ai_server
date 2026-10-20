@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, Text, TextInput, View } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { beginPasskeyStepUp, finishPasskeyStepUp, getAuthStatus, passkeysAvailable, stepUp } from '@/lib/auth';
 import { platformErrorMessage } from '@/lib/platform';
 import { withStepUp as runWithStepUp } from '@/lib/stepUp';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { getCredential, passkeysSupported } from '@/lib/webauthn';
 
 interface StepUpContextValue {
@@ -64,6 +64,8 @@ export function useStepUp(): StepUpContextValue {
 }
 
 function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +169,7 @@ function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
               accessibilityRole="button"
               testID="step-up-submit"
             >
-              {busy ? <ActivityIndicator color={theme.text} /> : <Text style={styles.buttonText}>Confirm</Text>}
+              {busy ? <ActivityIndicator color={theme.onAccent} /> : <Text style={[styles.buttonText, styles.primaryButtonText]}>Confirm</Text>}
             </Pressable>
           </View>
         </View>
@@ -176,7 +178,7 @@ function StepUpModal({ onDone }: { onDone: (ok: boolean) => void }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -232,6 +234,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
+  primaryButtonText: { color: theme.onAccent },
   primaryButton: {
     backgroundColor: theme.accent,
     borderColor: theme.accent,
@@ -244,4 +247,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-});
+}));

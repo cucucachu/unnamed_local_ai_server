@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { useAuth } from '@/components/AuthProvider';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 /**
  * Holds the app back until the first `/api/auth/status` answer (spinner, or
@@ -12,6 +12,8 @@ import { theme } from '@/lib/theme';
  * Expo Router rewrite the URL to its first route.
  */
 export function AuthGate({ children }: { children?: ReactNode }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const { state, refresh } = useAuth();
 
   if (state.phase === 'loading') {
@@ -40,7 +42,7 @@ export function AuthGate({ children }: { children?: ReactNode }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   app: {
     flex: 1,
   },
@@ -63,8 +65,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.accent,
   },
   retryText: {
-    color: theme.text,
+    color: theme.onAccent,
     fontSize: 15,
     fontWeight: '600',
   },
-});
+}));

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, BackHandler, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, BackHandler, Pressable, View } from 'react-native';
 
 import { ChatHistoryDrawer, ChatHistoryPanel, type ThreadListState } from '@/components/ChatHistoryDrawer';
 import { ChatView } from '@/components/ChatView';
@@ -10,7 +10,7 @@ import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
 import { publishThreads } from '@/lib/chatAttention';
 import { adoptCreatedThread, openChat, useCurrentChat } from '@/lib/currentChat';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { deleteThread, listThreads, renameThread, type Thread } from '@/lib/threads';
 
 /** The history as the home pager's first page (M19-08, on a phone). */
@@ -33,6 +33,8 @@ export interface PagedHistory {
  * without, it's a drawer over the chat.
  */
 export function ChatPage({ width, paged }: { width: number; paged?: PagedHistory }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const { threadId, key } = useCurrentChat();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -208,7 +210,7 @@ export function ChatPage({ width, paged }: { width: number; paged?: PagedHistory
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -228,4 +230,4 @@ const styles = StyleSheet.create({
   fill: {
     flex: 1,
   },
-});
+}));

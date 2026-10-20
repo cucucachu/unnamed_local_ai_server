@@ -1,14 +1,15 @@
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 
 /**
  * The title bar of a home pager page (M19-08). Each page draws its own, so
  * it slides with the page: the history pushes Chat's aside as it opens.
  */
 export function PageHeader({ title, left }: { title: string; left?: ReactNode }) {
+  const styles = useStyles();
   const insets = useSafeAreaInsets();
   return (
     <View style={[styles.header, { paddingTop: insets.top }]}>
@@ -20,7 +21,7 @@ export function PageHeader({ title, left }: { title: string; left?: ReactNode })
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -38,4 +39,4 @@ const styles = StyleSheet.create({
   titleAlone: {
     marginLeft: 16,
   },
-});
+}));

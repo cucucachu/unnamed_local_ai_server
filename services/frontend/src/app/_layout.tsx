@@ -1,16 +1,19 @@
-import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import * as SystemUI from 'expo-system-ui';
+import { useEffect, useMemo } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppKeyboardProvider } from '@/components/AppKeyboardProvider';
 import { AuthGate } from '@/components/AuthGate';
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { SettingsProvider } from '@/components/SettingsProvider';
+import { useTheme } from '@/lib/theme';
 
-// The host's own screens are always dark (M2-05): this ThemeProvider, the
-// light status bar and app.json's root `backgroundColor`. app.json's
-// `userInterfaceStyle` is "automatic" so `useColorScheme()` reports the
-// device's setting, which AppRunner passes to apps.
+// The host follows the device's light/dark setting (#464): `useTheme()` for
+// its screens, this ThemeProvider for the navigation chrome, the status bar
+// and the native root background (app.json's dark `backgroundColor` until
+// the first render). AppRunner passes the same scheme to apps.
 //
 // `GestureHandlerRootView` wraps the whole app (per
 // react-native-gesture-handler's own installation docs — confirmed by
@@ -25,18 +28,29 @@ import { SettingsProvider } from '@/components/SettingsProvider';
 // never hit this because `Swipeable` is skipped there entirely
 // (`Platform.OS === 'web'` branch in `chat/index.tsx`'s `ThreadRow`).
 export default function RootLayout() {
+  const theme = useTheme();
+  const navigationTheme = useMemo(() => {
+    const base = theme.scheme === 'dark' ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: { ...base.colors, primary: theme.accent, background: theme.bg, card: theme.bg, text: theme.text, border: theme.border },
+    };
+  }, [theme]);
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(theme.bg);
+  }, [theme.bg]);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       {/* M9-04: keyboard-controller's provider (native) / no-op (web).
           Must wrap every screen that uses `AppKeyboardAvoidingView`. */}
       <AppKeyboardProvider>
-        <ThemeProvider value={DarkTheme}>
+        <ThemeProvider value={navigationTheme}>
           <AuthProvider>
             <AuthGate>
               <AppStack />
             </AuthGate>
           </AuthProvider>
-          <StatusBar style="light" />
+          <StatusBar style={theme.scheme === 'dark' ? 'light' : 'dark'} />
         </ThemeProvider>
       </AppKeyboardProvider>
     </GestureHandlerRootView>

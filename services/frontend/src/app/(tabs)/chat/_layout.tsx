@@ -1,6 +1,6 @@
 import { Stack } from 'expo-router';
 
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 
 /**
  * `/chat` links (M3-04). Since M19-07 the chat is a page of the home pager
@@ -8,6 +8,7 @@ import { theme } from '@/lib/theme';
  * chat first; neither draws anything.
  */
 export default function ChatStackLayout() {
+  const theme = useTheme();
   return (
     <Stack
       screenOptions={{

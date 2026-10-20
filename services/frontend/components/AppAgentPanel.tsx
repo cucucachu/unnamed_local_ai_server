@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { ActionButton, ErrorText } from '@/components/SettingsUI';
 import { TurnActivityPanel } from '@/components/TurnActivityPanel';
@@ -13,7 +13,7 @@ import {
   type AppContext,
 } from '@/lib/appAgent';
 import type { Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { createThread } from '@/lib/threads';
 import {
   useChat,
@@ -62,6 +62,8 @@ export function AppAgentPanel({
   onActivity?: (activity: AgentActivity) => void;
   onComposerFocus?: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [ctx, setCtx] = useState<AppContext | null>(null);
   const [threadId, setThreadId] = useState<string | null>(() => threadsByInstance.get(instanceId) ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +146,7 @@ export function AppAgentPanel({
 }
 
 function ContextCard({ ctx, collapsible }: { ctx: AppContext; collapsible: boolean }) {
+  const styles = useStyles();
   const [open, setOpen] = useState(!collapsible);
   if (!open) {
     return (
@@ -192,6 +195,8 @@ function AgentChat({
   onActivity?: (activity: AgentActivity) => void;
   onComposerFocus?: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const { turns, sendMessage, busy, hydrationState, pendingApproval, respondToApproval } = useChat(threadId);
   const needsApproval = pendingApproval !== null;
   useEffect(() => {
@@ -262,7 +267,7 @@ function AgentChat({
           testID="app-agent-send"
           style={[styles.send, !canSend && styles.sendDisabled]}
         >
-          <Ionicons name="send" size={18} color={canSend ? theme.bg : theme.textMuted} />
+          <Ionicons name="send" size={18} color={canSend ? theme.onAccent : theme.textMuted} />
         </Pressable>
       </View>
     </View>
@@ -270,6 +275,7 @@ function AgentChat({
 }
 
 function TurnBlock({ turn }: { turn: ChatTurn }) {
+  const styles = useStyles();
   return (
     <View style={styles.turn}>
       {turn.user ? <UserBubble item={turn.user} /> : null}
@@ -288,6 +294,7 @@ function TurnBlock({ turn }: { turn: ChatTurn }) {
 }
 
 function UserBubble({ item }: { item: ChatUserItem }) {
+  const styles = useStyles();
   return (
     <Text style={styles.user} testID="app-agent-user-text">
       {displayUserPrompt(item.text)}
@@ -302,6 +309,7 @@ function PanelApproval({
   pending: PendingApproval;
   onRespond: (decisions: { tool_call_id: string; decision: 'approve' | 'reject' }[]) => void;
 }) {
+  const styles = useStyles();
   const decide = (decision: 'approve' | 'reject') =>
     onRespond(pending.actions.map((action) => ({ tool_call_id: action.toolCallId, decision })));
   return (
@@ -320,7 +328,7 @@ function PanelApproval({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   panel: {
     width: 360,
     maxWidth: '100%',
@@ -361,7 +369,7 @@ const styles = StyleSheet.create({
   user: {
     alignSelf: 'flex-end',
     backgroundColor: theme.accent,
-    color: theme.bg,
+    color: theme.onAccent,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
@@ -402,4 +410,4 @@ const styles = StyleSheet.create({
   },
   approvalText: { color: theme.text, fontSize: 13 },
   approvalRow: { flexDirection: 'row', gap: 8 },
-});
+}));

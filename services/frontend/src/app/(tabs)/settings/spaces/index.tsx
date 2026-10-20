@@ -12,15 +12,17 @@ import {
   LoadState,
   SectionTitle,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { createSpace, listSpaces, platformErrorMessage, slugify } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
 /** Settings → Spaces: the caller's spaces with their role, and a form to
  * create a shared space (the creator becomes its owner). */
 export default function SpacesScreen() {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
   const router = useRouter();
   const load = useCallback(() => listSpaces(), []);
   const { data: spaces, error, reload } = useLoad(load);
@@ -78,6 +80,7 @@ export default function SpacesScreen() {
 }
 
 function CreateSpaceCard({ onCreated }: { onCreated: (id: string) => void }) {
+  const settingsStyles = useSettingsStyles();
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [slugEdited, setSlugEdited] = useState(false);

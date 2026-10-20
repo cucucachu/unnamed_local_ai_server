@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 
 const DEFAULT_TOAST_DURATION_MS = 3000;
 
@@ -53,6 +53,7 @@ export interface ToastProps {
 }
 
 export function Toast({ message, testID }: ToastProps) {
+  const styles = useStyles();
   if (!message) return null;
   return (
     <View style={styles.toast} testID={testID}>
@@ -61,7 +62,7 @@ export function Toast({ message, testID }: ToastProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   toast: {
     position: 'absolute',
     bottom: 20,
@@ -79,4 +80,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
-});
+}));

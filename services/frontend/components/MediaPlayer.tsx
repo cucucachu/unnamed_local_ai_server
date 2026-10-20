@@ -2,10 +2,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useCallback, useState } from 'react';
-import { GestureResponderEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import { GestureResponderEvent, Pressable, Text, View } from 'react-native';
 
 import { authedSource, streamUrl } from '@/lib/media';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface MediaPlayerProps {
   path: string;
@@ -39,6 +39,7 @@ export function MediaPlayer({ path, kind }: MediaPlayerProps) {
  * stretching, with letterbox bars filling any leftover space for sources
  * that aren't actually 16:9. */
 function NativeVideoPlayer({ path }: { path: string }) {
+  const styles = useStyles();
   const player = useVideoPlayer(authedSource(streamUrl(path)));
 
   return (
@@ -65,6 +66,7 @@ function formatTime(seconds: number): string {
  * seek bar" ask without a full `PanResponder` gesture implementation for
  * something this app's own player controls don't otherwise need. */
 function ScrubBar({ progress, onSeek }: { progress: number; onSeek: (ratio: number) => void }) {
+  const styles = useStyles();
   const [trackWidth, setTrackWidth] = useState(0);
 
   const handlePress = useCallback(
@@ -91,6 +93,8 @@ function ScrubBar({ progress, onSeek }: { progress: number; onSeek: (ratio: numb
 }
 
 function NativeAudioPlayer({ path }: { path: string }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const player = useAudioPlayer(authedSource(streamUrl(path)));
   const status = useAudioPlayerStatus(player);
 
@@ -132,7 +136,7 @@ function NativeAudioPlayer({ path }: { path: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   videoBox: {
     width: '100%',
     aspectRatio: 16 / 9,
@@ -174,4 +178,4 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontSize: 13,
   },
-});
+}));

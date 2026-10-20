@@ -12,9 +12,10 @@ M2-06, the files UI in M3-05.
 - Routes live under `src/app/` (the current default template uses a `src/`
   directory, not a top-level `app/`) — see `tsconfig.json`'s `@/*` -> `./src/*`
   path alias.
-- The host's own screens are always dark (the `ThemeProvider` in
-  `src/app/_layout.tsx`); `app.json`'s `userInterfaceStyle` is `"automatic"`
-  so apps can follow the device's light/dark setting.
+- The host follows the device's light/dark setting (the browser's on web):
+  colors come from `useTheme()` / `themedStyles()` in `lib/theme.ts`, never
+  literals, and `src/app/_layout.tsx` themes the navigation chrome and status
+  bar. Apps get the same scheme.
 - `web.output` is `"single"` (SPA build) to match Caddy's `try_files {path}
   /index.html` fallback (`infra/caddy/Caddyfile`).
 

@@ -3,14 +3,16 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
-import { ActionButton, Badge, Card, LoadState, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Badge, Card, LoadState, SettingsFrame, useSettingsStyles } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { adminListIntegrations, type AdminIntegration } from '@/lib/integrations';
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
 /** Settings → Integrations → Manage (admins): every installed server, and Add. */
 export default function ManageIntegrationsScreen() {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
   const router = useRouter();
   const { withStepUp } = useStepUp();
   const load = useCallback(() => withStepUp(adminListIntegrations), [withStepUp]);

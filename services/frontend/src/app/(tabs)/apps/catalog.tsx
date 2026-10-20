@@ -1,12 +1,12 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { Badge, Card, LoadState, SectionTitle, settingsStyles } from '@/components/SettingsUI';
+import { Badge, Card, LoadState, SectionTitle, useSettingsStyles } from '@/components/SettingsUI';
 import { listAppTemplates, listCatalog, type AppTemplate, type CatalogEntry } from '@/lib/apps';
 import { isReadOnly, listSpaces, type Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
 interface SpaceCatalog {
@@ -37,6 +37,9 @@ async function loadCatalogs(onlySpaceId?: string): Promise<Catalogs> {
  * Below them, the templates a new app can start from (M22-05).
  */
 export default function CatalogScreen() {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const { spaceId } = useLocalSearchParams<{ spaceId?: string }>();
   const load = useCallback(() => loadCatalogs(spaceId), [spaceId]);
@@ -147,10 +150,10 @@ export default function CatalogScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: { flex: 1, backgroundColor: theme.bg },
   body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: 16, gap: 12 },
   group: { gap: 8 },
   empty: { gap: 8, paddingVertical: 48 },
   emptyTitle: { color: theme.text, fontSize: 16, fontWeight: '600' },
-});
+}));

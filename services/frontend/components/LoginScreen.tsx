@@ -13,9 +13,9 @@ import {
 } from '@/lib/auth';
 import { isHostApp } from '@/lib/client';
 import { passkeysSupported } from '@/lib/webauthn';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 
-import { Pressable, Platform, StyleSheet, Text } from 'react-native';
+import { Pressable, Platform, Text } from 'react-native';
 
 /** Username + password, plus a TOTP field once the platform answers
  * `totp_required`. When status says passkeys are available at this origin,
@@ -31,6 +31,7 @@ export function LoginScreen({
   /** From a `homeai://pair?…` link: show the pairing form pre-filled. */
   pairPayload?: string;
 }) {
+  const styles = useStyles();
   const { login, loginWithPasskey, loginWithDevice, pairDevice } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -273,7 +274,7 @@ export function LoginScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   passkey: {
     alignItems: 'center',
     paddingVertical: 10,
@@ -295,4 +296,4 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
-});
+}));

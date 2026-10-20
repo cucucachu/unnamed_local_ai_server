@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
 import { FileList } from '@/components/FileList';
 import { ROOT_PATH, listFiles, parentPath, type FileEntry } from '@/lib/files';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface DestinationPickerModalProps {
   /** Directory to open the picker in initially — typically the main files
@@ -42,6 +42,8 @@ type LoadState = 'loading' | 'error' | 'done';
  * it's out of this ticket's scope) trips that rule.
  */
 export function DestinationPickerModal({ initialPath, onSelect, onCancel }: DestinationPickerModalProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [path, setPath] = useState(initialPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [writable, setWritable] = useState(false);
@@ -130,7 +132,7 @@ export function DestinationPickerModal({ initialPath, onSelect, onCancel }: Dest
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -186,4 +188,4 @@ const styles = StyleSheet.create({
     color: theme.accent,
     fontSize: 14,
   },
-});
+}));

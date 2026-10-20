@@ -1,12 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { AppRunner } from '@/components/AppRunner';
 import { LoadState } from '@/components/SettingsUI';
 import { findInstance } from '@/lib/apps';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
 /**
@@ -16,6 +16,8 @@ import { useLoad } from '@/lib/useAsync';
  * The header's info button opens the app's info and history.
  */
 export default function AppRunnerScreen() {
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const params = useLocalSearchParams<{ instanceId: string }>();
   const instanceId = Array.isArray(params.instanceId) ? params.instanceId[0] : params.instanceId;
@@ -58,7 +60,7 @@ export default function AppRunnerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -66,4 +68,4 @@ const styles = StyleSheet.create({
   headerButton: {
     padding: 4,
   },
-});
+}));

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 
 import { AuthField } from '@/components/AuthForm';
-import { Notice, PlainHttpWarning, integrationStyles, noticeTextStyle } from '@/components/IntegrationParts';
+import { Notice, PlainHttpWarning, useIntegrationStyles, useNoticeTextStyle } from '@/components/IntegrationParts';
 import {
   ActionButton,
   Card,
@@ -11,7 +11,7 @@ import {
   SectionTitle,
   Segmented,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import {
@@ -52,6 +52,8 @@ function oauthUsable(check: ServerCheck | null): boolean {
  * new tools start off), then asks the gateway what it finds. Cancel
  * uninstalls it again. */
 export default function AddIntegrationScreen() {
+  const noticeTextStyle = useNoticeTextStyle();
+  const settingsStyles = useSettingsStyles();
   const router = useRouter();
   const { withStepUp } = useStepUp();
   const [name, setName] = useState('');
@@ -369,6 +371,9 @@ function CheckResult({
   busy: string | null;
   onTrust: (fingerprint: string) => void;
 }) {
+  const noticeTextStyle = useNoticeTextStyle();
+  const integrationStyles = useIntegrationStyles();
+  const settingsStyles = useSettingsStyles();
   if (check.reachable) {
     const server = check.server ?? {};
     const found = typeof server.name === 'string' ? `${server.name}${typeof server.version === 'string' ? ` ${server.version}` : ''}` : null;

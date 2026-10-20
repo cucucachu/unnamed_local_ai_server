@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { AuthField } from '@/components/AuthForm';
@@ -11,7 +11,7 @@ import {
   ErrorText,
   SectionTitle,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import {
   confirmTotp,
@@ -28,7 +28,7 @@ import {
 } from '@/lib/platform';
 import { getAuthStatus, passkeysAvailable, type User } from '@/lib/auth';
 import { createCredential, passkeysSupported } from '@/lib/webauthn';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles } from '@/lib/theme';
 
 /** Settings → Account: display name, password, and TOTP enrollment. */
 export default function AccountScreen() {
@@ -58,6 +58,8 @@ function ProfileCard({
   username: string;
   onSaved: (user: User) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const [name, setName] = useState(displayName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +113,8 @@ function ProfileCard({
 }
 
 function PasswordCard() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -200,6 +204,8 @@ function TotpCard({
   enabled: boolean;
   onChanged: (user: User) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const [step, setStep] = useState<TotpStep>({ kind: 'idle' });
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
@@ -346,7 +352,7 @@ function TotpCard({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   strong: {
     color: theme.text,
     fontWeight: '600',
@@ -383,9 +389,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-});
+}));
 
 function PasskeyCard() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const [available, setAvailable] = useState(false);
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
   const [busy, setBusy] = useState(false);

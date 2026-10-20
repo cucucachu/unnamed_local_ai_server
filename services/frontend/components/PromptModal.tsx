@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, Text, TextInput, View } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface PromptModalProps {
   title: string;
@@ -33,6 +33,8 @@ export interface PromptModalProps {
  * `app.json`'s `experiments.reactCompiler`) flags.
  */
 export function PromptModal({ title, initialValue = '', submitLabel = 'OK', onSubmit, onCancel }: PromptModalProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [value, setValue] = useState(initialValue);
 
   const trimmed = value.trim();
@@ -65,7 +67,7 @@ export function PromptModal({ title, initialValue = '', submitLabel = 'OK', onSu
               accessibilityRole="button"
               testID="prompt-modal-submit"
             >
-              <Text style={styles.buttonText}>{submitLabel}</Text>
+              <Text style={[styles.buttonText, styles.primaryButtonText]}>{submitLabel}</Text>
             </Pressable>
           </View>
         </View>
@@ -74,7 +76,7 @@ export function PromptModal({ title, initialValue = '', submitLabel = 'OK', onSu
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -120,6 +122,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
+  primaryButtonText: { color: theme.onAccent },
   primaryButton: {
     backgroundColor: theme.accent,
     borderColor: theme.accent,
@@ -132,4 +135,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-});
+}));
