@@ -4,7 +4,8 @@ import { FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 're
 
 import { categoryFor, formatFileSize, iconNameFor } from '@/lib/fileDisplay';
 import type { FileEntry, SpaceRole } from '@/lib/files';
-import { authedSource, mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
+import { useAuthedImage } from '@/lib/authedImage';
+import { mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
 import { relativeTime } from '@/lib/relativeTime';
 import { theme } from '@/lib/theme';
 
@@ -106,23 +107,26 @@ export function FileList({
  */
 function FileThumbnail({ path, name }: { path: string; name: string }) {
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+  const source = useAuthedImage(streamUrl(path));
 
-  if (status === 'error') {
+  if (status === 'error' || source.failed) {
     return <Ionicons name="image-outline" size={22} color={theme.textMuted} style={styles.icon} />;
   }
 
   return (
     <View style={styles.thumbnailBox}>
       {status === 'loading' ? <Ionicons name="image-outline" size={16} color={theme.textMuted} /> : null}
-      <Image
-        source={authedSource(streamUrl(path))}
-        style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
-        resizeMode="cover"
-        onLoad={() => setStatus('loaded')}
-        onError={() => setStatus('error')}
-        testID="file-thumbnail"
-        accessibilityLabel={`${name} thumbnail`}
-      />
+      {source.uri === null ? null : (
+        <Image
+          source={{ uri: source.uri }}
+          style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
+          resizeMode="cover"
+          onLoad={() => setStatus('loaded')}
+          onError={() => setStatus('error')}
+          testID="file-thumbnail"
+          accessibilityLabel={`${name} thumbnail`}
+        />
+      )}
     </View>
   );
 }
@@ -143,8 +147,9 @@ function FileThumbnail({ path, name }: { path: string; name: string }) {
  */
 function VideoThumbnail({ path, name }: { path: string; name: string }) {
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+  const source = useAuthedImage(thumbnailUrl(path));
 
-  if (status === 'error') {
+  if (status === 'error' || source.failed) {
     return (
       <Ionicons name="videocam-outline" size={22} color={theme.textMuted} style={styles.icon} />
     );
@@ -155,15 +160,17 @@ function VideoThumbnail({ path, name }: { path: string; name: string }) {
       {status === 'loading' ? (
         <Ionicons name="videocam-outline" size={16} color={theme.textMuted} />
       ) : null}
-      <Image
-        source={authedSource(thumbnailUrl(path))}
-        style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
-        resizeMode="cover"
-        onLoad={() => setStatus('loaded')}
-        onError={() => setStatus('error')}
-        testID="video-thumbnail"
-        accessibilityLabel={`${name} thumbnail`}
-      />
+      {source.uri === null ? null : (
+        <Image
+          source={{ uri: source.uri }}
+          style={[styles.thumbnail, status !== 'loaded' && styles.thumbnailHidden]}
+          resizeMode="cover"
+          onLoad={() => setStatus('loaded')}
+          onError={() => setStatus('error')}
+          testID="video-thumbnail"
+          accessibilityLabel={`${name} thumbnail`}
+        />
+      )}
     </View>
   );
 }

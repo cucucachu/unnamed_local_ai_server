@@ -3,6 +3,10 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { ImageViewer } from '../ImageViewer';
 
+jest.mock('@/lib/authedImage', () => ({
+  useAuthedImage: (url: string) => ({ uri: url, failed: false }),
+}));
+
 function render(element: React.ReactElement): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
