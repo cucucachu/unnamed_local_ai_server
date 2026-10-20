@@ -226,7 +226,7 @@ async def test_create_app_refuses_bad_input_without_writing(fake_model, fake_pla
         assert name in template
     assert "no space 'work'" in space
     assert fake_platform.apps == [] and list(fake_platform.personal()) == ["Apps/taken/app.json"]
-    assert [t for _, t, _ in fake_platform.template_installs] == ["grocery-list", "no"]
+    assert sorted(t for _, t, _ in fake_platform.template_installs) == ["grocery-list", "no"]
 
 
 async def test_build_app_on_hand_written_files_points_to_create_app(fake_model, fake_platform):

@@ -98,6 +98,13 @@
 #      goes into Memory on Run now with no web or integration call, a new
 #      chat recalls it, another user can't see or find it, and the Memory
 #      routine can't be deleted - a few GPU turns and one Memory run)
+#   -> gate_m22.sh (M22-20: the SDK, builder, M22 pytest and jest, the
+#      twelve template smokes in Chromium, the data map, app search, CSV
+#      and Files-editor smokes, then the G22 scenario: an installed template
+#      in the data map, its row found by search_files and not by another
+#      user, Run now on Memory writes a day file from it, and Run now on
+#      the weekly review writes the week and Lately - a few GPU turns and
+#      three or four routine runs)
 #
 # M8-08: after the initial compose up, this script waits for /api/health
 # and allows every tool for the e2e user (`ensure_hitl.sh false`, #342).
@@ -339,6 +346,10 @@ main() {
   # check, the M21 smokes and the G21 memory scenario (a few GPU turns and
   # one Memory run); its own users, so the same idempotent reasoning.
   run_step "gate_m21.sh"             bash "${SCRIPT_DIR}/gate_m21.sh"
+  # M22-20: gate_m22.sh runs the M22 tests, the template smokes, the M22
+  # smokes and the G22 scenario; its own users, so the same idempotent
+  # reasoning.
+  run_step "gate_m22.sh"             bash "${SCRIPT_DIR}/gate_m22.sh"
 
   print_summary
 

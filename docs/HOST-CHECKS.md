@@ -421,3 +421,43 @@ yourself, with the Memory routine on.
       up every time.
 - [ ] (M21-12) "Remember that …" either shows an edit to your notes to
       approve or says the nightly routine will pick it up; either is fine.
+
+## M22
+
+Web G22 is `scripts/e2e/gate_m22.sh` (stack health; the SDK, builder,
+M22 pytest and jest; the three template smokes in Chromium, every
+template installed from the catalog; the data map, app search, CSV and
+Files-editor smokes; then `g22_framework_smoke.sh`: Books and media
+installed from the catalog shows in the data map, its row is found by
+`search_files` and not by another user, Run now on Memory writes a day
+file from it, and Run now on the weekly review writes the week and a
+`## Lately` section). The authoring eval (`scripts/eval/app_authoring/`)
+has its results on #431, the reviews eval on #427. Setup: stack up from
+`main`, the release APK rebuilt from `main` and installed (M22-11 added
+`expo-intent-launcher`, a native module), signed in as yourself, with the
+Memory routine and the weekly review on.
+
+- [ ] (M22-05) Personal → Add app → Start from a template lists the
+      sixteen templates with icons and descriptions; install three you'd
+      actually use (say Chores, Budget and Books and media). Each opens
+      in the runner after its build.
+- [ ] (M22-02, M22-03, M22-04) Use them for a few days. Tabs, back and
+      modals behave like a phone app; the kit's lists, fields, swipe
+      actions and charts look native in light and dark mode, with no
+      layout glitches.
+- [ ] (M22-19) Customize one through Ask the agent (e.g. "add a store
+      field to transactions"): the agent edits and rebuilds, the change
+      shows up without losing data, and App info's history has the commit.
+- [ ] (M22-06, M22-07) A new chat answers "which app has my …?" without
+      listing apps, and finds a row by meaning ("that book about the
+      lighthouse").
+- [ ] (M22-08) App info → Data: export to a folder and open the CSV in
+      Files (it renders as a table); import a CSV back.
+- [ ] (M22-10, M22-11) Files opens markdown rendered, code with line
+      numbers, and a PDF in the system viewer; editing a note and saving
+      works, and a conflicting change gets the conflict prompt.
+- [ ] (M22-12, M22-13) After a night or two, `/personal/Memory/timeline/`
+      has day files that mention app activity ("finished …"), and none
+      for days with nothing worth noting.
+- [ ] (M22-14) After a Monday, the week's file reads sensibly in Files,
+      and `memory.md` has a short **Lately** section linking it.
