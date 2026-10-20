@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Switch, Text, View } from 'react-native';
 
-import { Card, LoadState, SectionTitle, Segmented, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
+import { Card, LoadState, SectionTitle, Segmented, SettingsFrame, useSettingsStyles } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
 import {
@@ -14,7 +14,7 @@ import {
   type DeliveredRoutine,
   type ToolPermission,
 } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Settings → Agent tools (admins, #342): a tool turned off here is off
@@ -23,6 +23,8 @@ import { useAction, useLoad } from '@/lib/useAsync';
  * Below, the routines every user gets (M21-08), each on or off for everyone;
  * a person's own switch is kept for when it's back on. */
 export default function AgentToolsScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { withStepUp } = useStepUp();
   const { message: toast, showToast } = useToast();
   const load = useCallback(() => withStepUp(adminListTools), [withStepUp]);
@@ -141,7 +143,7 @@ export default function AgentToolsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -162,4 +164,4 @@ const styles = StyleSheet.create({
   offText: {
     color: theme.textMuted,
   },
-});
+}));

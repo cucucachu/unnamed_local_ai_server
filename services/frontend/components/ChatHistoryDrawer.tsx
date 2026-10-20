@@ -1,12 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PromptModal } from '@/components/PromptModal';
 import { Badge } from '@/components/SettingsUI';
 import { relativeTime } from '@/lib/relativeTime';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import type { Thread } from '@/lib/threads';
 
 export type ThreadListState = 'loading' | 'error' | 'done';
@@ -69,6 +69,8 @@ export function ChatHistoryPanel({
   onRename,
   onDelete,
 }: ChatHistoryDrawerProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
   const [showRoutineRuns, setShowRoutineRuns] = useState(true);
@@ -129,8 +131,8 @@ export function ChatHistoryPanel({
               accessibilityLabel="Show routine runs"
               testID="thread-filter-routine-runs"
             >
-              <Ionicons name="alarm-outline" size={14} color={theme.text} />
-              <Text style={styles.filterChipText}>Routine runs</Text>
+              <Ionicons name="alarm-outline" size={14} color={showRoutineRuns ? theme.onAccent : theme.text} />
+              <Text style={[styles.filterChipText, showRoutineRuns && styles.filterChipTextOn]}>Routine runs</Text>
             </Pressable>
           </View>
         ) : null}
@@ -182,7 +184,7 @@ export function ChatHistoryPanel({
           accessibilityLabel="New chat"
           testID="chat-drawer-new-chat"
         >
-          <Ionicons name="add" size={22} color={theme.text} />
+          <Ionicons name="add" size={22} color={theme.onAccent} />
           <Text style={styles.newChatText}>New chat</Text>
         </Pressable>
         {menuThread !== null ? (
@@ -240,6 +242,7 @@ export function ChatHistoryPanel({
 
 /** The history panel sliding over the chat, with a backdrop that closes it. */
 export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
+  const styles = useStyles();
   return (
     <Modal visible={props.open} transparent animationType="fade" onRequestClose={props.onClose}>
       <View style={styles.overlay}>
@@ -269,6 +272,7 @@ function ThreadRow({
   onPress: () => void;
   onLongPress: () => void;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       style={[styles.row, current && styles.rowCurrent]}
@@ -295,7 +299,7 @@ function ThreadRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   overlay: {
     flex: 1,
     flexDirection: 'row',
@@ -360,6 +364,7 @@ const styles = StyleSheet.create({
     borderColor: theme.accent,
     backgroundColor: theme.accent,
   },
+  filterChipTextOn: { color: theme.onAccent },
   filterChipText: {
     color: theme.text,
     fontSize: 13,
@@ -392,7 +397,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.accent,
   },
   newChatText: {
-    color: theme.text,
+    color: theme.onAccent,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -480,4 +485,4 @@ const styles = StyleSheet.create({
   menuItemDanger: {
     color: theme.danger,
   },
-});
+}));

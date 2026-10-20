@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { ActionButton, Card, SectionTitle, Segmented, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Card, SectionTitle, Segmented, useSettingsStyles } from '@/components/SettingsUI';
 import {
   exportAppData,
   importCsv,
@@ -10,7 +10,7 @@ import {
   type DataMapInstance,
   type ImportResult,
 } from '@/lib/apps';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface Notice {
   text: string;
@@ -41,6 +41,9 @@ export function AppDataSection({
   run: (key: string, fn: () => Promise<unknown>) => Promise<boolean>;
   onNotice: (notice: Notice | null) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
+  const styles = useStyles();
   const canImport = instance.space.role === 'owner' || instance.space.role === 'editor';
   const [table, setTable] = useState(instance.tables[0]?.name ?? '');
   const [path, setPath] = useState('');
@@ -200,6 +203,7 @@ function Chip({
   onPress: () => void;
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       onPress={onPress}
@@ -213,7 +217,7 @@ function Chip({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -235,7 +239,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   chipTextSelected: {
-    color: theme.text,
+    color: theme.onAccent,
   },
   input: {
     color: theme.text,
@@ -250,4 +254,4 @@ const styles = StyleSheet.create({
   header: {
     gap: 4,
   },
-});
+}));

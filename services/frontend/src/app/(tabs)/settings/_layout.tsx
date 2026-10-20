@@ -2,12 +2,13 @@ import { Stack } from 'expo-router';
 
 import { useAuth } from '@/components/AuthProvider';
 import { StepUpProvider } from '@/components/StepUpProvider';
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 
 /** The Settings tab's own stack: the hub (`index`) plus its sub-screens.
  * Admin screens exist only for admins; the rest of the guard (signed in)
  * is the root layout's. */
 export default function SettingsLayout() {
+  const theme = useTheme();
   const { state } = useAuth();
   const isAdmin = state.phase === 'ready' && state.user?.role === 'admin';
 

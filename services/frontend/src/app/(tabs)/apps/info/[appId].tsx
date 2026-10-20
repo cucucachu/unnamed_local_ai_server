@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { AppDataSection } from '@/components/AppDataSection';
 import {
@@ -10,7 +10,7 @@ import {
   ErrorText,
   LoadState,
   SectionTitle,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { isReadOnly } from '@/lib/platform';
 import {
@@ -25,7 +25,7 @@ import {
   type RevertResult,
 } from '@/lib/apps';
 import { listSpaces, type Space } from '@/lib/platform';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 interface AppInfo {
@@ -107,6 +107,8 @@ function describeRevert(result: RevertResult): { text: string; ok: boolean } {
  * install's data.
  */
 export default function AppInfoScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const params = useLocalSearchParams<{ appId: string; instanceId?: string }>();
   const appId = Array.isArray(params.appId) ? params.appId[0] : params.appId;
   const instanceId = Array.isArray(params.instanceId) ? params.instanceId[0] : params.instanceId;
@@ -261,6 +263,8 @@ function CommitRow({
   disabled: boolean;
   onRevert: () => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const details = [
     commit.version ? `v${commit.version}` : null,
     commit.user,
@@ -292,7 +296,7 @@ function CommitRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -311,4 +315,4 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontSize: 13,
   },
-});
+}));

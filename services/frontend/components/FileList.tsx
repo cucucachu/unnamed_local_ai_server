@@ -1,13 +1,13 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useRef, useState } from 'react';
-import { FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Image, Platform, Pressable, Text, View } from 'react-native';
 
 import { categoryFor, formatFileSize, iconNameFor } from '@/lib/fileDisplay';
 import type { FileEntry, SpaceRole } from '@/lib/files';
 import { useAuthedImage } from '@/lib/authedImage';
 import { mediaKind, streamUrl, thumbnailUrl } from '@/lib/media';
 import { relativeTime } from '@/lib/relativeTime';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface FileListProps {
   entries: FileEntry[];
@@ -47,6 +47,7 @@ export function FileList({
   onEntryLongPress,
   highlightedPath = null,
 }: FileListProps) {
+  const styles = useStyles();
   const listRef = useRef<FlatList<FileEntry>>(null);
   const visibleEntries = dirsOnly ? entries.filter((entry) => entry.type === 'dir') : entries;
 
@@ -106,6 +107,8 @@ export function FileList({
  * throttling is added here.
  */
 function FileThumbnail({ path, name }: { path: string; name: string }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const source = useAuthedImage(streamUrl(path));
 
@@ -146,6 +149,8 @@ function FileThumbnail({ path, name }: { path: string; name: string }) {
  * row looked like before this issue.
  */
 function VideoThumbnail({ path, name }: { path: string; name: string }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const source = useAuthedImage(thumbnailUrl(path));
 
@@ -192,6 +197,8 @@ function FileRow({
   onLongPress?: (entry: FileEntry) => void;
   highlighted: boolean;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const iconName = iconNameFor(entry);
   const isImage = entry.type === 'file' && categoryFor(entry) === 'image';
   // Extension-based (`mediaKind`), not `categoryFor`'s MIME-based check —
@@ -262,7 +269,7 @@ function FileRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   listContent: {
     paddingVertical: 4,
   },
@@ -312,4 +319,4 @@ const styles = StyleSheet.create({
     color: theme.textMuted,
     fontSize: 12,
   },
-});
+}));

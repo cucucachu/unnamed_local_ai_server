@@ -1,9 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, type ReactElement, type ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { finishedHeaderLabel, runningStatusLine, type ChatTurn } from '@/lib/chatTurns';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface TurnActivityPanelProps {
   turn: ChatTurn;
@@ -19,6 +19,8 @@ export interface TurnActivityPanelProps {
  * turn has empty activity (small duration caption instead).
  */
 export function TurnActivityPanel({ turn, children }: TurnActivityPanelProps): ReactElement {
+  const theme = useTheme();
+  const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
   const running = turn.status === 'running';
   const statusLine = runningStatusLine(turn.activity);
@@ -64,7 +66,7 @@ export function TurnActivityPanel({ turn, children }: TurnActivityPanelProps): R
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   panel: {
     alignSelf: 'flex-start',
     maxWidth: '85%',
@@ -99,4 +101,4 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 8,
   },
-});
+}));

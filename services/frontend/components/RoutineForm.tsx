@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { Pressable, Switch, Text, TextInput, View, type TextInputProps } from 'react-native';
 
-import { ActionButton, Card, ErrorText, SectionTitle, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Card, ErrorText, SectionTitle, useSettingsStyles } from '@/components/SettingsUI';
 import type { Space } from '@/lib/platform';
 import {
   WEEKDAYS,
@@ -17,7 +17,7 @@ import {
   type ScheduleKind,
   type Weekday,
 } from '@/lib/routines';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 const KIND_LABELS: Record<ScheduleKind, string> = {
   once: 'Once',
@@ -172,6 +172,8 @@ export function RoutineForm({
   error: string | null;
   onSubmit: (input: RoutineInput) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const [form, setForm] = useState(() => initialForm(routine));
   const [invalid, setInvalid] = useState<string | null>(null);
   const set = <K extends keyof RoutineFormState>(key: K, value: RoutineFormState[K]) =>
@@ -369,6 +371,8 @@ function Field({
   style,
   ...props
 }: { label: string; containerStyle?: object } & TextInputProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   return (
     <View style={[styles.field, containerStyle]}>
       <Text style={styles.label}>{label}</Text>
@@ -394,6 +398,7 @@ function Chip({
   onPress: () => void;
   testID: string;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       onPress={onPress}
@@ -407,7 +412,7 @@ function Chip({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   form: {
     gap: 12,
   },
@@ -465,6 +470,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   chipTextSelected: {
+    color: theme.onAccent,
     fontWeight: '600',
   },
-});
+}));

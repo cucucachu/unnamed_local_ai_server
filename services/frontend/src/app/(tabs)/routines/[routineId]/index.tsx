@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, Text, View } from 'react-native';
 
 import { RoutineRunList } from '@/components/RoutineRunList';
 import {
@@ -9,13 +9,13 @@ import {
   LoadState,
   SectionTitle,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { openChat } from '@/lib/currentChat';
 import { showPage } from '@/lib/currentPage';
 import { listSpaces, type Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import {
   deleteRoutine,
   getRoutine,
@@ -52,6 +52,8 @@ const RECENT_RUNS = 5;
  * A delivered routine (M21-09) can't be deleted, says which tools it can't
  * use, and shows its fixed prompt part read-only. */
 export default function RoutineDetailScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { routineId } = useLocalSearchParams<{ routineId: string }>();
   const router = useRouter();
   const { message: toast, showToast } = useToast();
@@ -207,7 +209,7 @@ export default function RoutineDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
   },
@@ -231,4 +233,4 @@ const styles = StyleSheet.create({
     color: theme.accent,
     fontSize: 15,
   },
-});
+}));

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { DestinationPickerModal } from '@/components/DestinationPickerModal';
 import { FileActionSheet } from '@/components/FileActionSheet';
@@ -28,7 +28,7 @@ import {
 } from '@/lib/files';
 import { previewKind } from '@/lib/media';
 import { TEXT_MAX_BYTES, isPdfName, isTextFileName } from '@/lib/textFiles';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 type LoadState = 'loading' | 'error' | 'done';
 
@@ -145,6 +145,8 @@ type PendingAction =
  * a successful mutation, not a client-side guess at the new state).
  */
 export default function FilesScreen() {
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const { path: pathParam } = useLocalSearchParams<{ path?: string | string[] }>();
   const requestedPath = firstSearchParam(pathParam);
@@ -511,7 +513,7 @@ export default function FilesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -607,4 +609,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 10,
   },
-});
+}));

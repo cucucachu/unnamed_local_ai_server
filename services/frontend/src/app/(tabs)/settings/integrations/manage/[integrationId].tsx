@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Switch, Text, TextInput, View } from 'react-native';
 
 import {
   ExposedEntitiesNote,
@@ -9,8 +9,8 @@ import {
   SignInNote,
   TokenEntry,
   connectionNote,
-  integrationStyles,
-  noticeTextStyle,
+  useIntegrationStyles,
+  useNoticeTextStyle,
   useReloadOnReturn,
 } from '@/components/IntegrationParts';
 import {
@@ -21,7 +21,7 @@ import {
   SectionTitle,
   Segmented,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
@@ -43,13 +43,16 @@ import {
   type AdminIntegrationTool,
 } from '@/lib/integrations';
 import { errorCodeMessage, type ToolPermission } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Settings → Integrations → Manage → one (admins): what it is, who's
  * connected (status only, never a credential), each tool on or off for
  * everyone and whether it always asks, refresh and uninstall. */
 export default function ManageIntegrationScreen() {
+  const noticeTextStyle = useNoticeTextStyle();
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { integrationId } = useLocalSearchParams<{ integrationId: string }>();
   const router = useRouter();
   const { withStepUp } = useStepUp();
@@ -262,6 +265,8 @@ export default function ManageIntegrationScreen() {
 }
 
 function ServerCard({ integration }: { integration: AdminIntegration }) {
+  const integrationStyles = useIntegrationStyles();
+  const settingsStyles = useSettingsStyles();
   const server = integration.server_info ?? {};
   const serverName = typeof server.name === 'string' ? server.name : null;
   return (
@@ -300,6 +305,9 @@ function DescriptionCard({
   busy: boolean;
   onSave: (description: string) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
+  const styles = useStyles();
   const [draft, setDraft] = useState(description);
   return (
     <>
@@ -345,6 +353,8 @@ function SignInSection({
   onClearShared: () => void;
   onDisconnect: (userId: string) => void;
 }) {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const header = integration.token_header ? ` in the ${integration.token_header} header` : '';
   const oauth = integration.auth_method === 'oauth';
   const shared = integration.shared_credential;
@@ -486,6 +496,8 @@ function AdminToolRow({
   busy: boolean;
   onChange: (changes: { enabled?: boolean; ceiling?: ToolPermission }) => void;
 }) {
+  const integrationStyles = useIntegrationStyles();
+  const settingsStyles = useSettingsStyles();
   const hints = annotationLabels(tool.annotations);
   return (
     <View
@@ -533,7 +545,7 @@ function AdminToolRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -553,4 +565,4 @@ const styles = StyleSheet.create({
     padding: 10,
     textAlignVertical: 'top',
   },
-});
+}));

@@ -10,7 +10,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  StyleSheet,
+  
   Text,
   TextInput,
   View,
@@ -30,7 +30,7 @@ import { formatDuration } from '@/lib/chatTurns';
 import { parseExecResult, type ParsedExecResult } from '@/lib/execResult';
 import { isSpeechSupported, startListening, stopListening } from '@/lib/speech';
 import { useKeyboardVisible } from '@/lib/useKeyboardVisible';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles, useTheme, type Palette } from '@/lib/theme';
 import type { ApprovalDecision, ApprovalIntegration, EditMode } from '@/lib/chatSocket';
 import { changeMyIntegrationTools } from '@/lib/integrations';
 import { alwaysAllowable, changeMyTools, listMyTools, platformErrorMessage, type MyTool } from '@/lib/platform';
@@ -76,6 +76,8 @@ export interface ChatViewProps {
 
 /** One chat (M2-06; the Chat tab's body since M19-02). */
 export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const handleFileLink = useCallback((filePath: string) => {
     router.push({ pathname: '/files', params: { path: filePath } });
@@ -356,7 +358,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
                   accessibilityLabel="Talk"
                   testID="chat-voice-start"
                 >
-                  <Ionicons name="mic" size={44} color={theme.text} />
+                  <Ionicons name="mic" size={44} color={theme.onAccent} />
                 </Pressable>
               </View>
             ) : null
@@ -456,7 +458,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
               <Ionicons
                 name={listening ? 'mic' : 'mic-outline'}
                 size={20}
-                color={listening ? theme.text : theme.textMuted}
+                color={listening ? theme.onAccent : theme.textMuted}
               />
             </Pressable>
           ) : null}
@@ -468,7 +470,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
               accessibilityLabel="Stop generating"
               testID="chat-stop"
             >
-              <Ionicons name="square" size={16} color={theme.text} />
+              <Ionicons name="square" size={16} color={theme.onAccent} />
             </Pressable>
           ) : (
             <Pressable
@@ -478,7 +480,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
               accessibilityRole="button"
               accessibilityLabel="Send message"
             >
-              <Ionicons name="send" size={18} color={canSend ? theme.text : theme.textMuted} />
+              <Ionicons name="send" size={18} color={canSend ? theme.onAccent : theme.textMuted} />
             </Pressable>
           )}
         </View>
@@ -534,6 +536,7 @@ function ChatTurnRow({
   onAssistantMenu,
   onFileLink,
 }: ChatTurnRowProps): ReactElement {
+  const styles = useStyles();
   const user = turn.user;
   const showPanel = showActivityPanel(turn);
   const showDurationCaption =
@@ -607,6 +610,7 @@ function ChatTurnRow({
 }
 
 function ActivityItemRow({ item }: { item: ChatItem }): ReactElement | null {
+  const styles = useStyles();
   switch (item.kind) {
     case 'assistant':
       if (item.text === '') return null;
@@ -657,7 +661,7 @@ interface ExecChipInfo {
  * transport-error string, which never matches the `exit_code: N` shape)
  * means "not a real exec result": caller falls back to the generic
  * checkmark/x icon in that case. */
-function execChipInfo(parsed: ParsedExecResult): ExecChipInfo | null {
+function execChipInfo(parsed: ParsedExecResult, theme: Palette): ExecChipInfo | null {
   if (parsed.exitCode === null) return null;
   if (parsed.timedOut) return { text: '⏱ timed out', color: theme.accent };
   if (parsed.exitCode === 0) return { text: '✓ exit 0', color: theme.success };
@@ -690,6 +694,7 @@ function getExecOutputMaxHeight(): number {
 }
 
 function ExecToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedExecResult | null }): ReactElement {
+  const styles = useStyles();
   const commandText =
     typeof item.args.command === 'string' ? item.args.command : JSON.stringify(item.args, null, 2);
   const split = parsed !== null ? splitTruncatedMarker(parsed.body) : null;
@@ -709,7 +714,7 @@ function ExecToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedEx
 
 /** Chip precedence mirrors `execChipInfo`'s own doc: `null` means "nothing
  * special to show here, fall back to the generic checkmark/x icon". */
-function webSearchChipInfo(parsed: ParsedSearchResults): ExecChipInfo | null {
+function webSearchChipInfo(parsed: ParsedSearchResults, theme: Palette): ExecChipInfo | null {
   if (parsed.isError) return { text: 'error', color: theme.danger };
   return { text: `${parsed.resultCount} result${parsed.resultCount === 1 ? '' : 's'}`, color: theme.textMuted };
 }
@@ -718,7 +723,7 @@ function webSearchChipInfo(parsed: ParsedSearchResults): ExecChipInfo | null {
  * page title is already folded into the collapsed header text itself (see
  * `webFetchHeaderText`), so a chip here would be redundant. Only the error
  * case needs a chip (there's nothing else in the header to signal it). */
-function webFetchChipInfo(parsed: ParsedFetchResult): ExecChipInfo | null {
+function webFetchChipInfo(parsed: ParsedFetchResult, theme: Palette): ExecChipInfo | null {
   return parsed.isError ? { text: 'error', color: theme.danger } : null;
 }
 
@@ -753,6 +758,7 @@ const WEB_FETCH_TRUNCATED_MARKER = '[content truncated]';
  * does. On native, `Linking.openURL` already opens externally regardless
  * of arg count. */
 function WebSearchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedSearchResults | null }): ReactElement {
+  const styles = useStyles();
   if (parsed === null) {
     // Still running — nothing to show yet beyond the query already visible
     // in the collapsed header, so just echo it here too rather than an
@@ -808,6 +814,7 @@ function WebSearchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: Par
  * of screen, reuse the exec card's block style)." Reuses
  * `styles.execOutputScroll`/`getExecOutputMaxHeight` verbatim, per spec. */
 function WebFetchToolDetail({ item, parsed }: { item: ChatToolItem; parsed: ParsedFetchResult | null }): ReactElement {
+  const styles = useStyles();
   const argsUrl = typeof item.args.url === 'string' ? item.args.url : '';
 
   if (parsed === null) {
@@ -872,6 +879,7 @@ function BranchSwitcher({
   disabled: boolean;
   onSwitch: (checkpointId: string) => void;
 }): ReactElement {
+  const styles = useStyles();
   const total = point.branches.length;
   const current = point.active_index + 1;
   const go = (delta: number) => {
@@ -926,6 +934,8 @@ function MessageMenuAffordance({
   disabled: boolean;
   onOpen: () => void;
 }): ReactElement | null {
+  const theme = useTheme();
+  const styles = useStyles();
   if (Platform.OS !== 'web') return null;
   return (
     <Pressable
@@ -959,6 +969,8 @@ function MessageActionSheet({
   onRegenerate,
   onCopy,
 }: MessageActionSheetProps): ReactElement | null {
+  const theme = useTheme();
+  const styles = useStyles();
   if (menu === null) return null;
 
   const copyAction = {
@@ -1030,6 +1042,7 @@ function firstNLines(text: string, n: number): string {
  * `app_export` (M22-08) -> the file and table, or the folder.
  * Falls back to a raw JSON dump for anything else (defensive). */
 function ApprovalActionArgs({ action }: { action: PendingApprovalAction }): ReactElement {
+  const styles = useStyles();
   const args = action.args;
   if (action.category === 'exec') {
     const command = typeof args.command === 'string' ? args.command : JSON.stringify(args);
@@ -1146,6 +1159,8 @@ function useAlwaysAllowable(names: string[]): MyTool[] {
  * frame without its own guard.
  */
 function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps): ReactElement {
+  const theme = useTheme();
+  const styles = useStyles();
   const [responded, setResponded] = useState(false);
   const allowable = useAlwaysAllowable(pendingApproval.actions.map((action) => action.name));
   const allowableIntegrations = useMemo(() => integrationAllowable(pendingApproval.actions), [pendingApproval.actions]);
@@ -1319,6 +1334,8 @@ function ApprovalCard({ pendingApproval, onRespond, onError }: ApprovalCardProps
 }
 
 function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
+  const theme = useTheme();
+  const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
   const isExec = item.category === 'exec';
   const isWebSearch = item.category === 'web' && item.name === 'web_search';
@@ -1330,11 +1347,11 @@ function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
 
   const chip =
     execParsed !== null
-      ? execChipInfo(execParsed)
+      ? execChipInfo(execParsed, theme)
       : searchParsed !== null
-        ? webSearchChipInfo(searchParsed)
+        ? webSearchChipInfo(searchParsed, theme)
         : fetchParsed !== null
-          ? webFetchChipInfo(fetchParsed)
+          ? webFetchChipInfo(fetchParsed, theme)
           : null;
 
   const headerIcon: keyof typeof Ionicons.glyphMap = isWebSearch ? 'search-outline' : CATEGORY_ICON[item.category];
@@ -1407,7 +1424,7 @@ function ToolItemCard({ item }: { item: ChatToolItem }): ReactElement {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   flex: {
     flex: 1,
   },
@@ -1530,7 +1547,7 @@ const styles = StyleSheet.create({
     borderColor: theme.danger,
   },
   bubbleText: {
-    color: theme.text,
+    color: theme.onAccent,
     fontSize: 15,
     lineHeight: 20,
   },
@@ -1714,7 +1731,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   editModeChipTextSelected: {
-    color: theme.text,
+    color: theme.onAccent,
   },
   editBannerCancel: {
     color: theme.accent,
@@ -1870,8 +1887,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   approvalApproveButtonText: {
-    color: theme.text,
+    color: theme.onAccent,
     fontSize: 14,
     fontWeight: '600',
   },
-});
+}));

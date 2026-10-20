@@ -1,11 +1,11 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 
-import { ActionButton, Card, ErrorText, LoadState, SectionTitle, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Card, ErrorText, LoadState, SectionTitle, useSettingsStyles } from '@/components/SettingsUI';
 import { describePermissions, installApp, listCatalog, permissionsOf, type CatalogEntry } from '@/lib/apps';
 import { isReadOnly, listSpaces, type Space } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import { ApiError } from '@/lib/api';
 import { useAction, useLoad } from '@/lib/useAsync';
 
@@ -29,6 +29,8 @@ async function loadTarget(spaceId: string, appId: string, versionId: string): Pr
  * Confirming grants those permissions and pins the version in the space.
  */
 export default function InstallScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const router = useRouter();
   const params = useLocalSearchParams<{ spaceId: string; appId: string; versionId: string }>();
   const spaceId = Array.isArray(params.spaceId) ? params.spaceId[0] : params.spaceId;
@@ -103,7 +105,7 @@ export default function InstallScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: { flex: 1, backgroundColor: theme.bg },
   body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: 16, gap: 12 },
-});
+}));

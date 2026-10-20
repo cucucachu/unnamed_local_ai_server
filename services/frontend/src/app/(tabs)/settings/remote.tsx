@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, Platform, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Platform, Switch, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { AuthField } from '@/components/AuthForm';
@@ -11,7 +11,7 @@ import {
   LoadState,
   SectionTitle,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
@@ -33,7 +33,7 @@ import {
   type WireGuardDevice,
 } from '@/lib/platform';
 import { relativeTime } from '@/lib/relativeTime';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Same Alert (native) / window.confirm (web) split as files.tsx: RN's
@@ -68,6 +68,8 @@ function confirmRevokeHost(device: HostDevice): Promise<boolean> {
  * pairing QR (LAN), revoke. Admins also get the public HTTPS toggle
  * (M15-05) — it does not punch the host firewall. */
 export default function RemoteAccessScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { state: authState } = useAuth();
   const user = authState.phase === 'ready' ? authState.user : null;
   const isAdmin = user?.role === 'admin';
@@ -349,7 +351,7 @@ export default function RemoteAccessScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -365,4 +367,4 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: theme.textMuted,
   },
-});
+}));

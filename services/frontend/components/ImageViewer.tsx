@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Text, View } from 'react-native';
 
 import { useAuthedImage } from '@/lib/authedImage';
 import { streamUrl } from '@/lib/media';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface ImageViewerProps {
   path: string;
@@ -33,6 +33,8 @@ export interface ImageViewerProps {
  * targets.
  */
 export function ImageViewer({ path }: ImageViewerProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const source = useAuthedImage(streamUrl(path));
   const failed = status === 'error' || source.failed;
@@ -60,7 +62,7 @@ export function ImageViewer({ path }: ImageViewerProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     alignItems: 'center',
@@ -79,4 +81,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 24,
   },
-});
+}));

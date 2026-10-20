@@ -1,12 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { AppState, Platform, StyleSheet, Text, View } from 'react-native';
+import { AppState, Platform, Text, View } from 'react-native';
 
 import { AuthField } from '@/components/AuthForm';
-import { ActionButton, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, useSettingsStyles } from '@/components/SettingsUI';
 import { oauthHostsLine, type OAuthSummary } from '@/lib/integrations';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles, useTheme } from '@/lib/theme';
 
 /** Pieces shared by the Integrations screens (M18-08). */
 
@@ -19,6 +19,8 @@ export function Notice({
   children: ReactNode;
   testID?: string;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   return (
     <View style={[styles.notice, tone === 'warning' && styles.noticeWarning]} testID={testID}>
       <Ionicons
@@ -32,6 +34,7 @@ export function Notice({
 }
 
 export function PlainHttpWarning() {
+  const styles = useStyles();
   return (
     <Notice testID="integration-plain-http">
       <Text style={styles.noticeText}>
@@ -43,6 +46,7 @@ export function PlainHttpWarning() {
 }
 
 export function ExposedEntitiesNote() {
+  const styles = useStyles();
   return (
     <Notice tone="info" testID="integration-exposed-note">
       <Text style={styles.noticeText}>
@@ -65,6 +69,7 @@ export function useReloadOnReturn(reload: () => void) {
 
 /** Where an OAuth sign-in happens, and what disconnecting can't undo there. */
 export function SignInNote({ oauth, testID }: { oauth: OAuthSummary | null | undefined; testID?: string }) {
+  const settingsStyles = useSettingsStyles();
   if (!oauth) return null;
   const hosts = oauthHostsLine(oauth);
   return (
@@ -102,6 +107,7 @@ export function TokenEntry({
   onSubmit: (secret: string) => Promise<boolean>;
   testID: string;
 }) {
+  const styles = useStyles();
   const [secret, setSecret] = useState('');
   return (
     <View style={styles.tokenEntry}>
@@ -134,7 +140,7 @@ export function connectionNote(checked: boolean, problem: string | null): string
   return `Saved, but the server couldn't be asked to check it${problem ? ` (${problem})` : ''}. The first use will tell.`;
 }
 
-export const integrationStyles = StyleSheet.create({
+export const useIntegrationStyles = themedStyles((theme) => ({
   toolRow: {
     flexDirection: 'column',
     alignItems: 'stretch',
@@ -158,9 +164,9 @@ export const integrationStyles = StyleSheet.create({
     fontSize: 12,
     fontFamily: monospaceFontFamily,
   },
-});
+}));
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   notice: {
     flexDirection: 'row',
     gap: 10,
@@ -178,13 +184,15 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   noticeText: {
-    ...settingsStyles.muted,
+    fontSize: 13,
     color: theme.text,
     lineHeight: 18,
   },
   tokenEntry: {
     gap: 10,
   },
-});
+}));
 
-export const noticeTextStyle = styles.noticeText;
+export function useNoticeTextStyle() {
+  return useStyles().noticeText;
+}

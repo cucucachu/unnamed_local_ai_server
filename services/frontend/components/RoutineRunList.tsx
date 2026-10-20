@@ -1,6 +1,6 @@
 import { Pressable, Text, View } from 'react-native';
 
-import { Badge, Card, settingsStyles } from '@/components/SettingsUI';
+import { Badge, Card, useSettingsStyles } from '@/components/SettingsUI';
 import { relativeTime } from '@/lib/relativeTime';
 import { runStatusLabel, type RoutineRun, type RunStatus } from '@/lib/routines';
 
@@ -16,6 +16,7 @@ function runTime(run: RoutineRun): string {
 
 /** A routine's runs, newest first (M17-06); one with a thread opens its chat. */
 export function RoutineRunList({ runs, onOpen }: { runs: RoutineRun[]; onOpen: (threadId: string) => void }) {
+  const settingsStyles = useSettingsStyles();
   if (runs.length === 0) {
     return (
       <Text style={settingsStyles.muted} testID="routine-runs-empty">

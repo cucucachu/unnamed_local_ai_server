@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Modal, Pressable, StyleSheet, Text } from 'react-native';
+import { Modal, Pressable, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { FileEntry } from '@/lib/files';
 import { previewKind } from '@/lib/media';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 export interface FileActionSheetProps {
   entry: FileEntry | null;
@@ -72,6 +72,8 @@ export function FileActionSheet({
   onPlay,
   canWrite = true,
 }: FileActionSheetProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   const insets = useSafeAreaInsets();
   if (!entry) return null;
 
@@ -125,7 +127,7 @@ export function FileActionSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -161,4 +163,4 @@ const styles = StyleSheet.create({
   dangerLabel: {
     color: theme.danger,
   },
-});
+}));

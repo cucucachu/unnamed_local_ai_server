@@ -2,7 +2,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef } from 'react';
 import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { ActionButton, Badge, Card, LoadState, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Badge, Card, LoadState, SettingsFrame, useSettingsStyles } from '@/components/SettingsUI';
 import { Toast, useToast } from '@/components/Toast';
 import { listRoutines, nextRunLabel, runStatusLabel, scheduleSummary, updateRoutine, type Routine } from '@/lib/routines';
 import { useAction, useLoad } from '@/lib/useAsync';
@@ -11,6 +11,7 @@ import { useAction, useLoad } from '@/lib/useAsync';
  * schedule in words, next run, last result and an on/off switch. Tapping one
  * opens its detail. */
 export default function RoutinesScreen() {
+  const settingsStyles = useSettingsStyles();
   const router = useRouter();
   const { message: toast, showToast } = useToast();
   const { busyKey, run } = useAction(showToast);

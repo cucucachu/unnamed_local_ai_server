@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter, type Href } from 'expo-router';
 import type { ComponentProps, ReactNode } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 /** Shared chrome for the Settings and Routines stacks: a header with a back
  * button, and a scrolling, keyboard-aware body capped to a phone-ish width on
@@ -27,6 +27,8 @@ export function SettingsFrame({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const handleLeading = () => {
     if (exitTo !== undefined) router.dismissTo(exitTo);
@@ -61,11 +63,13 @@ export function SettingsFrame({
 }
 
 export function SectionTitle({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   return <Text style={styles.sectionTitle}>{children}</Text>;
 }
 
 /** A bordered group of rows. */
 export function Card({ children, testID }: { children: ReactNode; testID?: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.card} testID={testID}>
       {children}
@@ -86,6 +90,8 @@ export function NavRow({
   onPress: () => void;
   testID: string;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   return (
     <Pressable onPress={onPress} style={styles.navRow} accessibilityRole="button" testID={testID}>
       <Ionicons name={icon} size={20} color={theme.textMuted} />
@@ -115,6 +121,8 @@ export function ActionButton({
   compact?: boolean;
   testID?: string;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const inactive = busy || disabled;
   return (
     <Pressable
@@ -132,9 +140,13 @@ export function ActionButton({
       testID={testID}
     >
       {busy ? (
-        <ActivityIndicator color={theme.text} size="small" />
+        <ActivityIndicator color={variant === 'primary' ? theme.onAccent : theme.text} size="small" />
       ) : (
-        <Text style={[styles.buttonText, variant === 'danger' && styles.buttonTextDanger]}>{label}</Text>
+        <Text
+          style={[styles.buttonText, variant === 'primary' && styles.buttonTextPrimary, variant === 'danger' && styles.buttonTextDanger]}
+        >
+          {label}
+        </Text>
       )}
     </Pressable>
   );
@@ -159,6 +171,7 @@ export function Segmented<T extends string>({
   disabled?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <View style={[styles.segmented, disabled && styles.buttonInactive]} testID={testID}>
       {options.map((option) => {
@@ -184,6 +197,7 @@ export function Segmented<T extends string>({
 }
 
 export function ErrorText({ children, testID }: { children: ReactNode; testID?: string }) {
+  const styles = useStyles();
   if (!children) return null;
   return (
     <Text style={styles.error} accessibilityRole="alert" testID={testID}>
@@ -193,6 +207,7 @@ export function ErrorText({ children, testID }: { children: ReactNode; testID?: 
 }
 
 export function Badge({ label, tone = 'muted', testID }: { label: string; tone?: 'muted' | 'accent' | 'danger'; testID?: string }) {
+  const styles = useStyles();
   return (
     <View
       style={[styles.badge, tone === 'accent' && styles.badgeAccent, tone === 'danger' && styles.badgeDanger]}
@@ -205,6 +220,8 @@ export function Badge({ label, tone = 'muted', testID }: { label: string; tone?:
 
 /** Spinner / error-with-retry placeholder for a screen's initial load. */
 export function LoadState({ error, onRetry }: { error: string | null; onRetry: () => void }) {
+  const theme = useTheme();
+  const styles = useStyles();
   return (
     <View style={styles.loadState}>
       {error ? (
@@ -219,7 +236,7 @@ export function LoadState({ error, onRetry }: { error: string | null; onRetry: (
   );
 }
 
-export const settingsStyles = StyleSheet.create({
+export const useSettingsStyles = themedStyles((theme) => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -255,9 +272,9 @@ export const settingsStyles = StyleSheet.create({
     padding: 14,
     gap: 12,
   },
-});
+}));
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -358,6 +375,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  buttonTextPrimary: { color: theme.onAccent },
   buttonTextDanger: {
     color: theme.danger,
   },
@@ -383,7 +401,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   segmentButtonTextSelected: {
-    color: theme.text,
+    color: theme.onAccent,
   },
   error: {
     color: theme.danger,
@@ -414,4 +432,4 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 40,
   },
-});
+}));

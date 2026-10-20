@@ -3,7 +3,7 @@ import {
   ActivityIndicator,
   Pressable,
   ScrollView,
-  StyleSheet,
+  
   Text,
   TextInput,
   View,
@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 /** Shared chrome for the Setup / Login / Invite screens: a centered card
  * with a title, fields, an error line, and a submit button. */
@@ -30,6 +30,7 @@ export function AuthFormFrame({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const styles = useStyles();
   return (
     <AppKeyboardAvoidingView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
@@ -52,6 +53,8 @@ export function AuthFormFrame({
 }
 
 export function AuthField({ label, ...inputProps }: { label: string } & TextInputProps) {
+  const theme = useTheme();
+  const styles = useStyles();
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
@@ -76,6 +79,8 @@ export function AuthSubmitButton({
   busy: boolean;
   onPress: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   return (
     <Pressable
       onPress={onPress}
@@ -85,12 +90,13 @@ export function AuthSubmitButton({
       accessibilityState={{ disabled: busy, busy }}
       testID="auth-submit"
     >
-      {busy ? <ActivityIndicator color={theme.text} /> : <Text style={styles.submitText}>{label}</Text>}
+      {busy ? <ActivityIndicator color={theme.onAccent} /> : <Text style={styles.submitText}>{label}</Text>}
     </Pressable>
   );
 }
 
 export function AuthLink({ label, onPress, testID }: { label: string; onPress: () => void; testID: string }) {
+  const styles = useStyles();
   return (
     <Pressable onPress={onPress} accessibilityRole="link" testID={testID} style={styles.link}>
       <Text style={styles.linkText}>{label}</Text>
@@ -98,7 +104,7 @@ export function AuthLink({ label, onPress, testID }: { label: string; onPress: (
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -163,7 +169,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   submitText: {
-    color: theme.text,
+    color: theme.onAccent,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -175,4 +181,4 @@ const styles = StyleSheet.create({
     color: theme.accent,
     fontSize: 14,
   },
-});
+}));

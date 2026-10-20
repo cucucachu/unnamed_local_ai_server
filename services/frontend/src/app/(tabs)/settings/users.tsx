@@ -1,19 +1,21 @@
 import { useCallback } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import { useAuth } from '@/components/AuthProvider';
-import { ActionButton, Badge, Card, LoadState, Segmented, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
+import { ActionButton, Badge, Card, LoadState, Segmented, SettingsFrame, useSettingsStyles } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
 import type { User } from '@/lib/auth';
 import { adminListUsers, adminUpdateUser } from '@/lib/platform';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Settings → Users (admins): every account, with role and disable.
  * Your own row is read-only — demoting or disabling yourself is done by
  * another admin. */
 export default function UsersScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { state } = useAuth();
   const me = state.phase === 'ready' ? state.user : null;
   const { withStepUp } = useStepUp();
@@ -102,7 +104,7 @@ export default function UsersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -120,4 +122,4 @@ const styles = StyleSheet.create({
   disabledText: {
     color: theme.textMuted,
   },
-});
+}));

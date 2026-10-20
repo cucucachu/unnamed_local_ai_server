@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { csvDelimiterFor, parseCsv } from '@/lib/textFiles';
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 
 /** Rows shown at most; the rest are counted, not rendered. */
 export const CSV_MAX_ROWS = 5000;
@@ -17,6 +17,7 @@ const MAX_WIDTH = 280;
  * Column widths come from the header and the first 200 rows.
  */
 export function CsvTable({ name, text }: { name: string; text: string }) {
+  const styles = useStyles();
   const { header, rows, total, widths } = useMemo(() => {
     const all = parseCsv(text, csvDelimiterFor(name, text));
     const [first = [], ...data] = all;
@@ -62,7 +63,7 @@ export function CsvTable({ name, text }: { name: string; text: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
   },
@@ -92,4 +93,4 @@ const styles = StyleSheet.create({
   headCell: {
     fontWeight: '600',
   },
-});
+}));

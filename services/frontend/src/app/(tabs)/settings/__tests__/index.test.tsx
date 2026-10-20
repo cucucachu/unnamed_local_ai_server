@@ -4,7 +4,10 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { ApiError } from '@/lib/api';
 import type { SettingsDocument } from '@/lib/settings';
-import { theme } from '@/lib/theme';
+import { palettes } from '@/lib/theme';
+
+// React Native's jest environment reports a light device.
+const theme = palettes.light;
 
 const mockBack = jest.fn();
 const mockDismissTo = jest.fn();
@@ -109,12 +112,12 @@ describe('SettingsScreen', () => {
     expect(thinkingSwitch.props.value).toBe(true);
 
     // The selected segment ("Branch"/"fork", since `edit_mode_default: 'fork'` above) renders its
-    // label in the "selected" text color (`theme.text`); the unselected one ("Replace"/"truncate")
+    // label in the color drawn on the accent (`theme.onAccent`); the unselected one ("Replace"/"truncate")
     // renders in the muted color.
     const branchLabel = renderer.root.findByProps({ children: 'Branch' });
     const replaceLabel = renderer.root.findByProps({ children: 'Replace' });
     const flatStyle = (style: unknown) => (Array.isArray(style) ? Object.assign({}, ...style) : style);
-    expect(flatStyle(branchLabel.props.style).color).toBe(theme.text);
+    expect(flatStyle(branchLabel.props.style).color).toBe(theme.onAccent);
     expect(flatStyle(replaceLabel.props.style).color).toBe(theme.textMuted);
 
     // #342: approvals are per tool now, in Agent permissions.

@@ -1,9 +1,9 @@
 import { createElement, type ComponentProps, type ReactElement, type ReactNode } from 'react';
-import { Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, ScrollView, Text, View } from 'react-native';
 import MarkdownDisplay, { MarkdownIt, type ASTNode } from '@ronradtke/react-native-markdown-display';
 
 import { linkPathFrom } from '@/lib/fileLink';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles, useTheme, type Palette } from '@/lib/theme';
 
 export interface MarkdownProps {
   children: string;
@@ -47,6 +47,8 @@ function webBoxStyle(extra: Record<string, string | number> = {}): Record<string
 }
 
 function FenceBlock({ nodeKey, content }: { nodeKey: string; content: string }): ReactElement {
+  const theme = useTheme();
+  const styles = useStyles();
   if (Platform.OS === 'web') {
     return createElement(
       'pre',
@@ -78,6 +80,8 @@ function FenceBlock({ nodeKey, content }: { nodeKey: string; content: string }):
 }
 
 function TableWrap({ nodeKey, children }: { nodeKey: string; children: ReactNode }): ReactElement {
+  const theme = useTheme();
+  const styles = useStyles();
   if (Platform.OS === 'web') {
     return createElement(
       'div',
@@ -125,10 +129,14 @@ export function unwrapFileLinkCodeSpans(source: string): string {
  * `<Text>` is just another item in that row and breaks nothing (#270), but a
  * full-width item pushes what follows onto the next one. */
 function LineBreak({ nodeKey }: { nodeKey: string }): ReactElement {
+  const styles = useStyles();
   return <View key={nodeKey} style={styles.lineBreak} testID="markdown-line-break" />;
 }
 
 export function Markdown({ children, onFileLink, baseDir }: MarkdownProps): ReactElement {
+  const theme = useTheme();
+  const styles = useStyles();
+  const markdownStyles = useMarkdownStyles();
   const rules = {
     // Chat text puts one item per line without blank lines or list markers,
     // so a single newline (a softbreak) is a line break here too.
@@ -318,141 +326,150 @@ export function Markdown({ children, onFileLink, baseDir }: MarkdownProps): Reac
   );
 }
 
-const markdownStyles = {
-  body: {
-    color: theme.text,
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  heading1: {
-    color: theme.text,
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: '700' as const,
-    marginTop: 4,
-    marginBottom: 6,
-  },
-  heading2: {
-    color: theme.text,
-    fontSize: 19,
-    lineHeight: 24,
-    fontWeight: '700' as const,
-    marginTop: 4,
-    marginBottom: 4,
-  },
-  heading3: {
-    color: theme.text,
-    fontSize: 17,
-    lineHeight: 22,
-    fontWeight: '600' as const,
-    marginTop: 4,
-    marginBottom: 4,
-  },
-  heading4: {
-    color: theme.text,
-    fontSize: 16,
-    lineHeight: 21,
-    fontWeight: '600' as const,
-    marginTop: 2,
-    marginBottom: 2,
-  },
-  heading5: {
-    color: theme.text,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '600' as const,
-  },
-  heading6: {
-    color: theme.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600' as const,
-  },
-  paragraph: {
-    marginTop: 4,
-    marginBottom: 4,
-    flexWrap: 'wrap' as const,
-    flexDirection: 'row' as const,
-    width: '100%' as const,
-  },
-  link: {
-    color: theme.accent,
-    textDecorationLine: 'underline' as const,
-  },
-  blockquote: {
-    backgroundColor: theme.bg,
-    borderColor: theme.border,
-    borderLeftWidth: 3,
-    marginLeft: 0,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  code_inline: {
-    fontFamily: monospaceFontFamily,
-    fontSize: 13,
-    backgroundColor: theme.bg,
-    color: theme.text,
-    borderWidth: 0,
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  code_block: {
-    fontFamily: monospaceFontFamily,
-    fontSize: 13,
-    backgroundColor: theme.bg,
-    color: theme.text,
-    borderWidth: 0,
-    borderRadius: 6,
-    padding: 8,
-  },
-  fence: {
-    fontFamily: monospaceFontFamily,
-    fontSize: 13,
-    backgroundColor: theme.bg,
-    color: theme.text,
-    borderWidth: 0,
-    borderRadius: 6,
-    padding: 8,
-  },
-  table: {
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 4,
-  },
-  tr: {
-    borderBottomWidth: 1,
-    borderColor: theme.border,
-    flexDirection: 'row' as const,
-  },
-  th: {
-    flex: 1,
-    padding: 6,
-  },
-  td: {
-    flex: 1,
-    padding: 6,
-  },
-  hr: {
-    backgroundColor: theme.border,
-    height: 1,
-    marginVertical: 8,
-  },
-  bullet_list: {
-    marginTop: 2,
-    marginBottom: 2,
-  },
-  ordered_list: {
-    marginTop: 2,
-    marginBottom: 2,
-  },
-  list_item: {
-    flexDirection: 'row' as const,
-    justifyContent: 'flex-start' as const,
-  },
-};
+const markdownSheets: Partial<Record<Palette['scheme'], ReturnType<typeof makeMarkdownStyles>>> = {};
 
-const styles = StyleSheet.create({
+function useMarkdownStyles() {
+  const theme = useTheme();
+  return (markdownSheets[theme.scheme] ??= makeMarkdownStyles(theme));
+}
+
+function makeMarkdownStyles(theme: Palette) {
+  return {
+    body: {
+      color: theme.text,
+      fontSize: 15,
+      lineHeight: 20,
+    },
+    heading1: {
+      color: theme.text,
+      fontSize: 22,
+      lineHeight: 28,
+      fontWeight: '700' as const,
+      marginTop: 4,
+      marginBottom: 6,
+    },
+    heading2: {
+      color: theme.text,
+      fontSize: 19,
+      lineHeight: 24,
+      fontWeight: '700' as const,
+      marginTop: 4,
+      marginBottom: 4,
+    },
+    heading3: {
+      color: theme.text,
+      fontSize: 17,
+      lineHeight: 22,
+      fontWeight: '600' as const,
+      marginTop: 4,
+      marginBottom: 4,
+    },
+    heading4: {
+      color: theme.text,
+      fontSize: 16,
+      lineHeight: 21,
+      fontWeight: '600' as const,
+      marginTop: 2,
+      marginBottom: 2,
+    },
+    heading5: {
+      color: theme.text,
+      fontSize: 15,
+      lineHeight: 20,
+      fontWeight: '600' as const,
+    },
+    heading6: {
+      color: theme.textMuted,
+      fontSize: 13,
+      lineHeight: 18,
+      fontWeight: '600' as const,
+    },
+    paragraph: {
+      marginTop: 4,
+      marginBottom: 4,
+      flexWrap: 'wrap' as const,
+      flexDirection: 'row' as const,
+      width: '100%' as const,
+    },
+    link: {
+      color: theme.accent,
+      textDecorationLine: 'underline' as const,
+    },
+    blockquote: {
+      backgroundColor: theme.bg,
+      borderColor: theme.border,
+      borderLeftWidth: 3,
+      marginLeft: 0,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+    },
+    code_inline: {
+      fontFamily: monospaceFontFamily,
+      fontSize: 13,
+      backgroundColor: theme.bg,
+      color: theme.text,
+      borderWidth: 0,
+      borderRadius: 4,
+      paddingHorizontal: 4,
+      paddingVertical: 1,
+    },
+    code_block: {
+      fontFamily: monospaceFontFamily,
+      fontSize: 13,
+      backgroundColor: theme.bg,
+      color: theme.text,
+      borderWidth: 0,
+      borderRadius: 6,
+      padding: 8,
+    },
+    fence: {
+      fontFamily: monospaceFontFamily,
+      fontSize: 13,
+      backgroundColor: theme.bg,
+      color: theme.text,
+      borderWidth: 0,
+      borderRadius: 6,
+      padding: 8,
+    },
+    table: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 4,
+    },
+    tr: {
+      borderBottomWidth: 1,
+      borderColor: theme.border,
+      flexDirection: 'row' as const,
+    },
+    th: {
+      flex: 1,
+      padding: 6,
+    },
+    td: {
+      flex: 1,
+      padding: 6,
+    },
+    hr: {
+      backgroundColor: theme.border,
+      height: 1,
+      marginVertical: 8,
+    },
+    bullet_list: {
+      marginTop: 2,
+      marginBottom: 2,
+    },
+    ordered_list: {
+      marginTop: 2,
+      marginBottom: 2,
+    },
+    list_item: {
+      flexDirection: 'row' as const,
+      justifyContent: 'flex-start' as const,
+    },
+  };
+}
+
+const useStyles = themedStyles((theme) => ({
   fenceScroll: {
     backgroundColor: theme.bg,
     borderRadius: 6,
@@ -526,4 +543,4 @@ const styles = StyleSheet.create({
     minWidth: 0,
     flexShrink: 1,
   },
-});
+}));

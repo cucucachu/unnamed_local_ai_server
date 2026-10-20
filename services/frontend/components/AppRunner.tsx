@@ -8,7 +8,6 @@ import {
   StyleSheet,
   Text,
   View,
-  useColorScheme,
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,7 +24,7 @@ import {
 } from '@/lib/appHost';
 import type { Space } from '@/lib/platform';
 import { openPlatformEvents } from '@/lib/platformEvents';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles, useColorSchemeOrDark, useTheme } from '@/lib/theme';
 
 const LOAD_ERRORS: Record<string, string> = {
   no_bundle: "This app hasn't been built yet.",
@@ -50,6 +49,7 @@ export const SHEET_BREAKPOINT = 768;
 const DRAG_THRESHOLD = 40;
 
 function SheetHandle({ size, onSize }: { size: SheetSize; onSize: (size: SheetSize) => void }) {
+  const styles = useStyles();
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -98,6 +98,8 @@ export function AppRunner({
   appId?: string;
   appName?: string;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const readOnly = isReadOnly(space);
   const [generation, setGeneration] = useState(0);
   const [load, setLoad] = useState<Load>({ doc: null, error: null });
@@ -108,7 +110,7 @@ export function AppRunner({
   const { width } = useWindowDimensions();
   const sheet = width < SHEET_BREAKPOINT;
   const insets = useSafeAreaInsets();
-  const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
+  const scheme = useColorSchemeOrDark();
   // A change reaches a running app as a `theme` event, not a reload.
   const loadScheme = useRef(scheme);
   useEffect(() => {
@@ -301,7 +303,7 @@ export function AppRunner({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -375,7 +377,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(14, 17, 22, 0.85)',
+    backgroundColor: theme.scheme === 'dark' ? 'rgba(14, 17, 22, 0.85)' : 'rgba(255, 255, 255, 0.85)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -404,4 +406,4 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
-});
+}));

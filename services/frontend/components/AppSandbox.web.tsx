@@ -1,8 +1,9 @@
 import { mountSandboxFrame } from '@homeai/sdk/host/web';
 import { useEffect, useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 
 import { instanceForward, type AppSandboxProps } from '@/lib/appHost';
+import { themedStyles } from '@/lib/theme';
 
 /**
  * Web app sandbox: `@homeai/sdk/host/web`'s `<iframe sandbox="allow-scripts"
@@ -11,6 +12,7 @@ import { instanceForward, type AppSandboxProps } from '@/lib/appHost';
  * navigates itself (`onKilled`).
  */
 export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKilled, onAskAgent }: AppSandboxProps) {
+  const styles = useStyles();
   const container = useRef<View>(null);
 
   useEffect(() => {
@@ -37,6 +39,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKill
   return <View ref={container} testID="app-sandbox" style={styles.container} />;
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#ffffff' },
-});
+// The app paints its own background; this only shows until it does.
+const useStyles = themedStyles((theme) => ({
+  container: { flex: 1, backgroundColor: theme.bg },
+}));

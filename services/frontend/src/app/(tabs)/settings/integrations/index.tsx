@@ -4,15 +4,17 @@ import { useCallback, useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { useAuth } from '@/components/AuthProvider';
-import { Badge, Card, LoadState, NavRow, SectionTitle, SettingsFrame, settingsStyles } from '@/components/SettingsUI';
+import { Badge, Card, LoadState, NavRow, SectionTitle, SettingsFrame, useSettingsStyles } from '@/components/SettingsUI';
 import { listMyIntegrations, statusLabel, type Integration } from '@/lib/integrations';
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 import { useLoad } from '@/lib/useAsync';
 
 /** Settings → Integrations (M18-08): the services the agent can use for
  * you, e.g. Home Assistant. Each one opens to connect it and choose what
  * the agent may do there. Admins also get the way in to install them. */
 export default function IntegrationsScreen() {
+  const settingsStyles = useSettingsStyles();
+  const theme = useTheme();
   const router = useRouter();
   const { state } = useAuth();
   const isAdmin = state.phase === 'ready' && state.user?.role === 'admin';

@@ -1,12 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ImageViewer } from '@/components/ImageViewer';
 import { MediaPlayer } from '@/components/MediaPlayer';
 import { previewKind } from '@/lib/media';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 /**
  * M5-02 §3 — modal player screen, registered as a `presentation: 'modal'`
@@ -27,6 +27,8 @@ import { theme } from '@/lib/theme';
  * close-button/filename header this screen already had for M5-02.
  */
 export default function MediaScreen() {
+  const theme = useTheme();
+  const styles = useStyles();
   const { path } = useLocalSearchParams<{ path: string; kind: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -65,7 +67,7 @@ export default function MediaScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -98,4 +100,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 24,
   },
-});
+}));

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { AuthField } from '@/components/AuthForm';
@@ -11,7 +11,7 @@ import {
   LoadState,
   SectionTitle,
   SettingsFrame,
-  settingsStyles,
+  useSettingsStyles,
 } from '@/components/SettingsUI';
 import { useStepUp } from '@/components/StepUpProvider';
 import { Toast, useToast } from '@/components/Toast';
@@ -27,12 +27,14 @@ import {
 } from '@/lib/platform';
 import { relativeTime } from '@/lib/relativeTime';
 import { StepUpCancelledError } from '@/lib/stepUp';
-import { monospaceFontFamily, theme } from '@/lib/theme';
+import { monospaceFontFamily, themedStyles } from '@/lib/theme';
 import { useAction, useLoad } from '@/lib/useAsync';
 
 /** Settings → Invites (admins): create a single-use link (+ QR) for a new
  * member, and see or revoke past invites. The link is shown only once. */
 export default function InvitesScreen() {
+  const settingsStyles = useSettingsStyles();
+  const styles = useStyles();
   const { withStepUp } = useStepUp();
   const { message: toast, showToast } = useToast();
   const load = useCallback(() => withStepUp(adminListInvites), [withStepUp]);
@@ -176,7 +178,7 @@ function expiresIn(iso: string): string {
   return days === 1 ? 'in 1 day' : `in ${days} days`;
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -192,4 +194,4 @@ const styles = StyleSheet.create({
     fontFamily: monospaceFontFamily,
     fontSize: 13,
   },
-});
+}));

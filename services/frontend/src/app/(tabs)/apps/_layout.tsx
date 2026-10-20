@@ -1,12 +1,13 @@
 import { Stack } from 'expo-router';
 
-import { theme } from '@/lib/theme';
+import { useTheme } from '@/lib/theme';
 
 /** Apps screens pushed over the home pager (M14-02; M19-07): the catalog,
  * install/update, new from a template, the runner and App info. `index` (`/apps`) is a link to
  * the pager's first space page. Routes stay under `/apps` so existing links
  * and e2e keep working. */
 export default function AppsStackLayout() {
+  const theme = useTheme();
   return (
     <Stack
       screenOptions={{

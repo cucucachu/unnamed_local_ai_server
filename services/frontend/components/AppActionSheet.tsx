@@ -1,11 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { ComponentProps } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppIcon } from '@/components/AppGrid';
 import type { Instance } from '@/lib/apps';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -39,6 +39,7 @@ export function AppActionSheet({
   onUninstall,
   onClose,
 }: AppActionSheetProps) {
+  const styles = useStyles();
   const { app, update } = instance;
   const insets = useSafeAreaInsets();
   return (
@@ -110,6 +111,8 @@ function SheetItem({
   danger?: boolean;
   testID: string;
 }) {
+  const theme = useTheme();
+  const styles = useStyles();
   const color = danger ? theme.danger : theme.text;
   return (
     <Pressable style={styles.item} onPress={onPress} disabled={busy} accessibilityRole="button" testID={testID}>
@@ -119,7 +122,7 @@ function SheetItem({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -169,4 +172,4 @@ const styles = StyleSheet.create({
   itemText: {
     fontSize: 15,
   },
-});
+}));

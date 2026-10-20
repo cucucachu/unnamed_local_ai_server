@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Switch, Text, View } from 'react-native';
 
 import { useAuth } from '@/components/AuthProvider';
 import { NavRow, SectionTitle, Segmented, SettingsFrame } from '@/components/SettingsUI';
@@ -9,7 +9,7 @@ import { useSettings } from '@/components/SettingsProvider';
 import { Toast, useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api';
 import type { EditModeDefault } from '@/lib/settings';
-import { theme } from '@/lib/theme';
+import { themedStyles, useTheme } from '@/lib/theme';
 
 /**
  * Settings hub (M8-02, a tab since M14-02). Reachable from the Settings
@@ -27,6 +27,8 @@ import { theme } from '@/lib/theme';
  * optimistic-revert-on-failure.
  */
 export default function SettingsScreen() {
+  const theme = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const { settings, loading, updateSettings } = useSettings();
   const { state: authState, logout } = useAuth();
@@ -205,6 +207,7 @@ function SettingRow({
   testID: string;
   children: ReactNode;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.row} testID={testID}>
       <View style={styles.rowText}>
@@ -216,7 +219,7 @@ function SettingRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.bg,
@@ -283,4 +286,4 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
-});
+}));

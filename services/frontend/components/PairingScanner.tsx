@@ -1,8 +1,8 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useEffect, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
-import { theme } from '@/lib/theme';
+import { themedStyles } from '@/lib/theme';
 
 /** Camera view that reads one QR code (the Settings pairing QR) and hands
  * its text to `onScanned`. Asks for camera permission on first open. */
@@ -13,6 +13,7 @@ export function PairingScanner({
   onScanned: (data: string) => void;
   onCancel: () => void;
 }) {
+  const styles = useStyles();
   const [permission, requestPermission] = useCameraPermissions();
   const done = useRef(false);
 
@@ -50,7 +51,7 @@ export function PairingScanner({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = themedStyles((theme) => ({
   wrap: {
     gap: 8,
   },
@@ -72,4 +73,4 @@ const styles = StyleSheet.create({
     color: theme.accent,
     fontSize: 15,
   },
-});
+}));
