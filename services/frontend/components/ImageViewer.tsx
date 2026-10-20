@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 
-import { authedSource, streamUrl } from '@/lib/media';
+import { useAuthedImage } from '@/lib/authedImage';
+import { streamUrl } from '@/lib/media';
 import { theme } from '@/lib/theme';
 
 export interface ImageViewerProps {
@@ -33,14 +34,16 @@ export interface ImageViewerProps {
  */
 export function ImageViewer({ path }: ImageViewerProps) {
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+  const source = useAuthedImage(streamUrl(path));
+  const failed = status === 'error' || source.failed;
 
   return (
     <View style={styles.container} testID="image-viewer">
-      {status === 'error' ? (
+      {failed ? (
         <Text style={styles.errorText}>Couldn&apos;t load this image.</Text>
-      ) : (
+      ) : source.uri === null ? null : (
         <Image
-          source={authedSource(streamUrl(path))}
+          source={{ uri: source.uri }}
           style={styles.image}
           resizeMode="contain"
           onLoad={() => setStatus('loaded')}
@@ -50,7 +53,7 @@ export function ImageViewer({ path }: ImageViewerProps) {
           accessibilityLabel={path}
         />
       )}
-      {status === 'loading' ? (
+      {status === 'loading' && !failed ? (
         <ActivityIndicator size="large" color={theme.accent} style={styles.spinner} testID="image-viewer-spinner" />
       ) : null}
     </View>

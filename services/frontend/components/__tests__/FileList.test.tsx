@@ -6,6 +6,10 @@ import type { FileEntry } from '@/lib/files';
 
 import { FileList } from '../FileList';
 
+jest.mock('@/lib/authedImage', () => ({
+  useAuthedImage: (url: string) => ({ uri: url, failed: false }),
+}));
+
 const DIR_A: FileEntry = { name: 'alpha', path: 'alpha', type: 'dir', size: 0, mtime: '2026-08-30T10:00:00.000Z', mime: null };
 const DIR_B: FileEntry = { name: 'beta', path: 'beta', type: 'dir', size: 0, mtime: '2026-08-30T10:00:00.000Z', mime: null };
 const FILE_A: FileEntry = {
