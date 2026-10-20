@@ -307,46 +307,91 @@ try {
   await until('the Grocery list app shows the three ingredients', async () => [(await text(page, 'summary')) === '3 to buy, 0 checked', await text(page, 'summary')]);
 
   // --- Contacts --------------------------------------------------------------
-  const addPerson = async (name, { birthday, notes = '' } = {}) => {
+  /** Fills the New / Edit form: plain fields, then entries appended after `from` existing ones. */
+  const fillPerson = async (f, from = {}) => {
+    for (const [key, testID] of [['name', 'person-name'], ['nickname', 'person-nickname'], ['company', 'person-company'], ['job_title', 'person-job-title'], ['birthday', 'person-birthday'], ['notes', 'person-notes']]) {
+      if (f[key] !== undefined) await ui(page).getByTestId(testID).fill(f[key]);
+    }
+    for (const kind of ['phone', 'email', 'website']) {
+      for (const [n, [label, value]] of (f[`${kind}s`] ?? []).entries()) {
+        const i = (from[kind] ?? 0) + n;
+        await ui(page).getByTestId(`${kind}-add`).click();
+        await ui(page).getByTestId(`${kind}-${i}-label`).selectOption({ label });
+        await ui(page).getByTestId(`${kind}-${i}-value`).fill(value);
+      }
+    }
+    for (const [n, address] of (f.addresses ?? []).entries()) {
+      const i = (from.address ?? 0) + n;
+      await ui(page).getByTestId('address-add').click();
+      for (const [key, value] of Object.entries(address)) {
+        if (key === 'label') await ui(page).getByTestId(`address-${i}-label`).selectOption({ label: value });
+        else await ui(page).getByTestId(`address-${i}-${key}`).fill(value);
+      }
+    }
+    await ui(page).getByTestId('person-save').click();
+  };
+  const addPerson = async (f) => {
     await ui(page).getByTestId('new-person').click();
     await ui(page).getByTestId('modal').waitFor({ timeout: UI_TIMEOUT });
-    await ui(page).getByTestId('person-name').fill(name);
-    if (birthday) await ui(page).getByTestId('person-birthday').fill(birthday);
-    await ui(page).getByTestId('person-notes').fill(notes);
-    await ui(page).getByTestId('person-save').click();
+    await fillPerson(f);
     await ui(page).getByTestId('person-delete').waitFor({ timeout: UI_TIMEOUT });
   };
-  const addDetail = async (kind, label, value) => {
-    await ui(page).getByTestId('detail-kind').selectOption({ label: kind });
-    await ui(page).getByTestId('detail-label').fill(label);
-    await ui(page).getByTestId('detail-value').fill(value);
-    await ui(page).getByTestId('detail-add').click();
-  };
-  const people = () => rows('contacts', 'SELECT id, name, birthday, notes FROM people ORDER BY id');
+  const people = () => rows('contacts', 'SELECT id, name, nickname, company, job_title, birthday, notes FROM people ORDER BY id');
   const details = () => rows('contacts', 'SELECT person_id, kind, label, value FROM contact_details ORDER BY id');
+  const addresses = () => rows('contacts', 'SELECT id, person_id, label, street1, street2, city, region, postcode, country FROM addresses ORDER BY id');
+  const websites = () => rows('contacts', 'SELECT person_id, label, url FROM websites ORDER BY id');
 
   await openApp(page, installed.contacts, 'people-empty');
   ok('Contacts opens empty');
   const birthday = `1990-${inDays(5).slice(5)}`;
-  await addPerson('Priya Shah', { birthday, notes: 'Likes pottery' });
+  await addPerson({
+    name: 'Priya Shah', nickname: 'Pree', company: 'Northwind Dental', job_title: 'Dentist', birthday, notes: 'Likes pottery',
+    phones: [['Mobile', '555-0101'], ['Work', '555-0102']],
+    emails: [['Home', 'priya@example.com'], ['Work', 'priya@northwind.example']],
+    addresses: [{ label: 'Home', street1: '12 Elm St', street2: 'Apt 3', city: 'Springfield', region: 'OR', postcode: '97477', country: 'USA' }],
+  });
   await until('a new contact opens with their next birthday', async () => [(await text(page, 'person-next-birthday')).includes('In 5 days'), await text(page, 'person-next-birthday')]);
-  await addDetail('Phone', 'mobile', '555-0101');
-  await until('a phone number is added', async () => [(await details()).length === 1, await details()]);
-  await ui(page).getByTestId('person-notes').fill('Likes pottery and bouldering');
-  await ui(page).getByTestId('person-save').click();
-  await until('editing the notes saves them', async () => [(await people())[0]?.notes === 'Likes pottery and bouldering', await people()]);
+  await until('the New form saved two phones, two emails and a structured address (savePerson)', async () => {
+    const [ps, ds, as] = [await people(), await details(), await addresses()];
+    return [
+      ps.length === 1 && ps[0].nickname === 'Pree' && ps[0].company === 'Northwind Dental' && ps[0].job_title === 'Dentist' &&
+        JSON.stringify(ds.map((d) => [d.kind, d.label, d.value])) === JSON.stringify([['phone', 'mobile', '555-0101'], ['phone', 'work', '555-0102'], ['email', 'home', 'priya@example.com'], ['email', 'work', 'priya@northwind.example']]) &&
+        as.length === 1 && as[0].street2 === 'Apt 3' && as[0].postcode === '97477' && as[0].label === 'home',
+      { ps, ds, as },
+    ];
+  });
   const priya = (await people())[0];
+  const home = (await addresses())[0];
+  await until('the address shows formatted', async () => {
+    const shown = await text(page, `address-a${home.id}-text`);
+    return [shown === '12 Elm St\nApt 3\nSpringfield, OR 97477\nUSA', shown];
+  });
+  await until('the contact shows their work', async () => [(await text(page, 'person-work')) === 'Dentist · Northwind Dental', await text(page, 'person-work')]);
+
+  await ui(page).getByTestId('person-edit').click();
+  await ui(page).getByTestId('person-save').waitFor({ timeout: UI_TIMEOUT });
+  await ui(page).getByTestId('phone-1-remove').click();
+  await ui(page).getByTestId('address-0-city').fill('Eugene');
+  await fillPerson({ notes: 'Likes pottery and bouldering', websites: [['Personal', 'priya.example.com']] });
+  await ui(page).getByTestId('person-edit').waitFor({ timeout: UI_TIMEOUT });
+  await until('editing saves the notes, drops a phone, changes the city and adds a website', async () => {
+    const [ps, ds, as, ws] = [await people(), await details(), await addresses(), await websites()];
+    return [
+      ps[0]?.notes === 'Likes pottery and bouldering' && ds.filter((d) => d.kind === 'phone').length === 1 && ds.length === 3 &&
+        as.length === 1 && as[0].city === 'Eugene' && as[0].street1 === '12 Elm St' && ws.length === 1 && ws[0].url === 'priya.example.com',
+      { ps, ds, as, ws },
+    ];
+  });
 
   await ui(page).getByTestId('header-back').click();
-  await addPerson('Priya S.', { notes: 'From the climbing gym' });
-  await addDetail('Email', 'home', 'priya@example.com');
-  await until('the duplicate has an email', async () => [(await details()).length === 2, await details()]);
+  await addPerson({ name: 'Priya S.', notes: 'From the climbing gym', emails: [['Other', 'priya.s@example.com']] });
+  await until('the duplicate has an email', async () => [(await details()).length === 4, await details()]);
   await ui(page).getByTestId('header-back').click();
-  await addPerson('Tom Baker', { notes: 'Neighbour, has a ladder' });
+  await addPerson({ name: 'Tom Baker', company: 'Baker & Sons', notes: 'Neighbour, has a ladder' });
   await ui(page).getByTestId('header-back').click();
 
   await ui(page).getByTestId(`birthday-${priya.id}`).waitFor({ timeout: UI_TIMEOUT });
-  ok('"Birthdays coming up" lists Priya');
+  ok('"Coming up" lists Priya\'s birthday');
   await ui(page).getByTestId(`person-${priya.id}`).click();
   const dup = (await people()).find((p) => p.name === 'Priya S.');
   await ui(page).getByTestId('merge-pick').selectOption({ label: dup.name });
@@ -357,7 +402,7 @@ try {
     const ds = await details();
     const kept = ps.find((p) => p.id === priya.id);
     return [
-      ps.length === 2 && ds.every((d) => d.person_id === priya.id) && ds.length === 2 && kept.notes.includes('climbing gym') && kept.birthday === birthday,
+      ps.length === 2 && ds.every((d) => d.person_id === priya.id) && ds.length === 4 && kept.notes.includes('climbing gym') && kept.birthday === birthday && kept.nickname === 'Pree',
       { ps, ds },
     ];
   });
@@ -368,6 +413,14 @@ try {
   await searchUntil(page, 'searching "ladder" puts Tom first', 'ladder', async () => {
     const first = await firstRow(page, 'people', 'person-');
     return [first === `person-${tom.id}`, first];
+  });
+  await searchUntil(page, 'searching a company ("Baker & Sons") finds Tom', 'Baker & Sons', async () => {
+    const first = await firstRow(page, 'people', 'person-');
+    return [first === `person-${tom.id}`, first];
+  });
+  await searchUntil(page, 'searching a nickname ("Pree") finds Priya', 'Pree', async () => {
+    const first = await firstRow(page, 'people', 'person-');
+    return [first === `person-${priya.id}`, first];
   });
 
   await editor.context.close();
