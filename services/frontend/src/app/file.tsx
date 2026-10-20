@@ -3,6 +3,8 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
 import { CodeView } from '@/components/CodeView';
 import { CsvTable } from '@/components/CsvTable';
@@ -58,6 +60,7 @@ export default function FileScreen() {
   const path = (Array.isArray(pathParam) ? pathParam[0] : pathParam) ?? '';
   const router = useRouter();
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const [load, setLoad] = useState<{ path: string; load: Load }>({ path: '', load: { state: 'loading' } });
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -152,8 +155,8 @@ export default function FileScreen() {
   const editing = draft !== null;
 
   return (
-    <AppKeyboardAvoidingView style={styles.container}>
-      <View style={styles.header}>
+    <AppKeyboardAvoidingView style={[styles.container, { paddingBottom: insets.bottom }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <Pressable
           onPress={() => router.back()}
           style={styles.headerButton}
