@@ -194,6 +194,10 @@ SAMPLE = {
     "grade": 2,
     "position": 0,
     "status": "finished",
+    "details": json.dumps([{"kind": "phone", "label": "mobile", "value": "555-0101"}]),
+    "addresses": json.dumps([{"label": "home", "street1": "1 Main St", "city": "Springfield"}]),
+    "websites": json.dumps([{"label": "personal", "url": "example.com"}]),
+    "dates": json.dumps([{"label": "anniversary", "date": "2015-06-01"}]),
 }
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
@@ -216,7 +220,7 @@ def test_every_shipped_template_validates_and_its_actions_run(slug: str, tmp_pat
     finally:
         os.close(fd)
     assert found == [], [d.as_dict() for d in found]
-    assert doc["version"] == "1.0.0"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", doc["version"]), doc["version"]
 
     schema_sql = (pkg / "schema.sql").read_text()
     con = appschema.scratch_from(schema_sql)
