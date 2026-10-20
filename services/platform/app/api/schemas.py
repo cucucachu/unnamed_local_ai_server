@@ -793,6 +793,15 @@ class InstanceList(BaseModel):
     instances: list[InstanceOut]
 
 
+TileKey = Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class AppOrder(BaseModel):
+    """A space's home-page tiles in the caller's order (#465): instance ids and built-in tile names."""
+
+    items: list[TileKey] = Field(max_length=500)
+
+
 class InstallRequest(BaseModel):
     app_id: UUID
     tracks: Short = "working"

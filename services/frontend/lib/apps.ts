@@ -31,6 +31,8 @@ export interface Instance {
 export interface SpaceApps {
   space: Space;
   instances: Instance[];
+  /** The user's arrangement of the space's page (#465), see `arrangeTiles`. */
+  order: string[];
 }
 
 export async function listInstances(spaceId: string): Promise<Instance[]> {
@@ -44,7 +46,40 @@ export async function listInstalledApps(): Promise<SpaceApps[]> {
   const spaces = (await listSpaces())
     .filter((space) => space.archived_at === null)
     .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'personal' ? -1 : 1));
-  return Promise.all(spaces.map(async (space) => ({ space, instances: await listInstances(space.id) })));
+  return Promise.all(
+    spaces.map(async (space) => {
+      const [instances, order] = await Promise.all([listInstances(space.id), getAppOrder(space.id).catch(() => [])]);
+      return { space, instances, order };
+    }),
+  );
+}
+
+function appOrderPath(spaceId: string): string {
+  return `/api/platform/spaces/${encodeURIComponent(spaceId)}/app-order`;
+}
+
+/** The user's order of a space's home-page tiles: instance ids and built-in tile names. */
+export async function getAppOrder(spaceId: string): Promise<string[]> {
+  return (await apiFetch<{ items: string[] }>(appOrderPath(spaceId))).items;
+}
+
+export async function setAppOrder(spaceId: string, items: string[]): Promise<string[]> {
+  return (
+    await apiFetch<{ items: string[] }>(appOrderPath(spaceId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    })
+  ).items;
+}
+
+/** `keys` (the default order) arranged by `saved`: the saved ones that still exist, in
+ * their order, then the rest (a new install goes last). */
+export function arrangeTiles(keys: string[], saved: string[]): string[] {
+  const present = new Set(keys);
+  const placed = saved.filter((key) => present.has(key));
+  const placedSet = new Set(placed);
+  return [...placed, ...keys.filter((key) => !placedSet.has(key))];
 }
 
 /** `GET /api/platform/apps/{id}`; `source_path`/`working_version` are null
