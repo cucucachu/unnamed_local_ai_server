@@ -156,6 +156,7 @@ test('an app without userInterfaceStyle follows the host; bundles built before i
   assert.equal(legacy.$('scheme').textContent, 'light');
   assert.equal(legacy.color('plain-text'), 'rgb(0, 0, 0)');
   assert.equal(legacy.win.document.body.style.backgroundColor, '');
+  assert.equal(legacy.win.document.documentElement.style.backgroundColor, 'rgb(255, 255, 255)', "repaints the document's dark start");
   legacy.close();
 });
 

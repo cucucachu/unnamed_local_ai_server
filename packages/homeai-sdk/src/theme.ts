@@ -6,6 +6,7 @@
 // light, as it looked then.
 import { useSyncExternalStore } from 'react';
 import { on } from './bridge';
+import { SCHEME_BACKGROUND } from './protocol';
 
 export type ColorScheme = 'light' | 'dark';
 export type UserInterfaceStyle = 'light' | 'dark' | 'automatic';
@@ -40,7 +41,7 @@ export const THEMES: Record<ColorScheme, Theme> = {
   light: {
     scheme: 'light',
     colors: {
-      background: '#ffffff',
+      background: SCHEME_BACKGROUND.light,
       surface: '#f4f5f7',
       text: '#111418',
       textMuted: '#6b7280',
@@ -58,7 +59,7 @@ export const THEMES: Record<ColorScheme, Theme> = {
   dark: {
     scheme: 'dark',
     colors: {
-      background: '#0e1116',
+      background: SCHEME_BACKGROUND.dark,
       surface: '#161b22',
       text: '#e6edf3',
       textMuted: '#8b949e',
@@ -81,6 +82,11 @@ const listeners = new Set<() => void>();
 
 function update() {
   const scheme = style === 'automatic' ? hostScheme : style;
+  // The document starts in the host's scheme, which an app's pinned style can override.
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.backgroundColor = SCHEME_BACKGROUND[scheme];
+    document.documentElement.style.colorScheme = scheme;
+  }
   if (current.scheme === scheme) return;
   current = THEMES[scheme];
   if (typeof document !== 'undefined') document.body.style.backgroundColor = current.colors.background;
