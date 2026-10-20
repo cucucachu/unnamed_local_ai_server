@@ -11,6 +11,7 @@ import {
   useColorScheme,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppAgentPanel, type AgentActivity } from '@/components/AppAgentPanel';
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
@@ -106,6 +107,7 @@ export function AppRunner({
   const [activity, setActivity] = useState<AgentActivity>({ busy: false, needsApproval: false });
   const { width } = useWindowDimensions();
   const sheet = width < SHEET_BREAKPOINT;
+  const insets = useSafeAreaInsets();
   const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   // A change reaches a running app as a `theme` event, not a reload.
   const loadScheme = useRef(scheme);
@@ -209,7 +211,7 @@ export function AppRunner({
     ) : null;
 
   return (
-    <AppKeyboardAvoidingView style={styles.container}>
+    <AppKeyboardAvoidingView style={[styles.container, { paddingBottom: insets.bottom }]}>
     <View style={styles.container} testID="app-runner">
       {readOnly ? (
         <Text style={styles.readOnly} testID="app-runner-read-only">

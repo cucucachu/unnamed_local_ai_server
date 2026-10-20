@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { ComponentProps } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppIcon } from '@/components/AppGrid';
 import type { Instance } from '@/lib/apps';
@@ -39,10 +40,11 @@ export function AppActionSheet({
   onClose,
 }: AppActionSheetProps) {
   const { app, update } = instance;
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} testID="app-sheet-backdrop" accessibilityLabel="Close" />
-      <View style={styles.sheet} testID="app-sheet">
+      <View style={[styles.sheet, { paddingBottom: 24 + insets.bottom }]} testID="app-sheet">
         <View style={styles.header}>
           <AppIcon icon={app.icon} slug={app.slug} name={app.name} />
           <View style={styles.headerText}>
