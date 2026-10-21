@@ -1,0 +1,12 @@
+{
+  "name": "Connect Four",
+  "slug": "connect-four",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "ellipse-outline",
+    "description": "Four in a row against another member of the space: take turns dropping discs, several games at once, rematches.",
+    "permissions": {}
+  }
+}

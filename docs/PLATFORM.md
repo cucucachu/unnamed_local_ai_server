@@ -1606,12 +1606,12 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > listed spaces is writable) opens a New app sheet: name (the slug follows
 > it), space, Create app, then the runner.
 >
-> **The catalog (M22-16 to M22-18).** Nineteen templates: grocery-list,
+> **The catalog (M22-16 to M22-18).** Twenty templates: grocery-list,
 > list, notes and tracker (M13), chores, pantry, recipes and contacts
 > (household), budget, workouts, health-log and countdowns (money and
 > health), flashcards, kanban, books ("Books and media") and calculator
-> ("Calculator and units"), then group-chat (#467), calendar (#477) and
-> daily-word (#480).
+> ("Calculator and units"), then group-chat (#467), calendar (#477),
+> daily-word (#480) and connect-four (#481).
 > What each one's design leans on:
 > - **chores**: a rota in `chore_assignees` ordered by position; `turn`
 >   indexes it with `ROW_NUMBER()`, `completeChore` moves `next_due` and
@@ -1658,6 +1658,10 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >   guess; the player is `_created_by`, so "my game" and per-person stats
 >   need no player column. The day's word comes from the date, the same
 >   for everyone; SCOWL word lists in `lib/words.ts`.
+> - **connect-four**: the board is a game's `moves`; turns are kept by the
+>   game screen only (anyone who can edit, and the agent, can write), so
+>   `dropDisc` takes only the next move number into a column with room,
+>   and a move whose `_created_by` isn't the player on turn is pointed out.
 >
 > Building them found three framework gaps, fixed in M22-16: an export
 > action needs the target copy (#448), a copy with no rows was invisible in

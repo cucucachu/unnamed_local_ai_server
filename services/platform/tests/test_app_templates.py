@@ -210,6 +210,10 @@ SAMPLE = {
     "people": json.dumps(["00000000-0000-0000-0000-000000000001"]),
     "skip_event_id": None,
     "skip_date": None,
+    "turn": 0,
+    "col": 3,
+    "result": "playing",
+    "winner": None,
 }
 _PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
