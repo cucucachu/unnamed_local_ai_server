@@ -125,6 +125,7 @@ const TEMPLATE_ROUTES = {
     paths: ['/all', '/history', '/', '/chore/1', '/new'],
   },
   'connect-four': { names: ['game/[id]', 'index', 'new'], paths: ['/game/1', '/', '/new'] },
+  stack: { names: ['(tabs)/index', '(tabs)/scores'], paths: ['/', '/scores'] },
   contacts: { names: ['index', 'new', 'person/[id]/edit', 'person/[id]/index'], paths: ['/', '/new', '/person/1/edit', '/person/1'] },
   countdowns: { names: ['countdown/[id]', 'index', 'new'], paths: ['/countdown/1', '/', '/new'], reads: NO_EXPORTERS },
   'grocery-list': { names: ['index', 'item/[id]'], paths: ['/', '/item/1'] },

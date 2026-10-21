@@ -85,7 +85,7 @@ test('the runtime page with a stub host: render, routes, bridge round trips, liv
   }
 });
 
-test('GLView and three in Chromium: only bundles that import three get it, and the cube draws', async () => {
+test('GLView and three in Chromium: only bundles that import three get it, the cube draws, and a quick tap reaches onPressIn', async () => {
   const GL = path.join(path.dirname(FIXTURE), 'gl-check');
   const browser = await chromium.launch();
   try {
@@ -102,6 +102,12 @@ test('GLView and three in Chromium: only bundles that import three get it, and t
     const [r, g, b, a, , w, hgt] = seen;
     assert.ok(r > 200 && g < 40 && b < 40 && a === 255, `centre pixel ${seen.slice(0, 4)}`);
     assert.ok(w >= 400 && hgt >= 500, `drawing buffer ${w}x${hgt}`);
+    // A tap quicker than react-native-web's 50 ms press delay, with only onPressIn, as a game's drop.
+    const box = await h.ui.getByTestId('stage').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.up();
+    await until('onPressIn', async () => (await h.ui.getByTestId('taps').textContent()) === '1');
     assert.deepEqual(unexpected.filter((u) => !u.startsWith(`${ORIGIN}${HOST_PATH}`)), []);
     const errors = await page.evaluate(() => window.harness.events.filter((e) => e.event === 'runtime.error'));
     assert.deepEqual(errors, []);

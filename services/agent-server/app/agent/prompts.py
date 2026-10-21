@@ -137,7 +137,7 @@ No fetch, window, document, react-dom, or fs.
 new THREE.WebGLRenderer({ canvas: gl.canvas, context: gl }); each requestAnimationFrame
 frame: when gl.drawingBufferWidth/Height change, renderer.setSize(w, h, false) and the
 camera's aspect; render, gl.endFrameEXP(). Cancel the frame on unmount; wrap the GLView in a
-Pressable for taps. three's examples/jsm addons (OrbitControls, loaders) aren't available.
+Pressable for taps (onPressIn fires on touch). three's examples/jsm addons (OrbitControls, loaders) aren't available.
 @homeai/ui: build screens from these before hand-styling Views. Screen (scrolling page),
 Section title, List data renderItem empty, ListRow title subtitle value icon onPress
 actions=[{label, onPress}] (swipe), EmptyState, Card, TextField, NumberField (number|null),

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { GLView, type ExpoWebGLRenderingContext } from 'expo-gl';
 import * as THREE from 'three';
 
 export default function Cube() {
   const [pixel, setPixel] = useState('none');
+  const [taps, setTaps] = useState(0);
   const frame = useRef(0);
   const stop = useRef<number | null>(null);
   useEffect(() => () => {
@@ -44,8 +45,11 @@ export default function Cube() {
 
   return (
     <View style={{ flex: 1 }}>
-      <GLView testID="gl" style={{ flex: 1 }} onContextCreate={onContextCreate} />
+      <Pressable testID="stage" onPressIn={() => setTaps((n) => n + 1)} style={{ flex: 1 }}>
+        <GLView testID="gl" style={{ flex: 1 }} onContextCreate={onContextCreate} />
+      </Pressable>
       <Text testID="pixel">{pixel}</Text>
+      <Text testID="taps">{taps}</Text>
     </View>
   );
 }

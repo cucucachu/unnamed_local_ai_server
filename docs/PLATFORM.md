@@ -1625,12 +1625,12 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > listed spaces is writable) opens a New app sheet: name (the slug follows
 > it), space, Create app, then the runner.
 >
-> **The catalog (M22-16 to M22-18).** Twenty templates: grocery-list,
+> **The catalog (M22-16 to M22-18).** Twenty-one templates: grocery-list,
 > list, notes and tracker (M13), chores, pantry, recipes and contacts
 > (household), budget, workouts, health-log and countdowns (money and
 > health), flashcards, kanban, books ("Books and media") and calculator
 > ("Calculator and units"), then group-chat (#467), calendar (#477),
-> daily-word (#480) and connect-four (#481).
+> daily-word (#480), connect-four (#481) and stack (#483).
 > What each one's design leans on:
 > - **chores**: a rota in `chore_assignees` ordered by position; `turn`
 >   indexes it with `ROW_NUMBER()`, `completeChore` moves `next_due` and
@@ -1681,6 +1681,11 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >   game screen only (anyone who can edit, and the agent, can write), so
 >   `dropDisc` takes only the next move number into a column with room,
 >   and a move whose `_created_by` isn't the player on turn is pointed out.
+> - **stack**: the first three.js template (#482's `GLView`). The rules
+>   (`lib/stack.ts`) are pure: the sliding block's offset is a function of
+>   the time since it appeared, worked out again at the tap, so a drop
+>   doesn't depend on the frame rate. One `games` row per finished game;
+>   bests and the leaderboard group by `_created_by`.
 >
 > Building them found three framework gaps, fixed in M22-16: an export
 > action needs the target copy (#448), a copy with no rows was invisible in
