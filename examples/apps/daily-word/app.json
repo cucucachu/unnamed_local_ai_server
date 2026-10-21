@@ -1,0 +1,12 @@
+{
+  "name": "Daily Word",
+  "slug": "daily-word",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "text-outline",
+    "description": "Guess the day's five-letter word in six tries. Everyone in the space gets the same word; each person keeps their own streak and stats.",
+    "permissions": {}
+  }
+}
