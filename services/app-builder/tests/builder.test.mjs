@@ -118,6 +118,7 @@ const TEMPLATE_ROUTES = {
   },
   calculator: { names: ['(tabs)/index', '(tabs)/tip', '(tabs)/units'], paths: ['/', '/tip', '/units'] },
   calendar: { names: ['event/[id]/edit', 'event/[id]/index', 'index', 'new'], paths: ['/event/1/edit', '/event/1', '/', '/new'], reads: NO_EXPORTERS },
+  'daily-word': { names: ['(tabs)/index', '(tabs)/stats', '(tabs)/today'], paths: ['/', '/stats', '/today'] },
   'group-chat': { names: ['index', 'search'], paths: ['/', '/search'] },
   chores: {
     names: ['(tabs)/all', '(tabs)/history', '(tabs)/index', 'chore/[id]', 'new'],

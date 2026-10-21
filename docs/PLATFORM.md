@@ -1606,11 +1606,12 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 > listed spaces is writable) opens a New app sheet: name (the slug follows
 > it), space, Create app, then the runner.
 >
-> **The catalog (M22-16 to M22-18).** Eighteen templates: grocery-list,
+> **The catalog (M22-16 to M22-18).** Nineteen templates: grocery-list,
 > list, notes and tracker (M13), chores, pantry, recipes and contacts
 > (household), budget, workouts, health-log and countdowns (money and
 > health), flashcards, kanban, books ("Books and media") and calculator
-> ("Calculator and units"), then group-chat (#467) and calendar (#477).
+> ("Calculator and units"), then group-chat (#467), calendar (#477) and
+> daily-word (#480).
 > What each one's design leans on:
 > - **chores**: a rota in `chore_assignees` ordered by position; `turn`
 >   indexes it with `ROW_NUMBER()`, `completeChore` moves `next_due` and
@@ -1653,6 +1654,10 @@ app's `app.json` + `AGENT.md` + `schema.sql` before working with it.
 >   are `event_skips` rows (an edit also saves the copy as its own event,
 >   in the same `saveEvent`). Reads Contacts' `people` v1 for birthdays,
 >   as countdowns does.
+> - **daily-word**: one `games` row per member per day, made at the first
+>   guess; the player is `_created_by`, so "my game" and per-person stats
+>   need no player column. The day's word comes from the date, the same
+>   for everyone; SCOWL word lists in `lib/words.ts`.
 >
 > Building them found three framework gaps, fixed in M22-16: an export
 > action needs the target copy (#448), a copy with no rows was invisible in
