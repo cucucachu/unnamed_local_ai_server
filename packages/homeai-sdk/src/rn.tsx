@@ -1,6 +1,7 @@
 // What apps get as `react-native`: react-native-web, with Text and TextInput
 // defaulting to the theme's text colours when the app is dark (light apps
-// render exactly as before), and useColorScheme answering for the app.
+// render exactly as before), Pressable's onPressIn on touch as on a phone,
+// and useColorScheme answering for the app.
 import { createContext, forwardRef, useContext, type ComponentProps, type ElementRef } from 'react';
 import * as RN from 'react-native';
 import { useColorScheme, useTheme } from './theme';
@@ -29,4 +30,10 @@ export const TextInput = forwardRef<ElementRef<typeof RN.TextInput>, ComponentPr
   );
 });
 
-export const reactNative = { ...RN, Text, TextInput, useColorScheme };
+// react-native-web holds onPressIn back 50 ms, and drops it for a quicker tap without onPress;
+// React Native calls it on touch.
+export const Pressable = forwardRef<ElementRef<typeof RN.Pressable>, ComponentProps<typeof RN.Pressable>>(function Pressable(props, ref) {
+  return <RN.Pressable ref={ref} {...({ delayPressIn: 0 } as object)} {...props} />;
+});
+
+export const reactNative = { ...RN, Text, TextInput, Pressable, useColorScheme };

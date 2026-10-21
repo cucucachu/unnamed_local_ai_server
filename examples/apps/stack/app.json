@@ -1,0 +1,12 @@
+{
+  "name": "Stack",
+  "slug": "stack",
+  "version": "1.0.0",
+  "userInterfaceStyle": "automatic",
+  "homeai": {
+    "sdk": "1",
+    "icon": "cube-outline",
+    "description": "A 3D stacking game: tap to drop each sliding block on the tower; whatever overhangs is cut off. Everyone keeps their own best and recent games, with a leaderboard for the space.",
+    "permissions": {}
+  }
+}
