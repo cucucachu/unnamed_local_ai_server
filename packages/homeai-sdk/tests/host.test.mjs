@@ -284,6 +284,17 @@ test('bundle and runtime URLs', async () => {
   assert.equal(f.calls[0].method, 'GET');
   assert.equal(H.runtimeUrl('1'), '/app-runtime/1/runtime.js');
   assert.equal(H.runtimeUrl('1', 'http://homeai.local'), 'http://homeai.local/app-runtime/1/runtime.js');
+  assert.equal(H.moduleUrl('1', 'three', 'http://homeai.local'), 'http://homeai.local/app-runtime/1/three.js');
+});
+
+test('fetchRuntime adds the requested optional modules after the runtime, and fails if one is missing', async () => {
+  let f = fakeFetch([{ status: 200, body: 'RT' }]);
+  assert.equal(await H.fetchRuntime('1', { fetch: f.fetch }), 'RT');
+  f = fakeFetch([{ status: 200, body: 'RT' }, { status: 200, body: 'THREE' }]);
+  assert.equal(await H.fetchRuntime('1', { fetch: f.fetch }, ['three']), 'RT;\nTHREE');
+  assert.deepEqual(f.calls.map((c) => c.url), ['/app-runtime/1/runtime.js', '/app-runtime/1/three.js']);
+  f = fakeFetch([{ status: 200, body: 'RT' }, { status: 404 }]);
+  await assert.rejects(H.fetchRuntime('1', { fetch: f.fetch }, ['three']), /no three module for SDK 1/);
 });
 
 test('the event relay passes on this instance and this app only, coalescing reloads', async () => {

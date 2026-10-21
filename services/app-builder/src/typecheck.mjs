@@ -64,6 +64,7 @@ export const COMPILER_OPTIONS = {
     react: [path.join(modules, '@types/react/index.d.ts')],
     'react/jsx-runtime': [path.join(modules, '@types/react/jsx-runtime.d.ts')],
     'react-native': [path.join(modules, 'react-native/types/index.d.ts')],
+    three: [path.join(modules, '@types/three/index.d.ts')],
   },
 };
 

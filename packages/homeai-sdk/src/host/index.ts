@@ -5,4 +5,4 @@
 export * from '../protocol';
 export { MAX_IN_FLIGHT, checkParams, createBridgeHost, type BridgeHost, type BridgeHostOptions, type Forward, type ImageHost } from './bridge-host';
 export { SANDBOX_CSP, injectScriptFor, sandboxDocument } from './document';
-export { fetchBundle, fetchRuntime, platformEventRelay, platformForward, platformImages, runtimeUrl, type Bundle, type FetchLike, type PlatformOptions } from './platform';
+export { fetchBundle, fetchRuntime, moduleUrl, platformEventRelay, platformForward, platformImages, runtimeUrl, type Bundle, type FetchLike, type PlatformOptions } from './platform';

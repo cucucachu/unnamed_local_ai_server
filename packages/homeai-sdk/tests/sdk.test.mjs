@@ -4,11 +4,12 @@
 //   npm test    (builds dist/ first)
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
-import { ALLOWED_MODULES, SDK_TYPES } from '../build.mjs';
-import { APP_ID, INSTANCE_ID, RUNTIME_DEV, bundleApp, importHost, stubPlatform } from './helpers.mjs';
+import { ALLOWED_MODULES, OPTIONAL_MODULES, SDK_ROOT, SDK_TYPES, optionalModulesOf } from '../build.mjs';
+import { APP_ID, FIXTURE, INSTANCE_ID, RUNTIME_DEV, bundleApp, importHost, stubPlatform } from './helpers.mjs';
 
 const SPACE = { id: '33333333-3333-4333-8333-333333333333', slug: 'family', name: 'Family', role: 'editor' };
 const runtimeCode = fs.readFileSync(RUNTIME_DEV, 'utf8');
@@ -318,16 +319,39 @@ test('the runtime provides exactly modules.json, and the typings declare the non
   new vm.Script(runtimeCode).runInContext(dom.getInternalVMContext());
   let req;
   dom.window.__homeai_define((require) => void (req = require));
-  for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
+  for (const m of ALLOWED_MODULES.filter((m) => !OPTIONAL_MODULES.includes(m))) assert.ok(req(m), m);
+  for (const m of OPTIONAL_MODULES) assert.throws(() => req(m), /didn't load; reopen the app/);
   for (const m of ['react-dom', 'react-dom/client', 'react-native-web', 'fs']) assert.throws(() => req(m), /not available in the app sandbox/);
+  for (const m of OPTIONAL_MODULES) {
+    new vm.Script(fs.readFileSync(path.join(SDK_ROOT, 'dist', `${m}.js`), 'utf8')).runInContext(dom.getInternalVMContext());
+    assert.ok(req(m), m);
+  }
+  assert.equal(typeof req('three').WebGLRenderer, 'function');
+  dom.window.__homeai_provide('fs', {});
+  assert.throws(() => req('fs'), /not available in the app sandbox/);
+  assert.deepEqual(Object.keys(req('expo-gl')), ['GLView']);
   const sdk = req('@homeai/sdk');
   assert.deepEqual(Object.keys(sdk).sort(), ['askAgent', 'deleteImage', 'imageUri', 'pickImage', 'runAction', 'runExportAction', 'search', 'useDatabase', 'useImage', 'useMember', 'useMembers', 'useQuery', 'useSQLiteContext', 'useSpace', 'useUser']);
   assert.equal(sdk.useSQLiteContext, sdk.useDatabase);
   await assert.rejects(sdk.useDatabase().withTransactionAsync(async () => {}), /not available in SDK 1: put multi-statement writes in an action/);
   assert.deepEqual(Object.keys(req('expo-sqlite')).sort(), ['SQLiteProvider', 'openDatabaseAsync', 'useSQLiteContext']);
   const declared = [...fs.readFileSync(SDK_TYPES, 'utf8').matchAll(/declare module '([^']+)'/g)].map((m) => m[1]);
-  assert.deepEqual(declared.sort(), ALLOWED_MODULES.filter((m) => !m.startsWith('react')).sort());
+  // three's typings are @types/three's.
+  assert.deepEqual(declared.sort(), ALLOWED_MODULES.filter((m) => !m.startsWith('react') && m !== 'three').sort());
   dom.window.close();
+});
+
+test('optional modules: one list in build.mjs and protocol.ts, found by the require() esbuild leaves', async () => {
+  const H = await importHost();
+  assert.deepEqual([...H.OPTIONAL_MODULES], OPTIONAL_MODULES);
+  for (const f of [optionalModulesOf, H.optionalModulesOf]) {
+    assert.deepEqual(f('var t=__toESM(require("three"));'), ['three']);
+    assert.deepEqual(f("require( 'three' )"), ['three']);
+    assert.deepEqual(f('require("three-stdlib");x.require("threex")'), []);
+    assert.deepEqual(f('require("react-native")'), []);
+  }
+  assert.ok(optionalModulesOf(await bundleApp(path.join(path.dirname(FIXTURE), 'gl-check'), { dev: false })).includes('three'));
+  assert.deepEqual(optionalModulesOf(await bundleApp(FIXTURE, { dev: false })), []);
 });
 
 test('the sandbox ignores anything that is not a v1 envelope, and messages not from its parent', async () => {

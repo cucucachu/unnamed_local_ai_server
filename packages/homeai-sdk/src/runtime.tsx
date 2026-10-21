@@ -1,6 +1,6 @@
 // Runtime bundle entry: provides the only modules app code can import
-// (exactly ../modules.json), boots the app bundle, and wires the bridge. Built
-// once per SDK version (scripts/build-runtime.mjs); the builder's smoke render
+// (exactly ../modules.json, the OPTIONAL_MODULES once their own scripts ran),
+// boots the app bundle, and wires the bridge. Built once per SDK version (scripts/build-runtime.mjs); the builder's smoke render
 // evaluates the dev build (docs/PLATFORM.md §7).
 import * as React from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
@@ -12,9 +12,10 @@ import { reactNative } from './rn';
 import { setHostScheme, setUserInterfaceStyle, useTheme } from './theme';
 import * as UI from './ui';
 import { BarChart, LineChart, PieChart } from './charts';
+import { GLView } from './gl';
 import * as SDK from './sdk';
 import { emit, installReceiver, on } from './bridge';
-import type { SandboxConfig } from './protocol';
+import { OPTIONAL_MODULES, type SandboxConfig } from './protocol';
 
 // `layouts` by folder since M22-02 (bundles built before then have only `layout`, app/_layout.tsx);
 // `userInterfaceStyle` (app.json's) since M22-03.
@@ -24,6 +25,7 @@ declare global {
   interface Window {
     __homeai_config?: SandboxConfig;
     __homeai_define?: (factory: (require: (m: string) => unknown, module: { exports: any }, exports: any) => void) => void;
+    __homeai_provide?: (name: string, exports: unknown) => void;
   }
 }
 
@@ -43,6 +45,7 @@ export const modules: Record<string, unknown> = {
     usePathname: Router.usePathname,
   },
   'expo-sqlite': SDK.expoSqlite,
+  'expo-gl': { GLView },
   '@expo/vector-icons': { Ionicons },
   '@homeai/ui': {
     useTheme,
@@ -95,8 +98,14 @@ export const modules: Record<string, unknown> = {
   },
 };
 
+// An optional module's own script (OPTIONAL_MODULES) runs after this one, before the app's.
+window.__homeai_provide = (name, exports) => {
+  if ((OPTIONAL_MODULES as readonly string[]).includes(name) && !Object.prototype.hasOwnProperty.call(modules, name)) modules[name] = exports;
+};
+
 export function requireModule(name: string) {
   if (!Object.prototype.hasOwnProperty.call(modules, name)) {
+    if ((OPTIONAL_MODULES as readonly string[]).includes(name)) throw new Error(`Module "${name}" didn't load; reopen the app`);
     throw new Error(`Module "${name}" is not available in the app sandbox`);
   }
   return modules[name];

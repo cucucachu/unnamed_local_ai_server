@@ -239,3 +239,11 @@ test('charts follow the theme', async () => {
   assert.equal(s.$('bar-negative').querySelector('rect[data-bar]').getAttribute('fill'), '#4f8cff');
   s.close();
 });
+
+test('GLView without WebGL (jsdom, the builder smoke render) says so instead of failing', async () => {
+  const s = await bootJsdom({ appDir: path.join(path.dirname(FIXTURE), 'gl-check') });
+  await until('message', () => s.$('gl')?.textContent.includes("3D graphics aren't available here"));
+  assert.equal(s.$('pixel').textContent, 'none');
+  assert.deepEqual(s.errors(), []);
+  s.close();
+});

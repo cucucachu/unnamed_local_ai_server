@@ -760,7 +760,7 @@ async def test_outline_and_replace_symbol_edit_a_screen(fake_model, fake_platfor
     _, outlined, replaced = _tool_results(fake_model)
     assert "export default component GroceryListScreen" in outlined
     assert replaced.startswith(
-        f"Replaced component GroceryListScreen (kept `export default`) in {path}: lines 8-"
+        f"Replaced component GroceryListScreen (kept `export default`) in {path}: lines 9-"
     )
     screen = fake_platform.personal()["Apps/todo/app/index.tsx"].decode()
     assert "export default function GroceryListScreen() {\n  return null;\n}" in screen

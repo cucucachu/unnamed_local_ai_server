@@ -1,6 +1,6 @@
 import { PROTOCOL } from '@homeai/sdk/host';
 
-import { instanceBridge, isReadOnly, loadInstanceDocument, sandboxSpace } from '../appHost';
+import { NeedsNewDocument, instanceBridge, isReadOnly, loadInstanceCode, loadInstanceDocument, sandboxSpace } from '../appHost';
 import { pickPhoto } from '../pickPhoto';
 import type { Space } from '../platform';
 import { onUnauthorized, setSessionToken } from '../session';
@@ -256,6 +256,24 @@ describe('loadInstanceDocument', () => {
     expect(doc.html).not.toContain(TOKEN);
     expect(doc.html).toContain('"user":{"id":"u1","username":"alice","name":"Alice A"}');
     expect(doc.html).toContain('"members":[{"id":"u1","username":"alice","name":"Alice A","role":"owner"}]');
+  });
+
+  it('adds three after the runtime only for a bundle that requires it, and hot reload asks for a new document when it needs it', async () => {
+    const three = 'var T=__toESM(require("three"));';
+    const calls = mockPlatform(({ url }) =>
+      url.endsWith('/bundle')
+        ? { body: { app_id: 'app-1', version: '1.0.0', sdk: '1', bundle_id: 'b1', code: three } }
+        : url.includes('/api/platform/')
+          ? { status: 500, body: { detail: 'boom' } }
+          : { text: url.endsWith('/three.js') ? 'window.__three = 1;' : 'window.__runtime = 1;' },
+    );
+    const doc = await loadInstanceDocument(FIXED, { id: 's1', slug: 'home', name: 'Home', kind: 'shared', role: 'owner' } as Space);
+    expect(calls.map((c) => c.url)).toContain(`${BASE}/app-runtime/1/three.js`);
+    expect(doc.modules).toEqual(['three']);
+    expect(doc.html.indexOf('window.__three = 1;')).toBeGreaterThan(doc.html.indexOf('window.__runtime = 1;'));
+    expect(doc.html.indexOf('window.__three = 1;')).toBeLessThan(doc.html.indexOf(three));
+    await expect(loadInstanceCode(FIXED, ['three'])).resolves.toBe(three);
+    await expect(loadInstanceCode(FIXED, [])).rejects.toBeInstanceOf(NeedsNewDocument);
   });
 
   it('still loads the app when the user or members can’t be fetched', async () => {

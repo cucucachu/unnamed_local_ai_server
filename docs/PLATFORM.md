@@ -852,7 +852,8 @@ the platform publishes.
 `router` / `useRouter`, `useLocalSearchParams`, `useGlobalSearchParams`,
 `usePathname`), `expo-sqlite` (shim bound to this instance's database),
 `@expo/vector-icons` (`Ionicons` only, M22-02), `@homeai/sdk`,
-`@homeai/ui` (M22-03), and a
+`@homeai/ui` (M22-03), `expo-gl` (`GLView`, #482) and `three` (three.js
+0.186, #482), and a
 growing allowlist of Expo-compatible shims. Relative imports must resolve
 inside the app directory (symlinks included). Anything else — including
 `react-dom`, `fs`, `window`, `document`, raw `fetch` — fails the build:
@@ -992,6 +993,24 @@ dark the default colour of plain `Text` and `TextInput` (the outermost
   exports) + the expo-router shim + `@homeai/sdk` + the `expo-sqlite` shim +
   the bridge. It registers the allowlisted modules and refuses any other
   `require`.
+- **Optional modules** (#482): `three` (≈740 KB) is too big for every
+  document, so it is its own IIFE, `/app-runtime/<sdk>/three.js`, that
+  registers itself with the runtime (`__homeai_provide`). The host finds the
+  bundle's `require("three")` (`optionalModulesOf`), and `fetchRuntime` adds
+  the script after the runtime only then. A hot reload whose new build needs
+  a module the document lacks opens a fresh document instead. The builder's
+  smoke render loads it the same way; jsdom has no WebGL, so a `GLView` there
+  shows "3D graphics aren't available here" and never calls
+  `onContextCreate`.
+- **`expo-gl`'s `GLView`** (#482): a canvas in a `View`, sized to the view
+  times the pixel ratio (a ResizeObserver), with a WebGL2 context (WebGL 1
+  as the fallback) plus a no-op `endFrameEXP`, passed once to
+  `onContextCreate`. three renders into it with
+  `new THREE.WebGLRenderer({ canvas: gl.canvas, context: gl })`; the app
+  drives frames with `requestAnimationFrame` and cancels it on unmount. The
+  view loses its context on unmount, and shows a message (and calls
+  `onContextLost`) if the device drops it. The CSP needs nothing more:
+  three makes no requests and evaluates no strings.
 - **App bundle**: esbuild CJS body (es2020, automatic JSX) wrapped as
   `__homeai_define(function (require, module, exports) {…})`, exporting
   `{ routes, layout }` from a route table generated at build time from

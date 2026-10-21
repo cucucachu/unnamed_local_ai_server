@@ -92,7 +92,7 @@ async function mount(role: Space['role'] = 'owner') {
 beforeEach(() => {
   mockSandboxes.length = 0;
   mockSockets.length = 0;
-  mockLoadDocument.mockReset().mockResolvedValue({ appId: 'app-1', version: '1.0.0', html: '<html>v1</html>' });
+  mockLoadDocument.mockReset().mockResolvedValue({ appId: 'app-1', version: '1.0.0', html: '<html>v1</html>', modules: [] });
   mockLoadCode.mockReset().mockResolvedValue('__homeai_define(v2)');
 });
 
@@ -124,12 +124,27 @@ describe('AppRunner', () => {
     });
     await flush();
     expect(host.dbChanged).toHaveBeenCalledTimes(2);
-    expect(mockLoadCode).toHaveBeenCalledWith(INSTANCE);
+    expect(mockLoadCode).toHaveBeenCalledWith(INSTANCE, []);
     expect(host.loadBundle).toHaveBeenCalledWith('__homeai_define(v2)');
 
     act(() => renderer?.unmount());
     renderer = null;
     expect(mockSockets[0].close).toHaveBeenCalled();
+  });
+
+  it('opens a fresh sandbox when a new build needs a module the document lacks (three)', async () => {
+    await mount();
+    await act(async () => mockSandboxes[0].onHost(fakeHost()));
+    const { NeedsNewDocument } = jest.requireActual('@/lib/appHost');
+    mockLoadCode.mockRejectedValue(new NeedsNewDocument('needs three'));
+    mockLoadDocument.mockResolvedValue({ appId: 'app-1', version: '1.0.1', html: '<html>v2 with three</html>', modules: ['three'] });
+    await act(async () => {
+      mockSockets[0].onFrame('{"type":"ready"}');
+      mockSockets[0].onFrame(JSON.stringify({ type: 'app_built', app_id: 'app-1', version: '1.0.1' }));
+    });
+    await flush();
+    expect(mockLoadDocument).toHaveBeenCalledTimes(2);
+    expect(mockSandboxes.at(-1)!.html).toBe('<html>v2 with three</html>');
   });
 
   it('covers a crashed app with an error overlay whose Reload starts a fresh sandbox', async () => {
@@ -138,7 +153,7 @@ describe('AppRunner', () => {
     expect(exists(r, 'app-error-overlay')).toBe(true);
     expect(textOf(r)).toContain('boom: items is undefined');
 
-    mockLoadDocument.mockResolvedValue({ appId: 'app-1', version: '1.0.1', html: '<html>v2</html>' });
+    mockLoadDocument.mockResolvedValue({ appId: 'app-1', version: '1.0.1', html: '<html>v2</html>', modules: [] });
     await press(r, 'app-error-reload');
     expect(exists(r, 'app-error-overlay')).toBe(false);
     expect(mockLoadDocument).toHaveBeenCalledTimes(2);

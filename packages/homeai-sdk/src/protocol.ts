@@ -95,6 +95,16 @@ export type SandboxConfig = { initialPath?: string; space?: Space | null; user?:
 /** The theme's page background per scheme; the document paints it before the runtime loads. */
 export const SCHEME_BACKGROUND = { light: '#ffffff', dark: '#0e1116' } as const;
 
+/** Allowed modules served as their own script (`/app-runtime/<sdk>/<name>.js`, OPTIONAL_MODULES in
+ * build.mjs), which hosts add to the document only for bundles that require them. */
+export const OPTIONAL_MODULES = ['three'] as const;
+export type OptionalModule = (typeof OPTIONAL_MODULES)[number];
+
+/** The optional modules a built bundle requires: esbuild leaves each external as `require("<name>")`. */
+export function optionalModulesOf(code: string): OptionalModule[] {
+  return OPTIONAL_MODULES.filter((m) => new RegExp(`\\brequire\\(\\s*["'\`]${m}["'\`]\\s*\\)`).test(code));
+}
+
 /** The largest envelope either side accepts, in UTF-16 code units. */
 export const MAX_MESSAGE_CHARS = 1 << 20;
 

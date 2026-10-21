@@ -6,10 +6,12 @@
 // makes shows up. scripts/e2e/app_runtime_smoke.sh
 // runs the same checks against the live platform.
 //   npm test    (needs Playwright's Chromium: npx playwright install chromium)
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { APP_ID, FIXTURE, INSTANCE_ID, RUNTIME, bundleApp, importHost, stubPlatform } from './helpers.mjs';
+import { APP_ID, FIXTURE, INSTANCE_ID, RUNTIME, bundleApp, importHost, stubPlatform, until } from './helpers.mjs';
 import { HOST_PATH, PROBE_PATH, openHarness, readFixtureIndex, runChecks, runViewerChecks } from './harness/harness.mjs';
 
 const ORIGIN = 'http://homeai.test';
@@ -24,15 +26,21 @@ function pushEvents(page, platform) {
   };
 }
 
-async function stubHost(page, platform, state) {
+async function stubHost(page, platform, state, appDir = FIXTURE) {
   const unexpected = [];
   await page.route('**/*', (route) => {
     unexpected.push(route.request().url());
     return route.abort();
   });
-  await page.route(`${ORIGIN}/app-runtime/1/runtime.js`, (route) => route.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(RUNTIME, 'utf8') }));
+  const served = [];
+  await page.route(`${ORIGIN}/app-runtime/1/*.js`, (route) => {
+    const name = path.basename(new URL(route.request().url()).pathname);
+    served.push(name);
+    return route.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(path.join(path.dirname(RUNTIME), name), 'utf8') });
+  });
+  page.served = served;
   await page.route(`${ORIGIN}/api/platform/apps/instances/${INSTANCE_ID}/bundle`, async (route) =>
-    route.fulfill({ json: { app_id: APP_ID, version: '1.0.0', sdk: '1', bundle_id: `b${state.build}`, code: await bundleApp(FIXTURE, { dev: false, edits: state.edits }) } }),
+    route.fulfill({ json: { app_id: APP_ID, version: '1.0.0', sdk: '1', bundle_id: `b${state.build}`, code: await bundleApp(appDir, { dev: false, edits: state.edits }) } }),
   );
   await page.route(`${ORIGIN}/api/platform/apps/instances/${INSTANCE_ID}/rpc`, (route) => {
     const r = platform.rpc(route.request().postDataJSON());
@@ -72,6 +80,36 @@ test('the runtime page with a stub host: render, routes, bridge round trips, liv
     await runViewerChecks(await openHarness(viewer, { origin: ORIGIN, instanceId: INSTANCE_ID, space: { ...SPACE, role: 'viewer' }, readOnly: true, events: 'push', onReady: pushEvents(viewer, platform) }), {
       rows: async (sql) => platform.db.prepare(sql).all().map((r) => ({ ...r })),
     });
+  } finally {
+    await browser.close();
+  }
+});
+
+test('GLView and three in Chromium: only bundles that import three get it, and the cube draws', async () => {
+  const GL = path.join(path.dirname(FIXTURE), 'gl-check');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const unexpected = await stubHost(page, stubPlatform(GL), { build: 1, edits: {} }, GL);
+    const h = await openHarness(page, { origin: ORIGIN, instanceId: INSTANCE_ID, space: SPACE, events: 'push', onReady: async () => page.evaluate(() => window.harness.deliver(JSON.stringify({ type: 'ready' }))) });
+    assert.deepEqual(page.served.sort(), ['runtime.js', 'three.js']);
+    const pixel = h.ui.getByTestId('pixel');
+    const seen = await until('a few frames', async () => {
+      const t = await pixel.textContent();
+      const m = /^(\d+),(\d+),(\d+),(\d+) frame (\d+) size (\d+)x(\d+)$/.exec(t ?? '');
+      return m && Number(m[5]) > 20 && m.slice(1).map(Number);
+    }, 10000);
+    const [r, g, b, a, , w, hgt] = seen;
+    assert.ok(r > 200 && g < 40 && b < 40 && a === 255, `centre pixel ${seen.slice(0, 4)}`);
+    assert.ok(w >= 400 && hgt >= 500, `drawing buffer ${w}x${hgt}`);
+    assert.deepEqual(unexpected.filter((u) => !u.startsWith(`${ORIGIN}${HOST_PATH}`)), []);
+    const errors = await page.evaluate(() => window.harness.events.filter((e) => e.event === 'runtime.error'));
+    assert.deepEqual(errors, []);
+
+    const plain = await browser.newPage();
+    await stubHost(plain, stubPlatform(), { build: 1, edits: {} });
+    await openHarness(plain, { origin: ORIGIN, instanceId: INSTANCE_ID, space: SPACE, events: 'push', onReady: async () => plain.evaluate(() => window.harness.deliver(JSON.stringify({ type: 'ready' }))) });
+    assert.deepEqual(plain.served, ['runtime.js']);
   } finally {
     await browser.close();
   }
