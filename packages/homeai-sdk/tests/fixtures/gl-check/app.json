@@ -1,0 +1,11 @@
+{
+  "name": "GL check",
+  "slug": "gl-check",
+  "version": "1.0.0",
+  "homeai": {
+    "sdk": "1",
+    "icon": "cube-outline",
+    "description": "Fixture app for the GLView / three tests: a spinning cube that reads back its own pixels.",
+    "permissions": {}
+  }
+}

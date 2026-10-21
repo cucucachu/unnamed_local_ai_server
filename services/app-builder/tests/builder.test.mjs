@@ -12,8 +12,8 @@ import { JSDOM } from 'jsdom';
 import { compilePhase, smokePhase } from '../src/cli.mjs';
 import { ALLOWED_MODULES, BANNER } from '../src/compile.mjs';
 import { MAX_DIAGNOSTICS, writeResult } from '../src/diagnostics.mjs';
-import { RUNTIME_DEV } from '../src/smoke.mjs';
-import { SDK_TYPES } from '../src/sdk.mjs';
+import { RUNTIME_DEV, moduleDev } from '../src/smoke.mjs';
+import { OPTIONAL_MODULES, SDK_TYPES } from '../src/sdk.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GROCERIES = path.join(here, 'fixtures', 'groceries');
@@ -184,7 +184,7 @@ test('a forbidden import is an import diagnostic at the import, even if unused',
   const r = await compileOnly({ 'app/index.tsx': prepend("import { createPortal } from 'react-dom';") });
   assert.equal(r.ok, false);
   assert.deepEqual(r.diagnostics.map(pick), [{ step: 'import', file: 'app/index.tsx', line: 1, column: 30 }]);
-  assert.match(r.diagnostics[0].message, /Import "react-dom" is not allowed in apps\. Allowed modules: react, react-native, expo-router, expo-sqlite, @expo\/vector-icons, @homeai\/sdk/);
+  assert.match(r.diagnostics[0].message, /Import "react-dom" is not allowed in apps\. Allowed modules: react, react-native, expo-router, expo-sqlite, expo-gl, three, @expo\/vector-icons, @homeai\/sdk/);
   assert.equal(r.diagnostics[0].source, "import { createPortal } from 'react-dom';");
   assert.ok(!fs.existsSync(path.join(r.out, 'app.js')));
 });
@@ -391,6 +391,17 @@ test('@homeai/ui screens and charts type-check and render, and userInterfaceStyl
   assert.match(fs.readFileSync(path.join(light.out, 'app.dev.js'), 'utf8'), /userInterfaceStyle = "light"/);
 });
 
+test('GLView and three: type-checked against @types/three, and the smoke render loads three without WebGL', async () => {
+  const edits = { 'app/cube.tsx': fs.readFileSync(path.join(KIT, '..', '..', 'gl-check', 'app', 'index.tsx'), 'utf8') };
+  const compiled = await compileOnly(edits);
+  assert.deepEqual(compiled.diagnostics, []);
+  const smoke = await build(edits);
+  assert.deepEqual(smoke.diagnostics, []);
+  assert.equal(smoke.routes.find((r) => r.path === '/cube').timed_out, false);
+  const bad = await compileOnly({ 'app/cube.tsx': "import * as THREE from 'three';\nexport default function Cube() { new THREE.Vector3('far'); return null; }\n" });
+  assert.deepEqual(bad.diagnostics.map((d) => [d.step, d.file]), [['type', 'app/cube.tsx']]);
+});
+
 test('a kit icon outside the subset is a type error', async () => {
   const r = await compileOnly({ 'app/about.tsx': "import { ListRow } from '@homeai/ui';\nexport default function About() { return <ListRow title=\"x\" icon=\"logo-github\" />; }\n" });
   assert.deepEqual(r.diagnostics.map((d) => [d.step, d.file]), [['type', 'app/about.tsx']]);
@@ -521,10 +532,14 @@ test('the runtime provides exactly the allowed modules', () => {
   dom.window.__homeai_define((require) => {
     req = require;
   });
-  for (const m of ALLOWED_MODULES) assert.ok(req(m), m);
-  for (const m of ['react-dom', 'react-dom/client', 'fs', 'react-native-web']) assert.throws(() => req(m), /not available in the app sandbox/);
+  for (const m of ALLOWED_MODULES.filter((m) => !OPTIONAL_MODULES.includes(m))) assert.ok(req(m), m);
+  for (const m of ['react-dom', 'react-dom/client', 'fs', 'react-native-web', ...OPTIONAL_MODULES]) assert.throws(() => req(m), /not available in the app sandbox|didn't load/);
+  for (const m of OPTIONAL_MODULES) {
+    new vm.Script(fs.readFileSync(moduleDev(m), 'utf8')).runInContext(ctx);
+    assert.ok(req(m), m);
+  }
   const typings = fs.readFileSync(SDK_TYPES, 'utf8');
   const declared = [...typings.matchAll(/declare module '([^']+)'/g)].map((m) => m[1]);
-  assert.deepEqual(declared.sort(), ALLOWED_MODULES.filter((m) => !m.startsWith('react')).sort());
+  assert.deepEqual(declared.sort(), ALLOWED_MODULES.filter((m) => !m.startsWith('react') && m !== 'three').sort());
   dom.window.close();
 });

@@ -252,6 +252,33 @@ declare module 'expo-sqlite' {
   export function SQLiteProvider(props: { databaseName?: string; children?: ReactNode }): ReactNode;
 }
 
+declare module 'expo-gl' {
+  import type { ReactElement } from 'react';
+  import type { ViewProps } from 'react-native';
+
+  /**
+   * The view's WebGL2 (or WebGL 1) context: every WebGL call and constant, plus `endFrameEXP()`
+   * (a no-op here; call it after each frame as on a phone). `canvas` is the view's canvas, for
+   * `new THREE.WebGLRenderer({ canvas: gl.canvas, context: gl })`. The drawing buffer follows the
+   * view's size times the pixel ratio: when `drawingBufferWidth`/`Height` change, call
+   * `renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight, false)` and update the camera.
+   */
+  export interface ExpoWebGLRenderingContext {
+    readonly canvas: any;
+    readonly drawingBufferWidth: number;
+    readonly drawingBufferHeight: number;
+    endFrameEXP(): void;
+    [name: string]: any;
+  }
+  /** A view that draws with WebGL. Drive frames with requestAnimationFrame and cancel it on unmount;
+   * wrap it in a Pressable (or give it touch handlers) for input. */
+  export function GLView(props: ViewProps & {
+    onContextCreate: (gl: ExpoWebGLRenderingContext) => void;
+    /** The device dropped the context (the view then says so; reopening the app starts over). */
+    onContextLost?: () => void;
+  }): ReactElement;
+}
+
 declare module '@expo/vector-icons' {
   import type { ReactElement } from 'react';
   import type { StyleProp, TextStyle } from 'react-native';

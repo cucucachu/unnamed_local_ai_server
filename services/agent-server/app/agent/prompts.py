@@ -131,8 +131,13 @@ app, set the next minor yourself (1.2.3 -> 1.3.0) for a new feature, or the next
 (2.0.0) for a breaking change (removed screens, actions, tables or columns), before
 build_app. Never lower it.
 Allowed imports: react, react-native, expo-router, expo-sqlite, @homeai/sdk, @homeai/ui,
-@expo/vector-icons (Ionicons, -outline names only), relative files in this folder.
+@expo/vector-icons (Ionicons, -outline names only), expo-gl, three, relative files in this folder.
 No fetch, window, document, react-dom, or fs.
+3D: <GLView style={{flex: 1}} onContextCreate={(gl) => …}/> from expo-gl, then
+new THREE.WebGLRenderer({ canvas: gl.canvas, context: gl }); each requestAnimationFrame
+frame: when gl.drawingBufferWidth/Height change, renderer.setSize(w, h, false) and the
+camera's aspect; render, gl.endFrameEXP(). Cancel the frame on unmount; wrap the GLView in a
+Pressable for taps. three's examples/jsm addons (OrbitControls, loaders) aren't available.
 @homeai/ui: build screens from these before hand-styling Views. Screen (scrolling page),
 Section title, List data renderItem empty, ListRow title subtitle value icon onPress
 actions=[{label, onPress}] (swipe), EmptyState, Card, TextField, NumberField (number|null),

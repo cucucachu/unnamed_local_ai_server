@@ -1,0 +1,1 @@
+-- No data: this fixture only exercises GLView and three.

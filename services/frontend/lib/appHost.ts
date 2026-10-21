@@ -2,6 +2,7 @@ import {
   createBridgeHost,
   fetchBundle,
   fetchRuntime,
+  optionalModulesOf,
   platformForward,
   platformImages,
   sandboxDocument,
@@ -101,6 +102,8 @@ export interface InstanceDocument {
   appId: string;
   version: string;
   html: string;
+  /** The optional modules (`three`) in the document; a new build needing others needs a new document. */
+  modules: string[];
 }
 
 /** Who the app shows as the user and the space's members (`useUser` / `useMembers`):
@@ -122,12 +125,18 @@ export async function loadInstanceDocument(
 ): Promise<InstanceDocument> {
   const options = platformOptions();
   const [bundle, people] = await Promise.all([fetchBundle(instanceId, options), sandboxPeople(space)]);
-  const runtime = await fetchRuntime(bundle.sdk, options);
+  const modules = optionalModulesOf(bundle.code);
+  const runtime = await fetchRuntime(bundle.sdk, options, modules);
   const html = sandboxDocument({ runtime, app: bundle.code, config: { initialPath: '/', space: sandboxSpace(space), ...people, colorScheme } });
-  return { appId: bundle.app_id, version: bundle.version, html };
+  return { appId: bundle.app_id, version: bundle.version, html, modules };
 }
 
-/** The newest bundle's code, for hot reload. */
-export async function loadInstanceCode(instanceId: string): Promise<string> {
-  return (await fetchBundle(instanceId, platformOptions())).code;
+export class NeedsNewDocument extends Error {}
+
+/** The newest bundle's code, for hot reload into a document with `modules`; NeedsNewDocument if it
+ * requires an optional module that document lacks. */
+export async function loadInstanceCode(instanceId: string, modules: readonly string[] = []): Promise<string> {
+  const { code } = await fetchBundle(instanceId, platformOptions());
+  if (optionalModulesOf(code).some((m) => !modules.includes(m))) throw new NeedsNewDocument('the new version needs a module this document lacks');
+  return code;
 }

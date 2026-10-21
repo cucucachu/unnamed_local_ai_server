@@ -22,7 +22,7 @@ const HOST_SCRIPT = `
   const h = (window.harness = { events: [], frames: [], killed: false, error: null, asked: null, H });
   try {
     const bundle = await H.fetchBundle(cfg.instanceId);
-    const runtime = await H.fetchRuntime(bundle.sdk);
+    const runtime = await H.fetchRuntime(bundle.sdk, {}, H.optionalModulesOf(bundle.code));
     const html = H.sandboxDocument({ runtime, app: bundle.code, config: { initialPath: cfg.initialPath, space: cfg.space, colorScheme: cfg.colorScheme } });
     h.srcdocBytes = html.length;
     const sb = H.mountSandboxFrame(document.getElementById('app'), {

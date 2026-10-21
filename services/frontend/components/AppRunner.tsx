@@ -20,6 +20,7 @@ import {
   isReadOnly,
   loadInstanceCode,
   loadInstanceDocument,
+  NeedsNewDocument,
   type InstanceDocument,
 } from '@/lib/appHost';
 import type { Space } from '@/lib/platform';
@@ -128,6 +129,13 @@ export function AppRunner({
     };
   }, [instanceId, space, generation]);
 
+  const restart = useCallback(() => {
+    setCrash(null);
+    setHost(null);
+    setLoad({ doc: null, error: null });
+    setGeneration((n) => n + 1);
+  }, []);
+
   const { doc } = load;
   useEffect(() => {
     host?.event('theme', { colorScheme: scheme });
@@ -139,13 +147,15 @@ export function AppRunner({
       instanceId,
       appId: doc.appId,
       host,
-      reload: () => loadInstanceCode(instanceId),
+      reload: () => loadInstanceCode(instanceId, doc.modules),
       // A failed hot reload leaves the running version; the next build retries.
-      onError: () => {},
+      onError: (error) => {
+        if (error instanceof NeedsNewDocument) restart();
+      },
     });
     const events = openPlatformEvents(relay);
     return () => events.close();
-  }, [host, doc, instanceId]);
+  }, [host, doc, instanceId, restart]);
 
   const onEvent = useCallback(<E extends keyof SandboxEvents>(event: E, data: SandboxEvents[E]) => {
     if (event === 'runtime.ready') setCrash(null);
@@ -186,13 +196,6 @@ export function AppRunner({
   }, [sheet, setSheetSize]);
 
   const agentVisible = agent.open && (!sheet || agent.size !== 'min');
-
-  const restart = useCallback(() => {
-    setCrash(null);
-    setHost(null);
-    setLoad({ doc: null, error: null });
-    setGeneration((n) => n + 1);
-  }, []);
 
   const agentAppId = appId ?? doc?.appId;
   const panel =

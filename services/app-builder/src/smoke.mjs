@@ -18,9 +18,11 @@ import { TraceMap, originalPositionFor } from '@jridgewell/trace-mapping';
 import { diagnostic, relative, sourceLine } from './diagnostics.mjs';
 import { applySchema, checkSql } from './sqlcheck.mjs';
 import { samplePath } from './routes.mjs';
+import { optionalModulesOf } from './sdk.mjs';
 
 const builderRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const RUNTIME_DEV = path.join(builderRoot, 'dist', 'runtime.dev.js');
+export const moduleDev = (name) => path.join(builderRoot, 'dist', `${name}.dev.js`);
 const APP_FILE = 'app.js';
 const SMOKE_SPACE = { id: '00000000-0000-4000-8000-000000000000', slug: 'smoke-test', name: 'Smoke test', role: 'owner' };
 const SMOKE_USER = { id: '00000000-0000-4000-8000-000000000001', username: 'smoke', name: 'Smoke tester' };
@@ -192,7 +194,7 @@ async function renderRoute({ runtime, app, appRoot, schema, readsSql, reported, 
  * `readsSql` creates empty stand-ins for the merged views the app reads (`<app>_<export>`). */
 export async function smokeRender(appRoot, app, routes, { settleMs = 50, timeoutMs = 3000, readsSql = '' } = {}) {
   appRoot = path.resolve(appRoot);
-  const runtime = fs.readFileSync(RUNTIME_DEV, 'utf8');
+  const runtime = [RUNTIME_DEV, ...optionalModulesOf(app.code).map(moduleDev)].map((f) => fs.readFileSync(f, 'utf8')).join(';\n');
   let schema = '';
   try {
     schema = fs.readFileSync(path.join(appRoot, 'schema.sql'), 'utf8');

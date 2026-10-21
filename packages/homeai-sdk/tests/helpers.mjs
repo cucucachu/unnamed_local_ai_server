@@ -11,7 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
-import { ALLOWED_MODULES, SDK_ROOT } from '../build.mjs';
+import { ALLOWED_MODULES, SDK_ROOT, optionalModulesOf } from '../build.mjs';
 
 export const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'runtime-check');
 export const RUNTIME = path.join(SDK_ROOT, 'dist', 'runtime.js');
@@ -242,7 +242,9 @@ export async function bootJsdom({ appDir = FIXTURE, initialPath = '/', legacy = 
   win.__homeai_config = { initialPath, ...config };
   const ctx = dom.getInternalVMContext();
   new vm.Script(fs.readFileSync(RUNTIME_DEV, 'utf8'), { filename: 'runtime.js' }).runInContext(ctx);
-  new vm.Script(await bundleApp(appDir, { legacy, edits }), { filename: 'app.js' }).runInContext(ctx);
+  const app = await bundleApp(appDir, { legacy, edits });
+  for (const m of optionalModulesOf(app)) new vm.Script(fs.readFileSync(path.join(SDK_ROOT, 'dist', `${m}.dev.js`), 'utf8'), { filename: `${m}.js` }).runInContext(ctx);
+  new vm.Script(app, { filename: 'app.js' }).runInContext(ctx);
   const hidden = (el) => {
     for (let e = el; e; e = e.parentElement) if (win.getComputedStyle(e).display === 'none') return true;
     return false;

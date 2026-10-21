@@ -101,11 +101,22 @@ export function runtimeUrl(sdk: string, baseUrl = '') {
   return `${baseUrl}/app-runtime/${encodeURIComponent(sdk)}/runtime.js`;
 }
 
-export async function fetchRuntime(sdk: string, opts: PlatformOptions = {}): Promise<string> {
+/** Where it serves an optional module's script (OPTIONAL_MODULES) for SDK `sdk`. */
+export function moduleUrl(sdk: string, name: string, baseUrl = '') {
+  return `${baseUrl}/app-runtime/${encodeURIComponent(sdk)}/${encodeURIComponent(name)}.js`;
+}
+
+/** The runtime followed by the scripts of `modules` (the bundle's `optionalModulesOf`), as the one
+ * script `sandboxDocument` takes. */
+export async function fetchRuntime(sdk: string, opts: PlatformOptions = {}, modules: readonly string[] = []): Promise<string> {
   const doFetch = opts.fetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-  const r = await doFetch(runtimeUrl(sdk, opts.baseUrl));
-  if (!r.ok) throw withError(`http_${r.status}`, `no runtime for SDK ${sdk}`);
-  return r.text();
+  const get = async (url: string, what: string) => {
+    const r = await doFetch(url);
+    if (!r.ok) throw withError(`http_${r.status}`, `no ${what} for SDK ${sdk}`);
+    return r.text();
+  };
+  const parts = await Promise.all([get(runtimeUrl(sdk, opts.baseUrl), 'runtime'), ...modules.map((m) => get(moduleUrl(sdk, m, opts.baseUrl), `${m} module`))]);
+  return parts.join(';\n');
 }
 
 /**

@@ -1010,12 +1010,13 @@ what another doc says it should be.
   python scripts/icons.py`), `theme.ts` (the theme from app.json's
   `userInterfaceStyle` and the host's scheme), `rn.tsx` (the
   `react-native` apps get: themed default `Text` / `TextInput` colours),
-  `ui.tsx` and `charts.tsx` (`@homeai/ui`); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
+  `ui.tsx` and `charts.tsx` (`@homeai/ui`), `gl.tsx` (`expo-gl`'s `GLView`, #482); `src/host/` — `index.ts` (`@homeai/sdk/host`, DOM-free),
   `bridge-host.ts`, `platform.ts`, `document.ts`, and `web.ts`
   (`@homeai/sdk/host/web`, the iframe); `types/homeai.d.ts` (app typings);
   `modules.json` (the allowed modules); `build.mjs` (`runtimeBuildOptions`;
-  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈553 KB /
-  1.9 MB).
+  `node build.mjs [--out DIR]` → `runtime.js`, `runtime.dev.js`, ≈565 KB /
+  1.9 MB, and each optional module's script, `three.js` / `three.dev.js`,
+  ≈743 KB / 1.8 MB, which hosts add only for bundles that require it, #482).
 - **Tests**: `cd packages/homeai-sdk && npm ci --ignore-scripts && npm run
   lint && npm test` (`npx playwright install chromium` first).
   `lint` is `tsc` for the sandbox side and again for `src/host/index.ts`
