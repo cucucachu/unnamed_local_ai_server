@@ -50,12 +50,21 @@
 
 name: homeai
 
+# Subnets are pinned: host ufw rules name them (docs/INTEGRATIONS.md §4 allows
+# homeai-net to reach a server on this machine), and unpinned networks get
+# whichever free /16 Docker hands out on each re-create.
 networks:
   homeai-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
   homeai-internal:
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
   # UDP 51820 return path for LAN/WAN clients. Not homeai-net (no NAT to
   # the internet). Not internal (Docker would drop forwarded WG replies).
   homeai-wg:
@@ -63,6 +72,9 @@ networks:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
 
 volumes:
   pgdata:

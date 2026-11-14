@@ -1,7 +1,7 @@
 # WireGuard sidecar (M15-01). Uses the host kernel module; this image only
 # needs wg-quick, a DNS stub, and a TCP proxy to Caddy. Not privileged —
 # compose grants NET_ADMIN only.
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache wireguard-tools iptables dnsmasq socat iproute2 bash wget
 
