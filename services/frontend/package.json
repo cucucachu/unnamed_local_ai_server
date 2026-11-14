@@ -6,7 +6,7 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
     "@homeai/sdk": "file:../../packages/homeai-sdk",
-    "@ronradtke/react-native-markdown-display": "^8.1.0",
+    "@ronradtke/react-native-markdown-display": "^9.0.3",
     "expo": "~57.0.18",
     "expo-audio": "~57.0.5",
     "expo-camera": "~57.0.6",
@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@types/jest": "29.5.14",
+    "@types/markdown-it": "^14.2.0",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
@@ -76,10 +77,5 @@
       "/node_modules/react-native-reanimated/plugin/",
       "/node_modules/@react-native/babel-preset/"
     ]
-  },
-  "overrides": {
-    "@ronradtke/react-native-markdown-display": {
-      "markdown-it": "^14.1.1"
-    }
   }
 }
