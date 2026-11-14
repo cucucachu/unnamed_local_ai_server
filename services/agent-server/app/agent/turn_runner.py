@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from langchain_core.exceptions import ContextOverflowError
 from langgraph.errors import GraphRecursionError
 
 from app.agent.approvals import PolicyUnavailable
@@ -256,16 +257,21 @@ class TurnRunner:
             except DelegationDenied as exc:
                 outcome = TurnOutcome("error", error=exc)
                 return outcome
-            except (GraphRecursionError, RepeatedToolCall) as exc:
+            except (GraphRecursionError, RepeatedToolCall, ContextOverflowError) as exc:
                 logger.warning("turn on thread %s stopped: %r", request.thread_id, exc)
-                stuck = (
-                    exc
-                    if isinstance(exc, RepeatedToolCall)
-                    else RuntimeError(
+                if isinstance(exc, RepeatedToolCall):
+                    stuck: Exception = exc
+                elif isinstance(exc, ContextOverflowError):
+                    stuck = RuntimeError(
+                        "This is too much for the model's context window, even after "
+                        "compacting the conversation. Try a shorter message, or start a "
+                        "new chat."
+                    )
+                else:
+                    stuck = RuntimeError(
                         "The agent took too many steps without finishing, so it stopped. Try "
                         "rephrasing the request, or breaking it into smaller steps."
                     )
-                )
                 turn.emit({"type": "error", "message": str(stuck)})
                 outcome = TurnOutcome("error", error=stuck)
                 return outcome
