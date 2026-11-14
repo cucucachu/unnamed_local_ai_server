@@ -59,18 +59,44 @@ async def test_other_bad_requests_are_not_overflows(fake_model: FakeModel) -> No
     assert not isinstance(caught.value, ContextOverflowError)
 
 
-async def test_an_overflow_retries_instead_of_ending_the_turn(fake_model, fake_platform) -> None:
-    fake_model.queue(ErrorTurn(400, LLAMA_OVERFLOW), TextTurn("done"))
+async def test_an_overflow_on_a_long_thread_compacts_and_retries(fake_model, fake_platform) -> None:
+    long_message = "lorem " * 3000
     with (
-        _make_client(
-            fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()
-        ) as client,
+        _make_client(fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()) as client,
         client.websocket_connect("/ws/chat/overflow-thread") as ws,
+    ):
+        for _ in range(3):
+            fake_model.queue(TextTurn("noted"))
+            ws.send_json({"type": "user_message", "content": long_message})
+            _assert_turn_end(_drain_turn(ws)[-1], "completed")
+        sent_before = len(fake_model.requests)
+        fake_model.queue(
+            ErrorTurn(400, LLAMA_OVERFLOW), TextTurn("Earlier: three long notes."), TextTurn("done")
+        )
+        ws.send_json({"type": "user_message", "content": "hi"})
+        frames = _drain_turn(ws)
+
+    _assert_turn_end(frames[-1], "completed")
+    assert not [f for f in frames if f["type"] == "error"]
+    overflowed, _summary, retried = fake_model.requests[sent_before:]
+    assert len(str(retried["messages"])) < len(str(overflowed["messages"])) / 2
+    assert "Earlier: three long notes." in str(retried["messages"])
+
+
+async def test_an_overflow_that_cannot_be_compacted_ends_the_turn(
+    fake_model, fake_platform
+) -> None:
+    fake_model.queue(ErrorTurn(400, LLAMA_OVERFLOW), TextTurn("never sent"))
+    with (
+        _make_client(fake_model, fake_platform, tool_policy=ToolPolicy.allow_all()) as client,
+        client.websocket_connect("/ws/chat/overflow-short-thread") as ws,
     ):
         ws.send_json({"type": "user_message", "content": "hi"})
         frames = _drain_turn(ws)
-    _assert_turn_end(frames[-1], "completed")
-    assert not [f for f in frames if f["type"] == "error"]
+
+    assert frames[-1]["type"] == "error"
+    assert "too much for the model's context window" in frames[-1]["message"]
+    assert len(fake_model.requests) == 1
 
 
 def test_compact_invocation_error() -> None:
