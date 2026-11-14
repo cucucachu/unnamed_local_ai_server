@@ -46,7 +46,7 @@ describe('ShellLayout (M19-07)', () => {
       renderer = create(createElement(ShellLayout));
     });
     expect(mockScreens.map((s) => s.name)).toEqual(['index', 'chat', 'apps', 'files', 'routines', 'settings']);
-    expect(unstable_settings.initialRouteName).toBe('index');
+    expect(unstable_settings.anchor).toBe('index');
   });
 
   it("Files' back button returns to the home pager", () => {

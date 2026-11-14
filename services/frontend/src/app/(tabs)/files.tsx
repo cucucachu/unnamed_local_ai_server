@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 
@@ -220,17 +220,18 @@ export default function FilesScreen() {
 
   // Back (the gesture, the hardware button, the header arrow) goes up a
   // folder until the root, then leaves Files. Other removals, like signing
-  // out, aren't back.
-  const navigation = useNavigation();
-  useEffect(() => {
-    if (dirPath === ROOT_PATH) return;
-    return navigation.addListener('beforeRemove', (event) => {
-      if (!BACK_ACTIONS.has(event.data.action.type)) return;
-      event.preventDefault();
-      const up = parentPath(dirPath);
-      setBrowsePath(up === '/spaces' ? ROOT_PATH : up);
-    });
-  }, [navigation, dirPath, setBrowsePath]);
+  // out, aren't back. Not on web: there `usePreventRemove` also holds a
+  // "leave site?" prompt on reload for as long as it's on.
+  const [leaving, setLeaving] = useState(false);
+  usePreventRemove(Platform.OS !== 'web' && dirPath !== ROOT_PATH && !leaving, ({ data, repeat }) => {
+    if (!BACK_ACTIONS.has(data.action.type)) {
+      setLeaving(true);
+      repeat();
+      return;
+    }
+    const up = parentPath(dirPath);
+    setBrowsePath(up === '/spaces' ? ROOT_PATH : up);
+  });
 
   // Shared by both the direct-tap route below and `FileActionSheet`'s
   // "Play"/"View" action, so there's exactly one place that knows the

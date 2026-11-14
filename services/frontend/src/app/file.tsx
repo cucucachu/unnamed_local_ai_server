@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
@@ -61,13 +61,13 @@ export default function FileScreen() {
   const { path: pathParam } = useLocalSearchParams<{ path?: string | string[] }>();
   const path = (Array.isArray(pathParam) ? pathParam[0] : pathParam) ?? '';
   const router = useRouter();
-  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [load, setLoad] = useState<{ path: string; load: Load }>({ path: '', load: { state: 'loading' } });
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+  const [discarded, setDiscarded] = useState(false);
 
   const current: Load = load.path === path ? load.load : { state: 'loading' };
   const file = current.state === 'done' ? current.file : null;
@@ -94,22 +94,13 @@ export default function FileScreen() {
     void fetchFile(path);
   };
 
-  useEffect(() => {
-    if (!dirty) return;
-    return navigation.addListener('beforeRemove', (event) => {
-      event.preventDefault();
-      void confirmDiscard().then((discard) => {
-        if (discard) navigation.dispatch(event.data.action);
-      });
+  usePreventRemove(dirty && !discarded, ({ repeat }) => {
+    void confirmDiscard().then((discard) => {
+      if (!discard) return;
+      setDiscarded(true);
+      repeat();
     });
-  }, [navigation, dirty]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web' || !dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  });
 
   const save = async (target: string, ifVersion: string | null) => {
     if (file === null || draft === null) return;

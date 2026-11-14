@@ -172,7 +172,7 @@ export function ChatHistoryPanel({
                     <Text style={styles.moreText}>More ({shown.length - DRAWER_PREVIEW})</Text>
                     <Ionicons name="chevron-down" size={16} color={theme.textMuted} />
                   </Pressable>
-                ) : null
+                ) : undefined
               }
             />
           )}

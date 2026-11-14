@@ -5,19 +5,15 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 const mockBack = jest.fn();
 const mockDismissTo = jest.fn();
 const mockSetParams = jest.fn();
-const mockDispatch = jest.fn();
 let mockSearchParams: { path?: string } = {};
-const mockListeners: Record<string, (event: unknown) => void> = {};
+type MockPreventRemove = (options: { data: { action: { type: string } }; repeat: () => void }) => void;
+let mockPreventRemove: { prevent: boolean; callback?: MockPreventRemove } = { prevent: false };
 jest.mock('expo-router', () => ({
   useRouter: () => ({ back: mockBack, dismissTo: mockDismissTo, setParams: mockSetParams }),
   useLocalSearchParams: () => mockSearchParams,
-  useNavigation: () => ({
-    addListener: (name: string, listener: (event: unknown) => void) => {
-      mockListeners[name] = listener;
-      return () => delete mockListeners[name];
-    },
-    dispatch: mockDispatch,
-  }),
+  usePreventRemove: (prevent: boolean, callback?: MockPreventRemove) => {
+    mockPreventRemove = { prevent, callback };
+  },
 }));
 
 // eslint-disable-next-line import/first -- must follow the jest.mock call above
@@ -122,8 +118,8 @@ function textOf(r: ReactTestRenderer): string {
 }
 
 beforeEach(() => {
-  for (const fn of [mockBack, mockDismissTo, mockSetParams, mockDispatch]) fn.mockReset();
-  for (const key of Object.keys(mockListeners)) delete mockListeners[key];
+  for (const fn of [mockBack, mockDismissTo, mockSetParams]) fn.mockReset();
+  mockPreventRemove = { prevent: false };
 });
 
 afterEach(() => {
@@ -248,27 +244,27 @@ describe('FileScreen (M22-10)', () => {
   it('asks before leaving with unsaved changes', async () => {
     mockFiles({ '/personal/n.md': text('one\n') });
     const r = await renderFile('/personal/n.md');
-    const leave = () => {
-      const event = { preventDefault: jest.fn(), data: { action: { type: 'GO_BACK' } } };
-      act(() => mockListeners.beforeRemove(event));
-      return event;
-    };
+    const repeat = jest.fn();
+    const leave = () => act(() => mockPreventRemove.callback?.({ data: { action: { type: 'GO_BACK' } }, repeat }));
 
     await press(r, 'file-edit');
-    expect(mockListeners.beforeRemove).toBeUndefined();
+    expect(mockPreventRemove.prevent).toBe(false);
     await typeInEditor(r, 'changed\n');
+    expect(mockPreventRemove.prevent).toBe(true);
     let answer: 'cancel' | 'destructive' = 'cancel';
     jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, buttons?: AlertButton[]) => {
       buttons?.find((b) => b.style === answer)?.onPress?.();
     });
-    expect(leave().preventDefault).toHaveBeenCalled();
+    leave();
     await flush();
-    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(repeat).not.toHaveBeenCalled();
+    expect(mockPreventRemove.prevent).toBe(true);
 
     answer = 'destructive';
     leave();
     await flush();
-    expect(mockDispatch).toHaveBeenCalledWith({ type: 'GO_BACK' });
+    expect(repeat).toHaveBeenCalled();
+    expect(mockPreventRemove.prevent).toBe(false);
   });
 
   it('shows CSV as a table and code with line numbers (M22-11)', async () => {

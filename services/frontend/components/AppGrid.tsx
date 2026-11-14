@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
-import { PanResponder, Pressable, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { PanResponder, Pressable, Text, useWindowDimensions, View, type GestureResponderEvent, type ViewInstance } from 'react-native';
 
 import { themedStyles } from '@/lib/theme';
 
@@ -123,7 +123,7 @@ export function AppGrid({
   const styles = useStyles();
   const { width } = useWindowDimensions();
   const columns = gridColumns(width);
-  const grid = useRef<View>(null);
+  const grid = useRef<ViewInstance>(null);
   const [drag, setDrag] = useState<{ key: string; x: number; y: number; width: number } | null>(null);
   // Read and written only by the gesture's callbacks and effects, never while rendering.
   const [shared] = useState(() => ({

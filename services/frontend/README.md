@@ -5,10 +5,9 @@ the M2-05 scaffold: routing shell, the shared API/WS client, and the web
 export wired into the Caddy image. **No real screens yet** — chat lands in
 M2-06, the files UI in M3-05.
 
-- **Expo SDK 57** (scaffolded via `npx create-expo-app@latest . --template default`,
-  which — as of this SDK — already ships TypeScript + Expo Router in the
-  default template; no need to add either by hand). `expo` package version
-  `~57.0.18`.
+- **Expo SDK 58** (scaffolded on SDK 57 via `npx create-expo-app@latest . --template default`,
+  which already ships TypeScript + Expo Router in the default template; no
+  need to add either by hand). `expo` package version `~58.0.25`.
 - Routes live under `src/app/` (the current default template uses a `src/`
   directory, not a top-level `app/`) — see `tsconfig.json`'s `@/*` -> `./src/*`
   path alias.

@@ -1,4 +1,4 @@
-import { Platform, StyleSheet, useColorScheme } from 'react-native';
+import { Platform, StyleSheet, useColorScheme, type ImageStyle, type TextStyle, type ViewStyle } from 'react-native';
 
 export type ColorScheme = 'light' | 'dark';
 
@@ -59,8 +59,10 @@ export function useTheme(): Palette {
   return palettes[useColorSchemeOrDark()];
 }
 
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
+
 /** A `StyleSheet` per scheme, built on first use: `const useStyles = themedStyles((theme) => ({…}))`. */
-export function themedStyles<T extends StyleSheet.NamedStyles<T>>(make: (theme: Palette) => T): () => T {
+export function themedStyles<T extends NamedStyles<T>>(make: (theme: Palette) => T): () => T {
   const sheets: Partial<Record<ColorScheme, T>> = {};
   return function useStyles() {
     const theme = useTheme();

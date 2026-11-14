@@ -26,7 +26,14 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
+      [
+        "expo-router",
+        {
+          "asyncRoutes": {
+            "web": false
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -72,7 +79,8 @@
           "microphonePermission": "Home AI uses the microphone for voice input in chat.",
           "speechRecognitionPermission": "Home AI turns your speech into text for chat."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
