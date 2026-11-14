@@ -55,7 +55,7 @@ _LLAMA_OVERFLOW = "exceed_context_size_error"
 
 
 def _raise_if_overflow(exc: openai.BadRequestError) -> None:
-    if isinstance(exc, OpenAIContextOverflowError) or _LLAMA_OVERFLOW not in str(exc):
+    if isinstance(exc, OpenAIContextOverflowError) or exc.type != _LLAMA_OVERFLOW:
         return
     raise OpenAIContextOverflowError(
         message=exc.message, response=exc.response, body=exc.body

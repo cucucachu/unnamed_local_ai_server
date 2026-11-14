@@ -26,9 +26,6 @@ dependencies = [
 # try to build/install a wheel for it.
 [tool.uv]
 package = false
-# openai >3.6 binds its async HTTP client to the first event loop it runs on;
-# the test suite starts a fresh loop per TestClient and every later turn fails.
-constraint-dependencies = ["openai<3.7"]
 
 [tool.ruff]
 line-length = 100
