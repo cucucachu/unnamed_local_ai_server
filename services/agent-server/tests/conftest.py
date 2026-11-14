@@ -29,6 +29,19 @@ from tests.fake_web_fetch.scripting import FakeWebFetch
 from tests.fake_web_fetch.server import create_fake_web_fetch_app
 
 
+@pytest.fixture(autouse=True)
+def _model_http_client_per_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    """langchain-openai caches one async httpx client per (base_url, timeout) for the
+    whole process. Production runs a single event loop, but every TestClient starts
+    its own, and a client whose connections belong to an earlier, closed loop fails
+    with "Event loop is closed" (#488). Build a fresh client per model instead."""
+    from langchain_openai.chat_models import _client_utils, base
+
+    monkeypatch.setattr(
+        base, "_get_default_async_httpx_client", _client_utils._build_async_httpx_client
+    )
+
+
 @pytest.fixture
 def test_settings() -> Settings:
     return Settings(
