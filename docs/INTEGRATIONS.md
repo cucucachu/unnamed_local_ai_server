@@ -163,6 +163,10 @@ Admin flow (Settings → Integrations → Add):
        to <host> port <port> proto tcp comment 'HomeAI to <host>:<port>'
      ```
 
+     `docker-compose.yml` pins that subnet (`172.20.0.0/16`), so the rule
+     survives the network being re-created. A rule made before the pin may
+     name an older subnet; check `sudo ufw status` against it.
+
      When the check comes back unreachable or timed out for a private
      address, the Add screen shows this command with the real host and
      port. It says so definitely when the address is one of
