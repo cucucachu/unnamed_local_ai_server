@@ -13,8 +13,8 @@
 # pull` + `docker inspect --format='{{index .RepoDigests 0}}'`) once this
 # runs somewhere with real registry+docker access, the same way
 # model-runner's own pin was confirmed.
-FROM mitmproxy/mitmproxy@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f
-# was: mitmproxy/mitmproxy:12 (12.2.3 at pin time)
+FROM mitmproxy/mitmproxy@sha256:2711066c855659b5af8b1dbb84494ed3eff69b42ece439c60b4fe09a2db829d4
+# was: mitmproxy/mitmproxy:12 (12.3.1, Python 3.15, at pin time, 2026-11-14)
 
 WORKDIR /app
 

@@ -5,7 +5,9 @@ license = "Apache-2.0"
 description = "M2-01: FastAPI service hosting the agent and the chat WS"
 requires-python = ">=3.12"
 dependencies = [
-    "deepagents>=0.7.10,<0.8",
+    # 0.7.12+ ends a turn when an overflowing request can't be clipped smaller
+    # (tests/test_context_budget.py); adopting that is a deliberate change.
+    "deepagents>=0.7.10,<0.7.12",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "langchain-openai>=1.0,<2.0",
@@ -24,6 +26,9 @@ dependencies = [
 # try to build/install a wheel for it.
 [tool.uv]
 package = false
+# openai >3.6 binds its async HTTP client to the first event loop it runs on;
+# the test suite starts a fresh loop per TestClient and every later turn fails.
+constraint-dependencies = ["openai<3.7"]
 
 [tool.ruff]
 line-length = 100
