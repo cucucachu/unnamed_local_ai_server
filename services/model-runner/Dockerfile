@@ -2,9 +2,8 @@
 # comment for human readability). Resolved via:
 #   docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/ggml-org/llama.cpp:server-vulkan
 # Confirmed build date via image label org.opencontainers.image.created =
-# 2026-08-29T04:28:34Z (build 10680, commit d7bd3bfca) — well after the
-# April 2026 Gemma 4 chat-template fix, so no known-issue concerns there.
-FROM ghcr.io/ggml-org/llama.cpp@sha256:6157177921e5ba459c1200000a164dd2054af311ba9baf261c215ee91170f0b7
+# 2026-11-14T04:20:26Z (build 12375, commit 9d25e0014).
+FROM ghcr.io/ggml-org/llama.cpp@sha256:f885c1137a997b318eede280b76b3f35cb84b757c218f41480a33be2b129b8a9
 # was: ghcr.io/ggml-org/llama.cpp:server-vulkan
 
 # Upstream image entrypoint is /app/llama-server (confirmed via
