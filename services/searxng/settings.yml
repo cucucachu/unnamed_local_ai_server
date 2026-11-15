@@ -46,10 +46,11 @@ use_default_settings:
       #   - github        (searx/engines/github.py)          -> request() never sets params["method"] -> GET (api.github.com/search/repositories)
       #   - stackoverflow (searx/engines/stackexchange.py,
       #                    api_site: stackoverflow)          -> request() never sets params["method"] -> GET (api.stackexchange.com/2.3/search/advanced)
-      #   - mojeek        (searx/engines/mojeek.py)          -> request() never sets params["method"] -> GET; upstream's OWN
-      #                                                          default settings.yml entry has `disabled: true` on this one
-      #                                                          (unlike the other four) — explicitly re-enabled in the
-      #                                                          `engines:` override at the bottom of this file.
+      #
+      # REMOVED (#493): mojeek. Its search request is GET, but mojeek.com
+      # now answers proxied queries with a CAPTCHA page that can only be
+      # passed with a POST, so it returned zero results here; upstream
+      # also marks the engine `inactive: true` in newer images.
       #
       # EXCLUDED despite being in this ticket's own "expected set" guess —
       # audited from source and found to be POST, not GET (flagged per the
@@ -74,14 +75,13 @@ use_default_settings:
       # flagged, not silently assumed either way): every other engine in
       # upstream's ~230-engine default list. None of them are reachable
       # anyway once `keep_only` restricts the merged engine list to just
-      # the five named below, so this is a completeness note for whoever
-      # re-audits this list later (e.g. if a sixth engine is ever added),
+      # the four named below, so this is a completeness note for whoever
+      # re-audits this list later (e.g. if another engine is ever added),
       # not a gap in what's actually enabled today.
       - brave
       - wikipedia
       - github
       - stackoverflow
-      - mojeek
 
 search:
   # JSON only (spec §2) — no HTML UI is ever served or needed: this
@@ -137,7 +137,7 @@ outgoing:
   # fetch+redirect chain.
   request_timeout: 6.0
   # Every outbound request SearXNG itself makes — to brave / wikipedia /
-  # github / stackoverflow / mojeek, the five engines kept above, plus
+  # github / stackoverflow, the four engines kept above, plus
   # their own periodic `fetch_traits()` language/region lookups — goes
   # through the SAME egress-proxy chokepoint as web-fetch's own `/fetch`
   # (docs/ARCHITECTURE.md §5). SearXNG never gets its own direct route to
@@ -157,14 +157,3 @@ outgoing:
   # `outgoing.verify` is data this settings.yml already controls
   # regardless of container user).
   verify: /etc/searxng-ca/mitmproxy-ca-cert.pem
-
-# Re-enable mojeek: upstream's own default settings.yml entry for it has
-# `disabled: true` (see the audit comment under `keep_only` above) —
-# `keep_only` only controls WHICH engines exist in the merged config at
-# all, not their own `disabled`/`inactive` flags, so this override is
-# still needed on top of it. `update_settings()` matches this by `name`
-# against the (already `keep_only`-filtered) engine list and merges this
-# entry's fields onto the matching default entry.
-engines:
-  - name: mojeek
-    disabled: false

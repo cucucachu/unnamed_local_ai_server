@@ -550,7 +550,7 @@ what another doc says it should be.
 - **Published port**: none.
 - **Internal port**: `8080` (the pinned image's own default).
 - **Network (M7-01/M7-04)**: `homeai-internal` only. Its OWN outbound
-  requests (to brave/wikipedia/github/stackoverflow/mojeek — the 5 engines
+  requests (to brave/wikipedia/github/stackoverflow — the 4 engines
   kept, see below) are routed through `egress-proxy` via
   `outgoing.proxies` in `settings.yml`, not a direct route out — this
   service never joins `homeai-net`.
@@ -566,10 +566,10 @@ what another doc says it should be.
   this file's own header comment has the full reasoning; summarized here):
   uses `use_default_settings.engines.keep_only` (confirmed directly from
   `searx/settings_loader.py`'s `update_settings()`) to make ONLY
-  `brave`, `wikipedia`, `github`, `stackoverflow`, `mojeek` exist in the
+  `brave`, `wikipedia`, `github`, `stackoverflow` exist in the
   merged engine list at all — not merely "enabled", genuinely absent, so
   there's no reliance on remembering to disable ~225 other engines by
-  name. Each of those 5 was individually audited against its own
+  name. Each of those 4 was individually audited against its own
   `request()` function in the pinned image's SearXNG source
   (`github.com/searxng/searxng`, `master` @ 2026-09-04) and confirmed to
   never set `params["method"] = "POST"` (the online-engine default is GET,
@@ -583,11 +583,10 @@ what another doc says it should be.
   too (a SPARQL query) and was likewise excluded. Every other engine in
   upstream's default list was NOT individually source-audited (only the
   ones mentioned by name in the ticket, plus `wikidata`) — flagged as an
-  explicit gap for whoever adds a 6th engine later, not a silent
-  assumption either way. `mojeek` is re-enabled via a plain `engines:`
-  override (`disabled: false`) since upstream's own default entry for it
-  has `disabled: true` — `keep_only` controls which engines exist at all,
-  not their own `disabled` flag.
+  explicit gap for whoever adds another engine later, not a silent
+  assumption either way. `mojeek` was dropped in #493: mojeek.com now
+  answers proxied queries with a CAPTCHA that needs a POST, so it
+  returned zero results behind `egress-proxy`.
 - **`server.secret_key` — NOT env-var-driven, despite `SEARXNG_SECRET`
   existing in `.env`/compose (a deliberate, explicitly-flagged deviation)**:
   the pinned image's `container/entrypoint.sh` only ever substitutes a

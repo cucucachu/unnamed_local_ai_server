@@ -127,8 +127,8 @@ const EXEC_MESSAGE = 'Use execute_code to run: echo HELLO-UI';
 // to (M7-05 added `web_search`/`web_fetch` themselves; this script's own
 // prior steps had no coverage of either tool at all until this addition).
 const WEB_SEARCH_MESSAGE = 'Use web_search to search for: llama.cpp github repository';
-// Wikipedia is one of the GET-only engines and stays up when Brave/Mojeek
-// rate-limit (common after repeated gate runs). Same tool-name phrasing.
+// Wikipedia is one of the GET-only engines and stays up when Brave
+// rate-limits (common after repeated gate runs). Same tool-name phrasing.
 const WEB_SEARCH_FALLBACK_MESSAGE = 'Use web_search to search for: python';
 // M8-01: reliably produces many small token chunks over several seconds
 // (rather than one quick reply), giving the script room to click Stop
