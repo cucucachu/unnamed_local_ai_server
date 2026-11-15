@@ -1,6 +1,6 @@
 import { mountSandboxFrame } from '@homeai/sdk/host/web';
 import { useEffect, useRef } from 'react';
-import { View } from 'react-native';
+import { View, type ViewInstance } from 'react-native';
 
 import { instanceForward, instanceImages, type AppSandboxProps } from '@/lib/appHost';
 import { themedStyles } from '@/lib/theme';
@@ -13,7 +13,7 @@ import { themedStyles } from '@/lib/theme';
  */
 export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onKilled, onAskAgent }: AppSandboxProps) {
   const styles = useStyles();
-  const container = useRef<View>(null);
+  const container = useRef<ViewInstance>(null);
 
   useEffect(() => {
     const element = container.current as unknown as HTMLElement | null;

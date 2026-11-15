@@ -1026,7 +1026,7 @@ dark the default colour of plain `Text` and `TextInput` (the outermost
 - Web: `<iframe sandbox="allow-scripts">` (no `allow-same-origin`, opaque
   origin, no cookie/storage access). The host removes the iframe if it fires
   a second `load` (the frame navigated itself; see §11). Native:
-  `react-native-webview` 13.16.1 (the version Expo SDK 57 / Expo Go
+  `react-native-webview` 14.0.1 (the version Expo SDK 58 / Expo Go
   bundles) with `originWhitelist={['*']}` plus `onShouldStartLoadWithRequest`
   allowing only `about:*` — the default whitelist hands non-matching URLs to
   `Linking.openURL` — and multiple windows, DOM storage, cache, file access

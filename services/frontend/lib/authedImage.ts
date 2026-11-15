@@ -22,7 +22,7 @@ async function download(url: string): Promise<string> {
   if (!folder.exists) folder.create({ intermediates: true });
   counter += 1;
   const file = new File(folder, `${Date.now()}-${counter}`);
-  file.write(bytes);
+  await file.write(bytes);
   return file.uri;
 }
 

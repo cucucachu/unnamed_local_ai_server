@@ -26,7 +26,14 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
+      [
+        "expo-router",
+        {
+          "asyncRoutes": {
+            "web": false
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -42,7 +49,7 @@
         {
           "photosPermission": "Home AI lets you choose photos for your apps.",
           "cameraPermission": "Home AI uses the camera when you take a photo in an app.",
-          "microphonePermission": false
+          "microphonePermission": "Home AI uses the microphone for voice input in chat."
         }
       ],
       [
@@ -72,7 +79,8 @@
           "microphonePermission": "Home AI uses the microphone for voice input in chat.",
           "speechRecognitionPermission": "Home AI turns your speech into text for chat."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

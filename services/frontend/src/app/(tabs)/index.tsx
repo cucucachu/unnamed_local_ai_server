@@ -13,6 +13,7 @@ import {
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type ScrollViewInstance,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -70,7 +71,7 @@ export default function HomeScreen() {
   const { data, error, reload } = useLoad(listInstalledApps);
   const { page, jump } = useCurrentPage();
   const [width, setWidth] = useState(0);
-  const pager = useRef<ScrollView>(null);
+  const pager = useRef<ScrollViewInstance>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [busy, setBusy] = useState<'rebuild' | 'uninstall' | null>(null);
   const { message: toast, showToast } = useToast();

@@ -22,7 +22,7 @@ function BackHome() {
 }
 
 /** A deep link or reload anywhere still has the home pager underneath, so back returns to it. */
-export const unstable_settings = { initialRouteName: 'index' };
+export const unstable_settings = { anchor: 'index' };
 
 /**
  * The signed-in shell (M19-07; the folder name is from when it was a tab

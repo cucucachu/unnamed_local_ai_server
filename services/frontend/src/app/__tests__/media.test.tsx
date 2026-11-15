@@ -34,13 +34,20 @@ jest.mock('expo-audio', () => ({
 // eslint-disable-next-line import/first -- must follow the jest.mock calls above
 import MediaScreen from '../media';
 
+const mounted: ReactTestRenderer[] = [];
+
 function render(element: React.ReactElement): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(element);
   });
+  mounted.push(renderer);
   return renderer;
 }
+
+afterEach(() => {
+  act(() => mounted.splice(0).forEach((renderer) => renderer.unmount()));
+});
 
 function textOf(renderer: ReactTestRenderer): string {
   return renderer.root

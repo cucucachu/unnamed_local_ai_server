@@ -24,7 +24,7 @@ describe('theme', () => {
     scheme.mockReturnValue('dark');
     act(() => renderer.update(createElement(Probe, { seen })));
     act(() => renderer.update(createElement(Probe, { seen })));
-    scheme.mockReturnValue('unspecified');
+    scheme.mockReturnValue(null);
     act(() => renderer.update(createElement(Probe, { seen })));
 
     expect(seen.map(([s]) => s)).toEqual(['light', 'dark', 'dark', 'dark']);

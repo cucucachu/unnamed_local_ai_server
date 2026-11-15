@@ -23,7 +23,9 @@ export function allowSandboxLoad(request: Pick<ShouldStartLoadRequest, 'url'>): 
  */
 export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskAgent }: AppSandboxProps) {
   const styles = useStyles();
-  const webview = useRef<WebView>(null);
+  // react-native-webview 14 defaults the extra-props parameter to `undefined`,
+  // which makes the props `never`; `object` restores v13's `{}`.
+  const webview = useRef<WebView<object>>(null);
   const host = useRef<BridgeHost | null>(null);
 
   useEffect(() => {
@@ -46,7 +48,7 @@ export function AppSandbox({ instanceId, html, readOnly, onEvent, onHost, onAskA
   const [loadedHtml, setLoadedHtml] = useState<string | null>(null);
 
   return (
-    <WebView
+    <WebView<object>
       ref={webview}
       testID="app-sandbox"
       source={source}

@@ -14,8 +14,8 @@ import {
   Text,
   TextInput,
   View,
-  type NativeSyntheticEvent,
-  type TextInputKeyPressEventData,
+  type TextInputInstance,
+  type TextInputKeyPressEvent,
 } from 'react-native';
 
 import { AppKeyboardAvoidingView } from '@/components/AppKeyboardAvoidingView';
@@ -107,7 +107,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
   const listRef = useRef<FlatList<ChatTurn>>(null);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
   const keyboardUp = useKeyboardVisible();
   const ignoreBlurStopRef = useRef(false);
   const speechSupported = isSpeechSupported();
@@ -253,9 +253,9 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
   // needed there; this listener is a no-op off web (mirrors the
   // `Platform.OS === 'web'` pattern already used in `lib/api.ts`).
   const handleKeyPress = useCallback(
-    (event: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+    (event: TextInputKeyPressEvent) => {
       if (Platform.OS !== 'web') return;
-      const nativeEvent = event.nativeEvent as TextInputKeyPressEventData & {
+      const nativeEvent = event.nativeEvent as TextInputKeyPressEvent['nativeEvent'] & {
         shiftKey?: boolean;
         preventDefault?: () => void;
       };
@@ -361,7 +361,7 @@ export function ChatView({ threadId, onThreadCreated, onTurnEnd }: ChatViewProps
                   <Ionicons name="mic" size={44} color={theme.onAccent} />
                 </Pressable>
               </View>
-            ) : null
+            ) : undefined
           }
           style={styles.list}
           // Collapsed-by-default activity means token growth does not

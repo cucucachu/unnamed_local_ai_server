@@ -136,7 +136,7 @@ built from `main`, the builder image built):
    `--base http://<host>` if `homeai.local` doesn't resolve on the host).
 2. `cd services/frontend && npm ci && npx expo start`, with
    `EXPO_PUBLIC_API_HOST` pointing at the host as for the other Expo Go
-   checks; open it in Expo Go (SDK 57) and sign in.
+   checks; open it in Expo Go (SDK 58) and sign in.
 
 - [x] (M12-06) Expo Go (Android and iOS): the **Apps** tab lists "Runtime check" under Personal; tapping it opens the app (build label `v1`, your space and `(owner)`) with no blank screen or red box.
 - [x] (M12-06) Expo Go: type an item, tap **Add** — the status reads `added N` and the list shows it; leave the runner, reopen it (and fully restart Expo Go once) — the item is still there.
@@ -165,7 +165,7 @@ probe script as below in Chromium). Setup:
    For the spike checks, also the fixture app:
    `node scripts/e2e/app_fixture.mjs install --user <you>`.
 3. Start Expo Go as in the M12-06 setup (`npx expo start` in
-   `services/frontend`, SDK 57) and sign in on the phone. On the laptop,
+   `services/frontend`, SDK 58) and sign in on the phone. On the laptop,
    open `http://homeai.local` in a browser and sign in (as yourself, or as
    the second person in a private window).
 

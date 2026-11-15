@@ -597,7 +597,7 @@ describe('OAuth sign-in', () => {
   let listeners: ((state: string) => void)[] = [];
 
   beforeEach(() => {
-    openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+    openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
     listeners = [];
     appState = jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
       listeners.push(listener as (state: string) => void);

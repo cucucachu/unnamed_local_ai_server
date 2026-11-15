@@ -10,19 +10,16 @@ import type { FileEntry } from '@/lib/files';
 const mockPush = jest.fn();
 const mockSetParams = jest.fn();
 let mockSearchParams: { path?: string } = {};
-type MockRemoveEvent = { data: { action: { type: string } }; preventDefault: () => void };
-const mockRemoveListeners: ((event: MockRemoveEvent) => void)[] = [];
+type MockPreventRemove = (options: { data: { action: { type: string } }; repeat: () => void }) => void;
+let mockPreventRemove: { prevent: boolean; callback?: MockPreventRemove } = { prevent: false };
 jest.mock('expo-router', () => {
   const ReactActual = jest.requireActual('react');
   return {
     useRouter: () => ({ push: mockPush, setParams: mockSetParams }),
     useLocalSearchParams: () => mockSearchParams,
-    useNavigation: () => ({
-      addListener: (_name: string, listener: (event: MockRemoveEvent) => void) => {
-        mockRemoveListeners.push(listener);
-        return () => mockRemoveListeners.splice(mockRemoveListeners.indexOf(listener), 1);
-      },
-    }),
+    usePreventRemove: (prevent: boolean, callback?: MockPreventRemove) => {
+      mockPreventRemove = { prevent, callback };
+    },
     useFocusEffect: (callback: () => void | (() => void)) => {
       ReactActual.useEffect(() => {
         const cleanup = callback();
@@ -439,30 +436,32 @@ describe('FilesScreen — ?path= deep link (M9-03)', () => {
   });
 
   it('back in a folder goes up one; at the root it leaves Files', async () => {
+    // Whether the removal went ahead: not blocked, or blocked and then repeated.
     const back = (type: string) => {
-      const event = { data: { action: { type } }, preventDefault: jest.fn() };
-      mockRemoveListeners.forEach((listener) => listener(event));
-      return event.preventDefault;
+      if (!mockPreventRemove.prevent) return true;
+      const repeat = jest.fn();
+      act(() => mockPreventRemove.callback?.({ data: { action: { type } }, repeat }));
+      return repeat.mock.calls.length > 0;
     };
     mockSearchParams = { path: '/personal/notes' };
     mockFilesApiByPath({ '/personal/notes': [LINK_TEST_FILE] });
     let renderer = await renderScreen();
-    expect(back('GO_BACK')).toHaveBeenCalled();
+    expect(back('GO_BACK')).toBe(false);
     expect(mockSetParams).toHaveBeenLastCalledWith({ path: '/personal' });
-    expect(back('RESET')).not.toHaveBeenCalled();
+    expect(back('RESET')).toBe(true);
     act(() => renderer.unmount());
 
     mockSearchParams = { path: '/spaces/family' };
     mockFilesApiByPath({ '/spaces/family': { entries: [], label: 'Family' } });
     renderer = await renderScreen();
-    expect(back('POP_TO')).toHaveBeenCalled();
+    expect(back('POP_TO')).toBe(false);
     expect(mockSetParams).toHaveBeenLastCalledWith({ path: '/' });
     act(() => renderer.unmount());
 
     mockSearchParams = {};
     mockFilesApiByPath({ '/': [PERSONAL_SPACE, SHARED_SPACES], '/spaces': [FAMILY_SPACE] });
     renderer = await renderScreen();
-    expect(back('GO_BACK')).not.toHaveBeenCalled();
+    expect(back('GO_BACK')).toBe(true);
   });
 });
 
